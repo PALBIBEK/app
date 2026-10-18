@@ -103,7 +103,9 @@ def slow_tools() -> AsyncIterator[Callable[[float], None]]:
     EchoRuntime.tool_delay_s = 0.0
 
 
-async def _spawn_worker(cluster: Cluster, *, tool_delay_s: float) -> tuple[asyncio.subprocess.Process, str]:
+async def _spawn_worker(
+    cluster: Cluster, *, tool_delay_s: float
+) -> tuple[asyncio.subprocess.Process, str]:
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "tests.support.worker_process",
         cluster.db_url, str(cluster.blob_dir), cluster.address, cluster.queue, str(tool_delay_s),
@@ -219,9 +221,10 @@ async def test_recorded_histories_replay_deterministically(cluster: Cluster) -> 
         await cluster.sessions.terminate(sid)
 
     replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)
+    runs = cluster.client.list_workflows(f"WorkflowId = '{workflow_id(sid)}'")
     histories = [
-        await cluster.client.get_workflow_handle(workflow_id(sid), run_id=run.run_id).fetch_history()
-        async for run in cluster.client.list_workflows(f"WorkflowId = '{workflow_id(sid)}'")
+        await cluster.client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
+        async for run in runs
     ]
     assert len(histories) >= 2, "expected the session to span continue-as-new runs"
     async with replayer.workflow_replay_iterator(_aiter(histories)) as results:
