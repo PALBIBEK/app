@@ -1,0 +1,86 @@
+# Model gateway Deployment — readiness on /v1/readyz (D2).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yal-model-gateway
+  namespace: yal-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yal-model-gateway
+  template:
+    metadata:
+      labels:
+        app: yal-model-gateway
+    spec:
+      containers:
+        - name: model-gateway
+          image: yal-model-gateway:latest
+          ports:
+            - containerPort: 8090
+          envFrom:
+            - secretRef:
+                name: yal-gateway-credentials
+          startupProbe:
+            httpGet:
+              path: /v1/readyz
+              port: 8090
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /v1/readyz
+              port: 8090
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: 8090
+            periodSeconds: 10
+---
+# Memory service Deployment — readiness on /v1/readyz (D2).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yal-memory
+  namespace: yal-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yal-memory
+  template:
+    metadata:
+      labels:
+        app: yal-memory
+    spec:
+      containers:
+        - name: memory
+          image: yal-memory:latest
+          ports:
+            - containerPort: 8092
+          env:
+            - name: MEMORY_PORT
+              value: "8092"
+            - name: ENV
+              value: production
+          envFrom:
+            - secretRef:
+                name: yal-gateway-credentials
+          startupProbe:
+            httpGet:
+              path: /v1/readyz
+              port: 8092
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /v1/readyz
+              port: 8092
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: 8092
+            periodSeconds: 10

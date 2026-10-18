@@ -1,0 +1,14 @@
+"""
+Database models initialization.
+
+Import all models here for Alembic auto-generation to work.
+"""
+from prime_agent.db import Base
+
+from .harness import Harness
+from .refresh_token import RefreshToken
+from .session_link import SessionLink
+from .tool import Tool
+from .user import User
+
+__all__ = ["Base", "Harness", "RefreshToken", "SessionLink", "Tool", "User"]

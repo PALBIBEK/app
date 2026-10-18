@@ -1,0 +1,91 @@
+{
+  "series": [
+    "D8",
+    "D9",
+    "D10",
+    "D11",
+    "D12",
+    "D13"
+  ],
+  "active_dn": null,
+  "phase": "idle",
+  "cycle": 0,
+  "max_fail_cycles": 5,
+  "require_d7_full_gate": false,
+  "history": [
+    {
+      "dn": "D7",
+      "cycle": 0,
+      "verdict": "PASS",
+      "score": "18/18",
+      "notes": "FULL: JWT+BFF live memory+durable R/W; next D8",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D8",
+      "cycle": 0,
+      "verdict": "PASS",
+      "score": "19/19",
+      "notes": "FULL: Sweeper+HITL+budget+VK; next D9",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D9",
+      "cycle": 0,
+      "verdict": "PASS",
+      "score": "20/20",
+      "notes": "FULL: Dual-SoT durable workspace; next D10",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D10",
+      "cycle": 0,
+      "verdict": "PASS",
+      "score": "19/19",
+      "notes": "FULL: Sandbox isolation; next D11",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D11",
+      "cycle": 0,
+      "verdict": "PASS",
+      "score": "21/21",
+      "notes": "FULL: Durable grants; next D12",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D12",
+      "cycle": 0,
+      "verdict": "FAIL",
+      "score": "20/22",
+      "notes": "Cycle-0 verify gaps before H1/A4 harden",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D12",
+      "cycle": 1,
+      "verdict": "PASS",
+      "score": "21/22",
+      "notes": "FULL: lab_echo quarantine + nested/ACP defaults; ID alignment; depth; bg pairing; NEEDS_REVIEW; drain; cold-resume HA; owner_required; sweeper lease; BFF/FE live Subagents; P2 C8 only",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D13",
+      "cycle": 0,
+      "verdict": "FAIL",
+      "score": "10/15",
+      "notes": "Cycle-0: gateway W3C/OTLP unwired; FE waterfall missing; Jaeger tag key mismatch; live Jaeger UI docker-blocked",
+      "date": "2026-08-31"
+    },
+    {
+      "dn": "D13",
+      "cycle": 1,
+      "verdict": "PASS",
+      "score": "15/15",
+      "notes": "FULL: Jaeger+projector hub+traceparent+gateway OTLP+FE waterfall+d13 suites; D13.1 CH residual; next LOCAL_DEMO",
+      "date": "2026-08-31"
+    }
+  ],
+  "last_verify": null,
+  "notes": "Advanced past D12. Begin D13: python3 dn_orchestrator.py begin --dn D13 (or next-action)."
+}

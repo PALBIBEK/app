@@ -1,0 +1,2 @@
+# Placeholder — real extensions are copied at image build time.
+# Keep this directory so `COPY extensions/` succeeds in CI.

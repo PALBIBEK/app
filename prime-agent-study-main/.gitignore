@@ -1,0 +1,31 @@
+# Scratch / local discovery — never commit
+Experiments/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Node / harness
+node_modules/
+harness/dist/
+
+# Env / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local caches / tooling
+.pnpm-store/
+*.egg-info/

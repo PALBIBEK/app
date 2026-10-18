@@ -1,0 +1,45 @@
+"""Composite ToolProvider — merge multiple providers (factory-only)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from supervisor.seams.interfaces.tool_provider import ToolProvider
+from supervisor.seams.core.types import ToolDescriptor, ToolInvokeContext, ToolResult
+
+
+class CompositeToolProvider:
+    """Provider: ordered delegation for list_tools / invoke (first match wins)."""
+
+    def __init__(self, *providers: ToolProvider) -> None:
+        if not providers:
+            raise ValueError("CompositeToolProvider requires at least one provider")
+        self._providers = providers
+
+    def list_tools(self) -> list[ToolDescriptor]:
+        seen: set[str] = set()
+        out: list[ToolDescriptor] = []
+        for provider in self._providers:
+            for tool in provider.list_tools():
+                if tool.name in seen:
+                    continue
+                seen.add(tool.name)
+                out.append(tool)
+        return out
+
+    def invoke(
+        self,
+        ctx: ToolInvokeContext,
+        name: str,
+        args: dict[str, Any],
+    ) -> ToolResult:
+        for provider in self._providers:
+            names = {t.name for t in provider.list_tools()}
+            if name in names:
+                return provider.invoke(ctx, name, args)
+        return ToolResult(
+            ok=False,
+            payload=None,
+            error=f"tool {name!r} is not registered",
+            code="TOOL_NOT_FOUND",
+        )

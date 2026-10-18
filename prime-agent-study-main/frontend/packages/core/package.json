@@ -1,0 +1,23 @@
+{
+  "name": "@yal/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@yal/tokens": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.12"
+  }
+}

@@ -1,0 +1,408 @@
+<!doctype html>
+<!-- DEPRECATED — IA reference only, do not extend. Retire at Phase 2 exit. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>YAL Agent Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --ink:#14201c;--soft:#3d4a44;--muted:#6b7872;--line:#d5ddd8;
+  --bg:#f7faf8;--card:#fff;--wash:#eef3f0;
+  --accent:#0f6b5c;--accent2:#0a4a40;--tint:#d8efe9;
+  --warn:#9a5b12;--warnbg:#f5e6d0;--bad:#9b2c2c;--badbg:#f8e2e2;--ok:#1f6b3a;--okbg:#dcefe3;
+  --mono:"IBM Plex Mono",monospace;--sans:"Source Sans 3",system-ui,sans-serif;
+  --display:"Bricolage Grotesque","Source Sans 3",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:15px/1.5 var(--sans);min-height:100vh;
+background:radial-gradient(1200px 500px at 10% -10%,#d8efe9,transparent 55%),radial-gradient(900px 420px at 100% 0,#e7efe8,transparent 50%),linear-gradient(#f4f8f6,#f7faf8 40%,#eef2f0)}
+button,input,select,textarea{font:inherit}
+header{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.85rem 1.4rem;border-bottom:1px solid var(--line);background:rgba(255,255,255,.92);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+.brand{display:flex;gap:.65rem;align-items:baseline;cursor:pointer}
+.brand b{font-family:var(--display);font-size:1.35rem;font-weight:800;letter-spacing:-.03em}
+.brand span{color:var(--muted);font-size:.85rem}
+#nav{display:flex;gap:.25rem;flex-wrap:wrap}
+#nav button{border:0;background:transparent;color:var(--soft);padding:.45rem .75rem;border-radius:999px;cursor:pointer}
+#nav button.on{background:var(--ink);color:var(--bg)}
+#nav button:not(.on):hover{background:var(--wash)}
+main{max-width:1200px;margin:0 auto;padding:1.25rem 1.4rem 2.5rem}
+.hero{display:grid;gap:1.1rem;padding:1.4rem 0 .5rem;animation:rise .45s ease both}
+.mark{margin:0;font-family:var(--display);font-weight:800;letter-spacing:-.045em;font-size:clamp(2.6rem,6vw,4.2rem);line-height:.95}
+.hero h1{margin:0;font-family:var(--display);font-weight:700;letter-spacing:-.02em;font-size:clamp(1.2rem,2.4vw,1.65rem);max-width:34ch}
+.hero>p{margin:0;color:var(--soft);max-width:52ch;font-size:1.05rem}
+.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+.btn{border:1px solid transparent;border-radius:8px;padding:.55rem .95rem;cursor:pointer;font-weight:600}
+.btn.primary{background:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent2)}
+.btn.ghost{background:#fff;border-color:var(--line)}.btn.ghost:hover{background:var(--wash)}
+.btn.danger{background:var(--badbg);color:var(--bad)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.spine{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+.chip{font-family:var(--mono);font-size:.72rem;padding:.35rem .55rem;background:var(--wash);border-radius:6px;color:var(--soft)}
+.arr{color:var(--muted);font-size:.75rem}
+.sec{margin-top:2.2rem;animation:rise .5s ease both}
+.sec h2{margin:0 0 .35rem;font-family:var(--display);font-size:1.35rem;letter-spacing:-.02em}
+.lede{color:var(--muted);margin:0 0 1rem;max-width:60ch}
+.journey{display:grid;gap:.75rem}
+.j{display:grid;grid-template-columns:auto 1fr;gap:.9rem;padding:.9rem 1rem;background:#fff;border:1px solid var(--line);border-radius:10px;transition:transform .2s,border-color .2s}
+.j:hover{transform:translateX(4px);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.num{width:2rem;height:2rem;display:grid;place-items:center;border-radius:6px;font-family:var(--mono);font-size:.8rem;color:var(--accent);background:var(--tint)}
+.j p{margin:.15rem 0 0;color:var(--soft);font-size:.95rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.75rem}
+.card{padding:1rem;background:#fff;border:1px solid var(--line);border-radius:10px;border-top:3px solid var(--accent)}
+.card h3{margin:0 0 .4rem;font-family:var(--display);font-size:1.05rem}
+.card p{margin:0;color:var(--soft);font-size:.92rem}
+.head{display:flex;justify-content:space-between;align-items:end;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
+.head h2{margin:0;font-family:var(--display);font-size:1.7rem;letter-spacing:-.03em}
+.head p{margin:.2rem 0 0;color:var(--muted)}
+.tabs{display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:1rem}
+.tabs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:.4rem .8rem;cursor:pointer;color:var(--soft)}
+.tabs button.on{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 35%,var(--line));color:var(--accent2);font-weight:600}
+.panel{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.pad{padding:1rem}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th{text-align:left;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:.65rem .85rem;border-bottom:1px solid var(--line);background:var(--wash)}
+td{padding:.75rem .85rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.mono{font-family:var(--mono);font-size:.82rem}
+.pill{display:inline-flex;padding:.15rem .45rem;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--wash);color:var(--soft)}
+.pill.pure,.pill.idempotent,.pill.ok{background:var(--okbg);color:var(--ok)}
+.pill.transactional{background:var(--warnbg);color:var(--warn)}
+.pill.non_atomic{background:var(--badbg);color:var(--bad)}
+.builder{display:grid;grid-template-columns:200px 1fr;min-height:520px;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.snav{background:var(--wash);border-right:1px solid var(--line);padding:.85rem .55rem;display:flex;flex-direction:column;gap:.25rem}
+.snav button{text-align:left;border:0;background:transparent;padding:.55rem .7rem;border-radius:8px;cursor:pointer;color:var(--soft);display:flex;gap:.55rem;align-items:center}
+.snav button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.bmain{padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:1rem}
+.toolbar{display:flex;justify-content:space-between;gap:.75rem;flex-wrap:wrap;align-items:center}
+.meta{font-size:.9rem;color:var(--muted)}.meta strong{color:var(--ink)}
+.choice{display:grid;grid-template-columns:auto 1fr;gap:.75rem;padding:.85rem;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--bg);margin-bottom:.55rem}
+.choice.on{border-color:var(--accent);background:var(--tint)}
+.field{display:grid;gap:.3rem;font-size:.85rem;font-weight:600;color:var(--soft)}
+.field input,.field textarea,.field select{font-weight:400;border:1px solid var(--line);border-radius:8px;padding:.55rem .65rem;background:var(--bg);color:var(--ink)}
+.tool{display:flex;justify-content:space-between;align-items:center;gap:.75rem;padding:.65rem .75rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:.45rem}
+.tool label{display:flex;gap:.55rem;align-items:center;cursor:pointer}
+.warn{padding:.7rem .85rem;border-radius:8px;background:var(--warnbg);color:var(--warn);font-size:.9rem}
+.note{padding:.75rem .9rem;border-radius:8px;background:var(--tint);color:var(--accent2);font-size:.92rem}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+.run{display:grid;grid-template-columns:1.5fr .9fr;gap:.85rem;min-height:500px}
+.events{padding:.9rem;display:flex;flex-direction:column;gap:.55rem;background:var(--bg)}
+.ev{padding:.65rem .75rem;border-radius:8px;background:#fff;border:1px solid var(--line);animation:fade .35s ease both}
+.ev .k{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-bottom:.2rem}
+.ev.appr{background:var(--warnbg);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+.side{padding:.9rem;display:flex;flex-direction:column;gap:.85rem}
+.side h4{margin:0 0 .35rem;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.meter{height:8px;background:var(--wash);border-radius:999px;overflow:hidden}
+.meter i{display:block;height:100%;width:24%;background:var(--accent)}
+.tree{font-family:var(--mono);font-size:.78rem;color:var(--soft)}
+.streaming{color:var(--accent)}.settled{color:var(--ok)}.needs_review{color:var(--bad)}
+.tl{display:grid;gap:.45rem}
+.tl>div{display:grid;grid-template-columns:110px 1fr;gap:.75rem;padding:.55rem 0;border-bottom:1px solid var(--line)}
+.tl>div:last-child{border-bottom:0}
+.tl time{font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media(max-width:900px){.builder,.run,.split{grid-template-columns:1fr}.snav{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}}
+/* synced */
+
+.hero{display:grid;gap:1.1rem;padding:1.4rem 0 .5rem;animation:rise .45s ease both}
+.mark{margin:0;font-family:var(--display);font-weight:800;letter-spacing:-.045em;font-size:clamp(2.6rem,6vw,4.2rem);line-height:.95}
+.chip{font-family:var(--mono);font-size:.72rem;padding:.35rem .55rem;background:var(--wash);border-radius:6px;color:var(--soft)}
+.arr{color:var(--muted);font-size:.75rem}
+.sec{margin-top:2.2rem;animation:rise .5s ease both}
+.lede{color:var(--muted);margin:0 0 1rem;max-width:60ch}
+.journey{display:grid;gap:.75rem}
+.head h2{margin:0;font-family:var(--display);font-size:1.7rem;letter-spacing:-.03em}
+.head p{margin:.2rem 0 0;color:var(--muted)}
+.snav{background:var(--wash);border-right:1px solid var(--line);padding:.85rem .55rem;display:flex;flex-direction:column;gap:.25rem}
+.snav button{text-align:left;border:0;background:transparent;padding:.55rem .7rem;border-radius:8px;cursor:pointer;color:var(--soft);display:flex;gap:.55rem;align-items:center}
+.snav button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.bmain{padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:1rem}
+.toolbar{display:flex;justify-content:space-between;gap:.75rem;flex-wrap:wrap;align-items:center}
+.meta{font-size:.9rem;color:var(--muted)}.meta strong{color:var(--ink)}
+.ev.appr{background:var(--warnbg);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+.side h4{margin:0 0 .35rem;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.meter{height:8px;background:var(--wash);border-radius:999px;overflow:hidden}
+.meter i{display:block;height:100%;width:24%;background:var(--accent)}
+.tree{font-family:var(--mono);font-size:.78rem;color:var(--soft)}
+.pad{padding:1rem}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" id="home"><b>YAL</b><span>Agent Platform</span></div>
+  <div id="nav"></div>
+</header>
+<main id="app"></main>
+<script>
+const PAGES=[["overview","Overview"],["catalog","Catalog"],["builder","Builder"],["runs","Runs"],["observability","Observability"]];
+const STEPS=["Harness","Prompt","Tools","Subagents","Sandbox","Policy","Review"];
+const HARNESSES=[
+  {id:"coding-v1",protocol:1,mode:"sticky",sandbox:true,digest:"sha256:aaaa…aaaa",model:"anthropic/claude-sonnet-4",used:"4 compositions · 12 sessions"},
+  {id:"kg-v1",protocol:1,mode:"stateless",sandbox:false,digest:"sha256:bbbb…bbbb",model:"anthropic/claude-sonnet-4",used:"2 compositions · 5 sessions"}
+];
+const TOOLS=[
+  ["read","pure","auto_resume","never"],
+  ["grep","pure","auto_resume","never"],
+  ["write","idempotent","auto_resume","ask"],
+  ["git_commit","transactional","verify_then_resume","ask"],
+  ["bash","non_atomic","fail","ask"],
+  ["echo","pure","auto_resume","never"]
+];
+const SANDBOXES=[
+  ["e2b-workspace","e2b","workspace-write","ask","Default multi-tenant coding"],
+  ["local-docker","local_docker","workspace-write","ask","Internal / staging"],
+  ["none-kg","none","read-only","never","Sandbox-free KG harnesses"]
+];
+const SUBAGENTS=[
+  ["spawn","depth, filter, persona","no","in-process"],
+  ["fork","depth, filter, persona, inheritsParent","no","in-process"],
+  ["acp","depth, filter","yes","out-of-process"]
+];
+const SESSIONS=[
+  ["sess_8f2a","coding-assistant@v3","coding-v1@aaaa…","streaming","$1.24",1,0],
+  ["sess_1c90","coding-assistant@v3","coding-v1@aaaa…","settled","$0.61",0,0],
+  ["sess_kg44","kg-query@v1","kg-v1@bbbb…","settled","$0.12",0,0],
+  ["sess_b771","coding-assistant@v2","coding-v1@aaaa…","needs_review","$2.05",2,1]
+];
+const S={
+  page:"overview",cat:"harness",step:0,harness:"coding-v1",sandbox:"e2b-workspace",
+  enabled:Object.fromEntries(TOOLS.map(([n])=>[n,true])),
+  persona:"You are a careful coding agent. Prefer small diffs and explain risk.",
+  budget:"5.00",published:false,allowed:false
+};
+const pill=(c,t)=>`<span class="pill ${c||""}">${t}</span>`;
+const getHarness=()=>HARNESSES.find(x=>x.id===S.harness);
+
+function overview(){
+  const spine=["harness","prompt","tools","subagents","sandbox","run"].map((x,i,a)=>`<span class="chip">${x}</span>${i<a.length-1?'<span class="arr">→</span>':''}`).join("");
+  return `<div class="hero">
+    <p class="mark">YAL</p>
+    <h1>Compose agents on a versioned harness spine — then run them under supervisor policy.</h1>
+    <p>Operators browse a catalog, assemble a draft along a fixed composition path, publish an immutable pin, and watch sessions stream contract events with approvals and budgets the agent cannot bypass.</p>
+    <div class="row">
+      <button class="btn primary" data-go="builder">Open Builder</button>
+      <button class="btn ghost" data-go="catalog">Browse Catalog</button>
+    </div>
+    <div class="spine">${spine}</div>
+  </div>
+  <section class="sec">
+    <h2>How you use the platform</h2>
+    <p class="lede">Lifecycle: Catalog → Compose → Preview / Run draft → Publish → Observe.</p>
+    <div class="journey">
+      <div class="j"><div class="num">1</div><div><strong>Browse the Catalog</strong><p>Pick reusable harness versions, tools, sandbox profiles, prompt packs, and subagent providers. Digests stay immutable once offered.</p></div></div>
+      <div class="j"><div class="num">2</div><div><strong>Compose along the spine</strong><p>Harness → Prompt → Tools → Subagents → Sandbox → Policy. Stepped builder — not a free-form agent graph.</p></div></div>
+      <div class="j"><div class="num">3</div><div><strong>Validate &amp; publish</strong><p>Fail loud on capability mismatches. Publish creates an immutable composition pin. Draft runs stay ephemeral.</p></div></div>
+      <div class="j"><div class="num">4</div><div><strong>Run with approvals</strong><p>Sessions stream contract events. Approvals and budgets are supervisor policy — agents cannot bypass them.</p></div></div>
+      <div class="j"><div class="num">5</div><div><strong>Observe from the journal</strong><p>Timelines, unpaired tools, cost, and approval audit. Deep-link to tracing when OTLP is wired.</p></div></div>
+    </div>
+  </section>
+  <section class="sec">
+    <h2>Platform characteristics</h2>
+    <p class="lede">From the four research tracks and the integrated synthesis brief.</p>
+    <div class="grid">
+      <article class="card"><h3>Harness-agnostic control plane</h3><p>Supervisor babysits sessions, journal, policy, and sandboxes. Harnesses think. Contracts — not Pi/Cordis/E2B types — own durability.</p></article>
+      <article class="card"><h3>Composition spine</h3><p>harness version → system prompt → tools → subagents → sandbox → run. Publish immutable pins; sessions never float to latest.</p></article>
+      <article class="card"><h3>Two execution axes</h3><p>AgentRuntime × SandboxProvider (none / local_process / local_docker / e2b). Later: SubagentTransport as a third axis.</p></article>
+      <article class="card"><h3>Journal as crash truth</h3><p>tool_start before side effects. Unpaired starts recover via the pinned tool-class map. Streaming deltas are never journaled.</p></article>
+      <article class="card"><h3>Supervisor-owned governance</h3><p>Approvals, budgets, and loop guards fail closed. Composition cannot turn them into a bypass.</p></article>
+      <article class="card"><h3>Host plane vs agent plane</h3><p>Registries, sandbox, approvals, and persistence stay on the host. Presets only own what one session contributes.</p></article>
+    </div>
+  </section>`;
+}
+
+function catalog(){
+  const tabs=[["harness","Harness versions"],["tools","Tools"],["sandbox","Sandbox profiles"],["subagents","Subagent providers"]];
+  let body="";
+  if(S.cat==="harness"){
+    body=`<table><thead><tr><th>Version</th><th>Mode</th><th>Sandbox</th><th>Digest</th><th>Used by</th></tr></thead><tbody>`+
+      HARNESSES.map(x=>`<tr><td><strong class="mono">${x.id}</strong><div class="mono" style="color:var(--muted)">protocol ${x.protocol} · ${x.model}</div></td>
+      <td>${pill("",x.mode)}</td><td>${x.sandbox?"required":"optional"}</td><td class="mono">${x.digest}</td><td>${x.used}</td></tr>`).join("")+`</tbody></table>`;
+  } else if(S.cat==="tools"){
+    body=`<table><thead><tr><th>Tool</th><th>Class</th><th>Recovery</th><th>Approval</th></tr></thead><tbody>`+
+      TOOLS.map(([n,c,r,a])=>`<tr><td class="mono">${n}</td><td>${pill(c,c)}</td><td class="mono">${r}</td><td>${a}</td></tr>`).join("")+`</tbody></table>`;
+  } else if(S.cat==="sandbox"){
+    body=`<table><thead><tr><th>Profile</th><th>Where it runs</th><th>File effects</th><th>Approval</th><th>Use</th></tr></thead><tbody>`+
+      SANDBOXES.map(([id,w,f,a,u])=>`<tr><td class="mono">${id}</td><td>${pill("",w)}</td><td>${f}</td><td>${a}</td><td>${u}</td></tr>`).join("")+`</tbody></table>`;
+  } else {
+    body=`<table><thead><tr><th>Provider</th><th>Capabilities</th><th>Continuable</th><th>Transport</th></tr></thead><tbody>`+
+      SUBAGENTS.map(([n,c,cont,t])=>`<tr><td class="mono">${n}</td><td>${c}</td><td>${cont}</td><td>${t}</td></tr>`).join("")+`</tbody></table>`;
+  }
+  return `<div class="head"><div><h2>Catalog</h2><p>Reusable, versioned building blocks for compositions.</p></div></div>
+    <div class="tabs">${tabs.map(([id,l])=>`<button data-cat="${id}" class="${S.cat===id?"on":""}">${l}</button>`).join("")}</div>
+    <div class="panel">${body}</div>`;
+}
+
+function builder(){
+  const hh=getHarness();
+  const nonAtomic=TOOLS.some(([n,c])=>S.enabled[n]&&c==="non_atomic");
+  let content="";
+  if(S.step===0){
+    content=`<h3 style="margin:0;font-family:var(--display)">Harness version</h3>
+      <p style="margin:0;color:var(--muted)">Selecting a version pins protocol, image digest, and default recovery.</p>`+
+      HARNESSES.map(x=>`<label class="choice ${S.harness===x.id?"on":""}"><input type="radio" name="harness" value="${x.id}" ${S.harness===x.id?"checked":""}/>
+      <div><strong class="mono">${x.id}</strong><div style="color:var(--soft);font-size:.92rem">protocol ${x.protocol} · ${x.mode} · sandbox ${x.sandbox?"required":"not required"}</div>
+      <div class="mono" style="color:var(--muted);margin-top:4px">${x.digest}</div></div></label>`).join("");
+  } else if(S.step===1){
+    content=`<h3 style="margin:0;font-family:var(--display)">System prompt</h3>
+      <label class="field">Persona<textarea id="persona" rows="4">${S.persona}</textarea></label>
+      <div class="note">Assembled preview uses {{model}} = ${hh.model} and {{cwd}} from the session workspace.</div>`;
+  } else if(S.step===2){
+    content=`<h3 style="margin:0;font-family:var(--display)">Tools</h3>
+      <p style="margin:0;color:var(--muted)">Class badges teach recovery implications when a tool_start is unpaired.</p>
+      ${nonAtomic?'<div class="warn">bash is non_atomic — unpaired starts fail closed rather than auto-resuming.</div>':''}`+
+      TOOLS.map(([n,c,r])=>`<div class="tool"><label><input type="checkbox" data-tool="${n}" ${S.enabled[n]?"checked":""}/>
+      <span class="mono">${n}</span> ${pill(c,c)}</label><span class="mono" style="color:var(--muted)">${r}</span></div>`).join("");
+  } else if(S.step===3){
+    content=`<h3 style="margin:0;font-family:var(--display)">Subagents</h3>
+      <p style="margin:0;color:var(--muted)">Bind providers to tool names — not free-form canvas nodes.</p>
+      <div class="panel"><div class="pad"><div class="split">
+        <label class="field">Provider<select><option>spawn</option><option>fork</option><option>acp</option></select></label>
+        <label class="field">Tool name<input value="subagent"/></label>
+        <label class="field">Mode<select><option>one-shot</option><option selected>continuable</option></select></label>
+        <label class="field">maxDepth<input value="3"/></label>
+      </div><div class="note" style="margin-top:12px">Capabilities checked: depth ✓ · filter ✓ · persona ✓ — fail loud if unsupported.</div></div></div>`;
+  } else if(S.step===4){
+    content=`<h3 style="margin:0;font-family:var(--display)">Sandbox + permissions</h3>
+      <p style="margin:0;color:var(--muted)">Two axes: <strong>Where it runs</strong> vs <strong>File effects</strong>.</p>`+
+      SANDBOXES.map(([id,w,f,a])=>`<label class="choice ${S.sandbox===id?"on":""}"><input type="radio" name="sandbox" value="${id}" ${S.sandbox===id?"checked":""}/>
+      <div><strong class="mono">${id}</strong><div style="color:var(--soft);font-size:.92rem">Where: ${w} · File effects: ${f} · Approval: ${a}</div></div></label>`).join("");
+  } else if(S.step===5){
+    content=`<h3 style="margin:0;font-family:var(--display)">Policy</h3>
+      <p style="margin:0;color:var(--muted)">Supervisor-owned. Not bypassable by composition or child agents.</p>
+      <div class="split">
+        <label class="field">max_cost_per_session ($)<input id="budget" value="${S.budget}"/></label>
+        <label class="field">approval timeout (s)<input value="300"/></label>
+        <label class="field">on_timeout<select><option>deny</option><option>allow</option></select></label>
+        <label class="field">stall_iterations<input value="10"/></label>
+      </div>
+      <div class="note">Guards: repetition abort · oscillation abort. Fail closed when approval service is unavailable.</div>`;
+  } else {
+    const tools=TOOLS.filter(([n])=>S.enabled[n]).map(([n])=>n).join(", ");
+    content=`<h3 style="margin:0;font-family:var(--display)">Review</h3>
+      <div class="panel"><table><tbody>
+        <tr><td>Harness</td><td class="mono">${S.harness}</td></tr>
+        <tr><td>Digest</td><td class="mono">${hh.digest}</td></tr>
+        <tr><td>Tools enabled</td><td class="mono">${tools}</td></tr>
+        <tr><td>Sandbox</td><td class="mono">${S.sandbox}</td></tr>
+        <tr><td>Budget</td><td>$${S.budget}</td></tr>
+        <tr><td>Status</td><td>${S.published?"Published — ready for durable production sessions":"Draft — Run draft only; publish before prod"}</td></tr>
+      </tbody></table></div>`;
+  }
+  return `<div class="head"><div><h2>Builder</h2><p>Compose along the spine. Publish creates an immutable pin.</p></div></div>
+    <div class="builder">
+      <nav class="snav">${STEPS.map((s,i)=>`<button data-step="${i}" class="${S.step===i?"on":""}"><span class="mono" style="opacity:.55">${i+1}</span>${s}</button>`).join("")}</nav>
+      <div class="bmain">
+        <div class="toolbar">
+          <div class="meta">Draft: <strong>coding-assistant</strong> · ${S.published?pill("ok","published v1"):pill("","unpublished")}</div>
+          <div class="row">
+            <button class="btn ghost" type="button">Validate</button>
+            <button class="btn ghost" type="button">Run draft</button>
+            <button class="btn primary" id="publish" type="button">Publish</button>
+          </div>
+        </div>
+        ${content}
+        <div class="row" style="margin-top:auto">
+          <button class="btn ghost" id="back" ${S.step===0?"disabled":""}>Back</button>
+          <button class="btn primary" id="next" ${S.step===STEPS.length-1?"disabled":""}>Next</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function runs(){
+  const events=[["turn_start","Turn 3 started",false],["assistant","I'll install dependencies, then run the typecheck.",false],["tool_start","bash · npm install",true]];
+  if(S.allowed) events.push(["tool_end","bash · ok · 4.2s",false],["message_end","usage · in 1.8k · out 420 · +$0.04",false],["settled","Nothing pending",false]);
+  return `<div class="head">
+      <div><h2>Runs</h2><p>Session <span class="mono">sess_8f2a</span> · harness <span class="mono">coding-v1</span> · digest <span class="mono">aaaa…</span> · warm</p></div>
+      <div class="row"><button class="btn ghost">Fork</button><button class="btn danger">Abort</button></div>
+    </div>
+    <div class="run">
+      <div class="panel"><div class="events">${events.map(([k,t,ap],i)=>`
+        <div class="ev ${ap&&!S.allowed?"appr":""}" style="animation-delay:${i*40}ms">
+          <div class="k">${k}</div><div>${t}</div>
+          ${ap&&!S.allowed?`<div class="row" style="margin-top:.55rem">
+            <button class="btn primary" id="allow">Allow once</button>
+            <button class="btn ghost">Deny</button>
+            <button class="btn ghost">Allow session</button>
+            <span class="mono" style="color:var(--warn)">timeout 284s · on_timeout deny</span>
+          </div>`:""}
+        </div>`).join("")}</div></div>
+      <aside class="panel side">
+        <div><h4>State</h4><div>${S.allowed?"streaming":"pending approval"} · model claude-sonnet-4</div></div>
+        <div><h4>Budget</h4><div style="margin-bottom:6px">$1.24 / $5.00</div><div class="meter"><i></i></div></div>
+        <div><h4>Children</h4><div class="tree">└ sub_01 spawn · idle</div></div>
+        <div><h4>Journal</h4><div class="tree">tool t1 start ✓<br/>tool t1 end ${S.allowed?"✓":"?"}</div></div>
+        <div><h4>Policy</h4><div>guards on · approval fail-closed</div></div>
+      </aside>
+    </div>`;
+}
+
+function observability(){
+  return `<div class="head"><div><h2>Observability</h2><p>Journal-first session views. Deep-link to Future AGI / OTel when wired.</p></div></div>
+    <div class="panel" style="margin-bottom:1rem"><table><thead><tr>
+      <th>Session</th><th>Composition</th><th>Harness pin</th><th>Status</th><th>Cost</th><th>Approvals</th><th>Errors</th>
+    </tr></thead><tbody>${SESSIONS.map(([id,c,hh,st,cost,a,e])=>`<tr>
+      <td class="mono">${id}</td><td>${c}</td><td class="mono">${hh}</td>
+      <td class="${st}">${st}</td><td>${cost}</td><td>${a}</td><td>${e}</td></tr>`).join("")}</tbody></table></div>
+    <div class="split">
+      <div class="panel"><div class="pad">
+        <h3 style="margin-top:0;font-family:var(--display)">Session timeline · sess_b771</h3>
+        <div class="tl">
+          <div><time>seq 01</time><div>run_start · coding-v1 pin</div></div>
+          <div><time>seq 14</time><div>tool_start bash · unpaired → needs_review</div></div>
+          <div><time>seq 15</time><div>guard · stall_iterations approaching</div></div>
+          <div><time>seq 18</time><div>approval_request · denied by timeout</div></div>
+        </div>
+      </div></div>
+      <div class="panel"><div class="pad">
+        <h3 style="margin-top:0;font-family:var(--display)">Unknown outcomes</h3>
+        <p style="color:var(--soft)">tool_start without tool_end on <span class="mono">sess_b771</span> · class ${pill("non_atomic","non_atomic")} → recovery = fail</p>
+        <div class="row" style="margin-top:12px">
+          <button class="btn ghost" data-go="runs">Open in run console</button>
+          <button class="btn ghost">Open in tracing</button>
+        </div>
+      </div></div>
+    </div>`;
+}
+
+function render(){
+  document.getElementById("nav").innerHTML=PAGES.map(([id,label])=>
+    `<button data-go="${id}" class="${S.page===id?"on":""}">${label}</button>`
+  ).join("");
+  const views={overview,catalog,builder,runs,observability};
+  document.getElementById("app").innerHTML=views[S.page]();
+  bind();
+}
+
+function bind(){
+  document.querySelectorAll("[data-go]").forEach(el=>el.addEventListener("click",()=>{S.page=el.dataset.go;render();}));
+  document.querySelectorAll("[data-cat]").forEach(el=>el.addEventListener("click",()=>{S.cat=el.dataset.cat;render();}));
+  document.querySelectorAll("[data-step]").forEach(el=>el.addEventListener("click",()=>{S.step=Number(el.dataset.step);render();}));
+  document.querySelectorAll('input[name="harness"]').forEach(el=>el.addEventListener("change",()=>{S.harness=el.value;render();}));
+  document.querySelectorAll('input[name="sandbox"]').forEach(el=>el.addEventListener("change",()=>{S.sandbox=el.value;render();}));
+  document.querySelectorAll("[data-tool]").forEach(el=>el.addEventListener("change",()=>{S.enabled[el.dataset.tool]=el.checked;render();}));
+  const persona=document.getElementById("persona");
+  if(persona) persona.addEventListener("change",()=>{S.persona=persona.value;});
+  const budget=document.getElementById("budget");
+  if(budget) budget.addEventListener("change",()=>{S.budget=budget.value;});
+  const back=document.getElementById("back");
+  if(back) back.addEventListener("click",()=>{S.step=Math.max(0,S.step-1);render();});
+  const next=document.getElementById("next");
+  if(next) next.addEventListener("click",()=>{S.step=Math.min(STEPS.length-1,S.step+1);render();});
+  const publish=document.getElementById("publish");
+  if(publish) publish.addEventListener("click",()=>{S.published=true;S.step=6;render();});
+  const allow=document.getElementById("allow");
+  if(allow) allow.addEventListener("click",()=>{S.allowed=true;render();});
+}
+
+document.getElementById("home").addEventListener("click",()=>{S.page="overview";render();});
+render();
+</script>
+</body>
+</html>

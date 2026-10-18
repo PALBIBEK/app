@@ -1,0 +1,25 @@
+{
+  "digest": "sha256:3258f1bc4a50d6e8d93a1b06a872905ab831e57fcd8659315972288b4d39f5b1",
+  "name": "coding-prompt",
+  "persona": "coder",
+  "protocol_version": 1,
+  "sections": [
+    {
+      "complete": true,
+      "id": "intro",
+      "order": 1,
+      "text": "You are a coding agent."
+    },
+    {
+      "complete": true,
+      "id": "rules",
+      "order": 2,
+      "text": "Prefer small diffs."
+    }
+  ],
+  "semver": "1.0.0",
+  "status": "offered",
+  "vars": [
+    "cwd"
+  ]
+}

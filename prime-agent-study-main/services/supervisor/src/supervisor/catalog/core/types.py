@@ -1,0 +1,807 @@
+"""Catalog types - enums and frozen dataclasses with __slots__.
+
+All catalog types defined here for consistent imports and avoiding
+circular dependencies. Types use:
+- StrEnum for string-based enums (JSON-serializable)
+- frozen dataclasses with __slots__ for immutability and memory efficiency
+- Union types with None for optional fields
+
+Reference: policy/types.py pattern.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import StrEnum, auto
+from typing import Any, Final
+
+
+__all__ = [
+    # Enums
+    "ArtifactKind",
+    "ArtifactStatus",
+    "CatalogAction",
+    "CatalogGrant",
+    "SandboxProviderName",
+    "FileEffects",
+    "ApprovalDefault",
+    "RecallBackend",
+    # Base types
+    "ArtifactMetadata",
+    "DigestRef",
+    # Artifacts
+    "PromptSection",
+    "PromptPack",
+    "ToolDefinition",
+    "ToolSet",
+    "SandboxProfile",
+    "MemoryProfile",
+    "PlugBindings",
+    "AgentComposition",
+    # Session types
+    "SessionPins",
+    # Usage analytics
+    "ArtifactUsageRecord",
+    "ArtifactUsageStats",
+    # Union type
+    "Artifact",
+    # Constants
+    "DEFAULT_PROTOCOL_VERSION",
+]
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+DEFAULT_PROTOCOL_VERSION: Final[int] = 1
+
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+class ArtifactKind(StrEnum):
+    """Type of catalog artifact."""
+
+    PROMPT_PACK = "prompt_pack"
+    TOOL_SET = "tool_set"
+    COMPOSITION = "composition"
+    SANDBOX_PROFILE = "sandbox_profile"
+    MEMORY_PROFILE = "memory_profile"
+
+
+class ArtifactStatus(StrEnum):
+    """Lifecycle status of an artifact."""
+
+    DRAFT = "draft"
+    OFFERED = "offered"
+    DEPRECATED = "deprecated"
+
+
+class CatalogAction(StrEnum):
+    """Actions logged to audit trail."""
+
+    ARTIFACT_PUBLISHED = "artifact_published"
+    ARTIFACT_DEPRECATED = "artifact_deprecated"
+    ARTIFACT_RESOLVED = "artifact_resolved"
+    COMPOSITION_BOUND = "composition_bound"
+    SESSION_STARTED = "session_started"
+    PERMISSION_DENIED = "permission_denied"
+    ARTIFACT_ACCESSED = "artifact_accessed"
+
+
+class CatalogGrant(StrEnum):
+    """Permission grants for catalog operations."""
+
+    ARTIFACT_READ = "catalog:read"
+    ARTIFACT_PUBLISH = "catalog:publish"
+    ARTIFACT_DEPRECATE = "catalog:deprecate"
+    COMPOSITION_USE = "catalog:use"
+    ANALYTICS_VIEW = "catalog:analytics"
+    ADMIN = "catalog:admin"
+
+
+class SandboxProviderName(StrEnum):
+    """Sandbox execution environment provider."""
+
+    NONE = "none"
+    LOCAL_PROCESS = "local_process"
+    LOCAL_DOCKER = "local_docker"
+    E2B = "e2b"
+
+
+class FileEffects(StrEnum):
+    """File system access level for sandbox."""
+
+    READ_ONLY = "read_only"
+    WORKSPACE_WRITE = "workspace_write"
+    DANGER_FULL_ACCESS = "danger_full_access"
+
+
+class ApprovalDefault(StrEnum):
+    """Default approval behavior for sandbox operations."""
+
+    ASK = "ask"
+    NEVER = "never"
+
+
+class RecallBackend(StrEnum):
+    """Memory recall backend type."""
+
+    NONE = "none"
+    GITHI_MARKDOWN = "githi_markdown"
+    MCP = "mcp"
+
+
+# =============================================================================
+# Base Types
+# =============================================================================
+
+def _now() -> datetime:
+    """Current UTC datetime."""
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactMetadata:
+    """Metadata common to all artifacts for ownership and tracking.
+
+    Attributes:
+        created_by: Principal ID of the creator
+        created_at: Creation timestamp
+        updated_at: Last update timestamp
+        owner_id: Owner principal or team ID (for permission checks)
+    """
+
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    owner_id: str | None = None
+
+    @classmethod
+    def create(cls, principal_id: str) -> ArtifactMetadata:
+        """Create metadata for a new artifact."""
+        now = _now()
+        return cls(
+            created_by=principal_id,
+            created_at=now,
+            updated_at=now,
+            owner_id=principal_id,
+        )
+
+    def with_update(self) -> ArtifactMetadata:
+        """Return copy with updated timestamp."""
+        return ArtifactMetadata(
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=_now(),
+            owner_id=self.owner_id,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "created_by": self.created_by,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "owner_id": self.owner_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ArtifactMetadata:
+        """Create from dictionary."""
+        return cls(
+            created_by=data["created_by"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            owner_id=data.get("owner_id"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DigestRef:
+    """Reference to an artifact by id and content digest.
+
+    Used for composition references to child artifacts.
+    """
+
+    id: str
+    digest: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert to dictionary."""
+        return {"id": self.id, "digest": self.digest}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> DigestRef:
+        """Create from dictionary."""
+        return cls(id=data["id"], digest=data["digest"])
+
+
+# =============================================================================
+# Prompt Pack
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class PromptSection:
+    """A section within a prompt pack.
+
+    Sections are ordered and concatenated to form the full system prompt.
+
+    Attributes:
+        id: Unique section identifier
+        order: Sort order (lower = earlier)
+        text: Section text content (may contain template vars)
+        complete: Whether section is complete or a fragment
+    """
+
+    id: str
+    order: int
+    text: str
+    complete: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class PromptPack:
+    """Versioned prompt template for agent persona.
+
+    Contains ordered sections that form the system prompt.
+
+    Attributes:
+        name: Unique artifact name
+        semver: Semantic version string
+        digest: Content hash (sha256:...)
+        protocol_version: Schema version for compatibility
+        status: Lifecycle status (draft/offered/deprecated)
+        persona: Optional persona description
+        sections: Ordered prompt sections
+        vars: Template variable names
+        metadata: Creator and ownership info
+    """
+
+    name: str
+    semver: str
+    digest: str
+    protocol_version: int
+    status: ArtifactStatus
+    persona: str | None
+    sections: tuple[PromptSection, ...]
+    vars: tuple[str, ...] = ()
+    metadata: ArtifactMetadata | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body (excludes digest, status, metadata).
+
+        Used for computing content hash. Must be deterministic.
+        """
+        return {
+            "name": self.name,
+            "semver": self.semver,
+            "protocol_version": self.protocol_version,
+            "persona": self.persona,
+            "sections": [
+                {
+                    "id": s.id,
+                    "order": s.order,
+                    "text": s.text,
+                    "complete": s.complete,
+                }
+                for s in sorted(self.sections, key=lambda x: (x.order, x.id))
+            ],
+            "vars": list(self.vars),
+        }
+
+
+# =============================================================================
+# Tool Set
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """Individual tool specification.
+
+    Attributes:
+        name: Tool name (unique within toolset)
+        description: Human-readable description
+        parameters: JSON Schema for tool parameters
+        digest: Content hash of this definition
+        tool_class: Optional classification (e.g., "file", "shell")
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    digest: str
+    tool_class: str | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body for hashing."""
+        body: dict[str, Any] = {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+        if self.tool_class is not None:
+            body["tool_class"] = self.tool_class
+        return body
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSet:
+    """Collection of available tools for an agent.
+
+    Attributes:
+        name: Unique artifact name
+        semver: Semantic version string
+        digest: Content hash
+        protocol_version: Schema version
+        status: Lifecycle status
+        tools: Mapping of tool_name -> ToolDefinition.digest
+        definitions: Full tool definitions by name
+        metadata: Creator and ownership info
+    """
+
+    name: str
+    semver: str
+    digest: str
+    protocol_version: int
+    status: ArtifactStatus
+    tools: dict[str, str]  # tool_name -> digest
+    definitions: dict[str, ToolDefinition] = field(default_factory=dict)
+    metadata: ArtifactMetadata | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body for hashing."""
+        defs: dict[str, Any] = {}
+        for name, td in sorted(self.definitions.items()):
+            defs[name] = {
+                "name": td.name,
+                "description": td.description,
+                "parameters": td.parameters,
+                "digest": td.digest,
+                **({"tool_class": td.tool_class} if td.tool_class is not None else {}),
+            }
+        return {
+            "name": self.name,
+            "semver": self.semver,
+            "protocol_version": self.protocol_version,
+            "tools": dict(sorted(self.tools.items())),
+            "definitions": defs,
+        }
+
+
+# =============================================================================
+# Sandbox Profile
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class SandboxProfile:
+    """Sandbox execution environment configuration.
+
+    Defines where and how a session runs with security constraints.
+
+    Attributes:
+        name: Unique artifact name
+        semver: Semantic version
+        digest: Content hash
+        protocol_version: Schema version
+        status: Lifecycle status
+        provider: Sandbox provider (none/local_process/local_docker/e2b)
+        file_effects: File system access level
+        approval_default: Default approval behavior
+        sticky_eligible: Can sessions stick to this sandbox
+        image_digest: Optional container image digest
+        metadata: Creator and ownership info
+    """
+
+    name: str
+    semver: str
+    digest: str
+    protocol_version: int
+    status: ArtifactStatus
+    provider: SandboxProviderName
+    file_effects: FileEffects = FileEffects.WORKSPACE_WRITE
+    approval_default: ApprovalDefault = ApprovalDefault.ASK
+    sticky_eligible: bool = True
+    image_digest: str | None = None
+    metadata: ArtifactMetadata | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body for hashing."""
+        body: dict[str, Any] = {
+            "name": self.name,
+            "semver": self.semver,
+            "protocol_version": self.protocol_version,
+            "provider": self.provider.value,
+            "file_effects": self.file_effects.value,
+            "approval_default": self.approval_default.value,
+            "sticky_eligible": self.sticky_eligible,
+        }
+        if self.image_digest is not None:
+            body["image_digest"] = self.image_digest
+        return body
+
+
+# =============================================================================
+# Memory Profile
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class MemoryProfile:
+    """Session memory management configuration.
+
+    Controls context compaction and optional recall backend.
+
+    Attributes:
+        name: Unique artifact name
+        semver: Semantic version
+        digest: Content hash
+        protocol_version: Schema version
+        status: Lifecycle status
+        compaction_enabled: Enable context compaction
+        reserve_tokens: Tokens to reserve for output
+        keep_recent_tokens: Recent tokens to preserve
+        pressure_ratio: Compaction trigger threshold
+        summarization_model: Model for summarization
+        recall_enabled: Enable memory recall
+        recall_backend: Recall backend type
+        recall_mcp_server_url: MCP server for recall
+        metadata: Creator and ownership info
+    """
+
+    name: str
+    semver: str
+    digest: str
+    protocol_version: int
+    status: ArtifactStatus
+    compaction_enabled: bool = True
+    reserve_tokens: int = 16_384
+    keep_recent_tokens: int = 20_000
+    pressure_ratio: float = 0.8
+    summarization_model: str | None = None
+    recall_enabled: bool = False
+    recall_backend: RecallBackend = RecallBackend.NONE
+    recall_mcp_server_url: str | None = None
+    metadata: ArtifactMetadata | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body for hashing."""
+        body: dict[str, Any] = {
+            "name": self.name,
+            "semver": self.semver,
+            "protocol_version": self.protocol_version,
+            "compaction": {
+                "enabled": self.compaction_enabled,
+                "reserve_tokens": self.reserve_tokens,
+                "keep_recent_tokens": self.keep_recent_tokens,
+                "pressure_ratio": self.pressure_ratio,
+            },
+            "recall": {
+                "enabled": self.recall_enabled,
+                "backend": self.recall_backend.value,
+            },
+        }
+        if self.summarization_model is not None:
+            body["compaction"]["summarization_model"] = self.summarization_model
+        if self.recall_mcp_server_url is not None:
+            body["recall"]["mcp_server_url"] = self.recall_mcp_server_url
+        return body
+
+
+# =============================================================================
+# Plug Bindings
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class PlugBindings:
+    """Out-of-process service endpoints pinned with composition.
+
+    Attributes:
+        gateway_base_url: Model gateway URL
+        mcp_server_url: MCP server URL
+        acp_base_url: ACP service URL
+        model_route: Model routing configuration
+    """
+
+    gateway_base_url: str | None = None
+    mcp_server_url: str | None = None
+    acp_base_url: str | None = None
+    model_route: str | None = None
+
+    def body_for_digest(self) -> dict[str, str]:
+        """Canonical content body for hashing."""
+        out: dict[str, str] = {}
+        if self.gateway_base_url:
+            out["gateway_base_url"] = self.gateway_base_url
+        if self.mcp_server_url:
+            out["mcp_server_url"] = self.mcp_server_url
+        if self.acp_base_url:
+            out["acp_base_url"] = self.acp_base_url
+        if self.model_route:
+            out["model_route"] = self.model_route
+        return out
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> PlugBindings | None:
+        """Create from dictionary, returns None if empty."""
+        if not data:
+            return None
+        return cls(
+            gateway_base_url=data.get("gateway_base_url"),
+            mcp_server_url=data.get("mcp_server_url"),
+            acp_base_url=data.get("acp_base_url"),
+            model_route=data.get("model_route"),
+        )
+
+
+# =============================================================================
+# Agent Composition
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class AgentComposition:
+    """Complete agent configuration combining all components.
+
+    References child artifacts by digest for immutable, reproducible builds.
+
+    Attributes:
+        name: Unique composition name
+        semver: Semantic version
+        digest: Content hash
+        protocol_version: Schema version
+        status: Lifecycle status
+        harness_version: Required harness version
+        prompt_pack: Reference to PromptPack
+        tool_set: Reference to ToolSet
+        sandbox_profile: Optional SandboxProfile reference
+        memory_profile: Optional MemoryProfile reference
+        plug_bindings: External service endpoints
+        metadata: Creator and ownership info
+    """
+
+    name: str
+    semver: str
+    digest: str
+    protocol_version: int
+    status: ArtifactStatus
+    harness_version: str
+    prompt_pack: DigestRef
+    tool_set: DigestRef
+    sandbox_profile: DigestRef | None = None
+    memory_profile: DigestRef | None = None
+    plug_bindings: PlugBindings | None = None
+    metadata: ArtifactMetadata | None = None
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Canonical content body for hashing."""
+        body: dict[str, Any] = {
+            "name": self.name,
+            "semver": self.semver,
+            "protocol_version": self.protocol_version,
+            "harness_version": self.harness_version,
+            "prompt_pack": self.prompt_pack.to_dict(),
+            "tool_set": self.tool_set.to_dict(),
+        }
+        if self.sandbox_profile is not None:
+            body["sandbox_profile"] = self.sandbox_profile.to_dict()
+        if self.memory_profile is not None:
+            body["memory_profile"] = self.memory_profile.to_dict()
+        if self.plug_bindings is not None:
+            pb = self.plug_bindings.body_for_digest()
+            if pb:
+                body["plug_bindings"] = pb
+        return body
+
+
+# =============================================================================
+# Union Type
+# =============================================================================
+
+Artifact = PromptPack | ToolSet | AgentComposition | SandboxProfile | MemoryProfile
+
+
+# =============================================================================
+# Session Pins
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class SessionPins:
+    """Durable create-time pins for a session.
+
+    Captures exact artifact digests at session creation for reproducibility.
+    Stored in session row and never re-resolved.
+
+    Attributes:
+        composition_id: Composition name
+        composition_digest: Composition content hash
+        harness_version: Harness version at creation
+        prompt_pack_id: PromptPack name
+        prompt_pack_digest: PromptPack hash
+        tool_set_id: ToolSet name
+        tool_set_digest: ToolSet hash
+        sandbox_profile_id: Optional SandboxProfile name
+        sandbox_profile_digest: Optional SandboxProfile hash
+        memory_profile_id: Optional MemoryProfile name
+        memory_profile_digest: Optional MemoryProfile hash
+        gateway_base_url: Model gateway URL
+        mcp_server_url: MCP server URL
+        acp_base_url: ACP service URL
+        model_route: Model routing config
+    """
+
+    composition_id: str
+    composition_digest: str
+    harness_version: str
+    prompt_pack_id: str
+    prompt_pack_digest: str
+    tool_set_id: str
+    tool_set_digest: str
+    sandbox_profile_id: str | None = None
+    sandbox_profile_digest: str | None = None
+    memory_profile_id: str | None = None
+    memory_profile_digest: str | None = None
+    gateway_base_url: str | None = None
+    mcp_server_url: str | None = None
+    acp_base_url: str | None = None
+    model_route: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert to dictionary for JSON serialization."""
+        data: dict[str, str] = {
+            "composition_id": self.composition_id,
+            "composition_digest": self.composition_digest,
+            "harness_version": self.harness_version,
+            "prompt_pack_id": self.prompt_pack_id,
+            "prompt_pack_digest": self.prompt_pack_digest,
+            "tool_set_id": self.tool_set_id,
+            "tool_set_digest": self.tool_set_digest,
+        }
+        if self.sandbox_profile_id is not None:
+            data["sandbox_profile_id"] = self.sandbox_profile_id
+        if self.sandbox_profile_digest is not None:
+            data["sandbox_profile_digest"] = self.sandbox_profile_digest
+        if self.memory_profile_id is not None:
+            data["memory_profile_id"] = self.memory_profile_id
+        if self.memory_profile_digest is not None:
+            data["memory_profile_digest"] = self.memory_profile_digest
+        if self.gateway_base_url is not None:
+            data["gateway_base_url"] = self.gateway_base_url
+        if self.mcp_server_url is not None:
+            data["mcp_server_url"] = self.mcp_server_url
+        if self.acp_base_url is not None:
+            data["acp_base_url"] = self.acp_base_url
+        if self.model_route is not None:
+            data["model_route"] = self.model_route
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SessionPins:
+        """Create from dictionary."""
+        return cls(
+            composition_id=str(data["composition_id"]),
+            composition_digest=str(data["composition_digest"]),
+            harness_version=str(data["harness_version"]),
+            prompt_pack_id=str(data["prompt_pack_id"]),
+            prompt_pack_digest=str(data["prompt_pack_digest"]),
+            tool_set_id=str(data["tool_set_id"]),
+            tool_set_digest=str(data["tool_set_digest"]),
+            sandbox_profile_id=data.get("sandbox_profile_id"),
+            sandbox_profile_digest=data.get("sandbox_profile_digest"),
+            memory_profile_id=data.get("memory_profile_id"),
+            memory_profile_digest=data.get("memory_profile_digest"),
+            gateway_base_url=data.get("gateway_base_url"),
+            mcp_server_url=data.get("mcp_server_url"),
+            acp_base_url=data.get("acp_base_url"),
+            model_route=data.get("model_route"),
+        )
+
+
+# =============================================================================
+# Usage Analytics
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class ArtifactUsageRecord:
+    """Single usage event for analytics.
+
+    Recorded when an artifact is resolved, bound, or used in a session.
+
+    Attributes:
+        artifact_kind: Type of artifact
+        artifact_id: Artifact name
+        artifact_digest: Content hash
+        session_id: Session that used this artifact
+        principal_id: User who triggered the usage
+        timestamp_ms: Event timestamp in milliseconds
+        operation: Type of usage (resolved/bound/session_started)
+    """
+
+    artifact_kind: ArtifactKind
+    artifact_id: str
+    artifact_digest: str
+    session_id: str
+    principal_id: str
+    timestamp_ms: int
+    operation: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "artifact_kind": self.artifact_kind.value,
+            "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
+            "session_id": self.session_id,
+            "principal_id": self.principal_id,
+            "timestamp_ms": self.timestamp_ms,
+            "operation": self.operation,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactUsageStats:
+    """Aggregated usage statistics for an artifact.
+
+    Computed from usage records for analytics dashboards.
+
+    Attributes:
+        artifact_kind: Type of artifact
+        artifact_id: Artifact name
+        artifact_digest: Content hash (None for all versions)
+        resolution_count: Times resolved from catalog
+        bind_count: Times bound to runtime
+        session_count: Sessions using this artifact
+        unique_principals: Distinct users
+        last_used_at: Most recent usage
+        error_count: Errors during resolution/binding
+        error_rate: Errors / total operations
+    """
+
+    artifact_kind: ArtifactKind
+    artifact_id: str
+    artifact_digest: str | None
+    resolution_count: int
+    bind_count: int
+    session_count: int
+    unique_principals: int
+    last_used_at: datetime | None
+    error_count: int
+    error_rate: float
+
+    @classmethod
+    def empty(
+        cls,
+        kind: ArtifactKind,
+        artifact_id: str,
+        digest: str | None = None,
+    ) -> ArtifactUsageStats:
+        """Create empty stats for an artifact."""
+        return cls(
+            artifact_kind=kind,
+            artifact_id=artifact_id,
+            artifact_digest=digest,
+            resolution_count=0,
+            bind_count=0,
+            session_count=0,
+            unique_principals=0,
+            last_used_at=None,
+            error_count=0,
+            error_rate=0.0,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "artifact_kind": self.artifact_kind.value,
+            "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
+            "resolution_count": self.resolution_count,
+            "bind_count": self.bind_count,
+            "session_count": self.session_count,
+            "unique_principals": self.unique_principals,
+            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+            "error_count": self.error_count,
+            "error_rate": self.error_rate,
+        }

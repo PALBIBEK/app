@@ -1,0 +1,7 @@
+.root {
+  display: grid; gap: var(--space-3); justify-items: start;
+  padding: var(--space-6); border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-lg); background: var(--color-surface-raised);
+}
+.title { margin: 0; font-family: var(--font-display); color: var(--color-text-primary); font-size: 1.15rem; }
+.body { margin: 0; color: var(--color-text-secondary); max-width: 40ch; }

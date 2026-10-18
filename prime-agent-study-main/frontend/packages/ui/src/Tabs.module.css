@@ -1,0 +1,9 @@
+.list { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--color-border-subtle); }
+.trigger {
+  border: 0; background: transparent; padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary); cursor: pointer; font-family: var(--font-body);
+  border-bottom: 2px solid transparent;
+}
+.trigger[data-state="active"] { color: var(--color-accent-default); border-bottom-color: var(--color-accent-default); font-weight: 600; }
+.trigger:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
+.content { padding-top: var(--space-4); }

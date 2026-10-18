@@ -1,0 +1,18 @@
+{
+  "compaction": {
+    "enabled": true,
+    "keep_recent_tokens": 20000,
+    "pressure_ratio": 0.8,
+    "reserve_tokens": 16384,
+    "summarization_model": "cheap-summary"
+  },
+  "digest": "sha256:80b15b6abd544c312b239dc93d4ec7c0638b01fff712a1e37aa33985fbb28f32",
+  "name": "durable-ltm",
+  "protocol_version": 1,
+  "recall": {
+    "backend": "durable",
+    "enabled": true
+  },
+  "semver": "1.0.0",
+  "status": "offered"
+}

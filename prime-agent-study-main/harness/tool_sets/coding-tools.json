@@ -1,0 +1,113 @@
+{
+  "definitions": {
+    "bash": {
+      "description": "Run a shell command in the workspace sandbox",
+      "digest": "sha256:697ad8db1778fb49ce5fc5ffaae4374ec769178150dd3e76f0340754f8d9fd2b",
+      "name": "bash",
+      "parameters": {
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    "echo": {
+      "description": "Echo text (dev / smoke tool)",
+      "digest": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
+      "name": "echo",
+      "parameters": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "git_commit": {
+      "description": "Create a git commit in the workspace",
+      "digest": "sha256:29d890e267287c0b895bae5dfc0d095a166543f5c91c530eac508e5e6aafe738",
+      "name": "git_commit",
+      "parameters": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "grep": {
+      "description": "Search file contents in the workspace",
+      "digest": "sha256:3faa375ef6b601aec6da25b108bf9d79726626f15c8c85d09ba4d0ba612d75f3",
+      "name": "grep",
+      "parameters": {
+        "properties": {
+          "pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    },
+    "read": {
+      "description": "Read a file from the workspace",
+      "digest": "sha256:724205349d678d1ac2b902e049a93ab981b7a1758667913c441f25a7e37937e1",
+      "name": "read",
+      "parameters": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "write": {
+      "description": "Write a file in the workspace",
+      "digest": "sha256:5e30877f5322356f0fa441bea1701ca07ccf440883a55d4b655597dae3038b73",
+      "name": "write",
+      "parameters": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "name": "coding-tools",
+  "protocol_version": 1,
+  "semver": "1.0.0",
+  "status": "offered",
+  "tools": {
+    "bash": "sha256:697ad8db1778fb49ce5fc5ffaae4374ec769178150dd3e76f0340754f8d9fd2b",
+    "echo": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
+    "git_commit": "sha256:29d890e267287c0b895bae5dfc0d095a166543f5c91c530eac508e5e6aafe738",
+    "grep": "sha256:3faa375ef6b601aec6da25b108bf9d79726626f15c8c85d09ba4d0ba612d75f3",
+    "read": "sha256:724205349d678d1ac2b902e049a93ab981b7a1758667913c441f25a7e37937e1",
+    "write": "sha256:5e30877f5322356f0fa441bea1701ca07ccf440883a55d4b655597dae3038b73"
+  }
+}

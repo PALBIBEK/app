@@ -1,0 +1,5 @@
+# Protocol versions the supervisor speaks.
+supported:
+  - "1"
+  - "2"
+default: "1"

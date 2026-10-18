@@ -1,0 +1,46 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg
+
+# Node / Next
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Local DBs / caches
+*.db
+*.sqlite3
+.cache/
+
+# Nested service venvs / local junk
+**/uv.lock.local
+
+# Local backups from recovery
+.git-nested-backup/
+.local_demo_verify*/

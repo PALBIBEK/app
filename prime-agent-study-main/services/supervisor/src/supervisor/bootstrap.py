@@ -1,0 +1,132 @@
+"""Production supervisor bootstrap — DB, harness catalog, composition catalog, sandbox."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from supervisor.app import SupervisorState, build_supervisor
+from supervisor.catalog.bootstrap import (
+    agent_platform_root,
+    bootstrap_composition_catalog,
+    resolve_catalog_dir,
+)
+from supervisor.catalog.storage import CompositionCatalog
+from supervisor.config import Settings
+from supervisor.db.engine import create_all, make_engine, session_factory
+from supervisor.harness import HarnessCatalog, load_manifest
+from supervisor.obs.metrics import setup_metrics
+from supervisor.obs.tracing import setup_tracing
+from supervisor.policy.quotas import TenantQuotaEnforcer, TenantQuotaLimits
+from supervisor.policy.rate_limit import TenantRateLimiter
+from supervisor.sandbox.factory import create_sandbox_provider
+from supervisor.sandbox.gate import assert_multi_tenant_sandbox_provider
+
+
+def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
+    catalog = HarnessCatalog()
+    if not versions_dir.is_dir():
+        return catalog
+    for path in sorted(versions_dir.glob("*.yaml")) + sorted(versions_dir.glob("*.yml")):
+        manifest = load_manifest(path.read_text(encoding="utf-8"))
+        catalog.register(manifest, status="active")
+    return catalog
+
+
+async def bootstrap_supervisor(
+    settings: Settings,
+    *,
+    session_maker: async_sessionmaker[AsyncSession] | None = None,
+    composition_catalog: CompositionCatalog | None = None,
+) -> SupervisorState:
+    """Build fully wired supervisor state for production or integration tests."""
+    settings.require_auth_configured()
+
+    if session_maker is None:
+        engine = make_engine(settings.database_url)
+        await create_all(engine)
+        session_maker = session_factory(engine)
+
+    harness_catalog = bootstrap_harness_catalog(settings.harness_versions_dir)
+    if composition_catalog is None and settings.load_composition_catalog:
+        composition_catalog = bootstrap_composition_catalog(settings.resolved_catalog_dir())
+
+    if composition_catalog is not None and settings.persist_composition_catalog:
+        from supervisor.catalog.repository import hydrate_composition_catalog
+
+        await hydrate_composition_catalog(composition_catalog, session_maker)
+
+    assert_multi_tenant_sandbox_provider(
+        settings.sandbox_provider,
+        multi_tenant_strict=settings.multi_tenant_strict,
+    )
+    # Stage 1 / D9: honor WORKSPACE_STORE + OBJECT_STORAGE + GRANT_STORE env.
+    from supervisor.seams.providers.grant_store_factory import (
+        create_authz_service,
+        create_grant_store,
+    )
+    from supervisor.seams.providers.virtual_key_client import maybe_virtual_key_client
+    from supervisor.seams.providers.workspace_store_factory import (
+        create_object_storage_for_workspace,
+        create_workspace_hydrator,
+        create_workspace_store,
+    )
+
+    objects = create_object_storage_for_workspace()
+    workspace_store = create_workspace_store(
+        session_factory=session_maker,
+        objects=objects,
+    )
+    workspace_hydrator = create_workspace_hydrator(
+        store=workspace_store,
+        objects=objects,
+        session_factory=session_maker,
+    )
+    try:
+        sandbox = create_sandbox_provider(
+            settings.sandbox_provider, hydrator=workspace_hydrator
+        )
+    except ModuleNotFoundError:
+        # Optional provider dep missing (docker/e2b) — keep process up for /readyz.
+        # Session create soft-resolves via resolve_sandbox_create when a deploy
+        # provider is available; here fall back to local_process for demo.
+        sandbox = create_sandbox_provider("local_process", hydrator=workspace_hydrator)
+    grant_store = create_grant_store(session_factory=session_maker)
+    authz = create_authz_service(store=grant_store)
+    vk_client = maybe_virtual_key_client()
+    quotas = TenantQuotaEnforcer(
+        session_maker,
+        limits=TenantQuotaLimits(
+            max_sessions_per_tenant=settings.tenant_max_sessions,
+            max_sandboxes_per_tenant=settings.tenant_max_sandboxes,
+            max_sessions_global=settings.global_max_sessions,
+            max_cost_per_tenant=settings.tenant_max_cost,
+        ),
+    )
+    metrics = setup_metrics()
+    setup_tracing()
+    rate_limiter = TenantRateLimiter(max_per_minute=settings.tenant_rate_limit_per_minute)
+    return build_supervisor(
+        session_factory=session_maker,
+        catalog=harness_catalog,
+        blob_dir=settings.blob_dir,
+        sandbox_provider=sandbox,
+        composition_catalog=composition_catalog,
+        auth_token=settings.auth_token,
+        auth_required=settings.auth_required,
+        service_jwt_secret=settings.service_jwt_secret,
+        service_jwt_audience=settings.service_jwt_audience,
+        service_jwt_issuer=settings.service_jwt_issuer,
+        needs_sandbox_check=settings.sandbox_provider not in ("none", "null", ""),
+        drain_grace_s=settings.drain_grace_s,
+        idle_reap_max_seconds=settings.idle_reap_max_seconds,
+        idle_reap_interval_seconds=settings.idle_reap_interval_seconds,
+        quotas=quotas,
+        metrics=metrics,
+        rate_limiter=rate_limiter,
+        authz=authz,
+        grant_store=grant_store,
+        virtual_key_client=vk_client,
+        workspace_store=workspace_store,
+    )

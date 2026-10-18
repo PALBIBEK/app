@@ -1,0 +1,22 @@
+harness_version: kg-v1
+protocol_version: 1
+runtime: echo
+requires_sandbox: false
+mode: stateless
+# tools: recovery classification only — NOT the production ToolSet (see contracts/harness_binders.md).
+tools:
+  graph_query: { class: pure }
+  sql_select: { class: pure }
+  echo: { class: pure }
+  bash: { class: non_atomic }
+  git_commit: { class: transactional }
+  read: { class: pure }
+  grep: { class: pure }
+  write: { class: idempotent }
+recovery:
+  default: fail
+  by_tool_class:
+    pure: auto_resume
+    idempotent: auto_resume
+    transactional: verify_then_resume
+    non_atomic: fail

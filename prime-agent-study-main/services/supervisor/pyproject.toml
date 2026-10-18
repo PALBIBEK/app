@@ -1,0 +1,50 @@
+[project]
+name = "yal-supervisor"
+version = "0.1.0"
+description = "YAL agent session supervisor"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "sqlalchemy[asyncio]>=2.0",
+  "aiosqlite>=0.20",
+  "pyyaml>=6.0",
+  "httpx>=0.28",
+  "PyJWT>=2.9",
+  "opentelemetry-api>=1.27",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]
+s3 = ["boto3>=1.35"]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.28",
+  "ruff>=0.8",
+]
+docker = ["docker>=7.0"]
+e2b = ["e2b>=1.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/supervisor"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+  "e2e: live OTLP / Jaeger tests (set RUN_OTLP_E2E=1)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

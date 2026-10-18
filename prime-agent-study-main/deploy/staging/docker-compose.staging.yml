@@ -1,0 +1,222 @@
+# Phase 1 staging — shared Postgres + two supervisor replicas (cold-resume SLO).
+# Usage (from repo root):
+#   docker compose -f deploy/staging/docker-compose.staging.yml up --build
+#
+# Both replicas share journal state; warm sessions are per-replica (in-process registry).
+# Route sticky follow-up turns to the same replica or accept cold resume on the peer.
+#
+# Model gateway auth: MODEL_GATEWAY_TOKEN defaults to a non-empty staging token
+# (override via env). Vendor keys stay in the gateway container only:
+#   export OPENROUTER_API_KEY=sk-or-...   # enables `githi` openrouter route on gateway
+#   export OPENAI_API_KEY=sk-...          # enables `openai` route on gateway
+#   export GATEWAY_VENDOR_READY=1        # supervisors upgrade catalog echo → githi
+#   # or: export YAL_MODEL_ROUTE=githi / MODEL_GATEWAY_DEFAULT_ROUTE=githi
+# Leave keys unset for CI/echo-only bring-up (/v1/readyz stays green).
+# Never put vendor keys on supervisor / NEXT_PUBLIC_* / browser / sandbox.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: yal
+      POSTGRES_PASSWORD: yal
+      POSTGRES_DB: supervisor
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yal -d supervisor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  model-gateway:
+    build:
+      context: ..
+      dockerfile: services/model-gateway/Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      ENV: staging
+      AUTH_REQUIRED: "true"
+      MODEL_GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-staging-gateway-token}
+      # Vendor keys from host env (empty default = echo-only CI). Gateway only.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
+      # Echo-only catalog by default so /v1/readyz is green without vendor keys.
+      # When OPENROUTER_API_KEY / OPENAI_API_KEY is set, the gateway auto-registers
+      # `githi` / `openai` (see model_gateway.config.Settings.routes). To force an
+      # explicit catalog or default to real chat, override MODEL_GATEWAY_ROUTES_JSON
+      # / MODEL_GATEWAY_DEFAULT_ROUTE=githi in the environment or a compose override.
+      MODEL_GATEWAY_ROUTES_JSON: '{"echo":{"provider":"echo","upstream_model":"echo"}}'
+      # D13 B: gateway child spans → Jaeger (soft-fail if collector down).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SERVICE_NAME: yal-model-gateway
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/readyz')\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  memory:
+    build:
+      context: ..
+      dockerfile: services/memory/Dockerfile
+    ports:
+      - "8092:8092"
+    environment:
+      ENV: staging
+      AUTH_REQUIRED: "true"
+      MEMORY_PORT: "8092"
+      MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-staging-memory-token}
+      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-staging-service-jwt-secret}
+      MEMORY_JWT_AUDIENCE: yal-memory,yal-supervisor
+      MEMORY_JWT_ISSUER: ${SERVICE_JWT_ISSUER:-prime-agent-api}
+      MEMORY_DATABASE_URL: sqlite+aiosqlite:////data/memory.db
+    volumes:
+      - memorydata:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/v1/readyz')\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "4317:4317"
+      - "16686:16686"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  supervisor-a:
+    build:
+      context: ..
+      dockerfile: services/supervisor/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      ENV: staging
+      AUTH_REQUIRED: "true"
+      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-staging-service-jwt-secret}
+      SERVICE_JWT_ISSUER: ${SERVICE_JWT_ISSUER:-prime-agent-api}
+      SERVICE_JWT_AUDIENCE: ${SERVICE_JWT_AUDIENCE:-yal-supervisor}
+      MEMORY_SERVICE_URL: http://memory:8092
+      MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-staging-memory-token}
+      MEMORY_READY_REQUIRED: "true"
+      DATABASE_URL: postgresql+asyncpg://yal:yal@postgres:5432/supervisor
+      SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-local_docker}
+      WORKSPACE_STORE: ${WORKSPACE_STORE:-postgres}
+      OBJECT_STORAGE: seaweed
+      OBJECT_STORAGE_ENDPOINT: http://seaweed-s3:8333
+      OBJECT_STORAGE_BUCKET: yal-workspace
+      OBJECT_STORAGE_ACCESS_KEY: any
+      OBJECT_STORAGE_SECRET_KEY: any
+      GRANT_STORE: ${GRANT_STORE:-postgres}
+      GATEWAY_BASE_URL: http://model-gateway:8090
+      GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-staging-gateway-token}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      YAL_OTEL_SAMPLE_RATIO: ${YAL_OTEL_SAMPLE_RATIO:-1.0}
+      YAL_REAPER_INTERVAL_S: ${YAL_REAPER_INTERVAL_S:-300}
+      # D5 E1: keys stay on gateway. When OPENROUTER_API_KEY is set, also set
+      # GATEWAY_VENDOR_READY=1 and/or YAL_MODEL_ROUTE=githi / MODEL_GATEWAY_DEFAULT_ROUTE=githi.
+      YAL_MODEL_ROUTE: ${YAL_MODEL_ROUTE:-}
+      GATEWAY_VENDOR_READY: ${GATEWAY_VENDOR_READY:-0}
+      MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
+      DRAIN_GRACE_S: "30"
+      IDLE_REAP_MAX_SECONDS: ${IDLE_REAP_MAX_SECONDS:-3600}
+      IDLE_REAP_INTERVAL_SECONDS: "60"
+      YAL_CATALOG_DIR: /harness
+      YAL_LOAD_COMPOSITION_CATALOG: "true"
+      YAL_PERSIST_CATALOG: "true"
+      YAL_REQUIRE_COMPOSITION_DIGEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      model-gateway:
+        condition: service_healthy
+      memory:
+        condition: service_healthy
+    volumes:
+      - ../harness:/harness:ro
+      - ../contracts:/contracts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  supervisor-b:
+    build:
+      context: ..
+      dockerfile: services/supervisor/Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      ENV: staging
+      AUTH_REQUIRED: "true"
+      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-staging-service-jwt-secret}
+      SERVICE_JWT_ISSUER: ${SERVICE_JWT_ISSUER:-prime-agent-api}
+      SERVICE_JWT_AUDIENCE: ${SERVICE_JWT_AUDIENCE:-yal-supervisor}
+      MEMORY_SERVICE_URL: http://memory:8092
+      MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-staging-memory-token}
+      MEMORY_READY_REQUIRED: "true"
+      DATABASE_URL: postgresql+asyncpg://yal:yal@postgres:5432/supervisor
+      SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-local_docker}
+      WORKSPACE_STORE: ${WORKSPACE_STORE:-postgres}
+      OBJECT_STORAGE: seaweed
+      OBJECT_STORAGE_ENDPOINT: http://seaweed-s3:8333
+      OBJECT_STORAGE_BUCKET: yal-workspace
+      OBJECT_STORAGE_ACCESS_KEY: any
+      OBJECT_STORAGE_SECRET_KEY: any
+      GRANT_STORE: ${GRANT_STORE:-postgres}
+      GATEWAY_BASE_URL: http://model-gateway:8090
+      GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-staging-gateway-token}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      YAL_OTEL_SAMPLE_RATIO: ${YAL_OTEL_SAMPLE_RATIO:-1.0}
+      YAL_REAPER_INTERVAL_S: ${YAL_REAPER_INTERVAL_S:-300}
+      # D5 E1: keys stay on gateway. When OPENROUTER_API_KEY is set, also set
+      # GATEWAY_VENDOR_READY=1 and/or YAL_MODEL_ROUTE=githi / MODEL_GATEWAY_DEFAULT_ROUTE=githi.
+      YAL_MODEL_ROUTE: ${YAL_MODEL_ROUTE:-}
+      GATEWAY_VENDOR_READY: ${GATEWAY_VENDOR_READY:-0}
+      MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
+      DRAIN_GRACE_S: "30"
+      IDLE_REAP_MAX_SECONDS: ${IDLE_REAP_MAX_SECONDS:-3600}
+      IDLE_REAP_INTERVAL_SECONDS: "60"
+      YAL_CATALOG_DIR: /harness
+      YAL_LOAD_COMPOSITION_CATALOG: "true"
+      YAL_PERSIST_CATALOG: "true"
+      YAL_REQUIRE_COMPOSITION_DIGEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      model-gateway:
+        condition: service_healthy
+      memory:
+        condition: service_healthy
+    volumes:
+      - ../harness:/harness:ro
+      - ../contracts:/contracts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  pgdata:
+  memorydata:

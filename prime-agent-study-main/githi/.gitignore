@@ -1,0 +1,13 @@
+.venv/
+.test-venv/
+.pytest_cache/
+__pycache__/
+.pycache/
+*.pyc
+*.egg-info/
+dist/
+build/
+.DS_Store
+githi-workspace/
+workspace/
+.cursor/

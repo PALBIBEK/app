@@ -1,0 +1,70 @@
+name: ai-auth-tests
+
+on:
+  push:
+    paths:
+      - "services/supervisor/**"
+      - "services/memory/**"
+      - "services/model-gateway/**"
+      - "scripts/check_staging_auth.py"
+      - "deploy/staging/**"
+      - "docker-compose.yml"
+      - ".github/workflows/ai-auth-tests.yml"
+  pull_request:
+    paths:
+      - "services/supervisor/**"
+      - "services/memory/**"
+      - "services/model-gateway/**"
+      - "scripts/check_staging_auth.py"
+      - "deploy/staging/**"
+      - "docker-compose.yml"
+      - ".github/workflows/ai-auth-tests.yml"
+
+jobs:
+  compose-auth-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_staging_auth.py
+
+  supervisor-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/supervisor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/unit/test_service_auth.py tests/unit/test_durable_memory_bind.py -q
+
+  memory-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/memory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/test_auth.py -q
+
+  gateway-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/model-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/test_gateway.py -q

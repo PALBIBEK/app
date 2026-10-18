@@ -1,0 +1,60 @@
+# Supervisor deployment with drain preStop (Phase 1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yal-supervisor
+  namespace: yal-control
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: yal-supervisor
+  template:
+    metadata:
+      labels:
+        app: yal-supervisor
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: supervisor
+          image: yal-supervisor:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DRAIN_GRACE_S
+              value: "30"
+            - name: IDLE_REAP_MAX_SECONDS
+              value: "3600"
+            - name: IDLE_REAP_INTERVAL_SECONDS
+              value: "60"
+          envFrom:
+            - secretRef:
+                name: yal-gateway-credentials
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                # SIGTERM handler sets draining; lifespan waits DRAIN_GRACE_S
+                command: ["sh", "-c", "sleep 5"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: yal-supervisor

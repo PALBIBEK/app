@@ -1,0 +1,12 @@
+{
+  "approval_default": "ask",
+  "digest": "sha256:0c63030534df6ea09b81216dd46eb1024d2f5ae64a85c6ea9b9f33efe58adc72",
+  "file_effects": "workspace_write",
+  "image_digest": "sha256:5aec93a7fa559c073523ecb81dd8cf43232018291b7ca41b90c7c31716be106e",
+  "name": "coding-docker-v1",
+  "protocol_version": 1,
+  "provider": "local_docker",
+  "semver": "1.0.0",
+  "status": "offered",
+  "sticky_eligible": true
+}

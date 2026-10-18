@@ -1,0 +1,151 @@
+services:
+  # D9 durable workspace / journal SoT — matches supervisor DATABASE_URL below.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-yal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yal}
+      POSTGRES_DB: ${POSTGRES_DB:-supervisor}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-yal} -d ${POSTGRES_DB:-supervisor}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # D13 local demo: Jaeger all-in-one (OTLP gRPC 4317 + UI 16686).
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "4317:4317"
+      - "16686:16686"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: services/supervisor/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # PROFILE=dev: local stack may run with auth relaxed. Staging/prod must not.
+      PROFILE: ${PROFILE:-dev}
+      ENV: ${ENV:-development}
+      # Shared with BFF AI_SERVICE_JWT_SECRET so local JWTs verify (override via env).
+      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-dev-local-service-jwt-secret-32b!!}
+      AI_SERVICE_JWT_SECRET: ${AI_SERVICE_JWT_SECRET:-${SERVICE_JWT_SECRET:-dev-local-service-jwt-secret-32b!!}}
+      GATEWAY_BASE_URL: http://model-gateway:8090
+      GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-dev-local-gateway-token}
+      # D13: export spans to Jaeger (OTLP). Soft-fail if Jaeger is down.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      YAL_OTEL_SAMPLE_RATIO: ${YAL_OTEL_SAMPLE_RATIO:-1.0}
+      YAL_REAPER_INTERVAL_S: ${YAL_REAPER_INTERVAL_S:-300}
+      # Object store credentials (OBJECT_STORAGE default set below with D9 SoT pins).
+      OBJECT_STORAGE_ENDPOINT: http://seaweed-s3:8333
+      OBJECT_STORAGE_BUCKET: yal-workspace
+      OBJECT_STORAGE_ACCESS_KEY: any
+      OBJECT_STORAGE_SECRET_KEY: any
+      # Grants default memory for local; staging compose pins postgres.
+      GRANT_STORE: ${GRANT_STORE:-memory}
+      # D5 E1: keys stay on model-gateway. Signal non-echo Test without copying vendor keys:
+      #   OPENROUTER_API_KEY=… (gateway) GATEWAY_VENDOR_READY=1 YAL_MODEL_ROUTE=githi
+      #   or MODEL_GATEWAY_DEFAULT_ROUTE=githi on both services.
+      YAL_MODEL_ROUTE: ${YAL_MODEL_ROUTE:-}
+      GATEWAY_VENDOR_READY: ${GATEWAY_VENDOR_READY:-0}
+      MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
+      # Docker image tree is shallow — pin paths to mounted / writable dirs.
+      YAL_CATALOG_DIR: ${YAL_CATALOG_DIR:-/harness}
+      HARNESS_VERSIONS_DIR: ${HARNESS_VERSIONS_DIR:-/harness/versions}
+      YAL_CONTRACTS_DIR: ${YAL_CONTRACTS_DIR:-/contracts}
+      BLOB_DIR: ${BLOB_DIR:-/tmp/yal-blobs}
+      # Local demo: load harness compositions from YAL_CATALOG_DIR (/harness mount).
+      # Escape hatch (skip catalog / incomplete harness): YAL_LOAD_COMPOSITION_CATALOG=false
+      YAL_LOAD_COMPOSITION_CATALOG: ${YAL_LOAD_COMPOSITION_CATALOG:-true}
+      # D10: local docker sandbox for coding/githi (override via SANDBOX_PROVIDER).
+      SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-local_docker}
+      # D9 durable SoT defaults (override to memory for single-container without Postgres).
+      WORKSPACE_STORE: ${WORKSPACE_STORE:-postgres}
+      OBJECT_STORAGE: seaweed
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/${POSTGRES_DB:-supervisor}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      model-gateway:
+        condition: service_started
+      seaweed-s3:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    volumes:
+      - ./harness:/harness:ro
+      - ./contracts:/contracts:ro
+      # Needed when SANDBOX_PROVIDER=local_docker (coding-v1 requires_sandbox).
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # Independently developable — can also `docker compose up model-gateway` alone.
+  model-gateway:
+    build:
+      context: .
+      dockerfile: services/model-gateway/Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      PROFILE: ${PROFILE:-dev}
+      ENV: ${ENV:-development}
+      # Non-empty default for local. Empty tokens only if PROFILE=dev and you override explicitly.
+      MODEL_GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-dev-local-gateway-token}
+      MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
+      # Echo-only catalog so /v1/readyz is green without vendor keys (same idea as staging).
+      # Override MODEL_GATEWAY_ROUTES_JSON when OPENROUTER/OPENAI keys are set for real routes.
+      MODEL_GATEWAY_ROUTES_JSON: ${MODEL_GATEWAY_ROUTES_JSON:-{"echo":{"provider":"echo","upstream_model":"echo"},"fake":{"provider":"echo","upstream_model":"fake"}}}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # D13 B: gateway child spans → Jaeger (soft-fail if collector down).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SERVICE_NAME: yal-model-gateway
+    depends_on:
+      - jaeger
+
+  # Track B WP-M1: S3-compatible object store. App uses ObjectStorage Protocol only.
+  seaweed-master:
+    image: chrislusf/seaweedfs:3.68
+    command: "master -ip=seaweed-master -port=9333"
+    ports:
+      - "9333:9333"
+
+  seaweed-volume:
+    image: chrislusf/seaweedfs:3.68
+    command: "volume -mserver=seaweed-master:9333 -port=8081 -ip=seaweed-volume"
+    depends_on:
+      - seaweed-master
+    ports:
+      - "8081:8081"
+
+  seaweed-filer:
+    image: chrislusf/seaweedfs:3.68
+    command: "filer -master=seaweed-master:9333 -ip=seaweed-filer"
+    depends_on:
+      - seaweed-master
+      - seaweed-volume
+    ports:
+      - "8888:8888"
+
+  seaweed-s3:
+    image: chrislusf/seaweedfs:3.68
+    # Default -ip.bind is localhost — unreachable from supervisor / host publish.
+    command: "s3 -filer=seaweed-filer:8888 -port=8333 -ip.bind=0.0.0.0"
+    depends_on:
+      - seaweed-filer
+    ports:
+      - "8333:8333"
+
+volumes:
+  pgdata:

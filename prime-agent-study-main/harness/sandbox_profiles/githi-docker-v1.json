@@ -1,0 +1,12 @@
+{
+  "approval_default": "ask",
+  "digest": "sha256:b2ef6ff9146285f849f68d09e581f3058222089be426820c4835e111b79b1431",
+  "file_effects": "workspace_write",
+  "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "name": "githi-docker-v1",
+  "protocol_version": 1,
+  "provider": "local_docker",
+  "semver": "1.0.0",
+  "status": "offered",
+  "sticky_eligible": true
+}

@@ -1,0 +1,98 @@
+"""Shared helpers for independent D7 FULL-PRODUCTION outer BFF acceptance."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import httpx
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from prime_agent.config import Settings, get_settings
+from prime_agent.db.models.user import User
+from prime_agent.main import create_app
+from prime_agent.services.platform_status_service import PlatformStatusService
+from prime_agent.web.dependencies import get_current_user, get_db
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+PRIME_AGENT = BACKEND_ROOT / "prime_agent"
+SECRET = "d7-prod-acceptance-ai-jwt-secret-at-least-32-bytes!!"
+
+
+@pytest.fixture
+def d7prod_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    settings = Settings(
+        environment="development",
+        secret_key="d7-prod-user-secret-key-also-at-least-32-bytes!!",
+        ai_supervisor_base_url="http://supervisor.test",
+        ai_service_jwt_secret=SECRET,
+        ai_platform_status_cache_ttl_seconds=0,
+    )
+    get_settings.cache_clear()
+    PlatformStatusService.clear_cache()
+    for target in (
+        "prime_agent.config.get_settings",
+        "prime_agent.config.settings.get_settings",
+        "prime_agent.web.routes.sessions.get_settings",
+        "prime_agent.services.session_service.get_settings",
+        "prime_agent.services.harness_bind_service.get_settings",
+        "prime_agent.services.platform_status_service.get_settings",
+        "prime_agent.services.ai_client.get_settings",
+        "prime_agent.security.service_jwt.get_settings",
+        "prime_agent.security.jwt_manager.get_settings",
+        "prime_agent.services.harness_service.get_settings",
+    ):
+        monkeypatch.setattr(target, lambda s=settings: s, raising=False)
+    yield settings
+    get_settings.cache_clear()
+    PlatformStatusService.clear_cache()
+
+
+@pytest.fixture
+async def owner(make_user) -> User:
+    return await make_user(email="d7-prod-owner@example.com", name="D7 Prod Owner")
+
+
+@pytest.fixture
+async def other(make_user) -> User:
+    return await make_user(email="d7-prod-other@example.com", name="D7 Prod Other")
+
+
+@asynccontextmanager
+async def as_user(
+    db_session: AsyncSession, user: User
+) -> AsyncIterator[httpx.AsyncClient]:
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    async def override_user():
+        return user
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = override_user
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+def app_memory_route_paths() -> set[str]:
+    app = create_app()
+    paths: set[str] = set()
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str) and "memory" in path.lower():
+            paths.add(path)
+    return paths
+
+
+def source_blob(*globs: str) -> str:
+    chunks: list[str] = []
+    for pattern in globs:
+        for path in sorted(PRIME_AGENT.glob(pattern)):
+            if path.is_file() and path.suffix == ".py":
+                chunks.append(path.read_text(encoding="utf-8"))
+    return "\n".join(chunks)

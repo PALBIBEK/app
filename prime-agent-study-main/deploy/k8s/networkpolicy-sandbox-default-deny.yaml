@@ -1,0 +1,30 @@
+# Default-deny egress for agent sandbox namespaces (Phase 1 template).
+# Apply to the namespace where sandbox workloads run — not the supervisor API namespace.
+#
+# Allowlist model gateway, package mirrors, and git via your cluster egress proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-default-deny-egress
+  namespace: yal-sandboxes
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Model gateway (adjust namespace/service)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: yal-control
+      ports:
+        - protocol: TCP
+          port: 8090

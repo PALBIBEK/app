@@ -1,0 +1,28 @@
+{
+  "digest": "sha256:7306fb337525f9c27e5a6223460cf799ed62ec3d859b17cc2e1cd7a3bad6847d",
+  "harness_version": "coding-v1",
+  "memory_profile": {
+    "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
+    "id": "default"
+  },
+  "name": "coding-v1",
+  "plug_bindings": {
+    "gateway_base_url": "http://model-gateway:8090",
+    "model_route": "echo"
+  },
+  "prompt_pack": {
+    "digest": "sha256:3258f1bc4a50d6e8d93a1b06a872905ab831e57fcd8659315972288b4d39f5b1",
+    "id": "coding-prompt"
+  },
+  "protocol_version": 1,
+  "sandbox_profile": {
+    "digest": "sha256:0c63030534df6ea09b81216dd46eb1024d2f5ae64a85c6ea9b9f33efe58adc72",
+    "id": "coding-docker-v1"
+  },
+  "semver": "1.0.0",
+  "status": "offered",
+  "tool_set": {
+    "digest": "sha256:9092ae0dfea6a682d560c7f34336945389598cdcc2b8b5a10b6a3af63851f5bb",
+    "id": "coding-tools"
+  }
+}
