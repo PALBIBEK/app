@@ -16,7 +16,7 @@ from typing import Any
 
 from supervisor.catalog.providers.catalog_tools import CatalogToolProvider
 from supervisor.harness import HarnessCatalog, HarnessManifest
-from supervisor.harness.core.enums import ToolClass
+from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion
@@ -48,7 +48,7 @@ class ScriptedGateway:
                 raise ConnectionError("model gateway unavailable (scripted)")
         results = sum(1 for m in messages if m.role == "tool")
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
-        asking = messages[-1].role == "user" or self.repeat or self.vary_args
+        asking = bool(self.calls) and (messages[-1].role == "user" or self.repeat or self.vary_args)
         if not asking:
             text = f"done after {results} tool results"
             return Completion(ChatMessage("assistant", text), model="scripted", usage=usage)
@@ -109,7 +109,7 @@ def githi_variant(catalog: HarnessCatalog, version: str, **changes: Any) -> Harn
 
 def approval_variants(catalog: HarnessCatalog) -> None:
     """githi with ``write`` gated by a human (2s timeout), denying or allowing on timeout."""
-    for on_timeout in ("deny", "allow"):
+    for on_timeout in ApprovalOnTimeout:
         githi_variant(
             catalog,
             f"githi-approve-{on_timeout}",
