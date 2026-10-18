@@ -17,6 +17,7 @@ from supervisor.harness import (
     ToolSpec,
     default_recovery_policy,
 )
+from supervisor.harness.core.enums import RuntimeMode
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.sandbox.base import (
@@ -109,7 +110,7 @@ def make_manifest(
         protocol_version=1,
         runtime=runtime,
         requires_sandbox=requires_sandbox,
-        mode="sticky" if requires_sandbox else "stateless",
+        mode=RuntimeMode.STICKY if requires_sandbox else RuntimeMode.STATELESS,
         image_digest=image_digest,
         extension_bundle_uri=None,
         tools=tools,

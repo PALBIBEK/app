@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,10 +15,11 @@ from supervisor.harness import HarnessCatalog
 from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
-from supervisor.sandbox.base import SandboxProvider
+from supervisor.memory.platform import MemoryPlatform
 from supervisor.obs.metrics import MetricsRegistry
-from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.policy.protocols import RateLimiterProtocol
+from supervisor.policy.quotas import TenantQuotaEnforcer
+from supervisor.sandbox.base import SandboxProvider
 from supervisor.seams.services import AuthzService, WorkspaceStore
 from supervisor.session import SessionManager, SessionRegistry
 
@@ -50,6 +51,7 @@ class SupervisorState:
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
     writer: JournalWriter | None = None
+    memory: MemoryPlatform | None = None
     # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
     workflows: SessionWorkflows | None = None
 
@@ -91,6 +93,7 @@ def build_supervisor(
         authz=authz,
         hydrator=getattr(sandbox_provider, "_hydrator", None),
     )
+    memory = MemoryPlatform(session_factory)
     manager = SessionManager(
         session_factory=session_factory,
         writer=writer,
@@ -105,6 +108,7 @@ def build_supervisor(
         grant_store=gs,
         workspace_service=workspace_service,
         virtual_key_client=vk,
+        memory=memory,
     )
 
     async def check_db() -> bool:
@@ -142,4 +146,5 @@ def build_supervisor(
         grant_store=gs,
         workspace_store=workspace_store,
         writer=writer,
+        memory=memory,
     )

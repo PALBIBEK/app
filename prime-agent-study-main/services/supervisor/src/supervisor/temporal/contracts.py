@@ -114,6 +114,8 @@ class CreateSession:
     composition_digest: str | None = None
     scope_id: str | None = None
     principal_id: str | None = None
+    # The session's memory binding request (supervisor.memory.binding.MemoryRequest).
+    memory: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

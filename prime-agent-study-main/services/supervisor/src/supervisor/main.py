@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -17,6 +17,7 @@ from supervisor.api import (
     health,
     memory,
     metrics,
+    notebooks,
     scopes,
     sessions,
     subagents,
@@ -151,6 +152,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(workspace.router)
     app.include_router(scopes.router)
     app.include_router(memory.router)
+    app.include_router(notebooks.router)
     app.include_router(subagents.router)
     return app
 

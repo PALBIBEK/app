@@ -73,6 +73,8 @@ from supervisor.seams.services import (
     WorkspaceConflictError,
     VirtualKeyClient,
 )
+from supervisor.memory.binding import MemoryRequest, agent_pin, resolve_binding
+from supervisor.memory.platform import MemoryPlatform
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
 from supervisor.session.subagent_ops import SubagentOps
@@ -190,6 +192,7 @@ class SessionManager:
         grant_store: GrantStore | None = None,
         workspace_service: SessionWorkspaceService | None = None,
         virtual_key_client: VirtualKeyClient | None = None,
+        memory: MemoryPlatform | None = None,
     ) -> None:
         self._db = session_factory
         self._writer = writer
@@ -219,6 +222,7 @@ class SessionManager:
         self._vk_client = virtual_key_client
         self._run_traces: dict[str, str] = {}
         self._tool_outbox = ToolOutbox(session_factory, writer)
+        self._memory = memory or MemoryPlatform(session_factory)
         self._recovery = Recovery(
             registry=registry,
             reader=reader,
@@ -257,6 +261,7 @@ class SessionManager:
         composition_digest: str | None = None,
         scope_id: str | None = None,
         principal_id: str | None = None,
+        memory: MemoryRequest | dict[str, Any] | None = None,
         session_id: str | None = None,
     ) -> str:
         manifest = await self._catalog.resolve(harness_version, for_create=True)
@@ -366,6 +371,15 @@ class SessionManager:
         await runtime.start(sandbox, session_dir)
 
         snap = manifest_to_dict(manifest)
+        binding = await resolve_binding(
+            self._memory.store,
+            tenant_id=tenant_id,
+            owner=principal.id,
+            pin=agent_pin(
+                harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
+            ),
+            request=memory if isinstance(memory, MemoryRequest) else MemoryRequest.from_dict(memory),
+        )
         await self._writer.ensure_session(
             session_id,
             runtime=runtime_name,
@@ -382,6 +396,10 @@ class SessionManager:
             row.tenant_id = tenant_id
             row.scope_id = scope_id
             row.status = "active"
+            # Memory: owned by the creating principal, for this exact agent version.
+            row.owner_principal_id = binding.owner
+            row.agent_pin = binding.agent_pin
+            row.memory = binding.to_dict()
             await db.commit()
 
         self._registry.put(session_id, runtime)
@@ -391,6 +409,10 @@ class SessionManager:
         self._configure_policy(session_id, manifest, sandbox_profile=profile)
         self._start_fanout(session_id, runtime)
         return session_id
+
+    @property
+    def memory(self) -> MemoryPlatform:
+        return self._memory
 
     async def _ensure_scope_binding(
         self, scope_id: str, principal: Principal
@@ -694,6 +716,11 @@ class SessionManager:
             nrow.manifest = row.manifest
             nrow.composition_pins = row.composition_pins
             nrow.tenant_id = row.tenant_id
+            # A fork is the same person's same agent, with the same notebooks.
+            nrow.owner_principal_id = row.owner_principal_id
+            nrow.agent_pin = row.agent_pin
+            nrow.memory = row.memory
+            nrow.scope_id = row.scope_id
             nrow.status = "active"
             await db.commit()
 

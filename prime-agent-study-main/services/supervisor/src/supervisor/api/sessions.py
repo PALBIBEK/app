@@ -59,6 +59,7 @@ async def create_session(
                     composition_digest=body.composition_digest,
                     scope_id=body.scope_id,
                     principal_id=principal.id,
+                    memory=body.memory.model_dump() if body.memory else None,
                 ),
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
@@ -79,6 +80,7 @@ async def create_session(
             composition_digest=body.composition_digest,
             scope_id=body.scope_id,
             principal_id=principal.id,
+            memory=body.memory.model_dump() if body.memory else None,
         )
     except IncompatibleHarness as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

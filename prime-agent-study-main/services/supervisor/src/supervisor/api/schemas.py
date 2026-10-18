@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class SessionMemoryOptions(BaseModel):
+    """Which notebooks (by name) a session writes and reads, and QM's memory policy."""
+
+    write: str | None = "default"
+    read: list[str] = Field(default_factory=lambda: ["default"])
+    recall: Literal["off", "writable", "visible"] = "visible"
+    capture: Literal["off", "writable"] = "writable"
+    strategy: Literal["per-turn", "agent-only"] = "per-turn"
+    capture_quiet_s: float = Field(default=180.0, ge=0, le=86_400)
+    capture_max_turns: int = Field(default=10, ge=1, le=100)
+    open: bool = False
 
 
 class CreateSessionRequest(BaseModel):
@@ -13,6 +26,7 @@ class CreateSessionRequest(BaseModel):
     composition_id: str | None = None
     composition_digest: str | None = None
     scope_id: str | None = None
+    memory: SessionMemoryOptions | None = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -174,3 +188,91 @@ class CatalogArtifactOut(BaseModel):
     digest: str
     status: str
     semver: str
+
+
+# --- long-term memory (notebooks) ----------------------------------------------
+
+
+class NotebookCreate(BaseModel):
+    agent_pin: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=64)
+    label: str | None = Field(default=None, max_length=200)
+
+
+class NotebookPatch(BaseModel):
+    archived: bool
+
+
+class NotebookOut(BaseModel):
+    id: str
+    agent_pin: str
+    name: str
+    label: str | None
+    revision: int
+    created_at: int
+    archived: bool
+    facts: int
+    bytes: int
+    updated_at: int | None
+
+
+class FactOut(BaseModel):
+    id: str
+    text: str
+    sensitivity: str
+    sources: list[str]
+    source_unknown: bool
+    author: str | None
+    created_at: int
+    updated_at: int
+
+
+class FactsAdd(BaseModel):
+    facts: list[str] = Field(min_length=1, max_length=100)
+
+
+class FactEdit(BaseModel):
+    id: str
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class FactsEdit(BaseModel):
+    edits: list[FactEdit] = Field(min_length=1, max_length=100)
+
+
+class FactsDelete(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class FactsAdded(BaseModel):
+    added: int
+
+
+class NotebookRestore(BaseModel):
+    revision: int = Field(ge=0)
+
+
+class RevisionOut(BaseModel):
+    revision: int
+    fact_id: str
+    op: str
+    text: str
+    sensitivity: str
+    at: int
+    author: str | None
+
+
+class MemorySearch(BaseModel):
+    agent_pin: str = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=2000)
+    notebook_id: str | None = None
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class MemoryHit(BaseModel):
+    notebook_id: str
+    fact: str
+
+
+class FactsRemoved(BaseModel):
+    removed: int
