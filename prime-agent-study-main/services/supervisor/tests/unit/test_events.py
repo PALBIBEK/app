@@ -18,6 +18,8 @@ from supervisor.agent.events import (
     ErrorEvent,
     JobEnd,
     JobStart,
+    MemoryContext,
+    MemoryInjected,
     MemoryRecall,
     MessageEnd,
     RunEnd,
@@ -183,6 +185,8 @@ def test_agent_event_union_covers_all_payloads() -> None:
         JobStart,
         JobEnd,
         CompactionStart,
+        MemoryInjected,
+        MemoryContext,
         CompactionEnd,
         MemoryRecall,
     }

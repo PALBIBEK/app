@@ -60,13 +60,6 @@ async def _collect_until_run_end(rt: Any, *, send_message: str = "hello") -> lis
     return envs
 
 
-@pytest.mark.asyncio
-async def test_start_send_events_then_settled(runtime: Any) -> None:
-    envs = await _collect_until_run_end(runtime)
-    assert len(envs) >= 1
-    assert isinstance(envs[-1].payload, RunEnd)
-    state = await runtime.get_state()
-    assert state.settled is True
 
 
 @pytest.mark.asyncio

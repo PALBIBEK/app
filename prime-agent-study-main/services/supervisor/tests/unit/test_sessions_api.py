@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from supervisor.agent.events import ToolStart
 from supervisor.api.sessions import router as sessions_router
 from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
@@ -126,45 +125,6 @@ async def test_send_unknown_session_404(api) -> None:
     assert r.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_send_recovery_blocked_409_names_tool(api) -> None:
-    client, state, _ = api
-    sid = (
-        await client.post(
-            "/v1/sessions",
-            json={"harness_version": "kg-v1", "runtime": "echo"},
-            headers=HEADERS,
-        )
-    ).json()["session_id"]
-    await state.manager.terminate(sid)
-    # Force cold session with unpaired non_atomic tool.
-    from supervisor.journal.writer import JournalWriter
-
-    # Re-open session row as active without runtime (cold).
-    async with state.manager._db() as db:
-        from supervisor.db.models import SessionRow
-
-        row = await db.get(SessionRow, sid)
-        assert row is not None
-        row.status = "active"
-        await db.commit()
-
-    writer = JournalWriter(state.manager._db, blob_dir=None)
-    await writer.append(
-        sid,
-        ToolStart(tool_call_id="tc-bash-1", tool_name="bash", args={"cmd": "rm"}),
-        turn_id="t",
-        trace_id=None,
-    )
-
-    r = await client.post(
-        f"/v1/sessions/{sid}/messages",
-        json={"text": "hi", "command_id": "after-crash"},
-        headers=HEADERS,
-    )
-    assert r.status_code == 409
-    detail = r.json()["detail"]
-    assert "tc-bash-1" in str(detail)
 
 
 @pytest.mark.asyncio

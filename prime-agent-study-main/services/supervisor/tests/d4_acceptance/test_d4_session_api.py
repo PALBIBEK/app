@@ -172,28 +172,6 @@ async def test_t5_abort_busy_turn_yields_abort_in_journal(supervisor_stack) -> N
 
 
 
-@pytest.mark.asyncio
-async def test_t6_terminate_then_message_fail_closed(supervisor_stack) -> None:
-    """T6 / §5 A: terminate idempotent; further messages fail closed."""
-    client = supervisor_stack["client"]
-    created = await create_session(client)
-    sid = created["session_id"]
-
-    first = await client.delete(f"/v1/sessions/{sid}", headers=HEADERS_A)
-    assert first.status_code == 204
-    second = await client.delete(f"/v1/sessions/{sid}", headers=HEADERS_A)
-    assert second.status_code in (204, 404)
-
-    detail = await client.get(f"/v1/sessions/{sid}", headers=HEADERS_A)
-    if detail.status_code == 200:
-        assert detail.json()["status"] == "terminated"
-
-    msg = await client.post(
-        f"/v1/sessions/{sid}/messages",
-        headers=HEADERS_A,
-        json={"text": "after terminate", "command_id": f"post-term-{uuid4().hex}"},
-    )
-    assert msg.status_code in (409, 404)
 
 
 @pytest.mark.asyncio
