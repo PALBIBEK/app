@@ -5,7 +5,7 @@ from __future__ import annotations
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.catalog.providers.catalog_prompt import CatalogPromptAssembler
-from supervisor.catalog.providers.catalog_tools import CatalogToolProvider
+from supervisor.catalog.providers.catalog_tools import bind_tool_set
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import AgentComposition, PromptPack, SessionPins, ToolSet
 from supervisor.seams import build_runtime_seams
@@ -40,7 +40,7 @@ def bind_runtime_seams(
 
     # Build gateway first so MemoryProfile can share the same client instance.
     seams = build_runtime_seams(
-        tool_provider=CatalogToolProvider(tools),
+        tool_provider=bind_tool_set(tools),
         prompt_assembler=CatalogPromptAssembler(pack),
         gateway_base_url=gateway_url,
         mcp_server_url=mcp_url,

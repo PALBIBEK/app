@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from supervisor.api import deps
 from supervisor.api.schemas import CatalogArtifactOut
-from supervisor.catalog import CatalogError, ArtifactKind
+from supervisor.catalog import CatalogError, ArtifactKind, ToolSet
+from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict
 
 from supervisor.catalog.repository import artifact_summary, persist_deprecate, persist_offer
@@ -48,6 +49,8 @@ async def publish_artifact(
     catalog: CompositionCatalog = deps.get_composition_catalog(request)
     try:
         artifact = artifact_from_dict(kind, body)
+        if isinstance(artifact, ToolSet):
+            require_implemented(artifact)  # 422 before it can be pinned
         offered = catalog.offer(artifact)
     except CatalogError as exc:
         raise _catalog_error(exc) from exc

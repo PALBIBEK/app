@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 
 # Nested session provider constant
 NESTED_SESSION_PROVIDER = "nested_session"
+
+STANDALONE_TOOLS: Final = ("read", "write", "ls", "grep")
+"""Offered to a githi runtime created without a tool seam (no catalog pins):
+workspace file tools only, never a shell."""
 
 
 def _env_name() -> str:
@@ -101,6 +105,13 @@ def build_context_memory_from_profile(
         )
         return CompositeContextMemoryProvider(compaction=compaction, recall=recall)
     return compaction
+
+
+def build_standalone_tool_provider() -> ToolProvider:
+    """Tools for a runtime created without catalog pins (local dev, tests)."""
+    from supervisor.seams.providers.tools.registry_tools import RegistryToolProvider
+
+    return RegistryToolProvider.of(*STANDALONE_TOOLS)
 
 
 def _maybe_mcp_tools(

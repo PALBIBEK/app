@@ -16,7 +16,6 @@ import asyncio
 import logging
 import threading
 from collections.abc import AsyncIterator
-from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,7 +23,6 @@ from supervisor.agent.base import AgentState
 from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.events import Envelope, RunEnd, TurnEnd
 from supervisor.agent.runtimes.githi.loop import AgentLoop, LoopConfig
-from supervisor.agent.runtimes.githi.tools.provider import GithiToolProvider
 from supervisor.agent.runtimes.githi.session_store import PostgresSessionStore
 from supervisor.agent.runtimes.githi.session import Session
 from supervisor.agent.runtimes.githi.hooks import Hooks, EMPTY_HOOKS
@@ -81,7 +79,6 @@ class GithiRuntime:
         self._session_id = self._session_id or uuid4().hex
         self._session_dir = session_dir
         self._stream.session_id = self._session_id
-        self._ensure_tool_provider()
 
         # Load or create session in PostgreSQL (if session_store available)
         if self.seams and hasattr(self.seams, 'session_store') and self.seams.session_store:
@@ -118,20 +115,6 @@ class GithiRuntime:
             session_dir,
             self._model,
         )
-
-    def _ensure_tool_provider(self) -> None:
-        """Inject path-confined GithiToolProvider when caller did not supply one."""
-        if self.seams is not None and self.seams.tool_provider is not None:
-            return
-        assert self._session_id is not None
-        provider = GithiToolProvider(
-            self._session_id,
-            working_directory=self._session_dir or ".",
-        )
-        if self.seams is None:
-            self.seams = RuntimeSeams(tool_provider=provider)
-        else:
-            self.seams = replace(self.seams, tool_provider=provider)
 
     async def send(self, message: str, *, command_id: str, mode: str = "prompt") -> None:
         del command_id

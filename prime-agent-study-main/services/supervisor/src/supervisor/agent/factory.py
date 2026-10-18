@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
@@ -59,6 +60,11 @@ def create_runtime(
 
     if runtime_name == RuntimeNames.GITHI:
         from supervisor.agent.runtimes.githi.runtime import GithiRuntime
+
+        if seams.tool_provider is None:
+            from supervisor.seams.core.factory import build_standalone_tool_provider
+
+            seams = replace(seams, tool_provider=build_standalone_tool_provider())
         kw = {"seams": seams, "session_id": session_id, **kwargs}
         if model:
             kw["model"] = model

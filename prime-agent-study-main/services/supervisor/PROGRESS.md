@@ -147,6 +147,29 @@ imported, because they reference modules that no longer exist.
   - however it ends, exactly one `JobEnd` and one `SubagentEnd` reach the
     session's journal.
 
+### 8. Tools come from one registry, through the tool seam
+- **Before,** the same tools existed twice: plain functions in
+  `catalog/tools/handlers.py` (host-only) and githi's own classes and registry
+  (sandbox-aware), with different outputs. A published ToolSet was never checked
+  against code, so a tool with no implementation failed only when the model
+  called it. githi built its own tool provider, which the seams contract forbids.
+- **Now,** `supervisor/tools/` is the only place tools live:
+  - one module per built-in tool (`read`, `write`, `edit`, `ls`, `grep`, `bash`,
+    `echo`, `remember`, `git_commit`), each an `async def` registered with
+    `@tool`; its schema comes from a pydantic args model and its description
+    from its docstring;
+  - tools act on a `Workspace` (host directory or sandbox file tree), which
+    confines every path, symlinks included;
+  - `RegistryToolProvider` is the seam: it offers exactly the pinned tools and
+    turns every failure into a typed result code;
+  - a ToolSet naming an unimplemented tool is refused at publish (422), at boot
+    verify and at bind;
+  - `bash` no longer passes the supervisor's environment (service tokens,
+    database URLs) to agent commands, and returns output produced before a
+    timeout kill.
+- Shipped tool sets are unchanged (same digests); a test checks that every
+  argument they pin is accepted by the implementation.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
