@@ -2,7 +2,7 @@
   "definitions": {
     "echo": {
       "description": "Echo text (dev / smoke tool)",
-      "digest": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
+      "digest": "sha256:2a2fa3f821b39ad7a71681c2809c6fbe348835adc74b245d6a33564c090ed3b0",
       "name": "echo",
       "parameters": {
         "properties": {
@@ -138,7 +138,7 @@
   "semver": "1.0.0",
   "status": "offered",
   "tools": {
-    "echo": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
+    "echo": "sha256:2a2fa3f821b39ad7a71681c2809c6fbe348835adc74b245d6a33564c090ed3b0",
     "grep": "sha256:950438d4b6950562e5f912c8ffadf7bcdf70f4dd0e578e7bd00214c822d7d160",
     "ls": "sha256:e72466adfec28f058e67bb89fe28d68799d4df4db0059d69845ad76a45b7a69d",
     "read": "sha256:51c6058a3253bbcec16607c9768f7559b4ae4dd025e9471a6d30aa26acd8be3c",

@@ -17,6 +17,15 @@ def canonical_json_bytes(obj: Any) -> bytes:
     ).encode("utf-8")
 
 
+# Authoring markers meaning "compute the digest on offer".
+_UNSET_DIGEST_PREFIXES: tuple[str, ...] = ("sha256:PLACEHOLDER", "sha256:REPLACE")
+
+
+def is_unset_digest(digest: str | None) -> bool:
+    """True when a digest is absent or an authoring placeholder to be computed."""
+    return not digest or digest.startswith(_UNSET_DIGEST_PREFIXES)
+
+
 def content_digest(obj: Any) -> str:
     """Return ``sha256:`` + lowercase hex of canonical UTF-8 JSON body."""
     digest = hashlib.sha256(canonical_json_bytes(obj)).hexdigest()

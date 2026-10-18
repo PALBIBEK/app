@@ -16,9 +16,12 @@ Reference: Extracted from store.py with improvements.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
+from supervisor.catalog.core.digests import content_digest, is_unset_digest
+from supervisor.catalog.core.errors import DigestMismatch
 from supervisor.catalog.core.types import (
     # Enums
     ArtifactKind,
@@ -202,6 +205,22 @@ def prompt_pack_to_dict(pack: PromptPack) -> dict[str, Any]:
 # ToolSet Converters
 # =============================================================================
 
+def _tool_definition_from_dict(raw: dict[str, Any]) -> ToolDefinition:
+    """Parse one tool, computing its digest or verifying a claimed one."""
+    tool = ToolDefinition(
+        name=raw["name"],
+        description=raw["description"],
+        parameters=dict(raw["parameters"]),
+        digest="",
+        tool_class=raw.get("tool_class"),
+    )
+    actual = content_digest(tool.body_for_digest())
+    claimed = raw.get("digest")
+    if not is_unset_digest(claimed) and claimed != actual:
+        raise DigestMismatch(expected=claimed, actual=actual)
+    return replace(tool, digest=actual)
+
+
 def tool_set_from_dict(data: dict[str, Any]) -> ToolSet:
     """Parse ToolSet from dict.
 
@@ -211,15 +230,9 @@ def tool_set_from_dict(data: dict[str, Any]) -> ToolSet:
     Returns:
         Frozen ToolSet instance
     """
-    definitions: dict[str, ToolDefinition] = {}
-    for name, raw in (data.get("definitions") or {}).items():
-        definitions[name] = ToolDefinition(
-            name=raw["name"],
-            description=raw["description"],
-            parameters=dict(raw["parameters"]),
-            digest=raw["digest"],
-            tool_class=raw.get("tool_class"),
-        )
+    definitions = {
+        name: _tool_definition_from_dict(raw) for name, raw in (data.get("definitions") or {}).items()
+    }
 
     status_str = data.get("status", "offered")
     status = ArtifactStatus(status_str) if status_str else ArtifactStatus.OFFERED
@@ -230,7 +243,8 @@ def tool_set_from_dict(data: dict[str, Any]) -> ToolSet:
         digest=data.get("digest", ""),
         protocol_version=int(data.get("protocol_version", 1)),
         status=status,
-        tools=dict(data.get("tools") or {}),
+        # Derived, never trusted from input: each tool name pins its verified definition digest.
+        tools={name: td.digest for name, td in definitions.items()},
         definitions=definitions,
         metadata=metadata_from_dict(data.get("metadata")),
     )
@@ -345,7 +359,7 @@ def composition_to_dict(comp: AgentComposition) -> dict[str, Any]:
         }
 
     if comp.plug_bindings is not None:
-        result["plug_bindings"] = comp.plug_bindings.to_dict()
+        result["plug_bindings"] = comp.plug_bindings.body_for_digest()  # its serial form; from_dict reads it back
 
     return result
 

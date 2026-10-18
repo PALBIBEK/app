@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from supervisor.catalog.core.digests import content_digest
 from supervisor.catalog.core.errors import DigestMissing
 from supervisor.catalog.storage import (
     CompositionCatalog,
@@ -15,49 +14,11 @@ from supervisor.catalog.storage import (
     sandbox_profile_from_dict,
     tool_set_from_dict,
 )
-from supervisor.catalog.core.types import AgentComposition, ArtifactKind, DigestRef, PlugBindings, ToolDefinition, ToolSet
+from supervisor.catalog.core.types import AgentComposition, ArtifactKind, DigestRef, PlugBindings
 
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _normalize_tool_set(data: dict[str, Any]) -> ToolSet:
-    """Fill per-tool definition digests before offer (fixture authoring aid)."""
-    definitions: dict[str, ToolDefinition] = {}
-    tools: dict[str, str] = {}
-    for name, raw in (data.get("definitions") or {}).items():
-        body = {
-            "name": raw["name"],
-            "description": raw["description"],
-            "parameters": raw["parameters"],
-        }
-        if raw.get("tool_class") is not None:
-            body["tool_class"] = raw["tool_class"]
-        digest = raw.get("digest") or content_digest(body)
-        if digest in ("", "sha256:PLACEHOLDER", "sha256:REPLACE_AFTER_OFFER"):
-            digest = content_digest(body)
-        definitions[name] = ToolDefinition(
-            name=raw["name"],
-            description=raw["description"],
-            parameters=dict(raw["parameters"]),
-            digest=digest,
-            tool_class=raw.get("tool_class"),
-        )
-        tools[name] = digest
-    normalized = dict(data)
-    normalized["tools"] = tools
-    normalized["definitions"] = {
-        name: {
-            "name": td.name,
-            "description": td.description,
-            "parameters": td.parameters,
-            "digest": td.digest,
-            **({"tool_class": td.tool_class} if td.tool_class is not None else {}),
-        }
-        for name, td in definitions.items()
-    }
-    return tool_set_from_dict(normalized)
 
 
 def _load_dir(catalog_dir: Path, subdir: str, loader) -> list[Any]:  # type: ignore[no-untyped-def]
@@ -78,7 +39,7 @@ def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
     catalog = CompositionCatalog()
     for pack in _load_dir(catalog_dir, "prompt_packs", prompt_pack_from_dict):
         catalog.offer(pack)
-    for tool_set in _load_dir(catalog_dir, "tool_sets", _normalize_tool_set):
+    for tool_set in _load_dir(catalog_dir, "tool_sets", tool_set_from_dict):
         catalog.offer(tool_set)
     for profile in _load_dir(catalog_dir, "sandbox_profiles", sandbox_profile_from_dict):
         catalog.offer(profile)

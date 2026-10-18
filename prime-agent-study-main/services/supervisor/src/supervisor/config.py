@@ -51,7 +51,7 @@ class Settings:
     )
     load_composition_catalog: bool = True
     persist_composition_catalog: bool = field(
-        default_factory=lambda: os.environ.get("YAL_PERSIST_CATALOG", "false").lower()
+        default_factory=lambda: os.environ.get("YAL_PERSIST_CATALOG", "true").lower()
         in ("1", "true", "yes")
     )
     auth_token: str | None = field(
@@ -126,7 +126,7 @@ class Settings:
             ),
             load_composition_catalog=load_catalog,
             persist_composition_catalog=os.environ.get(
-                "YAL_PERSIST_CATALOG", "false"
+                "YAL_PERSIST_CATALOG", "true"
             ).lower()
             in ("1", "true", "yes"),
             auth_token=os.environ.get("AUTH_TOKEN") or None,

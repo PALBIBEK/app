@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from supervisor.app import SupervisorState, build_supervisor
 from supervisor.catalog.core.errors import (
     CatalogError,
     DigestMismatch,
@@ -29,13 +31,13 @@ from supervisor.catalog.loading.bootstrap import (
     bootstrap_composition_catalog,
     default_catalog_dir,
 )
+from supervisor.catalog.repository import hydrate_composition_catalog
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.db.engine import open_db
 from supervisor.harness import HarnessCatalog, load_manifest
-from supervisor.journal.reader import JournalReader
-from supervisor.journal.writer import JournalWriter
+from supervisor.main import create_app
+from supervisor.seams.core.types import PromptBindings
 from supervisor.session.manager import SessionManager
-from supervisor.session.registry import SessionRegistry
 from tests.support.session_env import TrackingProvider
 
 HARNESS = "githi-v1"
@@ -45,13 +47,29 @@ MOCK_IMAGE = "sha256:" + hashlib.sha256(b"mock-githi-image").hexdigest()
 
 @dataclass(frozen=True, slots=True)
 class Pipeline:
-    manager: SessionManager
-    compositions: CompositionCatalog
-    reader: JournalReader
+    """One supervisor process (fresh in-memory state) over a shared database."""
+
+    state: SupervisorState
     sandboxes: TrackingProvider
+
+    @property
+    def manager(self) -> SessionManager:
+        return self.state.manager
+
+    @property
+    def compositions(self) -> CompositionCatalog:
+        assert self.state.composition_catalog is not None
+        return self.state.composition_catalog
 
     def digest_of(self, composition_id: str) -> str:
         return self.compositions.list_versions("composition", composition_id)[-1]
+
+    def client(self) -> AsyncClient:
+        return AsyncClient(
+            transport=ASGITransport(app=create_app(state=self.state)),
+            base_url="http://supervisor",
+            headers={"X-Tenant-Id": "t1"},
+        )
 
 
 def _shipped_harness_catalog() -> HarnessCatalog:
@@ -65,22 +83,33 @@ def _shipped_harness_catalog() -> HarnessCatalog:
     return catalog
 
 
+Boot = Callable[[], Awaitable[Pipeline]]
+
+
 @pytest.fixture
-async def pipeline(tmp_path: Path) -> AsyncIterator[Pipeline]:
+async def boot(tmp_path: Path) -> AsyncIterator[Boot]:
+    """Start a supervisor process the way bootstrap_supervisor does; call again to restart."""
     async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'pipeline.db'}") as (_, factory):
-        compositions = bootstrap_composition_catalog(default_catalog_dir())
-        sandboxes = TrackingProvider()
-        reader = JournalReader(factory, blob_dir=tmp_path / "blobs")
-        manager = SessionManager(
-            session_factory=factory,
-            writer=JournalWriter(factory, blob_dir=tmp_path / "blobs"),
-            reader=reader,
-            registry=SessionRegistry(),
-            catalog=_shipped_harness_catalog(),
-            sandbox_provider=sandboxes,
-            composition_catalog=compositions,
-        )
-        yield Pipeline(manager, compositions, reader, sandboxes)
+
+        async def start() -> Pipeline:
+            compositions = bootstrap_composition_catalog(default_catalog_dir())
+            await hydrate_composition_catalog(compositions, factory)  # YAL_PERSIST_CATALOG
+            sandboxes = TrackingProvider()
+            state = build_supervisor(
+                session_factory=factory,
+                catalog=_shipped_harness_catalog(),
+                blob_dir=tmp_path / "blobs",
+                sandbox_provider=sandboxes,
+                composition_catalog=compositions,
+            )
+            return Pipeline(state, sandboxes)
+
+        yield start
+
+
+@pytest.fixture
+async def pipeline(boot: Boot) -> Pipeline:
+    return await boot()
 
 
 # --- Stage 1: catalog → composition → SessionPins -------------------------------
@@ -157,3 +186,97 @@ def test_catalog_refuses_a_digest_that_does_not_match_content(pipeline: Pipeline
     with pytest.raises(DigestMismatch):
         pipeline.compositions.offer(forged)
     assert pipeline.compositions.get("prompt_pack", pinned.name, pinned.digest).persona == pinned.persona
+
+
+# --- Stage 2: user-chosen seams, durable across restarts -------------------------
+
+WEATHER_TOOL = {
+    "name": "weather",
+    "description": "Current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    "tool_class": "pure",
+}
+
+
+async def _publish_user_composition(client: AsyncClient, pipeline: Pipeline) -> str:
+    """A user's own githi agent: new prompt, new tool set, memory profile, ACP subagents."""
+
+    async def publish(kind: str, body: dict) -> str:
+        resp = await client.post(f"/v1/catalog/{kind}/publish", json=body)
+        assert resp.status_code == 200, resp.text
+        return resp.json()["digest"]
+
+    common = {"semver": "1.0.0", "protocol_version": 1, "status": "offered"}
+    prompt = await publish("prompt_pack", common | {
+        "name": "my-prompt", "persona": "analyst", "vars": [],
+        "sections": [{"id": "s1", "order": 1, "text": "You are MY analyst.", "complete": True}],
+    })
+    tools = await publish("tool_set", common | {
+        "name": "my-tools", "definitions": {"weather": WEATHER_TOOL},
+    })
+    memory = pipeline.compositions.list_versions("memory_profile", "default")[-1]
+    return await publish("composition", common | {
+        "name": "my-githi",
+        "harness_version": HARNESS,
+        "prompt_pack": {"id": "my-prompt", "digest": prompt},
+        "tool_set": {"id": "my-tools", "digest": tools},
+        "memory_profile": {"id": "default", "digest": memory},
+        "plug_bindings": {"gateway_base_url": "http://gateway:8090", "acp_base_url": "http://acp:9000"},
+    })
+
+
+async def _create(client: AsyncClient, digest: str) -> str:
+    resp = await client.post("/v1/sessions", json={
+        "harness_version": HARNESS, "composition_id": "my-githi", "composition_digest": digest,
+    })
+    assert resp.status_code == 201, resp.text
+    return resp.json()["session_id"]
+
+
+def _assert_user_seams(pipeline: Pipeline, session_id: str) -> None:
+    runtime = pipeline.manager._registry.get(session_id)  # noqa: SLF001
+    seams = runtime.seams
+    assert type(runtime).__name__ == "GithiRuntime"  # from the manifest, not an API default
+    assert "You are MY analyst." in seams.prompt_assembler.assemble(PromptBindings()).text
+    assert [t.name for t in seams.tool_provider.list_tools()] == ["weather"]
+    assert seams.model_gateway._base == "http://gateway:8090"  # noqa: SLF001
+    assert seams.subagent_transport._provider("acp") is not None  # noqa: SLF001
+    assert seams.context_memory is not None
+
+
+async def test_user_composed_agent_runs_with_its_own_seams(pipeline: Pipeline) -> None:
+    async with pipeline.client() as client:
+        session_id = await _create(client, await _publish_user_composition(client, pipeline))
+    _assert_user_seams(pipeline, session_id)
+
+
+async def test_user_compositions_and_sessions_survive_restart(boot: Boot) -> None:
+    before = await boot()
+    async with before.client() as client:
+        digest = await _publish_user_composition(client, before)
+        old_session = await _create(client, digest)
+
+    after = await boot()  # new process, same database
+    async with after.client() as client:
+        assert (await client.get(f"/v1/catalog/composition/my-githi/{digest}")).status_code == 200
+        _assert_user_seams(after, await _create(client, digest))
+    await after.manager.resume(old_session)
+    _assert_user_seams(after, old_session)
+
+
+async def test_tool_set_with_forged_tool_digest_is_refused(pipeline: Pipeline) -> None:
+    forged = WEATHER_TOOL | {"digest": "sha256:" + "1" * 64}
+    async with pipeline.client() as client:
+        resp = await client.post("/v1/catalog/tool_set/publish", json={
+            "name": "forged", "semver": "1.0.0", "protocol_version": 1,
+            "definitions": {"weather": forged},
+        })
+    assert resp.status_code == 422, resp.text
+
+
+def test_catalog_persistence_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from supervisor.config import Settings
+
+    monkeypatch.delenv("YAL_PERSIST_CATALOG", raising=False)
+    assert Settings().persist_composition_catalog
+    assert Settings.from_env().persist_composition_catalog

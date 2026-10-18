@@ -64,10 +64,11 @@ async def create_session(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    info = await manager.get(session_id, tenant_id=tenant_id)
     return CreateSessionResponse(
         session_id=session_id,
         harness_version=body.harness_version,
-        runtime=body.runtime,
+        runtime=info.runtime if info is not None else body.runtime or "",
         status="active",
     )
 

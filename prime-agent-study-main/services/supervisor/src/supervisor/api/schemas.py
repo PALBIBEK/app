@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class CreateSessionRequest(BaseModel):
     harness_version: str
-    runtime: str = "echo"
+    runtime: str | None = None  # default: the harness manifest's runtime
     composition_id: str | None = None
     composition_digest: str | None = None
     scope_id: str | None = None

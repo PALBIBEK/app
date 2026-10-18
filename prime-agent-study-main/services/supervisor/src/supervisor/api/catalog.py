@@ -15,7 +15,7 @@ from supervisor.catalog.repository import artifact_summary, persist_deprecate, p
 
 router = APIRouter(prefix="/v1/catalog", tags=["catalog"])
 
-KindPath = Literal["prompt_pack", "tool_set", "composition", "sandbox_profile"]
+KindPath = Literal["prompt_pack", "tool_set", "composition", "sandbox_profile", "memory_profile"]
 
 
 _CATALOG_ERROR_STATUS: Final[dict[str, int]] = {

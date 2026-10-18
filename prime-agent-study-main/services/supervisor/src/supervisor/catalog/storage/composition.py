@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from supervisor.catalog.core.digests import content_digest
+from supervisor.catalog.core.digests import content_digest, is_unset_digest
 from supervisor.catalog.core.errors import (
     DigestMismatch,
     NotOffered,
@@ -23,9 +23,6 @@ from supervisor.catalog.core.types import (
     ArtifactStatus,
 )
 from supervisor.catalog.storage.converters import kind_of, with_digest, with_status
-
-# Authoring markers meaning "compute the digest on offer" (see catalog/loading/loader.py).
-_UNSET_DIGEST_PREFIXES: tuple[str, ...] = ("sha256:PLACEHOLDER", "sha256:REPLACE")
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
@@ -84,7 +81,7 @@ class CompositionCatalog:
         # A digest is a proof of content: sessions pin by it, so a claimed digest
         # that does not hash to this body would let anyone rewrite pinned content.
         expected = content_digest(artifact.body_for_digest())
-        if not artifact.digest or artifact.digest.startswith(_UNSET_DIGEST_PREFIXES):
+        if is_unset_digest(artifact.digest):
             artifact = with_digest(artifact, expected)
         elif artifact.digest != expected:
             raise DigestMismatch(expected=artifact.digest, actual=expected)

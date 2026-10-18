@@ -82,7 +82,7 @@ def test_bootstrap_soft_skips_invalid_composition_keeps_coding(tmp_path: Path) -
         # githi-tools lacks coding-v1 recovery tools bash/git_commit → verify fails
         "tool_set": {
             "id": "githi-tools",
-            "digest": "sha256:126f3ccb7c6c5f31688dbeb16b3aff60c35dec6f8782ecab5ceb64a5d335f3fa",
+            "digest": "sha256:d49abd6d6bbf6230ee084c01dd8cee6301f19aecbe1b64afe18d28ea9259b124",
         },
     }
     (dst / "compositions" / "broken-tools-v1.json").write_text(
