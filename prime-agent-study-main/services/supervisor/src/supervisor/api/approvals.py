@@ -12,6 +12,8 @@ from supervisor.policy.errors import (
     InvalidApprovalChoice,
 )
 from supervisor.session import SessionNotFound
+from supervisor.api.workflow_errors import to_http
+from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
 
 router = APIRouter(tags=["approvals"])
 
@@ -71,9 +73,19 @@ async def respond_approval(
         if existing.status == "timed_out":
             raise HTTPException(status_code=409, detail="approval already timed out")
         await deps.require_session_access(tenant_id, existing.session_id, request)
-        resolved = await manager.respond_approval(approval_id, body.choice)
-        approval = await broker.get(approval_id)
-        assert approval is not None
+        if (workflows := deps.get_workflows(request)) is not None:
+            # Delivered through the session's workflow, to the worker holding its runtime.
+            try:
+                await workflows.respond_approval(existing.session_id, approval_id, body.choice)
+            except (SessionCommandError, TemporalUnavailable) as exc:
+                raise to_http(exc) from exc
+            approval = await broker.get(approval_id)
+            assert approval is not None
+            status = approval.status
+        else:
+            status = (await manager.respond_approval(approval_id, body.choice)).status
+            approval = await broker.get(approval_id)
+            assert approval is not None
     except ApprovalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InvalidApprovalChoice as exc:
@@ -88,7 +100,7 @@ async def respond_approval(
         session_id=approval.session_id,
         prompt=approval.prompt,
         options=approval.options,
-        status=resolved.status,
+        status=status,
         choice=approval.choice,
         timeout_s=approval.timeout_s,
     )

@@ -16,6 +16,8 @@ dependencies = [
   "opentelemetry-api>=1.27",
   "opentelemetry-sdk>=1.27",
   "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+  # Every session runs as a Temporal workflow (supervisor.temporal).
+  "temporalio>=1.34,<2",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,4 @@
+# Server dynamic config for the local stack. Production overrides live with the deployment.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}

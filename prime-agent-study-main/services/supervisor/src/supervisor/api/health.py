@@ -48,6 +48,12 @@ async def readyz(request: Request, response: Response) -> dict[str, str]:
             response.status_code = 503
             return {"status": "not_ready", "reason": "sandbox"}
 
+    workflows = getattr(state, "workflows", None)
+    if workflows is not None and not await workflows.check_reachable():
+        # Every session runs as a Temporal workflow: no Temporal, no sessions.
+        response.status_code = 503
+        return {"status": "not_ready", "reason": "temporal"}
+
     catalog = getattr(state, "composition_catalog", None)
     if catalog is not None:
         from supervisor.catalog.loading.verify import list_catalog_problems

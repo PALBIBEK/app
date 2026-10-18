@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -23,6 +23,10 @@ from supervisor.seams.services import (
     UnauthorizedError,
 )
 from supervisor.session import SessionManager
+
+
+if TYPE_CHECKING:
+    from supervisor.temporal.sessions import SessionWorkflows
 
 
 def _state(request: Request):
@@ -230,6 +234,11 @@ def get_reader(request: Request) -> JournalReader:
 
 def get_commands(request: Request) -> CommandStore:
     return _state(request).commands
+
+
+def get_workflows(request: Request) -> SessionWorkflows | None:
+    """Session workflows; None only when a test drives SessionManager in-process."""
+    return getattr(_state(request), "workflows", None)
 
 
 def is_draining(request: Request) -> bool:

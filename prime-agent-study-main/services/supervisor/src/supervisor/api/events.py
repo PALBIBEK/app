@@ -22,6 +22,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
 
 _HEARTBEAT_SECS = 20.0
+_JOURNAL_POLL_SECS = 0.25
 
 
 def _sse_data(wire_json: str, *, event_id: int) -> str:
@@ -92,6 +93,40 @@ async def iter_sse(
         manager.unsubscribe_live(session_id, sub)
 
 
+async def iter_journal_sse(
+    *,
+    session_id: str,
+    cursor: int,
+    reader: JournalReader,
+    is_disconnected: Callable[[], bool] | None = None,
+    heartbeat_secs: float | None = None,
+    poll_secs: float = _JOURNAL_POLL_SECS,
+    max_events: int | None = None,
+) -> AsyncIterator[str]:
+    """Resumable SSE body that follows the journal, so it works for sessions running
+    in any worker and from any API replica.
+
+    shortcut: polls the journal; switch to Postgres LISTEN/NOTIFY if poll load shows up.
+    """
+    hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
+    emitted, idle = 0, 0.0
+    while is_disconnected is None or not is_disconnected():
+        batch = await reader.read(session_id, since=cursor)
+        for env in batch:
+            yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
+            cursor, emitted = env.seq, emitted + 1
+            if max_events is not None and emitted >= max_events:
+                return
+        if batch:
+            idle = 0.0
+            continue
+        if idle >= hb:
+            yield _sse_comment("ping")
+            idle = 0.0
+        await asyncio.sleep(poll_secs)
+        idle += poll_secs
+
+
 @router.get("/{session_id}/events")
 async def stream_events(
     session_id: str,
@@ -113,12 +148,12 @@ async def stream_events(
             ) from exc
 
     async def gen() -> AsyncIterator[str]:
-        async for chunk in iter_sse(
-            session_id=session_id,
-            cursor=cursor,
-            manager=manager,
-            reader=reader,
-        ):
+        body = (
+            iter_journal_sse(session_id=session_id, cursor=cursor, reader=reader)
+            if deps.get_workflows(request) is not None
+            else iter_sse(session_id=session_id, cursor=cursor, manager=manager, reader=reader)
+        )
+        async for chunk in body:
             if await request.is_disconnected():
                 return
             yield chunk

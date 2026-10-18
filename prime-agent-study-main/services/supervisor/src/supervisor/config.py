@@ -23,6 +23,26 @@ def _optional_float(name: str) -> float | None:
     return float(raw)
 
 
+@dataclass(frozen=True, slots=True)
+class TemporalSettings:
+    """Where sessions run durably. Every session is a workflow on this task queue."""
+
+    address: str = "localhost:7233"
+    namespace: str = "default"
+    task_queue: str = "supervisor-sessions"
+    # Temporal Cloud API key; setting it also turns on TLS.
+    api_key: str | None = None
+
+    @classmethod
+    def from_env(cls) -> TemporalSettings:
+        return cls(
+            address=os.environ.get("TEMPORAL_ADDRESS", cls.address),
+            namespace=os.environ.get("TEMPORAL_NAMESPACE", cls.namespace),
+            task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", cls.task_queue),
+            api_key=os.environ.get("TEMPORAL_API_KEY") or None,
+        )
+
+
 @dataclass
 class Settings:
     """Runtime settings for the supervisor service."""
@@ -50,6 +70,7 @@ class Settings:
         default_factory=lambda: agent_platform_root() / "harness" / "versions"
     )
     load_composition_catalog: bool = True
+    temporal: TemporalSettings = field(default_factory=TemporalSettings.from_env)
     persist_composition_catalog: bool = field(
         default_factory=lambda: os.environ.get("YAL_PERSIST_CATALOG", "true").lower()
         in ("1", "true", "yes")
@@ -125,6 +146,7 @@ class Settings:
                 else str(agent_platform_root() / "harness" / "versions")
             ),
             load_composition_catalog=load_catalog,
+            temporal=TemporalSettings.from_env(),
             persist_composition_catalog=os.environ.get(
                 "YAL_PERSIST_CATALOG", "true"
             ).lower()

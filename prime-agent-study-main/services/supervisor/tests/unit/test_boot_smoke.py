@@ -15,9 +15,8 @@ from fastapi.testclient import TestClient
 
 import supervisor
 
-# Optional extras / unfinished packages that are allowed not to import.
+# Unfinished packages that are allowed not to import.
 _OPTIONAL_PREFIXES = (
-    "supervisor.temporal",  # needs the optional `temporalio` dependency
     "supervisor.core",  # unused, unfinished refactor
     "supervisor.seams.observable",  # unused, unfinished refactor
 )
@@ -37,14 +36,26 @@ def test_every_module_imports() -> None:
     )
 
 
-@pytest.fixture
-def booted_app(tmp_path, monkeypatch):
+def _boot(tmp_path, monkeypatch, temporal_address: str):  # type: ignore[no-untyped-def]
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'boot.db'}")
     monkeypatch.setenv("SANDBOX_PROVIDER", "none")
+    monkeypatch.setenv("TEMPORAL_ADDRESS", temporal_address)
     from supervisor.main import create_app
 
-    with TestClient(create_app()) as client:
-        yield client
+    return TestClient(create_app())
+
+
+@pytest.fixture
+def booted_app(tmp_path, monkeypatch, temporal_env):  # type: ignore[no-untyped-def]
+    with _boot(tmp_path, monkeypatch, temporal_env.client.service_client.config.target_host) as c:
+        yield c
+
+
+def test_not_ready_without_temporal(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    with _boot(tmp_path, monkeypatch, "127.0.0.1:1") as client:
+        assert client.get("/healthz").status_code == 200  # alive, just not ready
+        ready = client.get("/readyz")
+        assert (ready.status_code, ready.json()["reason"]) == (503, "temporal")
 
 
 def test_app_boots_and_reports_ready(booted_app: TestClient) -> None:

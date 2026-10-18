@@ -45,50 +45,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     loop = asyncio.get_running_loop()
 
-    reap_task: asyncio.Task[None] | None = None
-    if state is not None and state.idle_reap_max_seconds > 0:
-        from supervisor.session import reap_idle
+    if state is not None and state.workflows is None:
+        from supervisor.temporal.client import connect
+        from supervisor.temporal.sessions import SessionWorkflows
 
-        async def _idle_reap_loop() -> None:
-            interval = max(5.0, state.idle_reap_interval_seconds)
-            while not state.draining:
-                try:
-                    reaped = await reap_idle(
-                        state.manager,
-                        max_idle_seconds=state.idle_reap_max_seconds,
-                    )
-                    if reaped:
-                        _log.info(
-                            "idle reaper: reaped %d sessions %s",
-                            len(reaped),
-                            reaped[:8],
-                        )
-                except Exception:
-                    _log.exception("idle reaper failed")
-                await asyncio.sleep(interval)
-
-        reap_task = asyncio.create_task(_idle_reap_loop(), name="idle-reaper")
-
-    approval_sweeper_task: asyncio.Task[None] | None = None
-    if state is not None:
-        async def _approval_sweeper_loop() -> None:
-            interval = 5.0
-            while not state.draining:
-                try:
-                    expired = await state.manager.expire_overdue_approvals()
-                    if expired:
-                        _log.info(
-                            "approval-sweeper: expired %d approvals",
-                            len(expired),
-                        )
-                except Exception:
-                    _log.exception("approval sweeper failed")
-                await asyncio.sleep(interval)
-
-        approval_sweeper_task = asyncio.create_task(
-            _approval_sweeper_loop(), name="approval-sweeper"
+        temporal = Settings.from_env().temporal
+        # Lazy: the API boots while Temporal starts; /readyz reports when it is reachable.
+        state.workflows = SessionWorkflows(
+            await connect(temporal, lazy=True), task_queue=temporal.task_queue
         )
-        _log.info("approval_sweeper started interval_s=5")
 
     span_reaper_task: asyncio.Task[None] | None = None
     span_reaper_stop = asyncio.Event()
@@ -116,22 +81,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "span_reaper started interval_s=%s",
                     cfg.reaper_interval_s,
                 )
-
-    if state is not None and state.sandbox_provider is not None:
-        try:
-            from supervisor.sandbox.reaper import reap_orphans
-
-            async def _reattach(session_id: str, sbx) -> None:  # type: ignore[no-untyped-def]
-                state.manager.reattach_sandbox(session_id, sbx)
-
-            stats = await reap_orphans(
-                state.sandbox_provider,
-                lookup_session=state.manager.session_status,
-                reattach=_reattach,
-            )
-            _log.info("orphan reaper: %s", stats)
-        except Exception:
-            _log.exception("orphan reaper failed")
 
     # The server (uvicorn) owns SIGTERM and runs the shutdown path below when it
     # receives it. Capture its handler so ours can mark the service as draining
@@ -169,20 +118,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except asyncio.CancelledError:
                 pass
             _log.warning("span_reaper did not stop cleanly; cancelled")
-        except asyncio.CancelledError:
-            pass
-
-    if reap_task is not None:
-        reap_task.cancel()
-        try:
-            await reap_task
-        except asyncio.CancelledError:
-            pass
-
-    if approval_sweeper_task is not None:
-        approval_sweeper_task.cancel()
-        try:
-            await approval_sweeper_task
         except asyncio.CancelledError:
             pass
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -20,6 +21,9 @@ from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.policy.protocols import RateLimiterProtocol
 from supervisor.seams.services import AuthzService, WorkspaceStore
 from supervisor.session import SessionManager, SessionRegistry
+
+if TYPE_CHECKING:
+    from supervisor.temporal.sessions import SessionWorkflows
 
 
 @dataclass
@@ -45,6 +49,9 @@ class SupervisorState:
     authz: AuthzService | None = None
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
+    writer: JournalWriter | None = None
+    # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
+    workflows: SessionWorkflows | None = None
 
 
 def build_supervisor(
@@ -134,4 +141,5 @@ def build_supervisor(
         authz=authz,
         grant_store=gs,
         workspace_store=workspace_store,
+        writer=writer,
     )

@@ -107,6 +107,10 @@ def event_type_name(event: AgentEvent) -> str:
     return name
 
 
+# Every event class fixes its category; it is implied by ``_type``.
+_DERIVED_FIELD = "category"
+
+
 def encode_event(event: AgentEvent) -> dict[str, Any]:
     """Serialize an AgentEvent to a JSON-compatible dictionary.
 
@@ -129,6 +133,8 @@ def encode_event(event: AgentEvent) -> dict[str, Any]:
     """
     type_name = event_type_name(event)
     data = dataclasses.asdict(event)
+    # Derived from the event type, never stored (and an Enum is not JSON).
+    data.pop(_DERIVED_FIELD, None)
     data["_type"] = type_name
     return data
 
@@ -158,6 +164,7 @@ def decode_event(data: dict[str, Any]) -> AgentEvent:
         raise DeserializationError(f"expected dict, got {type(data).__name__}")
 
     payload = dict(data)  # Don't mutate input
+    payload.pop(_DERIVED_FIELD, None)
     type_name = payload.pop("_type", None)
 
     if type_name is None:

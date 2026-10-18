@@ -1,6 +1,8 @@
-"""Session HTTP routes — translate and delegate to SessionManager only."""
+"""Session HTTP routes — translate and delegate to the session's workflow."""
 
 from __future__ import annotations
+
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -27,6 +29,10 @@ from supervisor.session import (
     SessionTerminated,
 )
 
+from supervisor.api.workflow_errors import to_http
+from supervisor.temporal.contracts import CreateSession, Message
+from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
+
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
 
@@ -40,6 +46,30 @@ async def create_session(
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     manager = deps.get_manager(request)
+    if (workflows := deps.get_workflows(request)) is not None:
+        session_id = uuid4().hex
+        try:
+            await workflows.create(
+                session_id,
+                CreateSession(
+                    tenant_id=tenant_id,
+                    harness_version=body.harness_version,
+                    runtime_name=body.runtime,
+                    composition_id=body.composition_id,
+                    composition_digest=body.composition_digest,
+                    scope_id=body.scope_id,
+                    principal_id=principal.id,
+                ),
+            )
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+        info = await manager.get(session_id, tenant_id=tenant_id)
+        return CreateSessionResponse(
+            session_id=session_id,
+            harness_version=body.harness_version,
+            runtime=info.runtime if info is not None else body.runtime or "",
+            status="active",
+        )
     try:
         session_id = await manager.create(
             tenant_id=tenant_id,
@@ -142,6 +172,28 @@ async def post_message(
             status=str(existing.get("status", "accepted")),
         )
 
+    if (workflows := deps.get_workflows(request)) is not None:
+        from supervisor.obs.trace_context import parse_traceparent
+
+        # The workflow prepares the turn first (recovery, budget, approvals), and
+        # de-duplicates by command id, so a refused message never claims its id.
+        try:
+            await workflows.submit(
+                session_id,
+                Message(
+                    body.command_id,
+                    body.text,
+                    parse_traceparent(request.headers.get("traceparent")),
+                ),
+            )
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+        _, response = await commands.claim(session_id, body.command_id)
+        return PostMessageResponse(
+            turn_id=str(response["turn_id"]),
+            status=str(response.get("status", "accepted")),
+        )
+
     try:
         # Resolve recovery *before* claiming command_id so a blocked session
         # does not poison the dedup table with a false accept.
@@ -226,7 +278,13 @@ async def abort_session(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> dict[str, str]:
     await deps.require_session_access(tenant_id, session_id, request)
-    await deps.get_manager(request).abort(session_id)
+    if (workflows := deps.get_workflows(request)) is not None:
+        try:
+            await workflows.abort(session_id)
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+    else:
+        await deps.get_manager(request).abort(session_id)
     return {"status": "ok"}
 
 
@@ -275,4 +333,10 @@ async def terminate_session(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> None:
     await deps.require_session_access(tenant_id, session_id, request)
-    await deps.get_manager(request).terminate(session_id)
+    if (workflows := deps.get_workflows(request)) is not None:
+        try:
+            await workflows.terminate(session_id)
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+    else:
+        await deps.get_manager(request).terminate(session_id)

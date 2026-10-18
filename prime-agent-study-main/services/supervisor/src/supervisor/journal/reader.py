@@ -75,6 +75,41 @@ class JournalReader:
                 return -1
             return int(row.last_seq)
 
+    async def open_run_start(self, session_id: str) -> int | None:
+        """Seq of a RunStart whose run never finished (crashed mid-turn), else None.
+
+        A run ends with RunEnd, an ErrorEvent, or an aborted TurnEnd.
+        """
+        async with self._factory() as db:
+            boundary = (
+                await db.execute(
+                    select(EventRow)
+                    .where(
+                        EventRow.session_id == session_id,
+                        EventRow.type.in_(("RunStart", "RunEnd", "ErrorEvent")),
+                    )
+                    .order_by(EventRow.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if boundary is None or boundary.type != "RunStart":
+                return None
+            turn_ends = (
+                await db.execute(
+                    select(EventRow).where(
+                        EventRow.session_id == session_id,
+                        EventRow.type == "TurnEnd",
+                        EventRow.seq > boundary.seq,
+                    )
+                )
+            ).scalars().all()
+        if any(
+            getattr(decode_event(self._load_payload(row.payload)), "stop_reason", None) == "aborted"
+            for row in turn_ends
+        ):
+            return None
+        return int(boundary.seq)
+
     async def latest_history(self, session_id: str) -> list[dict] | None:
         """Messages from the most recent RunEnd, or None if none."""
         async with self._factory() as db:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -47,7 +48,7 @@ from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.policy.approvals import ApprovalBroker
 from supervisor.policy.budget import BudgetExceeded, BudgetTracker
-from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard
+from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard, call_hash
 from supervisor.policy.quotas import QuotaExceeded, TenantQuotaEnforcer
 from supervisor.policy.sandbox_policy import SandboxPolicy
 from supervisor.sandbox.base import Sandbox, SandboxProvider
@@ -250,6 +251,7 @@ class SessionManager:
         composition_digest: str | None = None,
         scope_id: str | None = None,
         principal_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         manifest = await self._catalog.resolve(harness_version, for_create=True)
         check(
@@ -258,7 +260,7 @@ class SessionManager:
             sandbox_provider=self._provider,
         )
         runtime_name = runtime_name or manifest.runtime
-        session_id = uuid4().hex
+        session_id = session_id or uuid4().hex
         principal = Principal(
             id=principal_id or tenant_id,
             tenant_id=tenant_id,
@@ -504,6 +506,16 @@ class SessionManager:
                 compaction_ids=result.unpaired_compaction_ids,
             )
 
+    async def prepare_turn(self, session_id: str) -> None:
+        """Everything that must hold before a turn may start; raises the reason it cannot."""
+        await self.ensure_ready(session_id)
+        ws = self._workspace.get(session_id)
+        if ws is not None:
+            self._workspace_svc.assert_ready(ws)
+        state = await self._budget.check(session_id)
+        if state.exceeded:
+            raise BudgetExceeded(state)
+
     async def send(
         self,
         session_id: str,
@@ -512,13 +524,7 @@ class SessionManager:
         command_id: str,
         inbound_trace_id: str | None = None,
     ) -> None:
-        await self.ensure_ready(session_id)
-        ws = self._workspace.get(session_id)
-        if ws is not None:
-            self._workspace_svc.assert_ready(ws)
-        state = await self._budget.check(session_id)
-        if state.exceeded:
-            raise BudgetExceeded(state)
+        await self.prepare_turn(session_id)
         self._budget.begin_turn(session_id)
         runtime = self._registry.get(session_id)
         mode = self._modes.get(session_id)
@@ -751,6 +757,7 @@ class SessionManager:
         self._seams.pop(session_id, None)
         self._workspace.pop(session_id, None)
         self._sandbox_policy.clear(session_id)
+        self._guards.clear(session_id)
         self._live.drop_session(session_id)
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
@@ -1037,8 +1044,18 @@ class SessionManager:
                 except Exception:
                     _log.exception("span projection failed session=%s", session_id)
 
-                verdict = self._guards.observe(session_id, payload)
-                if verdict.tripped and verdict.action == GuardAction.ABORT:
+                if isinstance(payload, RunStart):
+                    self._guards.reset(session_id)  # stall counts tool calls within one run
+                verdict = (
+                    self._guards.observe(
+                        session_id,
+                        payload.tool_name,
+                        call_hash(payload.tool_name, payload.args),
+                    )
+                    if isinstance(payload, ToolStart)
+                    else None
+                )
+                if verdict is not None and verdict.tripped and verdict.action == GuardAction.ABORT:
                     await self._policy_abort(
                         session_id,
                         runtime,
@@ -1048,7 +1065,10 @@ class SessionManager:
                     return
 
                 if isinstance(payload, MessageEnd) and payload.usage is not None:
-                    bstate = await self._budget.record(session_id, payload.usage)
+                    usage = payload.usage
+                    bstate = await self._budget.record(
+                        session_id, Decimal(str(usage.cost_total)), usage.total_tokens
+                    )
                     if bstate.exceeded:
                         await self._policy_abort(
                             session_id,
