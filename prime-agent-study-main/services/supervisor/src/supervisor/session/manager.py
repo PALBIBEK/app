@@ -115,6 +115,10 @@ class MemoryNotConfigured(SessionError):
     pass
 
 
+class WorkspaceUnavailable(SessionError):
+    """The session has no scope-bound workspace or no sandbox to put it in."""
+
+
 class RecoveryBlocked(SessionError):
     def __init__(
         self,
@@ -661,13 +665,20 @@ class SessionManager:
             unpaired_tool_call_ids=decision.unpaired_tool_call_ids,
         )
 
-    async def fork(self, session_id: str, *, at_seq: int | None = None) -> str:
+    async def fork(
+        self, session_id: str, *, at_seq: int | None = None, new_id: str | None = None
+    ) -> str:
+        """Copy the session (up to ``at_seq``) into ``new_id``; safe to retry with the same id.
+
+        Each copied event is keyed by its source event, so a retry after a crash
+        mid-copy carries on where it stopped instead of duplicating events.
+        """
         row = await self._get_session_row(session_id)
         events = await self._reader.read(session_id, since=-1)
         if at_seq is not None:
             events = [e for e in events if e.seq <= at_seq]
 
-        new_id = uuid4().hex
+        new_id = new_id or uuid4().hex
         await self._writer.ensure_session(
             new_id,
             runtime=row.runtime,
@@ -691,6 +702,7 @@ class SessionManager:
                 env.payload,
                 turn_id=env.turn_id,
                 trace_id=env.trace_id,
+                event_key=f"fork:{env.event_id}",
             )
         return new_id
 
@@ -776,9 +788,9 @@ class SessionManager:
         ws = self._workspace.get(session_id)
         sandbox = self._sandboxes.get(session_id)
         if ws is None or ws.scope_id is None:
-            raise RuntimeError("session has no scope-bound workspace")
+            raise WorkspaceUnavailable("session has no scope-bound workspace")
         if sandbox is None:
-            raise RuntimeError("session has no sandbox to rehydrate")
+            raise WorkspaceUnavailable("session has no sandbox to rehydrate")
         await self._workspace_svc.ensure_hydrated(ws, sandbox, force=True)
 
     async def _sync_workspace_fail_closed(

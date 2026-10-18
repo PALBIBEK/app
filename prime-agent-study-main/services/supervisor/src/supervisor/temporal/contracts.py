@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 WORKFLOW_ID_PREFIX = "session/"
 
@@ -21,6 +22,8 @@ class Activity(StrEnum):
     """Activity names. The workflow calls activities by name so it never imports their code."""
 
     CREATE = "session.create"
+    # A new session's workflow whose session is a copy of another's journal.
+    FORK = "session.fork"
     ADOPT = "session.adopt"
     PREPARE_TURN = "session.prepare_turn"
     RUN_TURN = "session.run_turn"
@@ -35,6 +38,8 @@ class Activity(StrEnum):
     END_RUN = "session.end_run"
     # Journal-only, so it runs on any worker: closes a call whose worker died.
     CLOSE_LOST_CALL = "session.close_lost_call"
+    # Any other session operation (tool invoke, memory, subagents, workspace).
+    SESSION_OP = "session.op"
 
 
 class Phase(StrEnum):
@@ -68,6 +73,14 @@ NON_RETRYABLE = (
     "ApprovalAlreadyResponded",
     "ApprovalTimedOut",
     "InvalidApprovalChoice",
+    # Session operations: missing seams, bad requests, workspace preconditions.
+    "ToolInvokeNotConfigured",
+    "SubagentNotConfigured",
+    "MemoryNotConfigured",
+    "WorkspaceNotReadyError",
+    "WorkspaceUnavailable",
+    "SeamError",
+    "ToolOutcomeUnknown",
 )
 
 
@@ -88,6 +101,20 @@ class CreateSession:
 class CreateRequest:
     session_id: str
     spec: CreateSession
+
+
+@dataclass(frozen=True, slots=True)
+class ForkSpec:
+    """Start a session as a copy of ``source_id``'s journal, up to ``at_seq``."""
+
+    source_id: str
+    at_seq: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForkRequest:
+    session_id: str
+    spec: ForkSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,12 +243,53 @@ class ApprovalDecision:
 LOST_WORKER = "the worker running this tool was lost"
 
 
+class Op(StrEnum):
+    """Session operations besides turns; each runs on the worker holding the session."""
+
+    INVOKE_TOOL = "invoke_tool"
+    COMPACT_MEMORY = "compact_memory"
+    RECALL_MEMORY = "recall_memory"
+    SPAWN_CHILD = "spawn_child"
+    FORK_CHILD = "fork_child"
+    START_BACKGROUND = "start_background"
+    START_CONTINUABLE = "start_continuable"
+    SEND_CHILD_MESSAGE = "send_child_message"
+    INTERRUPT_CHILD = "interrupt_child"
+    REHYDRATE_WORKSPACE = "rehydrate_workspace"
+
+
+# Safe to run again if the first attempt's outcome is unknown; the rest run at most once.
+RETRYABLE_OPS = frozenset({Op.INTERRUPT_CHILD, Op.REHYDRATE_WORKSPACE})
+
+
+@dataclass(frozen=True, slots=True)
+class SessionOp:
+    """One operation; ``op_id`` dedups re-sends, ``args`` is the API request body.
+
+    For INVOKE_TOOL, ``op_id`` is also the tool call id, so a lost call can be closed.
+    """
+
+    session_id: str
+    op_id: str
+    kind: Op
+    tenant_id: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class OpResult:
+    """The operation's HTTP response body; None for operations that answer 204."""
+
+    body: dict[str, Any] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class LostCall:
     """A tool call that started but whose outcome is unknown (worker lost, or aborted)."""
 
     session_id: str
-    run_id: str
+    # None: a direct tool invoke, closed through the tool outbox.
+    run_id: str | None
     call_id: str
     reason: str = LOST_WORKER
 
@@ -286,6 +354,8 @@ class SessionInput:
     create: CreateSession | None = None
     carried: Carried | None = None
     timing: Timing = field(default_factory=Timing)
+    # Instead of ``create``: the new session is a fork of another.
+    fork: ForkSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)

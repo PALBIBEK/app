@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Request
 
 from supervisor.api import deps
 from supervisor.api.schemas import InvokeToolRequest, InvokeToolResponse
-from supervisor.seams.services import WorkspaceNotReadyError
-from supervisor.session import (
-    SessionAwaitingApproval,
-    SessionNotFound,
-    SessionTerminated,
-    ToolInvokeNotConfigured,
-)
+from supervisor.api.session_ops import run_op
+from supervisor.temporal.contracts import Op
 
 router = APIRouter(tags=["tools"])
 
@@ -27,32 +24,16 @@ async def invoke_tool(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> InvokeToolResponse:
+    """Runs at most once per tool_call_id; re-sending one returns its recorded outcome."""
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        outcome = await manager.invoke_tool(
-            session_id,
-            tenant_id=tenant_id,
-            name=body.name,
-            arguments=body.arguments,
-            tool_call_id=body.tool_call_id,
-        )
-    except SessionNotFound as exc:
-        raise HTTPException(status_code=404, detail="session not found") from exc
-    except SessionTerminated as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except SessionAwaitingApproval as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ToolInvokeNotConfigured as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except WorkspaceNotReadyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    result = outcome.result
-    return InvokeToolResponse(
-        tool_call_id=outcome.tool_call_id,
-        ok=result.ok,
-        payload=result.payload,
-        error=result.error,
-        code=result.code,
+    call_id = body.tool_call_id or uuid4().hex
+    out = await run_op(
+        request,
+        session_id,
+        tenant_id,
+        Op.INVOKE_TOOL,
+        {"name": body.name, "arguments": body.arguments},
+        op_id=call_id,
     )
+    assert out is not None
+    return InvokeToolResponse(**out)

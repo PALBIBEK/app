@@ -37,8 +37,10 @@ from supervisor.harness import RecoveryAction
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.policy.guards import call_hash
+from supervisor.seams import ToolResult
 from supervisor.seams.core.types import ChatMessage, PromptBindings
 from supervisor.session import SessionManager
+from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.contracts import (
     ApprovalAsk,
     ApprovalDecision,
@@ -413,8 +415,24 @@ class GithiSteps:
         """Journal an unknown outcome for a call that started; a no-op once it has ended.
 
         Keyed like tool_call's own ToolEnd, so whichever lands first is the only one.
+        A direct invoke (no run) is completed through the tool outbox, which locks
+        its row: a zombie worker finishing later gets this outcome back, not a
+        second ToolEnd, and a re-sent invoke returns it instead of running again.
         """
         sid, run_id, call_id = lost.session_id, lost.run_id, lost.call_id
+        error = f"outcome unknown: {lost.reason}"
+        if run_id is None:
+            outbox = self._manager._tool_outbox
+            row = await outbox.get_by_key(idempotency_key(sid, call_id))
+            if row is not None:  # None: the invoke never began, so nothing is open
+                await outbox.complete(
+                    sid,
+                    tool_call_id=call_id,
+                    tool_name=row.tool_name,
+                    result=ToolResult(ok=False, error=error, code=TOOL_OUTCOME_UNKNOWN),
+                    trace_id=None,
+                )
+            return
         await self._record(
             sid,
             run_id,
@@ -422,7 +440,7 @@ class GithiSteps:
             ToolEnd(
                 tool_call_id=call_id,
                 tool_name=await self._tool_name(sid, run_id, call_id),
-                result={"error": f"outcome unknown: {lost.reason}", "code": TOOL_OUTCOME_UNKNOWN},
+                result={"error": error, "code": TOOL_OUTCOME_UNKNOWN},
                 is_error=True,
             ),
         )

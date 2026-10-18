@@ -21,50 +21,31 @@ from supervisor.agent.events import ErrorEvent, RunEnd, ToolStart, TurnEnd
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.session import SessionManager, is_dropped_sentinel
+from supervisor.session.dispatch import run_operation
 from supervisor.temporal.contracts import (
-    NON_RETRYABLE,
     Activity,
     ApprovalAsk,
     ApprovalDecision,
     ApprovalRequest,
     CreateRequest,
     EndRunRequest,
+    ForkRequest,
     LostCall,
+    OpResult,
     Placement,
     RunPlan,
+    SessionOp,
     StepRequest,
     StepResult,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
 )
+from supervisor.temporal.domain import domain_kind, error_details
 from supervisor.temporal.steps import GithiSteps, heartbeating
 
 # How long an aborted turn gets to wind down before the next one may start.
 ABORT_GRACE_S = 10.0
-
-
-def _domain_type(exc: BaseException) -> str | None:
-    """The exception's class name when retrying cannot fix it, else None.
-
-    Errors that declare ``retryable`` (catalog, harness, policy, sandbox) decide
-    for themselves; the rest are matched against NON_RETRYABLE by class or base.
-    """
-    retryable = getattr(exc, "retryable", None)
-    if isinstance(retryable, bool):
-        return None if retryable else type(exc).__name__
-    if any(cls.__name__ in NON_RETRYABLE for cls in type(exc).__mro__):
-        return type(exc).__name__
-    return None
-
-
-def _details(exc: BaseException) -> dict[str, Any]:
-    details: dict[str, Any] = {}
-    if code := getattr(exc, "error_code", None):
-        details["code"] = code
-    if (tools := getattr(exc, "tool_call_ids", None)) is not None:
-        details |= {"state": str(getattr(exc, "state", "")), "tool_call_ids": list(tools)}
-    return details
 
 
 @contextlib.contextmanager
@@ -75,9 +56,9 @@ def _as_application_error() -> Iterator[None]:
     except ApplicationError:
         raise
     except Exception as exc:
-        if (kind := _domain_type(exc)) is None:
+        if (kind := domain_kind(exc)) is None:
             raise
-        raise ApplicationError(str(exc), _details(exc), type=kind, non_retryable=True) from exc
+        raise ApplicationError(str(exc), error_details(exc), type=kind, non_retryable=True) from exc
 
 
 def _is_terminal(payload: object) -> bool:
@@ -114,6 +95,15 @@ class SessionActivities:
                 await self._manager.create(session_id=req.session_id, **asdict(req.spec))
             else:  # a retry after the row was written: attach instead of creating twice
                 await self._manager.ensure_ready(req.session_id)
+        return self._home
+
+    @activity.defn(name=Activity.FORK)
+    async def fork(self, req: ForkRequest) -> Placement:
+        """Copy the source session's journal into this one; resumed here on first use."""
+        with _as_application_error():
+            await self._manager.fork(
+                req.spec.source_id, at_seq=req.spec.at_seq, new_id=req.session_id
+            )
         return self._home
 
     @activity.defn(name=Activity.ADOPT)
@@ -223,6 +213,13 @@ class SessionActivities:
         with _as_application_error():
             return await self._steps.end_run(req)
 
+    @activity.defn(name=Activity.SESSION_OP)
+    async def session_op(self, op: SessionOp) -> OpResult:
+        with _as_application_error():
+            # Against the live session, as a turn would: resumed here if cold.
+            await self._manager.ensure_ready(op.session_id)
+            return OpResult(await heartbeating(run_operation(self._manager, op)))
+
     @activity.defn(name=Activity.CLOSE_LOST_CALL)
     async def close_lost_call(self, lost: LostCall) -> None:
         with _as_application_error():
@@ -232,6 +229,7 @@ class SessionActivities:
         return [
             self.create,
             self.adopt,
+            self.fork,
             self.prepare_turn,
             self.run_turn,
             self.respond_approval,
@@ -243,6 +241,7 @@ class SessionActivities:
             self.resolve_approval,
             self.end_run,
             self.close_lost_call,
+            self.session_op,
         ]
 
     @contextlib.asynccontextmanager
@@ -255,7 +254,7 @@ class SessionActivities:
         try:
             yield
         except Exception as exc:
-            if (kind := _domain_type(exc)) is not None:
+            if (kind := domain_kind(exc)) is not None:
                 await self._manager._record(
                     session_id,
                     ErrorEvent(error_class=kind, retryable=False, detail=str(exc)),
@@ -287,14 +286,14 @@ class SessionActivities:
         After a tool ran, a retry could repeat its side effects, so the failure
         becomes final (TurnInterrupted) instead of retryable.
         """
-        retryable = not side_effects and _domain_type(exc) is None
+        retryable = not side_effects and domain_kind(exc) is None
         await self._writer.append(
             session_id,
             ErrorEvent(error_class=type(exc).__name__, retryable=retryable, detail=str(exc)),
             turn_id=None,
             trace_id=None,
         )
-        if not retryable and _domain_type(exc) is None:
+        if not retryable and domain_kind(exc) is None:
             raise ApplicationError(
                 f"turn failed after tools ran: {exc}", type="TurnInterrupted", non_retryable=True
             ) from exc

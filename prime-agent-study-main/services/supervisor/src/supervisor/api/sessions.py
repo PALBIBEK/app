@@ -17,6 +17,8 @@ from supervisor.api.schemas import (
     SessionDetailResponse,
     SessionSummary,
 )
+from supervisor.api.session_ops import domain_http_error, run_op
+from supervisor.api.workflow_errors import to_http
 from supervisor.catalog import HarnessVersionMismatch, NotOffered
 from supervisor.harness import HarnessNotOffered, IncompatibleHarness
 from supervisor.policy.budget import BudgetExceeded
@@ -28,9 +30,7 @@ from supervisor.session import (
     SessionNotFound,
     SessionTerminated,
 )
-
-from supervisor.api.workflow_errors import to_http
-from supervisor.temporal.contracts import CreateSession, Message
+from supervisor.temporal.contracts import CreateSession, Message, Op
 from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
@@ -299,10 +299,20 @@ async def fork_session(
         raise HTTPException(status_code=503, detail="draining")
     await deps.require_session_access(tenant_id, session_id, request)
     at_seq = body.at_seq if body is not None else None
+    if (workflows := deps.get_workflows(request)) is not None:
+        # The fork is a session like any other: it gets its own workflow.
+        new_id = uuid4().hex
+        try:
+            await workflows.fork(session_id, new_id, at_seq=at_seq)
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+        return ForkSessionResponse(session_id=new_id)
     try:
         new_id = await deps.get_manager(request).fork(session_id, at_seq=at_seq)
-    except SessionNotFound as exc:
-        raise HTTPException(status_code=404, detail="session not found") from exc
+    except Exception as exc:
+        if (http := domain_http_error(exc)) is None:
+            raise
+        raise http from exc
     return ForkSessionResponse(session_id=new_id)
 
 
@@ -314,15 +324,8 @@ async def rehydrate_session_workspace(
 ) -> dict[str, str]:
     """Force rehydrate durable scope files into the session sandbox cache."""
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        await manager.rehydrate_workspace(session_id)
-    except SessionNotFound as exc:
-        raise HTTPException(status_code=404, detail="session not found") from exc
-    except SessionTerminated as exc:
-        raise HTTPException(status_code=409, detail="session terminated") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # The sandbox lives on the session's worker, so that is where this runs.
+    await run_op(request, session_id, tenant_id, Op.REHYDRATE_WORKSPACE, {})
     return {"status": "ok"}
 
 

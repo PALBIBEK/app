@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-pytest_plugins = ["tests.support.session_env", "tests.support.temporal_env"]
+pytest_plugins = [
+    "tests.support.session_env",
+    "tests.support.temporal_env",
+    "tests.support.githi_env",
+]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

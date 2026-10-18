@@ -30,6 +30,19 @@ _STATUS: Final[dict[str, int]] = {
     "ApprovalTimedOut": 409,
     "InvalidApprovalChoice": 422,
     "ValueError": 422,
+    # Session operations (tool invoke, memory, subagents, workspace).
+    "ToolInvokeNotConfigured": 409,
+    "SubagentNotConfigured": 409,
+    "MemoryNotConfigured": 409,
+    "WorkspaceNotReadyError": 409,
+    "WorkspaceUnavailable": 409,
+    "ToolOutcomeUnknown": 503,
+    "DepthExceeded": 400,
+    "BadArgs": 400,
+    "UnsupportedCapability": 400,
+    "ProviderConflict": 409,
+    "ProviderMissing": 404,
+    "SeamError": 400,
 }
 
 
@@ -50,6 +63,10 @@ def _detail(err: SessionCommandError) -> Any:
             return {"code": err.details.get("code", err.kind), "message": message}
         case "SessionTerminated" | "SessionClosed":
             return "session terminated"
+        case "DepthExceeded":
+            return {"code": err.details.get("code", "DEPTH_EXCEEDED"), "message": message}
+        case "ToolOutcomeUnknown":
+            return {"reason": "tool_outcome_unknown", "message": message}
         case _:
             return message
 

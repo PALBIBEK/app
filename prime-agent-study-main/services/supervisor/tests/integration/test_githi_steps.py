@@ -8,170 +8,44 @@ The model is a scripted gateway (a pure function of the conversation).
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-import json
-import sys
-import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
-from dataclasses import dataclass
-from pathlib import Path
+from collections.abc import AsyncIterator, Callable
 
 import pytest
-import pytest_asyncio
 from temporalio.client import Client, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
 
 from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
-    Envelope,
     ErrorEvent,
     MessageEnd,
     ToolEnd,
     TurnEnd,
 )
 from supervisor.app import SupervisorState
-from supervisor.catalog.repository import persist_offer
-from supervisor.config import TemporalSettings
-from supervisor.db.engine import open_db
-from supervisor.temporal.client import connect
 from supervisor.temporal.contracts import (
     Activity,
-    CreateSession,
     Message,
     Phase,
-    Timing,
     workflow_id,
 )
-from supervisor.temporal.sessions import SessionCommandError, SessionWorkflows
+from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
-from tests.support.platform import boot_platform
-from tests.support.scripted import ScriptedGateway, scripted_model, slow_tool
+from tests.support.githi_env import (
+    LS,
+    WRITE,
+    Env,
+    event_types,
+    has_event,
+    payloads,
+    run_ended,
+    spawn_worker,
+)
+from tests.support.scripted import ScriptedGateway, slow_tool
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
-
-FAST = Timing(placement_timeout_s=2.0, heartbeat_timeout_s=2.0, turn_timeout_s=120.0)
-WRITE = ("write", {"file_path": "notes.txt", "content": "hello"})
-LS = ("ls", {"path": "."})
-
-Done = Callable[[list[Envelope]], bool]
-
-
-def _types(events: list[Envelope]) -> list[str]:
-    return [type(e.payload).__name__ for e in events]
-
-
-def _has(predicate: Callable[[object], bool]) -> Done:
-    return lambda events: any(predicate(e.payload) for e in events)
-
-
-def _run_ended(n: int = 1) -> Done:
-    return lambda events: _types(events).count("RunEnd") >= n
-
-
-def _payloads[E](events: list[Envelope], kind: type[E]) -> list[E]:
-    return [e.payload for e in events if isinstance(e.payload, kind)]
-
-
-@dataclass(frozen=True, slots=True)
-class Env:
-    address: str
-    namespace: str
-    queue: str
-    db_url: str
-    blob_dir: Path
-    client: Client
-    sessions: SessionWorkflows
-    factory: object
-
-    async def state(self) -> SupervisorState:
-        state, _ = await boot_platform(self.factory, self.blob_dir)  # type: ignore[arg-type]
-        return state
-
-    async def create(self, state: SupervisorState, harness: str = "githi-v1") -> str:
-        """A githi session from the shipped composition, re-pinned to ``harness``."""
-        name, digest = await self.composition(state, harness)
-        sid = uuid.uuid4().hex
-        await self.sessions.create(
-            sid,
-            CreateSession("t1", harness, composition_id=name, composition_digest=digest),
-            timing=FAST,
-        )
-        return sid
-
-    async def composition(self, state: SupervisorState, harness: str) -> tuple[str, str]:
-        catalog = state.composition_catalog
-        assert catalog is not None
-        latest = catalog.list_versions("composition", "githi-v1")[-1]
-        base = catalog.get("composition", "githi-v1", latest)
-        if harness == base.harness_version:
-            return base.name, base.digest
-        variant = catalog.offer(
-            dataclasses.replace(
-                base, name=f"githi-on-{harness}", harness_version=harness, digest=""
-            )
-        )
-        # Persisted, so a worker booted later (or in another process) hydrates it.
-        await persist_offer(
-            self.factory,  # type: ignore[arg-type]
-            catalog,
-            "composition",
-            variant.name,
-            variant.digest,
-        )
-        return variant.name, variant.digest
-
-    async def wait_for(
-        self, state: SupervisorState, sid: str, done: Done, timeout: float = 45
-    ) -> list[Envelope]:
-        async with asyncio.timeout(timeout):
-            while not done(events := await state.reader.read(sid)):
-                await asyncio.sleep(0.1)
-        return events
-
-    async def activity_types(self, sid: str) -> list[str]:
-        history = await self.client.get_workflow_handle(workflow_id(sid)).fetch_history()
-        return [
-            e.activity_task_scheduled_event_attributes.activity_type.name
-            for e in history.events
-            if e.HasField("activity_task_scheduled_event_attributes")
-        ]
-
-
-@pytest_asyncio.fixture(loop_scope="session")
-async def env(temporal_env: WorkflowEnvironment, tmp_path: Path) -> AsyncIterator[Env]:
-    queue = f"steps-{uuid.uuid4().hex[:8]}"
-    address = temporal_env.client.service_client.config.target_host
-    namespace = temporal_env.client.namespace
-    client = await connect(TemporalSettings(address=address, namespace=namespace, task_queue=queue))
-    db_url = f"sqlite+aiosqlite:///{tmp_path / 'steps.db'}"
-    async with open_db(db_url) as (_, factory):
-        yield Env(
-            address,
-            namespace,
-            queue,
-            db_url,
-            tmp_path / "blobs",
-            client,
-            SessionWorkflows(client, task_queue=queue),
-            factory,
-        )
-
-
-@pytest.fixture
-def model() -> Iterator[Callable[..., ScriptedGateway]]:
-    with scripted_model(ScriptedGateway(calls=[])) as gateway:
-
-        def script(*calls: tuple[str, dict], **options: object) -> ScriptedGateway:
-            gateway.calls = list(calls)
-            for name, value in options.items():
-                setattr(gateway, name, value)
-            return gateway
-
-        yield script
 
 
 async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
@@ -182,9 +56,9 @@ async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "list the files"))
-        events = await env.wait_for(state, sid, _run_ended())
+        events = await env.wait_for(state, sid, run_ended())
 
-    assert _types(events) == [
+    assert event_types(events) == [
         "RunStart",
         "MessageEnd",
         "TurnStart",
@@ -196,8 +70,8 @@ async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
         "TurnEnd",
         "RunEnd",
     ]
-    assert _payloads(events, MessageEnd)[-1].content[0]["text"] == "done after 1 tool results"
-    scheduled = await env.activity_types(sid)
+    assert payloads(events, MessageEnd)[-1].content[0]["text"] == "done after 1 tool results"
+    scheduled = await env.activityevent_types(sid)
     assert scheduled.count(Activity.MODEL_STEP) == 2
     assert scheduled.count(Activity.TOOL_CALL) == 1
     # The model saw the pinned system prompt, its own tool call, and the result tied to it.
@@ -216,9 +90,9 @@ async def test_each_turn_sees_the_conversation_so_far(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "first question"))
-        await env.wait_for(state, sid, _run_ended())
+        await env.wait_for(state, sid, run_ended())
         await env.sessions.submit(sid, Message("c2", "second question"))
-        await env.wait_for(state, sid, _run_ended(2))
+        await env.wait_for(state, sid, run_ended(2))
     texts = [m.content for m in gateway.seen[-1] if m.role in ("user", "assistant")]
     assert texts[:3] == ["first question", "done after 0 tool results", "second question"]
 
@@ -227,8 +101,8 @@ async def test_each_turn_sees_the_conversation_so_far(
 
 
 async def _await_approval(env: Env, state: SupervisorState, sid: str) -> str:
-    events = await env.wait_for(state, sid, _has(lambda p: isinstance(p, ApprovalRequired)))
-    return _payloads(events, ApprovalRequired)[0].approval_id
+    events = await env.wait_for(state, sid, has_event(lambda p: isinstance(p, ApprovalRequired)))
+    return payloads(events, ApprovalRequired)[0].approval_id
 
 
 @pytest.mark.parametrize(
@@ -244,12 +118,12 @@ async def test_a_human_decides_a_gated_tool(
         await env.sessions.submit(sid, Message("c1", "write a note"))
         approval_id = await _await_approval(env, state, sid)
         await env.sessions.respond_approval(sid, approval_id, choice)
-        events = await env.wait_for(state, sid, _run_ended())
-    (end,) = _payloads(events, ToolEnd)
+        events = await env.wait_for(state, sid, run_ended())
+    (end,) = payloads(events, ToolEnd)
     assert end.is_error is not tool_ran
     if not tool_ran:
         assert end.result["code"] == "APPROVAL_DENIED"
-    (resolved,) = _payloads(events, ApprovalResolved)
+    (resolved,) = payloads(events, ApprovalResolved)
     assert (resolved.choice, resolved.status) == (choice, status)
 
 
@@ -264,10 +138,10 @@ async def test_unanswered_approval_applies_on_timeout(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state, harness)
         await env.sessions.submit(sid, Message("c1", "write a note"))
-        events = await env.wait_for(state, sid, _run_ended())  # manifest timeout is 2s
-    (resolved,) = _payloads(events, ApprovalResolved)
+        events = await env.wait_for(state, sid, run_ended())  # manifest timeout is 2s
+    (resolved,) = payloads(events, ApprovalResolved)
     assert resolved.status == "timed_out"
-    assert _payloads(events, ToolEnd)[0].is_error is not tool_ran
+    assert payloads(events, ToolEnd)[0].is_error is not tool_ran
 
 
 async def test_an_invalid_choice_is_rejected_and_the_approval_stays_open(
@@ -283,7 +157,7 @@ async def test_an_invalid_choice_is_rejected_and_the_approval_stays_open(
             await env.sessions.respond_approval(sid, approval_id, "maybe")
         assert err.value.kind == "InvalidApprovalChoice"
         await env.sessions.respond_approval(sid, approval_id, "allow")
-        await env.wait_for(state, sid, _run_ended())
+        await env.wait_for(state, sid, run_ended())
 
 
 async def test_approval_wait_survives_a_worker_restart(
@@ -299,8 +173,8 @@ async def test_approval_wait_survives_a_worker_restart(
     second = await env.state()
     async with session_worker(env.client, second, task_queue=env.queue):
         await env.sessions.respond_approval(sid, approval_id, "allow")
-        events = await env.wait_for(second, sid, _run_ended())
-    assert not _payloads(events, ToolEnd)[0].is_error
+        events = await env.wait_for(second, sid, run_ended())
+    assert not payloads(events, ToolEnd)[0].is_error
 
 
 # --- policy gates ---------------------------------------------------------------
@@ -314,12 +188,12 @@ async def test_a_looping_model_trips_the_guard_and_closes_the_session(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "list forever"))
-        events = await env.wait_for(state, sid, _run_ended())
+        events = await env.wait_for(state, sid, run_ended())
         handle = env.client.get_workflow_handle_for(AgentSessionWorkflow.run, workflow_id(sid))
         async with asyncio.timeout(15):
             assert (await handle.result()).phase is Phase.FAILED
-    assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["LoopGuard"]
-    assert len(_payloads(events, ToolEnd)) == 2  # the third identical call never ran
+    assert [e.error_class for e in payloads(events, ErrorEvent)] == ["LoopGuard"]
+    assert len(payloads(events, ToolEnd)) == 2  # the third identical call never ran
 
 
 async def test_a_model_that_never_answers_ends_the_run_not_the_session(
@@ -330,8 +204,8 @@ async def test_a_model_that_never_answers_ends_the_run_not_the_session(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "keep going"))
-        events = await env.wait_for(state, sid, _run_ended())
-        assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["AgentLoopError"]
+        events = await env.wait_for(state, sid, run_ended())
+        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["AgentLoopError"]
         assert (await env.sessions.status(sid)).phase is Phase.IDLE
 
 
@@ -345,10 +219,10 @@ async def test_spending_the_budget_stops_the_run_and_refuses_new_turns(
         await env.sessions.submit(sid, Message("c1", "expensive"))
         # Queued behind c1, so it is only refused once c1 has spent the budget.
         assert (await env.sessions.submit(sid, Message("c2", "queued"))).queued
-        events = await env.wait_for(state, sid, lambda ev: len(_payloads(ev, ErrorEvent)) >= 2)
-        assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["BudgetExceeded"] * 2
-        assert not _payloads(events, ToolEnd), "no tool runs once the budget is spent"
-        assert _types(events).count("RunStart") == 1, "the queued turn never starts"
+        events = await env.wait_for(state, sid, lambda ev: len(payloads(ev, ErrorEvent)) >= 2)
+        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["BudgetExceeded"] * 2
+        assert not payloads(events, ToolEnd), "no tool runs once the budget is spent"
+        assert event_types(events).count("RunStart") == 1, "the queued turn never starts"
         async with asyncio.timeout(10):
             while (await env.sessions.status(sid)).phase is not Phase.IDLE:
                 await asyncio.sleep(0.1)
@@ -366,9 +240,9 @@ async def test_a_flaky_model_gateway_is_retried(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "hello"))
-        events = await env.wait_for(state, sid, _run_ended())
-    assert not _payloads(events, ErrorEvent)
-    assert _types(events).count("MessageEnd") == 2  # one user, one answer: no duplicates
+        events = await env.wait_for(state, sid, run_ended())
+    assert not payloads(events, ErrorEvent)
+    assert event_types(events).count("MessageEnd") == 2  # one user, one answer: no duplicates
 
 
 # --- abort and worker loss ------------------------------------------------------
@@ -383,11 +257,11 @@ async def test_abort_during_a_tool_closes_the_call_and_the_run(
         async with session_worker(env.client, state, task_queue=env.queue):
             sid = await env.create(state)
             await env.sessions.submit(sid, Message("c1", "write slowly"))
-            await env.wait_for(state, sid, _has(lambda p: type(p).__name__ == "ToolStart"))
+            await env.wait_for(state, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
             await env.sessions.abort(sid)
-            events = await env.wait_for(state, sid, _run_ended(), timeout=20)
-    assert _payloads(events, TurnEnd)[-1].stop_reason == "aborted"
-    assert _payloads(events, ToolEnd)[0].result["code"] == "TOOL_OUTCOME_UNKNOWN"
+            events = await env.wait_for(state, sid, run_ended(), timeout=20)
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    assert payloads(events, ToolEnd)[0].result["code"] == "TOOL_OUTCOME_UNKNOWN"
 
 
 async def test_abort_during_an_approval_wait(
@@ -400,31 +274,10 @@ async def test_abort_during_an_approval_wait(
         await env.sessions.submit(sid, Message("c1", "write a note"))
         await _await_approval(env, state, sid)
         await env.sessions.abort(sid)
-        events = await env.wait_for(state, sid, _run_ended())
-    assert _payloads(events, TurnEnd)[-1].stop_reason == "aborted"
-    assert _payloads(events, ApprovalResolved)[0].choice == "deny"
-    assert not _payloads(events, ToolEnd)
-
-
-async def _spawn_worker(env: Env, spec: dict) -> tuple[asyncio.subprocess.Process, str]:
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "tests.support.worker_process",
-        env.db_url,
-        str(env.blob_dir),
-        env.address,
-        env.queue,
-        json.dumps(spec),
-        stdout=asyncio.subprocess.PIPE,
-        cwd=str(Path(__file__).resolve().parents[2]),
-    )
-    assert proc.stdout is not None
-    async with asyncio.timeout(60):
-        while not (line := (await proc.stdout.readline()).decode()).startswith("READY"):
-            if not line:
-                raise RuntimeError("worker process exited before it was ready")
-    return proc, line.split()[1]
+        events = await env.wait_for(state, sid, run_ended())
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    assert payloads(events, ApprovalResolved)[0].choice == "deny"
+    assert not payloads(events, ToolEnd)
 
 
 @pytest.mark.parametrize(
@@ -439,28 +292,28 @@ async def test_worker_killed_during_a_tool(
     observer = await env.state()
     # Published before the worker process boots, so it hydrates the composition.
     await env.composition(observer, harness)
-    worker, _ = await _spawn_worker(
+    worker, _ = await spawn_worker(
         env, {"scripted_calls": [list(WRITE)], "slow_tool": ["write", 120]}
     )
     try:
         sid = await env.create(observer, harness)
         await env.sessions.submit(sid, Message("c1", "write a note"))
-        await env.wait_for(observer, sid, _has(lambda p: type(p).__name__ == "ToolStart"))
+        await env.wait_for(observer, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
     finally:
         worker.kill()  # SIGKILL mid-tool
         await worker.wait()
 
     adopter = await env.state()
     async with session_worker(env.client, adopter, task_queue=env.queue):
-        events = await env.wait_for(observer, sid, _run_ended())
-    assert _types(events).count("ToolStart") == 1, "the call is journalled once"
-    (end,) = _payloads(events, ToolEnd)
+        events = await env.wait_for(observer, sid, run_ended())
+    assert event_types(events).count("ToolStart") == 1, "the call is journalled once"
+    (end,) = payloads(events, ToolEnd)
     if interrupted:
         assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
-        assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["TurnInterrupted"]
+        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["TurnInterrupted"]
     else:
         assert not end.is_error, "an idempotent tool re-runs on the adopting worker"
-        assert not _payloads(events, ErrorEvent)
+        assert not payloads(events, ErrorEvent)
 
 
 # --- determinism ----------------------------------------------------------------
@@ -481,7 +334,7 @@ async def test_stepped_histories_replay_deterministically(
         sid = await env.create(state, "githi-approve-deny")
         await env.sessions.submit(sid, Message("c1", "write a note"))
         await env.sessions.respond_approval(sid, await _await_approval(env, state, sid), "allow")
-        await env.wait_for(state, sid, _run_ended())
+        await env.wait_for(state, sid, run_ended())
         await env.sessions.terminate(sid)
 
     replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)

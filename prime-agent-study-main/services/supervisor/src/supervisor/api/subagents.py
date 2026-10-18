@@ -1,8 +1,14 @@
-"""Subagent HTTP routes — session-scoped child commands (AGENT_CONTRACT)."""
+"""Subagent HTTP routes — session-scoped child commands (AGENT_CONTRACT).
+
+Commands run on the worker holding the parent session (its child agents and
+background jobs live there); listing children reads the journal.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query, Request
 
 from supervisor.api import deps
 from supervisor.api.schemas import (
@@ -13,59 +19,19 @@ from supervisor.api.schemas import (
     SpawnChildResponse,
     SubagentCommandRequest,
 )
-from supervisor.seams import (
-    BadArgs,
-    DepthExceeded,
-    ProviderMissing,
-    SeamError,
-    SubagentRequest,
-    UnsupportedCapability,
-)
-from supervisor.session import (
-    SessionAwaitingApproval,
-    SessionNotFound,
-    SessionTerminated,
-    SubagentNotConfigured,
-)
+from supervisor.api.session_ops import domain_http_error, run_op
+from supervisor.temporal.contracts import Op
 
 router = APIRouter(tags=["subagents"])
 
 
-def _to_request(body: SubagentCommandRequest) -> SubagentRequest:
-    return SubagentRequest(
-        prompt=body.prompt,
-        description=body.description,
-        parent_depth=body.parent_depth,
-        mode=body.mode,
-        run_id=body.run_id,
-        tool_filter=body.tool_filter,
-        persona=body.persona,
-        depth_limit=body.depth_limit,
-        output_schema=body.output_schema,
-    )
-
-
-def _session_errors(exc: Exception) -> HTTPException:
-    if isinstance(exc, SessionNotFound):
-        return HTTPException(status_code=404, detail="session not found")
-    if isinstance(exc, (SessionTerminated, SessionAwaitingApproval)):
-        return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, SubagentNotConfigured):
-        return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, DepthExceeded):
-        return HTTPException(
-            status_code=400,
-            detail={"code": exc.code, "message": str(exc)},
-        )
-    if isinstance(exc, BadArgs):
-        return HTTPException(status_code=400, detail=str(exc))
-    if isinstance(exc, ProviderMissing):
-        return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, UnsupportedCapability):
-        return HTTPException(status_code=400, detail=str(exc))
-    if isinstance(exc, SeamError):
-        return HTTPException(status_code=400, detail=str(exc))
-    raise exc
+async def _command(
+    request: Request, session_id: str, tenant_id: str, kind: Op, body: SubagentCommandRequest
+) -> dict[str, Any]:
+    await deps.require_session_access(tenant_id, session_id, request)
+    out = await run_op(request, session_id, tenant_id, kind, body.model_dump())
+    assert out is not None
+    return out
 
 
 @router.post(
@@ -78,22 +44,8 @@ async def spawn_child(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> SpawnChildResponse:
-    await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        result = await manager.spawn_child(
-            session_id,
-            tenant_id=tenant_id,
-            provider=body.provider,
-            request=_to_request(body),
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
-    return SpawnChildResponse(
-        child_session_id=result.child_id or "",
-        text=result.text or None,
-        status=result.status,
-    )
+    out = await _command(request, session_id, tenant_id, Op.SPAWN_CHILD, body)
+    return SpawnChildResponse(**out)
 
 
 @router.post(
@@ -106,22 +58,8 @@ async def fork_child(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> SpawnChildResponse:
-    await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        result = await manager.fork_child(
-            session_id,
-            tenant_id=tenant_id,
-            provider=body.provider,
-            request=_to_request(body),
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
-    return SpawnChildResponse(
-        child_session_id=result.child_id or "",
-        text=result.text or None,
-        status=result.status,
-    )
+    out = await _command(request, session_id, tenant_id, Op.FORK_CHILD, body)
+    return SpawnChildResponse(**out)
 
 
 @router.post(
@@ -134,18 +72,8 @@ async def start_background(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> BackgroundJobResponse:
-    await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        handle = await manager.start_subagent_background(
-            session_id,
-            tenant_id=tenant_id,
-            provider=body.provider,
-            request=_to_request(body),
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
-    return BackgroundJobResponse(job_id=handle.job_id)
+    out = await _command(request, session_id, tenant_id, Op.START_BACKGROUND, body)
+    return BackgroundJobResponse(**out)
 
 
 @router.post(
@@ -158,21 +86,8 @@ async def start_continuable(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> ContinuableChildResponse:
-    await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        handle = await manager.start_subagent_continuable(
-            session_id,
-            tenant_id=tenant_id,
-            provider=body.provider,
-            request=_to_request(body),
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
-    return ContinuableChildResponse(
-        child_id=handle.child_id,
-        message_id=handle.message_id or None,
-    )
+    out = await _command(request, session_id, tenant_id, Op.START_CONTINUABLE, body)
+    return ContinuableChildResponse(**out)
 
 
 @router.post("/v1/sessions/{session_id}/children/{child_id}/message", status_code=204)
@@ -184,16 +99,13 @@ async def send_child_message(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> None:
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        await manager.send_child_message(
-            session_id,
-            tenant_id=tenant_id,
-            child_id=child_id,
-            text=body.text,
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
+    await run_op(
+        request,
+        session_id,
+        tenant_id,
+        Op.SEND_CHILD_MESSAGE,
+        {"child_id": child_id, "text": body.text},
+    )
 
 
 @router.post("/v1/sessions/{session_id}/children/{child_id}/interrupt", status_code=204)
@@ -204,15 +116,7 @@ async def interrupt_child(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> None:
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    try:
-        await manager.interrupt_child(
-            session_id,
-            tenant_id=tenant_id,
-            child_id=child_id,
-        )
-    except Exception as exc:
-        raise _session_errors(exc) from exc
+    await run_op(request, session_id, tenant_id, Op.INTERRUPT_CHILD, {"child_id": child_id})
 
 
 @router.get(
@@ -226,15 +130,14 @@ async def list_children(
     scope: str = Query(default="direct"),
 ) -> list[ChildRowOut]:
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
     try:
-        rows = await manager.list_children(
-            session_id,
-            tenant_id=tenant_id,
-            scope=scope,
+        rows = await deps.get_manager(request).list_children(
+            session_id, tenant_id=tenant_id, scope=scope
         )
     except Exception as exc:
-        raise _session_errors(exc) from exc
+        if (http := domain_http_error(exc)) is None:
+            raise
+        raise http from exc
     return [
         ChildRowOut(
             id=r.id,

@@ -24,8 +24,10 @@ from supervisor.temporal.contracts import (
     Accepted,
     ApprovalChoice,
     CreateSession,
+    ForkSpec,
     Message,
     SessionInput,
+    SessionOp,
     SessionStatus,
     Timing,
     workflow_id,
@@ -84,10 +86,13 @@ class SessionWorkflows:
         self, session_id: str, spec: CreateSession, *, timing: Timing | None = None
     ) -> SessionStatus:
         """Start the session's workflow and wait until the session exists (or why it cannot)."""
+        return await self._start(SessionInput(session_id, create=spec, timing=timing or Timing()))
+
+    async def _start(self, inp: SessionInput) -> SessionStatus:
         start = WithStartWorkflowOperation(
             AgentSessionWorkflow.run,
-            SessionInput(session_id, create=spec, timing=timing or Timing()),
-            id=workflow_id(session_id),
+            inp,
+            id=workflow_id(inp.session_id),
             task_queue=self._task_queue,
             # Re-sending the same create is idempotent; a closed session id is never reused.
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
@@ -98,11 +103,32 @@ class SessionWorkflows:
                 AgentSessionWorkflow.wait_ready, start_workflow_operation=start
             )
 
+    async def fork(
+        self,
+        source_id: str,
+        new_id: str,
+        *,
+        at_seq: int | None = None,
+        timing: Timing | None = None,
+    ) -> SessionStatus:
+        """Start ``new_id`` as a copy of ``source_id`` with its own workflow; wait until ready."""
+        return await self._start(
+            SessionInput(new_id, fork=ForkSpec(source_id, at_seq), timing=timing or Timing())
+        )
+
     async def submit(self, session_id: str, message: Message) -> Accepted:
         async with _commands():
             return await self._handle(session_id).execute_update(
                 AgentSessionWorkflow.submit_message, message, id=f"msg:{message.command_id}"
             )
+
+    async def op(self, op: SessionOp) -> dict[str, Any] | None:
+        """Run a session operation on the session's worker; a re-sent op_id runs once."""
+        async with _commands():
+            result = await self._handle(op.session_id).execute_update(
+                AgentSessionWorkflow.session_op, op, id=f"op:{op.op_id}"
+            )
+        return result.body
 
     async def respond_approval(self, session_id: str, approval_id: str, choice: str) -> None:
         async with _commands():

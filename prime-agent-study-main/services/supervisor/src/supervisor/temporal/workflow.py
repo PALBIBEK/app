@@ -39,6 +39,7 @@ from temporalio.exceptions import TimeoutError as ActivityTimeout
 from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
     NON_RETRYABLE,
+    RETRYABLE_OPS,
     Accepted,
     Activity,
     ApprovalAsk,
@@ -49,15 +50,19 @@ from supervisor.temporal.contracts import (
     Carried,
     CreateRequest,
     EndRunRequest,
+    ForkRequest,
     GuardSettings,
     LostCall,
     Message,
+    Op,
+    OpResult,
     Phase,
     Placement,
     PlannedCall,
     RetryMode,
     RunPlan,
     SessionInput,
+    SessionOp,
     SessionResult,
     SessionStatus,
     StepRequest,
@@ -109,6 +114,11 @@ def _domain_error(err: ActivityError) -> ApplicationError:
     if isinstance(cause, ApplicationError):
         return ApplicationError(cause.message, *cause.details, type=cause.type, non_retryable=True)
     return ApplicationError(str(err), type="ActivityFailed", non_retryable=True)
+
+
+def _is_domain(err: ActivityError) -> bool:
+    """A final domain answer from the activity, as opposed to a crash or timeout."""
+    return isinstance(err.cause, ApplicationError) and err.cause.non_retryable
 
 
 def _failure(err: ActivityError) -> tuple[str, str]:
@@ -182,11 +192,15 @@ class AgentSessionWorkflow:
         return SessionResult(self._session_id, self._state.phase, self._state.turns_completed)
 
     async def _create(self, inp: SessionInput) -> None:
-        assert inp.create is not None, "a new session workflow needs CreateSession"
+        if inp.fork is not None:
+            activity, arg = Activity.FORK, ForkRequest(self._session_id, inp.fork)
+        else:
+            assert inp.create is not None, "a new session workflow needs CreateSession or ForkSpec"
+            activity, arg = Activity.CREATE, CreateRequest(self._session_id, inp.create)
         try:
             self._state.placement = await workflow.execute_activity(
-                Activity.CREATE,
-                CreateRequest(self._session_id, inp.create),
+                activity,
+                arg,
                 result_type=Placement,
                 start_to_close_timeout=_SHORT,
                 retry_policy=_RETRY,
@@ -476,6 +490,47 @@ class AgentSessionWorkflow:
         self._reject_if_closed()
         if not message.command_id or not message.text:
             raise ValueError("command_id and text are required")
+
+    @workflow.update(name="session_op")
+    async def session_op(self, op: SessionOp) -> OpResult:
+        """Tool invoke, memory, subagents, workspace: on the worker holding the session."""
+        await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
+        if self._creation_error is not None:
+            raise self._creation_error
+        lost = LostCall(self._session_id, None, op.op_id) if op.kind is Op.INVOKE_TOOL else None
+        try:
+            return await self._session_activity(
+                Activity.SESSION_OP,
+                op,
+                OpResult,
+                start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
+                # Side effects run at most once; a placement loss (never started) re-runs.
+                retry=_RETRY if op.kind in RETRYABLE_OPS else _ONCE,
+                heartbeat=True,
+                lost=lost,
+            )
+        except ActivityError as err:
+            if lost is not None and not _is_domain(err):
+                # The worker died (or failed) mid-invoke: say so, and never re-run it.
+                await workflow.execute_activity(
+                    Activity.CLOSE_LOST_CALL,
+                    lost,
+                    task_queue=workflow.info().task_queue,
+                    start_to_close_timeout=_SHORT,
+                    retry_policy=_RETRY,
+                )
+                raise ApplicationError(
+                    f"tool call {op.op_id!r} outcome unknown: {_failure(err)[1]}",
+                    type="ToolOutcomeUnknown",
+                    non_retryable=True,
+                ) from err
+            raise _domain_error(err) from err
+
+    @session_op.validator
+    def _validate_session_op(self, op: SessionOp) -> None:
+        self._reject_if_closed()
+        if op.session_id != self._session_id or not op.op_id:
+            raise ValueError("op must name this session and carry an op_id")
 
     @workflow.update(name="respond_approval")
     async def respond_approval(self, choice: ApprovalChoice) -> None:
