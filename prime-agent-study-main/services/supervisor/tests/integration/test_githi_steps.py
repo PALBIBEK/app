@@ -61,7 +61,9 @@ async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
     assert event_types(events) == [
         "RunStart",
         "MessageEnd",
+        "MemoryContext",  # the audience checkpoint (baseline)
         "TurnStart",
+        "MemoryInjected",  # recall: the notebook is empty, so nothing is shown
         "MessageEnd",
         "ToolStart",
         "ToolEnd",

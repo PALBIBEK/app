@@ -24,6 +24,8 @@ from supervisor.agent.events import (
     ErrorEvent,
     JobEnd,
     JobStart,
+    MemoryContext,
+    MemoryInjected,
     MemoryRecall,
     MessageEnd,
     RunEnd,
@@ -77,6 +79,8 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "CompactionStart": CompactionStart,
     "CompactionEnd": CompactionEnd,
     "MemoryRecall": MemoryRecall,
+    "MemoryInjected": MemoryInjected,
+    "MemoryContext": MemoryContext,
 }
 
 # Reverse mapping for validation

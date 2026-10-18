@@ -23,6 +23,7 @@ from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
     ErrorEvent,
+    MemoryInjected,
     MessageEnd,
     RunEnd,
     RunStart,
@@ -36,6 +37,12 @@ from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.harness import RecoveryAction
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
+from supervisor.memory.binding import Strategy
+from supervisor.memory.classification import OneShot
+from supervisor.memory.history import message_text
+from supervisor.memory.platform import gateway_one_shot
+from supervisor.memory.tools import PLATFORM_TOOLS
+from supervisor.memory.turn import SessionMemory
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ToolResult
 from supervisor.seams.core.types import ChatMessage, PromptBindings
@@ -45,6 +52,7 @@ from supervisor.temporal.contracts import (
     ApprovalAsk,
     ApprovalDecision,
     ApprovalNeeded,
+    CaptureConfig,
     EndRunRequest,
     GuardSettings,
     LostCall,
@@ -81,10 +89,24 @@ async def heartbeating[T](work: Awaitable[T]) -> T:
 
 
 def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, Any]]:
-    """The run's messages, rebuilt from its journalled events on top of earlier history."""
+    """The run's messages, rebuilt from its journalled events on top of earlier history.
+
+    Memory injected for the run comes right before the run's user message, so it is
+    part of the history later runs carry (what the next run's delta assumes is held).
+    """
     messages = list(prior)
+    user_at: int | None = None
     for envelope in run:
         event = envelope.payload
+        if isinstance(event, MemoryInjected):
+            if event.text:
+                at = len(messages) if user_at is None else user_at
+                messages.insert(
+                    at, {"role": "system", "content": [{"type": "text", "text": event.text}]}
+                )
+            continue
+        if isinstance(event, MessageEnd) and event.role == "user" and user_at is None:
+            user_at = len(messages)
         if isinstance(event, MessageEnd) and event.role in ("user", "assistant"):
             text = [p for p in event.content if p.get("type") == "text"]
             calls = [
@@ -107,6 +129,24 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     return messages
 
 
+def _user_text(run: list[Any]) -> str:
+    for envelope in run:
+        event = envelope.payload
+        if isinstance(event, MessageEnd) and event.role == "user":
+            return message_text(event)
+    return ""
+
+
+def _platform_result(text: str, is_error: bool) -> dict[str, Any]:
+    """A memory tool's result in the same shape as a catalog tool's."""
+    return {
+        "ok": not is_error,
+        "payload": text,
+        "error": text if is_error else None,
+        "code": "MEMORY_TOOL_ERROR" if is_error else None,
+    }
+
+
 class GithiSteps:
     """Step implementations bound to one worker's SessionManager.
 
@@ -117,6 +157,21 @@ class GithiSteps:
     def __init__(self, manager: SessionManager, reader: JournalReader) -> None:
         self._manager = manager
         self._reader = reader
+        self._memory = SessionMemory(manager.memory, reader, one_shot_for=self.one_shot_for)
+
+    @property
+    def memory(self) -> SessionMemory:
+        return self._memory
+
+    async def one_shot_for(self, session_id: str) -> OneShot:
+        """One-shot calls (classification, extraction) with the session's own model."""
+        row = await self._manager._get_session_row(session_id)
+        seams = self._manager._seams_for_session(session_id, row)
+        if seams is None or seams.model_gateway is None:
+            return self._manager.memory.one_shot
+        return gateway_one_shot(
+            seams.model_gateway, model=self._manager._pinned_manifest(row).model
+        )
 
     # --- run lifecycle ---------------------------------------------------------
 
@@ -136,13 +191,30 @@ class GithiSteps:
             "user",
             MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
         )
+        await self._memory.checkpoint(session_id, run_id, self._record)
         guards = (await self._manifest(session_id)).guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
             if guards is not None
             else None
         )
-        return RunPlan(run_id, stepped=True, guard=guard, max_steps=_MAX_TOOL_ITERATIONS)
+        return RunPlan(
+            run_id,
+            stepped=True,
+            guard=guard,
+            max_steps=_MAX_TOOL_ITERATIONS,
+            capture=await self._capture_plan(session_id),
+        )
+
+    async def _capture_plan(self, session_id: str) -> CaptureConfig | None:
+        """Automatic capture after this turn (QM per-turn strategy), if the session has it."""
+        scope = await self._memory.scope(session_id)
+        if scope is None:
+            return None
+        b = scope.binding
+        if b.strategy is not Strategy.PER_TURN or b.writable is None:
+            return None
+        return CaptureConfig(quiet_s=b.capture_quiet_s, max_turns=b.capture_max_turns)
 
     async def end_run(self, req: EndRunRequest) -> TurnOutcome:
         sid, run_id = req.session_id, req.run_id
@@ -162,7 +234,7 @@ class GithiSteps:
             )
         await self._record(sid, run_id, "turn_end", TurnEnd(stop_reason=req.stop_reason))
         history = conversation(
-            await self._reader.latest_history(sid) or [], await self._reader.read_turn(sid, run_id)
+            await self._memory.prior_history(sid), await self._reader.read_turn(sid, run_id)
         )
         last_seq = await self._record(sid, run_id, "end", RunEnd(messages=history))
         status = await self._manager.session_status(sid) or "terminated"
@@ -180,20 +252,16 @@ class GithiSteps:
             runtime = await self._runtime(sid)
             loop = self._loop(sid, runtime)
             await self._record(sid, run_id, f"{req.step}:turn", TurnStart())
-            chat = self._chat(
-                runtime,
-                conversation(
-                    await self._reader.latest_history(sid) or [],
-                    await self._reader.read_turn(sid, run_id),
-                ),
-            )
+            run = await self._reader.read_turn(sid, run_id)
+            if req.step == 0:
+                await self._memory.recall(sid, run_id, _user_text(run), self._record)
+                run = await self._reader.read_turn(sid, run_id)
+            chat = self._chat(runtime, conversation(await self._memory.prior_history(sid), run))
+            schemas = await self._tool_schemas(sid, loop)
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             completion = await heartbeating(
                 asyncio.to_thread(
-                    runtime.seams.model_gateway.complete,
-                    chat,
-                    loop._tool_schemas(),
-                    model=runtime._model,
+                    runtime.seams.model_gateway.complete, chat, schemas, model=runtime._model
                 )
             )
             calls = AgentLoop._extract_tool_calls(completion)
@@ -237,7 +305,9 @@ class GithiSteps:
         )
         retry = (
             RetryMode.RETRY
-            if manifest.recovery.action_for(name) is RecoveryAction.AUTO_RESUME
+            # Memory tools are idempotent: capture dedupes, edits and deletes are by id.
+            if name in PLATFORM_TOOLS
+            or manifest.recovery.action_for(name) is RecoveryAction.AUTO_RESUME
             else RetryMode.ONCE
         )
         return PlannedCall(
@@ -274,9 +344,13 @@ class GithiSteps:
             f"{call_id}:start",
             ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"]),
         )
+        tools = await self._memory.tools(sid)
         if req.denied:
             result: dict[str, Any] = {"error": "denied by approval", "code": "APPROVAL_DENIED"}
             is_error = True
+        elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
+            output = await tools.call(call["name"], call["arguments"])
+            result, is_error = _platform_result(output.text, output.is_error), output.is_error
         else:
             runtime = await self._runtime(sid)
             invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
@@ -384,6 +458,19 @@ class GithiSteps:
             return chat
         prompt = assembler.assemble(PromptBindings(cwd=runtime._session_dir or "."))
         return [ChatMessage(role="system", content=prompt.text), *chat]
+
+    async def _tool_schemas(self, session_id: str, loop: AgentLoop) -> list[dict[str, Any]]:
+        """The session's catalog tools, then the memory tools it does not shadow."""
+        schemas = loop._tool_schemas()
+        names = {s["function"]["name"] for s in schemas}
+        tools = await self._memory.tools(session_id)
+        return schemas + [s for s in tools.schemas() if s["function"]["name"] not in names]
+
+    async def _catalog_has(self, session_id: str, name: str) -> bool:
+        runtime = await self._runtime(session_id)
+        return any(
+            s["function"]["name"] == name for s in self._loop(session_id, runtime)._tool_schemas()
+        )
 
     async def _manifest(self, session_id: str) -> Any:
         row = await self._manager._get_session_row(session_id)

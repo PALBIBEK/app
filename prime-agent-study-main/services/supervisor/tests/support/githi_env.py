@@ -14,6 +14,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -69,13 +70,27 @@ class Env:
         state, _ = await boot_platform(self.factory, self.blob_dir)  # type: ignore[arg-type]
         return state
 
-    async def create(self, state: SupervisorState, harness: str = "githi-v1") -> str:
+    async def create(
+        self,
+        state: SupervisorState,
+        harness: str = "githi-v1",
+        *,
+        principal: str = "alice",
+        memory: dict[str, Any] | None = None,
+    ) -> str:
         """A githi session from the shipped composition, re-pinned to ``harness``."""
         name, digest = await self.composition(state, harness)
         sid = uuid.uuid4().hex
         await self.sessions.create(
             sid,
-            CreateSession("t1", harness, composition_id=name, composition_digest=digest),
+            CreateSession(
+                "t1",
+                harness,
+                composition_id=name,
+                composition_digest=digest,
+                principal_id=principal,
+                memory=memory,
+            ),
             timing=FAST,
         )
         return sid

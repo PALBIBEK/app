@@ -268,7 +268,7 @@ class NotebookStore:
         author: str | None = None,
         expect_revision: int | None = None,
     ) -> T:
-        """Run ``fn`` on the notebook's facts atomically; ``expect_revision`` guards stale writes."""
+        """Run ``fn`` on the notebook's facts atomically; ``expect_revision`` refuses stale."""
         async with self._db() as db:
             # Lock by writing: portable, and taken before any read the change depends on.
             locked = await db.execute(

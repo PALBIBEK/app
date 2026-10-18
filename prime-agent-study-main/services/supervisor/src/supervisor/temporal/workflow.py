@@ -50,6 +50,8 @@ from supervisor.temporal.contracts import (
     ApprovalDecision,
     ApprovalNeeded,
     ApprovalRequest,
+    CaptureConfig,
+    CaptureRequest,
     Carried,
     CreateRequest,
     EndRunRequest,
@@ -177,9 +179,7 @@ class AgentSessionWorkflow:
             if self._state.phase is Phase.CREATING:
                 await self._create(inp)
             while self._state.phase is not Phase.FAILED:
-                await workflow.wait_condition(
-                    lambda: bool(self._state.pending) or self._terminate_requested
-                )
+                await self._wait_for_work()
                 if self._terminate_requested:
                     break
                 await self._run_turn(self._state.pending.pop(0))
@@ -194,6 +194,7 @@ class AgentSessionWorkflow:
             await self._terminate()
             raise
         if self._state.phase is not Phase.FAILED:
+            await self._flush_capture()  # a pending burst is not lost with the session
             await self._terminate()
         for job_id in list(self._state.jobs):  # a closed session's jobs stop with it
             await self._cancel_job(job_id)
@@ -228,6 +229,8 @@ class AgentSessionWorkflow:
             outcome = await (
                 self._run_steps(message, plan) if plan.stepped else self._run_whole(message)
             )
+            if plan.capture is not None and outcome.stop_reason == "stop":
+                await self._queue_capture(plan.run_id, plan.capture)
             if outcome.session_status in CLOSED_STATUSES:
                 # Policy closed the session (e.g. a loop guard): nothing more can run.
                 workflow.logger.info("session closed by policy: %s", outcome.stop_reason)
@@ -244,6 +247,57 @@ class AgentSessionWorkflow:
             self._state.turns_completed += 1
             if self._state.phase is Phase.RUNNING:
                 self._state.phase = Phase.IDLE
+
+    # --- automatic memory capture (QM per-turn bursts, on durable timers) --------
+
+    async def _wait_for_work(self) -> None:
+        """Wait for a message or terminate; flush a capture burst when its quiet ends."""
+        while True:
+            due = self._state.capture_due
+            timeout = (
+                None
+                if due is None
+                else timedelta(seconds=max(0.0, due - workflow.now().timestamp()))
+            )
+            try:
+                await workflow.wait_condition(
+                    lambda: bool(self._state.pending) or self._terminate_requested,
+                    timeout=timeout,
+                )
+                return
+            except TimeoutError:
+                await self._flush_capture()
+
+    async def _queue_capture(self, run_id: str, config: CaptureConfig) -> None:
+        runs = self._state.capture_runs
+        if run_id not in runs:
+            runs.append(run_id)
+        if len(runs) >= config.max_turns:
+            await self._flush_capture()
+        else:  # every new turn restarts the quiet window
+            self._state.capture_due = workflow.now().timestamp() + config.quiet_s
+
+    async def _flush_capture(self) -> None:
+        runs, self._state.capture_runs, self._state.capture_due = (
+            list(self._state.capture_runs),
+            [],
+            None,
+        )
+        if not runs:
+            return
+        try:
+            await workflow.execute_activity(
+                Activity.CAPTURE_MEMORY,
+                CaptureRequest(self._session_id, runs),
+                result_type=int,
+                task_queue=workflow.info().task_queue,  # journal-only: any worker
+                start_to_close_timeout=_MODEL_CALL,
+                heartbeat_timeout=self._heartbeat,
+                retry_policy=_RETRY,
+            )
+        except ActivityError as err:
+            # Capture is best effort: a failed burst is dropped, never blocks the session.
+            workflow.logger.warning("memory capture failed for %d turns: %s", len(runs), err)
 
     async def _run_whole(self, message: Message) -> TurnOutcome:
         """Runtime-driven turn (harness, echo, offline githi): one heartbeated activity."""

@@ -59,6 +59,8 @@ class Activity(StrEnum):
     # A background subagent job's work and its end, on any worker.
     RUN_JOB = "subagent.run_job"
     END_JOB = "subagent.end_job"
+    # Extract and save durable facts from a burst of a session's turns (any worker).
+    CAPTURE_MEMORY = "session.capture_memory"
 
 
 class Phase(StrEnum):
@@ -193,6 +195,20 @@ class GuardSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureConfig:
+    """Automatic memory capture after a turn: flush a burst after quiet, or at max turns."""
+
+    quiet_s: float
+    max_turns: int
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureRequest:
+    session_id: str
+    run_ids: list[str]
+
+
+@dataclass(frozen=True, slots=True)
 class RunPlan:
     """How a turn runs: stepped by the workflow, or as one activity (runtime-driven)."""
 
@@ -200,6 +216,8 @@ class RunPlan:
     stepped: bool
     guard: GuardSettings | None = None
     max_steps: int = 0
+    # Capture this turn into long-term memory (in a burst, after quiet).
+    capture: CaptureConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +400,9 @@ class Carried:
     turns_completed: int = 0
     # Background jobs still running (their workflows are cancelled with the session).
     jobs: list[str] = field(default_factory=list)
+    # Turns waiting to be captured into memory, and when the burst is due (epoch s).
+    capture_runs: list[str] = field(default_factory=list)
+    capture_due: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

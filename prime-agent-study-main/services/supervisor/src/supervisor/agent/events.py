@@ -220,6 +220,35 @@ class MemoryRecall:
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
+@dataclass(frozen=True)
+class MemoryInjected:
+    """Long-term memory shown to the model in one run (QM's per-turn recall record).
+
+    ``text`` is what was injected (only new or changed facts after the first run);
+    ``shown`` is every fact the model now holds ({notebook, id, hash, provenance}),
+    which the next run's delta and capture provenance are computed from.
+    """
+
+    run_id: str
+    text: str
+    shown: list[dict[str, Any]] = field(default_factory=list)
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
+@dataclass(frozen=True)
+class MemoryContext:
+    """Audience checkpoint (QM context boundary).
+
+    When the audience a session speaks to changes, ``through_seq`` advances to the
+    last event before the change: nothing at or before it re-enters a later turn.
+    ``-1`` is a baseline (no cutoff).
+    """
+
+    audience: str
+    through_seq: int
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
 # ── Meta Events ────────────────────────────────────────────────────────────────
 
 
@@ -246,7 +275,7 @@ AgentEvent = Union[
     ToolStart, ToolEnd,
     ApprovalRequired, ApprovalResolved,
     SubagentStart, SubagentEnd, JobStart, JobEnd,
-    CompactionStart, CompactionEnd, MemoryRecall,
+    CompactionStart, CompactionEnd, MemoryRecall, MemoryInjected, MemoryContext,
     Settled, ErrorEvent,
 ]
 

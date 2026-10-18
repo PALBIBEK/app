@@ -36,12 +36,18 @@ class ScriptedGateway:
     fail_first: int = 0
     vary_args: bool = False
     repeat: bool = False
+    # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
+    extract: str = "NONE"
+    sensitivity: str = "ordinary"
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
+    one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def complete(
         self, messages: list[ChatMessage], tools: list[dict[str, Any]], *, model: str | None = None
     ) -> Completion:
+        if (answer := self._one_shot(messages)) is not None:
+            return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
         with self._lock:
             self.seen.append(list(messages))
             if self.fail_first > 0:
@@ -66,6 +72,18 @@ class ScriptedGateway:
         ]
         message = ChatMessage("assistant", "", tool_calls=calls)
         return Completion(message, model="scripted", usage=usage, tool_calls=calls)
+
+    def _one_shot(self, messages: list[ChatMessage]) -> str | None:
+        system = messages[0].content if messages and messages[0].role == "system" else ""
+        if system.startswith("You extract durable facts"):
+            answer = self.extract
+        elif system.startswith("Classify sensitivity"):
+            answer = self.sensitivity
+        else:
+            return None
+        with self._lock:
+            self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
+        return answer
 
     def stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:  # pragma: no cover
         raise NotImplementedError

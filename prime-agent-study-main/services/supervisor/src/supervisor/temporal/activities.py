@@ -27,6 +27,7 @@ from supervisor.temporal.contracts import (
     ApprovalAsk,
     ApprovalDecision,
     ApprovalRequest,
+    CaptureRequest,
     CreateRequest,
     EndRunRequest,
     ForkRequest,
@@ -225,6 +226,11 @@ class SessionActivities:
             await self._manager.ensure_ready(op.session_id)
             return OpResult(await heartbeating(run_operation(self._manager, op)))
 
+    @activity.defn(name=Activity.CAPTURE_MEMORY)
+    async def capture_memory(self, req: CaptureRequest) -> int:
+        with _as_application_error():
+            return await heartbeating(self._steps.memory.capture(req.session_id, req.run_ids))
+
     @activity.defn(name=Activity.RUN_JOB)
     async def run_job(self, spec: JobSpec) -> JobOutcome:
         with _as_application_error():
@@ -259,6 +265,7 @@ class SessionActivities:
             self.session_op,
             self.run_job,
             self.end_job,
+            self.capture_memory,
         ]
 
     @contextlib.asynccontextmanager
