@@ -1115,7 +1115,7 @@ class SessionManager:
         self, *, now: float | None = None
     ) -> list[Any]:
         """Sweep overdue pending approvals using per-session manifest on_timeout."""
-        from supervisor.policy.approvals import is_allow_choice
+        from supervisor.policy.types import is_allow_choice
 
         pending = await self._approvals.list_pending_all()
         session_policies: dict[str, Literal["deny", "allow"]] = {}
@@ -1134,9 +1134,10 @@ class SessionManager:
                 session_policies[sid] = "deny"
 
         expired = await self._approvals.expire_due(
-            now=now,
-            on_timeout="deny",
-            session_on_timeout=session_policies,
+            # ``now`` is wall-clock epoch seconds; the broker works in milliseconds.
+            now_ms=int(now * 1000) if now is not None else None,
+            default_choice="deny",
+            session_defaults=session_policies,
         )
         touched: set[str] = set()
         for approval in expired:
@@ -1198,7 +1199,7 @@ class SessionManager:
     async def _harness_request_allowed(
         self, session_id: str, harness_request_id: str
     ) -> bool:
-        from supervisor.policy.approvals import is_allow_choice
+        from supervisor.policy.types import is_allow_choice
 
         prior = await self._approvals.get_by_harness_request(
             session_id, harness_request_id

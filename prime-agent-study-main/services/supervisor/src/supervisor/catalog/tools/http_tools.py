@@ -129,7 +129,7 @@ def register_http_tool(
     handler = HttpToolHandler(name, endpoint=url, timeout=float(kwargs.get("timeout") or 15.0))
     HTTP_TOOL_REGISTRY[name] = handler.endpoint
 
-    from supervisor.catalog.tool_handlers import register_handler
+    from supervisor.catalog.tools.handlers import register_handler
 
     register_handler(name, handler)
     return handler

@@ -126,7 +126,8 @@ class CatalogArtifactRow(Base):
     body: Mapped[dict] = mapped_column(JSON, nullable=False)
     # Creator/owner tracking (new columns)
     created_by: Mapped[str] = mapped_column(Text, nullable=False, default="system")
-    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    # Indexed via __table_args__ (ix_catalog_artifacts_owner_id); index=True here would duplicate it.
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     deprecated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Timestamps

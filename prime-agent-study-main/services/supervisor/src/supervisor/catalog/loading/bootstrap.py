@@ -19,8 +19,20 @@ _PROBLEM_COMP_RE = re.compile(r"^([^:\s]+?)(?:\.json)?:\s*(.*)$")
 
 
 def agent_platform_root() -> Path:
-    """Install anchor: ``services/supervisor/src/supervisor`` → ``agent-platform``."""
-    return Path(__file__).resolve().parents[5]
+    """Repo root of the agent platform (the directory holding ``contracts/`` and ``harness/``).
+
+    Found by walking up from this file rather than counting levels, so moving
+    modules around cannot silently point it at the wrong directory. Falls back
+    to the layout ``<root>/services/supervisor/src/supervisor/...``.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "contracts").is_dir() and (parent / "harness").is_dir():
+            return parent
+    for parent in here.parents:
+        if parent.name == "services" and (parent / "supervisor").is_dir():
+            return parent.parent
+    return here.parents[-1]
 
 
 def default_catalog_dir() -> Path:

@@ -134,6 +134,9 @@ class RecallBackend(StrEnum):
     NONE = "none"
     GITHI_MARKDOWN = "githi_markdown"
     MCP = "mcp"
+    # Both route to DurableRecallProvider (seams/core/factory.py).
+    DURABLE = "durable"
+    MEMORY_SERVICE = "memory_service"
 
 
 # =============================================================================

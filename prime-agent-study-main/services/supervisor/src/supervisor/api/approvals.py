@@ -6,10 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from supervisor.api import deps
-from supervisor.policy.approvals import (
+from supervisor.policy.errors import (
     ApprovalError,
+    ApprovalNotFound,
     InvalidApprovalChoice,
-    UnknownApproval,
 )
 from supervisor.session import SessionNotFound
 
@@ -74,7 +74,7 @@ async def respond_approval(
         resolved = await manager.respond_approval(approval_id, body.choice)
         approval = await broker.get(approval_id)
         assert approval is not None
-    except UnknownApproval as exc:
+    except ApprovalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InvalidApprovalChoice as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

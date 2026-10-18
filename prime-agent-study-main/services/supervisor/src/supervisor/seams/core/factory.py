@@ -69,7 +69,7 @@ def build_context_memory_from_profile(
 
     compaction: ContextMemoryProvider
     if profile.compaction_enabled:
-        from supervisor.seams.providers.basic_compaction import BasicCompactionProvider
+        from supervisor.seams.providers.memory.basic_compaction import BasicCompactionProvider
         compaction = BasicCompactionProvider(
             gateway,
             summarizer_model=profile.summarization_model,
@@ -79,24 +79,24 @@ def build_context_memory_from_profile(
 
     recall: ContextMemoryProvider | None = None
     if profile.recall_enabled and profile.recall_backend == "githi_markdown":
-        from supervisor.seams.providers.markdown_recall import MarkdownRecallProvider
+        from supervisor.seams.providers.memory.markdown_recall import MarkdownRecallProvider
         recall = MarkdownRecallProvider()
     elif profile.recall_enabled and profile.recall_backend == "mcp":
         url = (profile.recall_mcp_server_url or "").strip()
         if url:
-            from supervisor.seams.providers.mcp_semantic_recall import McpSemanticRecallProvider
+            from supervisor.seams.providers.memory.mcp_recall import McpSemanticRecallProvider
             recall = McpSemanticRecallProvider(server_url=url)
     elif profile.recall_enabled and profile.recall_backend in (
         "durable",
         "memory_service",
     ):
-        from supervisor.seams.providers.durable_recall import DurableRecallProvider
+        from supervisor.seams.providers.memory.durable_recall import DurableRecallProvider
         recall = DurableRecallProvider(
             max_tokens=int(getattr(profile, "recall_max_tokens", None) or 512),
         )
 
     if recall is not None:
-        from supervisor.seams.providers.composite_context_memory import (
+        from supervisor.seams.providers.memory.composite_memory import (
             CompositeContextMemoryProvider,
         )
         return CompositeContextMemoryProvider(compaction=compaction, recall=recall)
@@ -165,7 +165,7 @@ def _build_subagent_transport(
         impl.register_provider(LEGACY_MEMORY_ALIAS, echo)
 
     if want_acp:
-        from supervisor.seams.providers.acp_subagent import AcpSubagentProvider
+        from supervisor.seams.providers.subagent.acp_subagent import AcpSubagentProvider
 
         impl.register_provider(
             "acp",
@@ -173,7 +173,7 @@ def _build_subagent_transport(
         )
 
     if not want_acp and not register_lab_echo:
-        from supervisor.seams.providers.nested_session_subagent import NestedSessionSubagentProvider
+        from supervisor.seams.providers.subagent.nested_session import NestedSessionSubagentProvider
         impl.register_provider(
             NESTED_SESSION_PROVIDER,
             NestedSessionSubagentProvider(gateway),
@@ -185,7 +185,7 @@ def _build_subagent_transport(
         # ACP primary — still register nested as optional alternate when not lab.
         if not register_lab_echo:
             try:
-                from supervisor.seams.providers.nested_session_subagent import NestedSessionSubagentProvider
+                from supervisor.seams.providers.subagent.nested_session import NestedSessionSubagentProvider
                 impl.register_provider(
                     NESTED_SESSION_PROVIDER,
                     NestedSessionSubagentProvider(gateway),

@@ -133,11 +133,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             _log.exception("orphan reaper failed")
 
+    # The server (uvicorn) owns SIGTERM and runs the shutdown path below when it
+    # receives it. Capture its handler so ours can mark the service as draining
+    # first and then hand off; replacing it outright leaves the process running
+    # forever with /readyz stuck at 503.
+    server_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
     def _begin_drain() -> None:
-        if state is None:
-            return
         _log.info("SIGTERM received — entering drain")
-        state.draining = True
+        if state is not None:
+            state.draining = True
+        if callable(server_sigterm_handler):
+            server_sigterm_handler(signal.SIGTERM, None)
+        else:
+            # No server handler installed (e.g. run under a bare event loop):
+            # fall back to the default behaviour of terminating the process.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            signal.raise_signal(signal.SIGTERM)
 
     try:
         loop.add_signal_handler(signal.SIGTERM, _begin_drain)

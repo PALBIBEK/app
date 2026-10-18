@@ -50,7 +50,7 @@ async def readyz(request: Request, response: Response) -> dict[str, str]:
 
     catalog = getattr(state, "composition_catalog", None)
     if catalog is not None:
-        from supervisor.catalog.verify import list_catalog_problems
+        from supervisor.catalog.loading.verify import list_catalog_problems
 
         catalog_problems = list_catalog_problems(catalog)
         if catalog_problems:

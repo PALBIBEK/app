@@ -11,25 +11,7 @@ from supervisor.api.schemas import CatalogArtifactOut
 from supervisor.catalog import CatalogError, ArtifactKind
 from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict
 
-# TODO: These functions need to be implemented
-# from supervisor.catalog.repository import persist_deprecate, persist_offer
-# from supervisor.catalog.serialize import artifact_summary
-
-async def persist_offer(factory, catalog, kind: str, name: str, digest: str) -> None:
-    """Stub: persist artifact offer to database."""
-    pass  # TODO: Implement DB persistence
-
-async def persist_deprecate(factory, kind: str, artifact_id: str, digest: str) -> None:
-    """Stub: persist artifact deprecation to database."""
-    pass  # TODO: Implement DB persistence
-
-def artifact_summary(artifact) -> dict:
-    """Stub: create summary dict from artifact."""
-    return {
-        "name": getattr(artifact, "name", ""),
-        "digest": getattr(artifact, "digest", ""),
-        "status": getattr(artifact, "status", "").value if hasattr(getattr(artifact, "status", ""), "value") else str(getattr(artifact, "status", "")),
-    }
+from supervisor.catalog.repository import artifact_summary, persist_deprecate, persist_offer
 
 router = APIRouter(prefix="/v1/catalog", tags=["catalog"])
 

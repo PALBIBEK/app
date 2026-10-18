@@ -49,6 +49,7 @@ __all__ = [
     "StallState",
     # Constants
     "ALLOW_CHOICES",
+    "is_allow_choice",
     "DEFAULT_APPROVAL_TIMEOUT_S",
     "DEFAULT_RATE_WINDOW_MS",
     "DEFAULT_STALL_ITERATIONS",
@@ -62,6 +63,12 @@ __all__ = [
 ALLOW_CHOICES: Final[frozenset[str]] = frozenset({
     "yes", "allow", "approve", "ok", "y",
 })
+
+
+def is_allow_choice(choice: str | None) -> bool:
+    """True if an approval choice is allow-shaped (e.g. "allow", "yes")."""
+    return choice is not None and choice.strip().lower() in ALLOW_CHOICES
+
 
 DEFAULT_APPROVAL_TIMEOUT_S: Final[int] = 300
 DEFAULT_RATE_WINDOW_MS: Final[int] = 60_000

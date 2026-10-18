@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.app import SupervisorState, build_supervisor
-from supervisor.catalog.bootstrap import (
+from supervisor.catalog.loading.bootstrap import (
     agent_platform_root,
     bootstrap_composition_catalog,
     resolve_catalog_dir,
@@ -19,9 +20,9 @@ from supervisor.harness import HarnessCatalog, load_manifest
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
 from supervisor.policy.quotas import TenantQuotaEnforcer, TenantQuotaLimits
-from supervisor.policy.rate_limit import TenantRateLimiter
+from supervisor.policy.rate_limit import MemoryRateLimiter
 from supervisor.sandbox.factory import create_sandbox_provider
-from supervisor.sandbox.gate import assert_multi_tenant_sandbox_provider
+from supervisor.sandbox.security.guards import assert_multi_tenant_sandbox_provider
 
 
 def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
@@ -30,7 +31,7 @@ def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
         return catalog
     for path in sorted(versions_dir.glob("*.yaml")) + sorted(versions_dir.glob("*.yml")):
         manifest = load_manifest(path.read_text(encoding="utf-8"))
-        catalog.register(manifest, status="active")
+        catalog.register_sync(manifest)  # defaults to HarnessStatus.ACTIVE
     return catalog
 
 
@@ -62,12 +63,12 @@ async def bootstrap_supervisor(
         multi_tenant_strict=settings.multi_tenant_strict,
     )
     # Stage 1 / D9: honor WORKSPACE_STORE + OBJECT_STORAGE + GRANT_STORE env.
-    from supervisor.seams.providers.grant_store_factory import (
+    from supervisor.seams.providers.authz.grant_store_factory import (
         create_authz_service,
         create_grant_store,
     )
-    from supervisor.seams.providers.virtual_key_client import maybe_virtual_key_client
-    from supervisor.seams.providers.workspace_store_factory import (
+    from supervisor.seams.providers.gateway.virtual_key_client import maybe_virtual_key_client
+    from supervisor.seams.providers.workspace.workspace_store_factory import (
         create_object_storage_for_workspace,
         create_workspace_hydrator,
         create_workspace_store,
@@ -101,12 +102,21 @@ async def bootstrap_supervisor(
             max_sessions_per_tenant=settings.tenant_max_sessions,
             max_sandboxes_per_tenant=settings.tenant_max_sandboxes,
             max_sessions_global=settings.global_max_sessions,
-            max_cost_per_tenant=settings.tenant_max_cost,
+            max_cost_per_tenant=(
+                Decimal(str(settings.tenant_max_cost))
+                if settings.tenant_max_cost is not None
+                else None
+            ),
         ),
     )
     metrics = setup_metrics()
     setup_tracing()
-    rate_limiter = TenantRateLimiter(max_per_minute=settings.tenant_rate_limit_per_minute)
+    # Per-process sliding window; unset/0 disables tenant rate limiting.
+    rate_limiter = (
+        MemoryRateLimiter(max_per_window=settings.tenant_rate_limit_per_minute, window_ms=60_000)
+        if settings.tenant_rate_limit_per_minute
+        else None
+    )
     return build_supervisor(
         session_factory=session_maker,
         catalog=harness_catalog,

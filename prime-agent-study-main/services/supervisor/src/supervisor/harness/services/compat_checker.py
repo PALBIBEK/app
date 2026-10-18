@@ -81,12 +81,8 @@ def load_supported_protocol_versions(
         candidates.append(Path("contracts/protocol_versions.yaml"))
 
         # Relative to this file (host checkout)
-        here = Path(__file__).resolve()
-        for idx in (5, 4, 3, 2):
-            if len(here.parents) > idx:
-                candidates.append(
-                    here.parents[idx] / "contracts" / "protocol_versions.yaml"
-                )
+        for parent in Path(__file__).resolve().parents:
+            candidates.append(parent / "contracts" / "protocol_versions.yaml")
 
         for candidate in candidates:
             if candidate.is_file():

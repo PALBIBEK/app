@@ -17,7 +17,7 @@ from supervisor.journal.writer import JournalWriter
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.obs.metrics import MetricsRegistry
 from supervisor.policy.quotas import TenantQuotaEnforcer
-from supervisor.policy.rate_limit import TenantRateLimiter
+from supervisor.policy.protocols import RateLimiterProtocol
 from supervisor.seams.services import AuthzService, WorkspaceStore
 from supervisor.session import SessionManager, SessionRegistry
 
@@ -41,7 +41,7 @@ class SupervisorState:
     idle_reap_max_seconds: float = 0.0
     idle_reap_interval_seconds: float = 60.0
     metrics: MetricsRegistry | None = None
-    rate_limiter: TenantRateLimiter | None = None
+    rate_limiter: RateLimiterProtocol | None = None
     authz: AuthzService | None = None
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
@@ -66,7 +66,7 @@ def build_supervisor(
     idle_reap_interval_seconds: float = 60.0,
     quotas: TenantQuotaEnforcer | None = None,
     metrics: MetricsRegistry | None = None,
-    rate_limiter: TenantRateLimiter | None = None,
+    rate_limiter: RateLimiterProtocol | None = None,
     authz: AuthzService | None = None,
     grant_store: object | None = None,
     virtual_key_client: object | None = None,

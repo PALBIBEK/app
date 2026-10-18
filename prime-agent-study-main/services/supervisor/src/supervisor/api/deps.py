@@ -107,7 +107,7 @@ async def current_tenant(
         tenant_id = x_tenant_id.strip()
 
     limiter = getattr(state, "rate_limiter", None)
-    if limiter is not None and not limiter.allow(tenant_id):
+    if limiter is not None and not (await limiter.check_and_record(tenant_id)).allowed:
         raise HTTPException(status_code=429, detail="tenant rate limit exceeded")
     metrics = getattr(state, "metrics", None)
     if metrics is not None:
@@ -136,7 +136,7 @@ async def current_principal(
         if x_principal_id and x_principal_id.strip() != principal_id:
             raise HTTPException(status_code=403, detail="principal mismatch")
         limiter = getattr(state, "rate_limiter", None)
-        if limiter is not None and not limiter.allow(tenant_id):
+        if limiter is not None and not (await limiter.check_and_record(tenant_id)).allowed:
             raise HTTPException(status_code=429, detail="tenant rate limit exceeded")
         metrics = getattr(state, "metrics", None)
         if metrics is not None:

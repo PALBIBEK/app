@@ -12,14 +12,16 @@ from supervisor.policy.quotas.limits import (
     parse_quota_limits,
 )
 from supervisor.policy.errors import QuotaExceeded
+from supervisor.policy.types import QuotaLimits
 
 # Alias for backwards compatibility
 TenantQuotaEnforcer = QuotaEnforcer
-TenantQuotaLimits = DEFAULT_QUOTA_LIMITS
+TenantQuotaLimits = QuotaLimits
 
 __all__ = [
     "QuotaEnforcer",
     "QuotaExceeded",
+    "QuotaLimits",
     "TenantQuotaEnforcer",
     "TenantQuotaLimits",
     "DEFAULT_QUOTA_LIMITS",

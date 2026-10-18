@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from supervisor.catalog.bootstrap import agent_platform_root, resolve_catalog_dir
+from supervisor.catalog.loading.bootstrap import agent_platform_root, resolve_catalog_dir
 
 
 def _optional_int(name: str) -> int | None:

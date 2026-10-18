@@ -79,13 +79,13 @@ class CompositionCatalog:
         name = artifact.name
 
         # Compute digest if needed
+        expected = content_digest(artifact.body_for_digest())
         if not artifact.digest or artifact.digest in ("", "sha256:PLACEHOLDER"):
-            artifact = with_digest(artifact, content_digest(artifact))
+            artifact = with_digest(artifact, expected)
 
         digest = artifact.digest
 
         # Verify digest if already set
-        expected = content_digest(artifact)
         if digest != expected:
             # Allow placeholder digests during loading
             if not digest.startswith("sha256:PLACEHOLDER"):
