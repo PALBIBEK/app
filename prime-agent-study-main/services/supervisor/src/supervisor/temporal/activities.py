@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
@@ -29,6 +29,7 @@ from supervisor.temporal.contracts import (
     ApprovalRequest,
     CreateRequest,
     EndRunRequest,
+    LostCall,
     Placement,
     RunPlan,
     StepRequest,
@@ -131,7 +132,8 @@ class SessionActivities:
     async def run_turn(self, req: TurnRequest) -> TurnOutcome:
         session_id, message = req.session_id, req.message
         with _as_application_error():
-            await self._manager.prepare_turn(session_id)
+            async with self._refusal_journalled(session_id, message.command_id):
+                await self._manager.prepare_turn(session_id)
             await self._refuse_if_interrupted(session_id)
             subscription = self._manager.subscribe_live(session_id)
             tools_started = 0
@@ -193,7 +195,8 @@ class SessionActivities:
     @activity.defn(name=Activity.BEGIN_RUN)
     async def begin_run(self, req: TurnRequest) -> RunPlan:
         with _as_application_error():
-            return await self._steps.begin_run(req)
+            async with self._refusal_journalled(req.session_id, req.message.command_id):
+                return await self._steps.begin_run(req)
 
     @activity.defn(name=Activity.MODEL_STEP)
     async def model_step(self, req: StepRequest) -> StepResult:
@@ -220,6 +223,11 @@ class SessionActivities:
         with _as_application_error():
             return await self._steps.end_run(req)
 
+    @activity.defn(name=Activity.CLOSE_LOST_CALL)
+    async def close_lost_call(self, lost: LostCall) -> None:
+        with _as_application_error():
+            await self._steps.close_lost_call(lost)
+
     def all(self) -> list[Any]:
         return [
             self.create,
@@ -234,7 +242,28 @@ class SessionActivities:
             self.request_approval,
             self.resolve_approval,
             self.end_run,
+            self.close_lost_call,
         ]
+
+    @contextlib.asynccontextmanager
+    async def _refusal_journalled(self, session_id: str, command_id: str) -> AsyncIterator[None]:
+        """A queued turn refused before it starts (budget, closed session) still answers.
+
+        Its caller was told "accepted" long ago; without a journalled error the
+        message would vanish. Keyed by command, so a retried refusal is recorded once.
+        """
+        try:
+            yield
+        except Exception as exc:
+            if (kind := _domain_type(exc)) is not None:
+                await self._manager._record(
+                    session_id,
+                    ErrorEvent(error_class=kind, retryable=False, detail=str(exc)),
+                    turn_id=None,
+                    trace_id=None,
+                    event_key=f"refused:{command_id}",
+                )
+            raise
 
     async def _refuse_if_interrupted(self, session_id: str) -> None:
         """Never silently re-run a turn a crashed worker left half done: tools may have run."""
@@ -252,9 +281,7 @@ class SessionActivities:
         )
         raise ApplicationError(detail, type="TurnInterrupted", non_retryable=True)
 
-    async def _record_failure(
-        self, session_id: str, exc: Exception, *, side_effects: bool
-    ) -> None:
+    async def _record_failure(self, session_id: str, exc: Exception, *, side_effects: bool) -> None:
         """Close the run in the journal so clients see it and a retry starts clean.
 
         After a tool ran, a retry could repeat its side effects, so the failure

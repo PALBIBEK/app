@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from datetime import timedelta
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -49,6 +50,7 @@ from supervisor.temporal.contracts import (
     CreateRequest,
     EndRunRequest,
     GuardSettings,
+    LostCall,
     Message,
     Phase,
     Placement,
@@ -88,6 +90,9 @@ _TURN_RETRY = RetryPolicy(
 _ONCE = RetryPolicy(maximum_attempts=1)
 _SHORT = timedelta(minutes=2)
 _MODEL_CALL = timedelta(minutes=10)
+# Patch id (workflow.patched): histories recorded before lost calls were closed
+# ahead of adoption replay without the extra activity.
+_CLOSE_LOST_BEFORE_ADOPT = "close-lost-call-before-adopt"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -102,9 +107,7 @@ def _domain_error(err: ActivityError) -> ApplicationError:
     """Surface an activity's domain error unchanged so the API maps it to the same status."""
     cause = err.cause
     if isinstance(cause, ApplicationError):
-        return ApplicationError(
-            cause.message, *cause.details, type=cause.type, non_retryable=True
-        )
+        return ApplicationError(cause.message, *cause.details, type=cause.type, non_retryable=True)
     return ApplicationError(str(err), type="ActivityFailed", non_retryable=True)
 
 
@@ -239,14 +242,17 @@ class AgentSessionWorkflow:
         guard = _guard(plan.guard)
         in_flight: str | None = None
 
-        async def end(stop_reason: str, **details: object) -> TurnOutcome:
-            return await self._session_activity(
-                Activity.END_RUN,
-                EndRunRequest(
-                    self._session_id, plan.run_id, message.command_id, stop_reason, **details
-                ),
-                TurnOutcome,
+        async def end(stop_reason: str, **details: Any) -> TurnOutcome:
+            req = EndRunRequest(
+                self._session_id, plan.run_id, message.command_id, stop_reason, **details
             )
+            lost = (
+                LostCall(self._session_id, plan.run_id, req.lost_call_id, req.lost_reason)
+                if req.lost_call_id is not None
+                else None
+            )
+            # If the session's worker is gone, its lost call is closed before adoption.
+            return await self._session_activity(Activity.END_RUN, req, TurnOutcome, lost=lost)
 
         try:
             for step in range(plan.max_steps):
@@ -314,6 +320,7 @@ class AgentSessionWorkflow:
             track=True,
             # An at-most-once tool whose worker died is not re-run by the adopting worker.
             rerun_after_adopt=not once,
+            lost=LostCall(self._session_id, run_id, call.call_id) if once else None,
         )
 
     async def _approve(self, run_id: str, call: PlannedCall) -> bool:
@@ -367,6 +374,7 @@ class AgentSessionWorkflow:
         heartbeat: bool = False,
         track: bool = False,
         rerun_after_adopt: bool = True,
+        lost: LostCall | None = None,
         cancellation_type: workflow.ActivityCancellationType = (
             workflow.ActivityCancellationType.TRY_CANCEL
         ),
@@ -387,7 +395,7 @@ class AgentSessionWorkflow:
             )
 
         return await self._on_session_worker(
-            start, track=track, rerun_after_adopt=rerun_after_adopt
+            start, track=track, rerun_after_adopt=rerun_after_adopt, lost=lost
         )
 
     async def _on_session_worker[T](
@@ -396,8 +404,13 @@ class AgentSessionWorkflow:
         *,
         track: bool = False,
         rerun_after_adopt: bool = True,
+        lost: LostCall | None = None,
     ) -> T:
-        """Run on the worker holding the session; adopt it elsewhere if that worker is gone."""
+        """Run on the worker holding the session; adopt it elsewhere if that worker is gone.
+
+        ``lost`` is the call this activity would leave half done: it is closed in the
+        journal first, so the adopting worker's recovery finds no dangling tool.
+        """
         while True:
             queue = (
                 self._state.placement.task_queue
@@ -413,6 +426,14 @@ class AgentSessionWorkflow:
                 if not _is_placement_lost(err) or self._state.placement is None:
                     raise
                 workflow.logger.warning("session worker %s lost; adopting", queue)
+                if lost is not None and workflow.patched(_CLOSE_LOST_BEFORE_ADOPT):
+                    await workflow.execute_activity(
+                        Activity.CLOSE_LOST_CALL,
+                        lost,
+                        task_queue=workflow.info().task_queue,
+                        start_to_close_timeout=_SHORT,
+                        retry_policy=_RETRY,
+                    )
                 self._state.placement = await workflow.execute_activity(
                     Activity.ADOPT,
                     self._session_id,
@@ -498,9 +519,7 @@ class AgentSessionWorkflow:
     @workflow.update(name="terminate")
     async def terminate(self) -> SessionStatus:
         self._terminate_requested = True
-        await workflow.wait_condition(
-            lambda: self._state.phase in (Phase.TERMINATED, Phase.FAILED)
-        )
+        await workflow.wait_condition(lambda: self._state.phase in (Phase.TERMINATED, Phase.FAILED))
         return self.status()
 
     @workflow.query(name="status")

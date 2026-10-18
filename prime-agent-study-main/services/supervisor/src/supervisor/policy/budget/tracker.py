@@ -1,25 +1,21 @@
 """Budget tracker — cost and token budget enforcement.
 
-Rewritten with:
-- Decimal for monetary values (no floating-point errors)
-- No lazy-init antipattern
-- Single DB query for cost loading
-- Proper caching with TTL
-- Metrics hooks for observability
-
-Reference: FastAPI best practices.
+The session's running cost lives in ``session_index.total_cost`` and is only
+changed by an atomic ``total_cost + :cost`` update, so it stays correct when a
+session moves between workers or two of them record at once. Money is Decimal.
+Tokens per turn are counted in the recording worker's memory.
 """
 
 from __future__ import annotations
 
-import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionIndexRow
-from supervisor.policy.errors import BudgetCostExceeded, BudgetExceeded, BudgetTokensExceeded
 from supervisor.policy.types import BudgetSpec, BudgetState
 
 if TYPE_CHECKING:
@@ -27,15 +23,6 @@ if TYPE_CHECKING:
 
 
 __all__ = ["BudgetTracker"]
-
-
-# Cache TTL for cost lookups (5 seconds)
-_CACHE_TTL_MS = 5_000
-
-
-def _now_ms() -> int:
-    """Current time in milliseconds."""
-    return int(time.time() * 1000)
 
 
 class BudgetTracker:
@@ -60,7 +47,7 @@ class BudgetTracker:
         tracker.begin_turn("sess_123")
         state = await tracker.check("sess_123")
         if state.exceeded:
-            raise BudgetExceeded(...)
+            raise BudgetExceeded.from_state(state)
 
         # After model response
         state = await tracker.record(
@@ -75,8 +62,6 @@ class BudgetTracker:
         "_audit",
         "_session_limits",
         "_tokens_this_turn",
-        "_cost_cache",
-        "_cost_cache_time",
     )
 
     def __init__(
@@ -91,9 +76,6 @@ class BudgetTracker:
         self._session_limits: dict[str, BudgetSpec | None] = {}
         # Per-turn token counter
         self._tokens_this_turn: dict[str, int] = {}
-        # Cost cache: {session_id: Decimal}
-        self._cost_cache: dict[str, Decimal] = {}
-        self._cost_cache_time: dict[str, int] = {}
 
     def configure(self, session_id: str, spec: BudgetSpec | None) -> None:
         """Configure budget limits for a session.
@@ -121,10 +103,7 @@ class BudgetTracker:
             session_id: Session to check
 
         Returns:
-            Current budget state
-
-        Raises:
-            BudgetExceeded: If budget already exceeded
+            Current budget state (``exceeded`` set; the caller decides to refuse)
         """
         cost = await self._load_cost(session_id)
         tokens = self._tokens_this_turn.get(session_id, 0)
@@ -146,42 +125,16 @@ class BudgetTracker:
         Returns:
             Updated budget state
         """
-        # Zero usage never trips (echo runtime)
-        if cost_usd == Decimal("0") and tokens == 0:
-            cost = await self._load_cost(session_id)
-            return self._evaluate(
-                session_id,
-                cost=cost,
-                tokens=self._tokens_this_turn.get(session_id, 0),
-            )
-
-        # Load current cost
-        prev_cost = self._cost_cache.get(session_id)
-        if prev_cost is None:
-            prev_cost = await self._load_cost(session_id)
-
-        # Check if DB already includes this cost (idempotency)
-        db_cost = await self._load_cost(session_id, force=True)
-        expected_cost = prev_cost + cost_usd
-
-        if db_cost >= expected_cost - Decimal("0.000001"):
-            # DB already has this cost recorded
-            new_cost = db_cost
-        else:
-            # Persist new cost
-            new_cost = prev_cost + cost_usd
-            await self._persist_cost(session_id, new_cost)
-
-        # Update cache
-        self._cost_cache[session_id] = new_cost
-        self._cost_cache_time[session_id] = _now_ms()
-
-        # Update turn tokens
-        current_tokens = self._tokens_this_turn.get(session_id, 0)
-        new_tokens = current_tokens + tokens
+        # The database holds the session total, never a worker's memory: a session
+        # moves between workers, and two may record for it at once.
+        cost = (
+            await self._add_cost(session_id, cost_usd)
+            if cost_usd
+            else await self._load_cost(session_id)
+        )
+        new_tokens = self._tokens_this_turn.get(session_id, 0) + tokens
         self._tokens_this_turn[session_id] = new_tokens
-
-        return self._evaluate(session_id, cost=new_cost, tokens=new_tokens)
+        return self._evaluate(session_id, cost=cost, tokens=new_tokens)
 
     def clear(self, session_id: str) -> None:
         """Clear tracking state for session.
@@ -193,8 +146,6 @@ class BudgetTracker:
         """
         self._session_limits.pop(session_id, None)
         self._tokens_this_turn.pop(session_id, None)
-        self._cost_cache.pop(session_id, None)
-        self._cost_cache_time.pop(session_id, None)
 
     def _evaluate(
         self,
@@ -231,59 +182,31 @@ class BudgetTracker:
             exceeded_reason=reason,
         )
 
-    async def _load_cost(
-        self,
-        session_id: str,
-        *,
-        force: bool = False,
-    ) -> Decimal:
-        """Load cost from DB with caching.
-
-        Args:
-            session_id: Session to load
-            force: Bypass cache
-
-        Returns:
-            Total cost as Decimal
-        """
-        now = _now_ms()
-
-        # Check cache
-        if not force:
-            cached = self._cost_cache.get(session_id)
-            cache_time = self._cost_cache_time.get(session_id, 0)
-            if cached is not None and (now - cache_time) < _CACHE_TTL_MS:
-                return cached
-
-        # Load from DB
+    async def _load_cost(self, session_id: str) -> Decimal:
         async with self._db() as db:
-            idx = await db.get(SessionIndexRow, session_id)
-            if idx is None:
-                cost = Decimal("0")
-            else:
-                cost = Decimal(str(idx.total_cost or 0))
+            total = await db.scalar(
+                select(SessionIndexRow.total_cost).where(SessionIndexRow.session_id == session_id)
+            )
+        return Decimal(str(total or 0))
 
-        # Update cache
-        self._cost_cache[session_id] = cost
-        self._cost_cache_time[session_id] = now
-
-        return cost
-
-    async def _persist_cost(self, session_id: str, cost: Decimal) -> None:
-        """Persist cost to DB.
-
-        Args:
-            session_id: Session to update
-            cost: New total cost
-        """
+    async def _add_cost(self, session_id: str, cost: Decimal) -> Decimal:
+        """Add ``cost`` to the session total in one statement; returns the new total."""
+        add = (
+            update(SessionIndexRow)
+            .where(SessionIndexRow.session_id == session_id)
+            .values(total_cost=SessionIndexRow.total_cost + cost)
+            .returning(SessionIndexRow.total_cost)
+        )
         async with self._db() as db:
-            idx = await db.get(SessionIndexRow, session_id)
-            if idx is None:
-                idx = SessionIndexRow(
-                    session_id=session_id,
-                    total_cost=float(cost),
-                )
-                db.add(idx)
-            else:
-                idx.total_cost = float(cost)
+            total = await db.scalar(add)
+            if total is None:
+                # No index row yet; a concurrent first insert loses and adds instead.
+                try:
+                    db.add(SessionIndexRow(session_id=session_id, total_cost=cost))
+                    await db.commit()
+                    return cost
+                except IntegrityError:
+                    await db.rollback()
+                    total = await db.scalar(add)
             await db.commit()
+        return Decimal(str(total))

@@ -515,7 +515,7 @@ class SessionManager:
             self._workspace_svc.assert_ready(ws)
         state = await self._budget.check(session_id)
         if state.exceeded:
-            raise BudgetExceeded(state)
+            raise BudgetExceeded.from_state(state)
 
     async def send(
         self,
@@ -1766,7 +1766,7 @@ class SessionManager:
                 self._pinned_manifest(row),
                 sandbox_profile=self._sandbox_profile_for_row(row),
             )
-            raise BudgetExceeded(await self._budget.check(session_id))
+            raise BudgetExceeded.from_state(await self._budget.check(session_id))
         # Ensure limits are loaded after restart / cold path.
         self._configure_policy(
             session_id,

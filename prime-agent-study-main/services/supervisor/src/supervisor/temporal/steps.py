@@ -45,6 +45,7 @@ from supervisor.temporal.contracts import (
     ApprovalNeeded,
     EndRunRequest,
     GuardSettings,
+    LostCall,
     PlannedCall,
     RetryMode,
     RunPlan,
@@ -135,9 +136,7 @@ class GithiSteps:
         )
         guards = (await self._manifest(session_id)).guards
         guard = (
-            GuardSettings(
-                str(guards.repetition), str(guards.oscillation), guards.stall_iterations
-            )
+            GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
             if guards is not None
             else None
         )
@@ -146,20 +145,7 @@ class GithiSteps:
     async def end_run(self, req: EndRunRequest) -> TurnOutcome:
         sid, run_id = req.session_id, req.run_id
         if req.lost_call_id is not None:
-            await self._record(
-                sid,
-                run_id,
-                f"{req.lost_call_id}:end",
-                ToolEnd(
-                    tool_call_id=req.lost_call_id,
-                    tool_name=await self._tool_name(sid, run_id, req.lost_call_id),
-                    result={
-                        "error": f"outcome unknown: {req.lost_reason}",
-                        "code": TOOL_OUTCOME_UNKNOWN,
-                    },
-                    is_error=True,
-                ),
-            )
+            await self.close_lost_call(LostCall(sid, run_id, req.lost_call_id, req.lost_reason))
         if req.close_session and await self._manager.session_status(sid) == "active":
             runtime = self._manager._registry.get(sid)
             await self._manager._policy_abort(
@@ -188,14 +174,17 @@ class GithiSteps:
         if (assistant := await self._keyed(sid, run_id, key)) is None:
             state = await self._manager._budget.check(sid)
             if state.exceeded:
-                return await self._budget_stop(sid, state.reason)
+                return await self._budget_stop(sid, state.exceeded_reason)
             runtime = await self._runtime(sid)
             loop = self._loop(sid, runtime)
             await self._record(sid, run_id, f"{req.step}:turn", TurnStart())
-            chat = self._chat(runtime, conversation(
-                await self._reader.latest_history(sid) or [],
-                await self._reader.read_turn(sid, run_id),
-            ))
+            chat = self._chat(
+                runtime,
+                conversation(
+                    await self._reader.latest_history(sid) or [],
+                    await self._reader.read_turn(sid, run_id),
+                ),
+            )
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             completion = await heartbeating(
                 asyncio.to_thread(
@@ -216,19 +205,20 @@ class GithiSteps:
                 model=completion.model,
                 finish_reason=completion.finish_reason,
             )
-            await self._record(sid, run_id, key, assistant)
-            spent = await self._manager._budget.record(
+            # Cost first: a crash before the journal write re-runs a call the provider
+            # has billed, so both are counted; the reverse order could drop one.
+            await self._manager._budget.record(
                 sid, Decimal(str(usage.cost_total)), usage.total_tokens
             )
-            if spent.exceeded:
-                return await self._budget_stop(sid, spent.reason)
+            await self._record(sid, run_id, key, assistant)
+        # Checked on replay too, so a retried step cannot hand out calls past the limit.
+        if (spent := await self._manager._budget.check(sid)).exceeded:
+            return await self._budget_stop(sid, spent.exceeded_reason)
         calls = [p for p in assistant.content if p.get("type") == "tool_call"]
         if not calls:
             return StepResult(calls=[], final=True)
         manifest = await self._manifest(sid)
-        return StepResult(
-            calls=[self._plan(manifest, call) for call in calls], final=False
-        )
+        return StepResult(calls=[self._plan(manifest, call) for call in calls], final=False)
 
     def _plan(self, manifest: Any, call: dict[str, Any]) -> PlannedCall:
         name = str(call["name"])
@@ -419,6 +409,24 @@ class GithiSteps:
                         return {"name": str(part["name"]), "arguments": dict(part["arguments"])}
         raise LookupError(f"tool call {call_id} not found in run {run_id}")
 
+    async def close_lost_call(self, lost: LostCall) -> None:
+        """Journal an unknown outcome for a call that started; a no-op once it has ended.
+
+        Keyed like tool_call's own ToolEnd, so whichever lands first is the only one.
+        """
+        sid, run_id, call_id = lost.session_id, lost.run_id, lost.call_id
+        await self._record(
+            sid,
+            run_id,
+            f"{call_id}:end",
+            ToolEnd(
+                tool_call_id=call_id,
+                tool_name=await self._tool_name(sid, run_id, call_id),
+                result={"error": f"outcome unknown: {lost.reason}", "code": TOOL_OUTCOME_UNKNOWN},
+                is_error=True,
+            ),
+        )
+
     async def _tool_name(self, session_id: str, run_id: str, call_id: str) -> str:
         return (await self._call(session_id, run_id, call_id))["name"]
 
@@ -438,4 +446,3 @@ class GithiSteps:
             trace_id=None,
             event_key=f"interrupted:{open_run[0]}",
         )
-

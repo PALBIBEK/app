@@ -33,6 +33,8 @@ class Activity(StrEnum):
     REQUEST_APPROVAL = "session.request_approval"
     RESOLVE_APPROVAL = "session.resolve_approval"
     END_RUN = "session.end_run"
+    # Journal-only, so it runs on any worker: closes a call whose worker died.
+    CLOSE_LOST_CALL = "session.close_lost_call"
 
 
 class Phase(StrEnum):
@@ -211,6 +213,19 @@ class ApprovalDecision:
     timed_out: bool = False
 
 
+LOST_WORKER = "the worker running this tool was lost"
+
+
+@dataclass(frozen=True, slots=True)
+class LostCall:
+    """A tool call that started but whose outcome is unknown (worker lost, or aborted)."""
+
+    session_id: str
+    run_id: str
+    call_id: str
+    reason: str = LOST_WORKER
+
+
 @dataclass(frozen=True, slots=True)
 class EndRunRequest:
     session_id: str
@@ -223,7 +238,7 @@ class EndRunRequest:
     close_session: bool = False
     # A tool call that started but whose outcome is unknown (worker lost, or aborted).
     lost_call_id: str | None = None
-    lost_reason: str = "the worker running this tool was lost"
+    lost_reason: str = LOST_WORKER
 
 
 # Session row statuses after which no turn can ever run again.

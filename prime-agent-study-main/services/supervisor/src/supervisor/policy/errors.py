@@ -126,6 +126,18 @@ class BudgetExceeded(PolicyError):
         self.current_tokens = current_tokens
         self.limit_tokens = limit_tokens
 
+    @classmethod
+    def from_state(cls, state: BudgetState) -> BudgetExceeded:
+        """The error for a tracker state that reports ``exceeded``."""
+        return cls(
+            state.exceeded_reason or "budget exceeded",
+            session_id=state.session_id,
+            current_cost=state.total_cost_usd,
+            limit_cost=state.max_cost_usd,
+            current_tokens=state.tokens_this_turn,
+            limit_tokens=state.max_tokens_per_turn,
+        )
+
 
 class BudgetCostExceeded(BudgetExceeded):
     """Session cost limit exceeded."""

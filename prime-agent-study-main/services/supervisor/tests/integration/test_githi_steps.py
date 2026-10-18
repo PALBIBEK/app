@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowHistory
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -229,9 +231,11 @@ async def _await_approval(env: Env, state: SupervisorState, sid: str) -> str:
     return _payloads(events, ApprovalRequired)[0].approval_id
 
 
-@pytest.mark.parametrize(("choice", "tool_ran"), [("allow", True), ("deny", False)])
+@pytest.mark.parametrize(
+    ("choice", "status", "tool_ran"), [("allow", "approved", True), ("deny", "denied", False)]
+)
 async def test_a_human_decides_a_gated_tool(
-    env: Env, model: Callable[..., ScriptedGateway], choice: str, tool_ran: bool
+    env: Env, model: Callable[..., ScriptedGateway], choice: str, status: str, tool_ran: bool
 ) -> None:
     model(WRITE)
     state = await env.state()
@@ -246,7 +250,7 @@ async def test_a_human_decides_a_gated_tool(
     if not tool_ran:
         assert end.result["code"] == "APPROVAL_DENIED"
     (resolved,) = _payloads(events, ApprovalResolved)
-    assert (resolved.choice, resolved.status) == (choice, "responded")
+    assert (resolved.choice, resolved.status) == (choice, status)
 
 
 @pytest.mark.parametrize(
@@ -339,11 +343,18 @@ async def test_spending_the_budget_stops_the_run_and_refuses_new_turns(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state, "githi-budget")
         await env.sessions.submit(sid, Message("c1", "expensive"))
-        events = await env.wait_for(state, sid, _run_ended())
-        assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["BudgetExceeded"]
+        # Queued behind c1, so it is only refused once c1 has spent the budget.
+        assert (await env.sessions.submit(sid, Message("c2", "queued"))).queued
+        events = await env.wait_for(state, sid, lambda ev: len(_payloads(ev, ErrorEvent)) >= 2)
+        assert [e.error_class for e in _payloads(events, ErrorEvent)] == ["BudgetExceeded"] * 2
         assert not _payloads(events, ToolEnd), "no tool runs once the budget is spent"
+        assert _types(events).count("RunStart") == 1, "the queued turn never starts"
+        async with asyncio.timeout(10):
+            while (await env.sessions.status(sid)).phase is not Phase.IDLE:
+                await asyncio.sleep(0.1)
+        # Idle: the refusal reaches the caller directly.
         with pytest.raises(SessionCommandError) as err:
-            await env.sessions.submit(sid, Message("c2", "more"))
+            await env.sessions.submit(sid, Message("c3", "more"))
         assert err.value.kind == "BudgetExceeded"
 
 
@@ -426,11 +437,13 @@ async def test_worker_killed_during_a_tool(
 ) -> None:
     model(WRITE)
     observer = await env.state()
-    sid = await env.create(observer, harness)
+    # Published before the worker process boots, so it hydrates the composition.
+    await env.composition(observer, harness)
     worker, _ = await _spawn_worker(
         env, {"scripted_calls": [list(WRITE)], "slow_tool": ["write", 120]}
     )
     try:
+        sid = await env.create(observer, harness)
         await env.sessions.submit(sid, Message("c1", "write a note"))
         await env.wait_for(observer, sid, _has(lambda p: type(p).__name__ == "ToolStart"))
     finally:
@@ -448,3 +461,33 @@ async def test_worker_killed_during_a_tool(
     else:
         assert not end.is_error, "an idempotent tool re-runs on the adopting worker"
         assert not _payloads(events, ErrorEvent)
+
+
+# --- determinism ----------------------------------------------------------------
+
+
+async def _histories(client: Client) -> AsyncIterator[WorkflowHistory]:
+    async for run in client.list_workflows("WorkflowType = 'AgentSession'"):
+        yield await client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
+
+
+async def test_stepped_histories_replay_deterministically(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Replays every session history this server has recorded (all scenarios above)."""
+    model(WRITE)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, "githi-approve-deny")
+        await env.sessions.submit(sid, Message("c1", "write a note"))
+        await env.sessions.respond_approval(sid, await _await_approval(env, state, sid), "allow")
+        await env.wait_for(state, sid, _run_ended())
+        await env.sessions.terminate(sid)
+
+    replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)
+    replayed = 0
+    async with replayer.workflow_replay_iterator(_histories(env.client)) as results:
+        async for result in results:
+            assert result.replay_failure is None, result.replay_failure
+            replayed += 1
+    assert replayed >= 1
