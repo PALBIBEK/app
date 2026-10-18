@@ -1288,7 +1288,9 @@ class SessionManager:
         if begin.action == "cached" and begin.cached is not None:
             return ToolInvokeOutcome(tool_call_id=call_id, result=begin.cached)
 
-        result = seams.tool_provider.invoke(ctx, name, arguments)
+        # Tools block (files, sandboxes, HTTP); off the loop so the worker's heartbeats
+        # and every other session it holds keep running.
+        result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
         result = await self._tool_outbox.complete(
             session_id,
             tool_call_id=call_id,

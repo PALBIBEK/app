@@ -147,9 +147,15 @@ async def test_worker_killed_mid_invoke_reports_unknown_and_never_reruns(
         with pytest.raises(SessionCommandError) as err:
             await task
         assert err.value.kind == "ToolOutcomeUnknown"
-        # Re-sending the call answers with the recorded outcome instead of running it.
-        body = await env.sessions.op(_invoke(sid, "slow-1", path="."))
-        assert body is not None and body["code"] == "TOOL_OUTCOME_UNKNOWN"
+        # A re-send gets the same answer from the workflow (update id dedup) ...
+        with pytest.raises(SessionCommandError) as again:
+            await env.sessions.op(_invoke(sid, "slow-1", path="."))
+        assert again.value.kind == "ToolOutcomeUnknown"
+        # ... and from the tool outbox once that dedup has expired: never a re-run.
+        outcome = await adopter.manager.invoke_tool(
+            sid, tenant_id="t1", name="ls", arguments={"path": "."}, tool_call_id="slow-1"
+        )
+        assert outcome.result.code == "TOOL_OUTCOME_UNKNOWN"
         # The session is still usable.
         await env.sessions.submit(sid, Message("c1", "hello"))
         events = await env.wait_for(adopter, sid, run_ended())
@@ -172,11 +178,11 @@ async def test_a_fork_is_a_session_with_its_own_workflow(
         fork = resp.json()["session_id"]
         await env.sessions.submit(fork, Message("c2", "what was the word?"))
         events = await env.wait_for(worker, fork, run_ended(2))
+        assert (await env.sessions.status(fork)).turns_completed == 1
     # The fork carries the source's conversation, and its own turn went on top of it.
     texts = [m.content for m in gateway.seen[-1] if m.role == "user"]
     assert texts == ["remember the word kiwi", "what was the word?"]
     assert len(payloads(events, MessageEnd)) == 4
-    assert (await env.sessions.status(fork)).turns_completed == 1
 
 
 async def test_fork_copy_is_safe_to_retry(env: Env, model: Callable[..., ScriptedGateway]) -> None:

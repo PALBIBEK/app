@@ -71,7 +71,7 @@ async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
         "RunEnd",
     ]
     assert payloads(events, MessageEnd)[-1].content[0]["text"] == "done after 1 tool results"
-    scheduled = await env.activityevent_types(sid)
+    scheduled = await env.activity_types(sid)
     assert scheduled.count(Activity.MODEL_STEP) == 2
     assert scheduled.count(Activity.TOOL_CALL) == 1
     # The model saw the pinned system prompt, its own tool call, and the result tied to it.

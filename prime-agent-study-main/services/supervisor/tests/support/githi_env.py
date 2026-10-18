@@ -110,7 +110,7 @@ class Env:
                 await asyncio.sleep(0.1)
         return events
 
-    async def activityevent_types(self, sid: str) -> list[str]:
+    async def activity_types(self, sid: str) -> list[str]:
         history = await self.client.get_workflow_handle(workflow_id(sid)).fetch_history()
         return [
             e.activity_task_scheduled_event_attributes.activity_type.name

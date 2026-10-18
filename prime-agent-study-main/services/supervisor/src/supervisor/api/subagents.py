@@ -1,7 +1,7 @@
 """Subagent HTTP routes — session-scoped child commands (AGENT_CONTRACT).
 
 Commands run on the worker holding the parent session (its child agents and
-background jobs live there); listing children reads the journal.
+background jobs live there); listing children is a read of recorded events.
 """
 
 from __future__ import annotations
