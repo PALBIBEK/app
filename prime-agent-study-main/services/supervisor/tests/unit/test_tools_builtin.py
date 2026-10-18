@@ -10,12 +10,14 @@ from typing import Any
 
 import pytest
 
+from supervisor.sandbox.providers.local_process import LocalProcessSandbox
 from supervisor.sandbox.workspace_tree import LocalFsTreeIO
 from supervisor.tools import (
     FileMissing,
     HostWorkspace,
     InvalidArguments,
     PathEscape,
+    SandboxWorkspace,
     ToolContext,
     TreeWorkspace,
     UnsupportedCapability,
@@ -24,7 +26,7 @@ from supervisor.tools import (
 )
 
 
-@pytest.fixture(params=["host", "tree"])
+@pytest.fixture(params=["host", "tree", "sandbox"])
 def workspace(request: pytest.FixtureRequest, tmp_path: Path) -> Workspace:
     root = tmp_path / "ws"
     root.mkdir()
@@ -33,7 +35,11 @@ def workspace(request: pytest.FixtureRequest, tmp_path: Path) -> Workspace:
     (root / "src" / "util.py").write_text("def helper():\n    return 'HELLO'\n")
     (root / "README").write_text("line 1\nline 2\nline 3\n")
     (root / ".env").write_text("SECRET=1\n")
-    return HostWorkspace(root) if request.param == "host" else TreeWorkspace(LocalFsTreeIO(root))
+    return {
+        "host": lambda: HostWorkspace(root),
+        "tree": lambda: TreeWorkspace(LocalFsTreeIO(root)),
+        "sandbox": lambda: SandboxWorkspace(LocalProcessSandbox(root, "sb-test")),
+    }[request.param]()
 
 
 @pytest.fixture
@@ -211,3 +217,11 @@ def _git(repo: Path, *args: str) -> str:
         ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
     )
     return done.stdout.strip()
+
+
+async def test_bash_runs_inside_the_sandbox(tmp_path: Path) -> None:
+    sandbox = LocalProcessSandbox(tmp_path, "sb-bash")
+    ctx = ToolContext(bound_workspace=SandboxWorkspace(sandbox), timeout_s=10)
+    out = await _run("bash", ctx, command="echo hi > made.txt; cat made.txt; exit 2")
+    assert (out["exit_code"], out["stdout"]) == (2, "hi\n")
+    assert await sandbox.read_file("/workspace/made.txt") == b"hi\n"

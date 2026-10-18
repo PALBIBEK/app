@@ -193,6 +193,44 @@ imported, because they reference modules that no longer exist.
   are served by the `context_memory` seam; durability by the journal and
   Temporal.
 
+### 11. A githi session runs entirely on what it pinned
+- **Before,** githi took its prompt, tools and gateway from the pins but nothing
+  else:
+  - the pinned sandbox was created and then discarded, so every tool, `bash`
+    included, ran on the supervisor's own disk;
+  - the composition's model route was ignored;
+  - the memory profile was bound but never consulted, so conversations grew
+    without limit and pinned recall never ran;
+  - the subagent transport was bound, but the agent had no way to use it;
+  - a resumed session was rebuilt differently from a created one (no gateway
+    key, no workspace-change hook, no hydration).
+- **Now:**
+  - **Sandbox.** Tools act in the session's sandbox (`SandboxWorkspace`: files
+    and commands both). The sandbox profile's `file_effects` policy now governs
+    the model's tool calls too, not only direct invokes. Workspace changes mark
+    the workspace dirty for sync.
+  - **Model.** Every call names the pinned model route (else the manifest's
+    model), including memory's one-shot calls and the gateway key's allowed
+    models.
+  - **Memory.** Between turns, a conversation past the profile's limit is
+    compacted through the memory seam (summary plus the most recent
+    `keep_recent_tokens`, whole tool exchanges only), journalled on
+    `CompactionEnd` as the new checkpoint. Pinned recall runs on each run's
+    first model step and is shown ahead of the user's message. The profile can
+    now pin `context_window`.
+  - **Subagents.** `subagent` delegates on the transport's pinned default
+    provider (depth enforced); with `background`, when the manifest allows it,
+    the child runs as the session's durable job, and `subagent_result` reads its
+    outcome. Requests that name no provider now get the pinned default, not the
+    lab-only `memory` alias. One-shot spawns run off the event loop.
+  - **One path.** A githi turn with a model only runs step by step under the
+    workflow; the in-process path that sent no system prompt is gone.
+    Create and resume share one runtime builder.
+- Also fixed: `get_state()` on the githi and echo runtimes crashed (it passed
+  fields `AgentState` does not have).
+- `tests/integration/test_githi_pinned.py` checks each pin end to end against
+  a Temporal dev server; every built-in tool is also tested in a sandbox.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -202,7 +240,7 @@ imported, because they reference modules that no longer exist.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 560 passing, 0 failing, 0 that cannot be imported** (from 228
+- **Test suite: 583 passing, 0 failing, 0 that cannot be imported** (from 228
   passing at the start). Two tests are intermittent and are run separately:
   `test_memory_histories_replay_deterministically` (can time out under full
   suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
@@ -227,9 +265,12 @@ imported, because they reference modules that no longer exist.
 - **Deployment.** The staging compose files and Kubernetes manifests don't
   include Temporal yet. `docker compose` itself hasn't been run in this
   environment (no Docker here).
-- **No shell in a sandbox yet.** File tools work on a sandbox workspace, but
-  `bash` and `git_commit` return `UNSUPPORTED_CAPABILITY` there: the tool
-  `Workspace` is not yet wired to the sandbox's `exec`.
+- **Context window per model.** Compaction uses the memory profile's
+  `context_window`, or 200,000 tokens when the profile pins none; the gateway
+  does not report a model's real window.
+- **Background results are pulled, not pushed.** A background subagent's
+  outcome reaches the model when it calls `subagent_result`; it is not injected
+  into the next turn on its own.
 - **Two intermittent tests** (see above) need a real fix, not a retry.
 
 ---
@@ -244,8 +285,6 @@ the gaps list.** In order:
    durability scenarios against that stack.
 2. Unify the session error hierarchies into one (`session/core/errors.py`), and
    remove the duplicate `session/operations/subagent_ops.py`.
-3. Give the tool `Workspace` a sandbox implementation backed by the sandbox's
-   `exec`, so `bash` and `git_commit` run inside the sandbox.
-4. Fix the two intermittent tests.
+3. Fix the two intermittent tests.
 
 After that, per the roadmap: the backend, then the frontend.

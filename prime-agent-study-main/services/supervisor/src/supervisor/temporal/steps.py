@@ -24,6 +24,7 @@ from supervisor.agent.events import (
     ApprovalResolved,
     ErrorEvent,
     MemoryInjected,
+    MemoryRecall,
     MessageEnd,
     RunEnd,
     RunStart,
@@ -32,7 +33,7 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
 )
-from supervisor.agent.runtimes.githi.loop import _MAX_TOOL_ITERATIONS, AgentLoop
+from supervisor.agent.runtimes.githi.loop import MAX_TOOL_ITERATIONS, AgentLoop
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.harness import RecoveryAction
 from supervisor.journal.reader import JournalReader
@@ -45,9 +46,9 @@ from supervisor.memory.tools import PLATFORM_TOOLS
 from supervisor.memory.turn import SessionMemory
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ToolResult
-from supervisor.seams.core.types import ChatMessage, PromptBindings
 from supervisor.session import SessionManager
 from supervisor.session.tool_outbox import idempotency_key
+from supervisor.temporal.context_memory import PinnedContextMemory
 from supervisor.temporal.contracts import (
     ApprovalAsk,
     ApprovalDecision,
@@ -64,6 +65,12 @@ from supervisor.temporal.contracts import (
     ToolRequest,
     TurnOutcome,
     TurnRequest,
+)
+from supervisor.temporal.subagent_tools import (
+    SUBAGENT_RESULT,
+    SUBAGENT_TOOLS,
+    SubagentTools,
+    render,
 )
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
@@ -91,14 +98,15 @@ async def heartbeating[T](work: Awaitable[T]) -> T:
 def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, Any]]:
     """The run's messages, rebuilt from its journalled events on top of earlier history.
 
-    Memory injected for the run comes right before the run's user message, so it is
-    part of the history later runs carry (what the next run's delta assumes is held).
+    Memory shown for the run (notebook facts, and whatever the pinned recall backend
+    found) comes right before the run's user message, so it is part of the history
+    later runs carry (what the next run's delta assumes is held).
     """
     messages = list(prior)
     user_at: int | None = None
     for envelope in run:
         event = envelope.payload
-        if isinstance(event, MemoryInjected):
+        if isinstance(event, (MemoryInjected, MemoryRecall)):
             if event.text:
                 at = len(messages) if user_at is None else user_at
                 messages.insert(
@@ -158,6 +166,8 @@ class GithiSteps:
         self._manager = manager
         self._reader = reader
         self._memory = SessionMemory(manager.memory, reader, one_shot_for=self.one_shot_for)
+        self._pinned = PinnedContextMemory(manager, record=self._record, keyed=self._keyed)
+        self._subagents = SubagentTools(manager, reader)
 
     @property
     def memory(self) -> SessionMemory:
@@ -169,9 +179,7 @@ class GithiSteps:
         seams = self._manager._seams_for_session(session_id, row)
         if seams is None or seams.model_gateway is None:
             return self._manager.memory.one_shot
-        return gateway_one_shot(
-            seams.model_gateway, model=self._manager._pinned_manifest(row).model
-        )
+        return gateway_one_shot(seams.model_gateway, model=self._manager.session_model(row))
 
     # --- run lifecycle ---------------------------------------------------------
 
@@ -192,6 +200,10 @@ class GithiSteps:
             MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
         )
         await self._memory.checkpoint(session_id, run_id, self._record)
+        # Between turns: compact what this run carries over, per the pinned memory profile.
+        await heartbeating(
+            self._pinned.compact(session_id, run_id, await self._memory.prior_history(session_id))
+        )
         guards = (await self._manifest(session_id)).guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
@@ -202,7 +214,7 @@ class GithiSteps:
             run_id,
             stepped=True,
             guard=guard,
-            max_steps=_MAX_TOOL_ITERATIONS,
+            max_steps=MAX_TOOL_ITERATIONS,
             capture=await self._capture_plan(session_id),
         )
 
@@ -250,22 +262,25 @@ class GithiSteps:
             if state.exceeded:
                 return await self._budget_stop(sid, state.exceeded_reason)
             runtime = await self._runtime(sid)
-            loop = self._loop(sid, runtime)
+            loop = runtime.loop()
             await self._record(sid, run_id, f"{req.step}:turn", TurnStart())
             run = await self._reader.read_turn(sid, run_id)
             if req.step == 0:
                 await self._memory.recall(sid, run_id, _user_text(run), self._record)
+                await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
-            chat = self._chat(runtime, conversation(await self._memory.prior_history(sid), run))
+            chat = loop.messages_for_model(
+                conversation(await self._memory.prior_history(sid), run)
+            )
             schemas = await self._tool_schemas(sid, loop)
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             completion = await heartbeating(
                 asyncio.to_thread(
-                    runtime.seams.model_gateway.complete, chat, schemas, model=runtime._model
+                    runtime.seams.model_gateway.complete, chat, schemas, model=runtime.model
                 )
             )
-            calls = AgentLoop._extract_tool_calls(completion)
-            usage = AgentLoop._usage_from_completion(completion)
+            calls = AgentLoop.extract_tool_calls(completion)
+            usage = AgentLoop.usage_from_completion(completion)
             text = (completion.message.content if completion.message else "") or ""
             assistant = MessageEnd(
                 role="assistant",
@@ -305,9 +320,14 @@ class GithiSteps:
         )
         retry = (
             RetryMode.RETRY
-            # Memory tools are idempotent: capture dedupes, edits and deletes are by id.
+            # Memory tools are idempotent: capture dedupes, edits and deletes are by id;
+            # reading a subagent's result is pure. Starting a subagent runs once.
             if name in PLATFORM_TOOLS
-            or manifest.recovery.action_for(name) is RecoveryAction.AUTO_RESUME
+            or name == SUBAGENT_RESULT
+            or (
+                name not in SUBAGENT_TOOLS
+                and manifest.recovery.action_for(name) is RecoveryAction.AUTO_RESUME
+            )
             else RetryMode.ONCE
         )
         return PlannedCall(
@@ -351,14 +371,21 @@ class GithiSteps:
         elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
             output = await tools.call(call["name"], call["arguments"])
             result, is_error = _platform_result(output.text, output.is_error), output.is_error
+        elif call["name"] in SUBAGENT_TOOLS and not await self._catalog_has(sid, call["name"]):
+            outcome = await self._subagents.call(
+                sid, run_id, call_id, call["name"], call["arguments"]
+            )
+            result, is_error = render(outcome), outcome.is_error
         else:
             runtime = await self._runtime(sid)
-            invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
-            # _run_tool yields ToolStart (journalled above) then runs the provider.
-            events = [e async for e in self._loop(sid, runtime)._run_tool(invocation)]
-            end = events[-1]
-            assert isinstance(end, ToolEnd)
-            result, is_error = end.result, end.is_error
+            provider = runtime.seams.tool_provider if runtime.seams else None
+            if (denial := self._manager.tool_denial(sid, call["name"], provider)) is not None:
+                result, is_error = {"error": denial, "code": "FILE_EFFECTS_DENIED"}, True
+            else:
+                row = await self._manager._get_session_row(sid)
+                invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
+                end = await runtime.loop().run_tool(invocation, tenant_id=row.tenant_id)
+                result, is_error = end.result, end.is_error
         await self._record(
             sid,
             run_id,
@@ -439,38 +466,16 @@ class GithiSteps:
         assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
         return runtime
 
-    @staticmethod
-    def _loop(session_id: str, runtime: GithiRuntime) -> AgentLoop:
-        return AgentLoop(
-            seams=runtime.seams,
-            model=runtime._model,
-            session_dir=runtime._session_dir,
-            should_abort=lambda: False,
-            session_id=session_id,
-        )
-
-    @staticmethod
-    def _chat(runtime: GithiRuntime, messages: list[dict[str, Any]]) -> list[ChatMessage]:
-        """Conversation for the model, led by the session's pinned system prompt."""
-        chat = AgentLoop._to_chat_messages(messages)
-        assembler = runtime.seams.prompt_assembler if runtime.seams else None
-        if assembler is None:
-            return chat
-        prompt = assembler.assemble(PromptBindings(cwd=runtime._session_dir or "."))
-        return [ChatMessage(role="system", content=prompt.text), *chat]
-
     async def _tool_schemas(self, session_id: str, loop: AgentLoop) -> list[dict[str, Any]]:
-        """The session's catalog tools, then the memory tools it does not shadow."""
-        schemas = loop._tool_schemas()
+        """The session's catalog tools, then the memory and subagent tools it does not shadow."""
+        schemas = loop.tool_schemas()
         names = {s["function"]["name"] for s in schemas}
-        tools = await self._memory.tools(session_id)
-        return schemas + [s for s in tools.schemas() if s["function"]["name"] not in names]
+        platform = (await self._memory.tools(session_id)).schemas()
+        platform += await self._subagents.schemas(session_id)
+        return schemas + [s for s in platform if s["function"]["name"] not in names]
 
     async def _catalog_has(self, session_id: str, name: str) -> bool:
-        runtime = await self._runtime(session_id)
-        return any(
-            s["function"]["name"] == name for s in self._loop(session_id, runtime)._tool_schemas()
-        )
+        return (await self._runtime(session_id)).loop().offers(name)
 
     async def _manifest(self, session_id: str) -> Any:
         row = await self._manager._get_session_row(session_id)

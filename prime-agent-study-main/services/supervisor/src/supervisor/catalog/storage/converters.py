@@ -460,6 +460,11 @@ def memory_profile_from_dict(data: dict[str, Any]) -> MemoryProfile:
         reserve_tokens=int(compaction.get("reserve_tokens", 16_384)),
         keep_recent_tokens=int(compaction.get("keep_recent_tokens", 20_000)),
         pressure_ratio=float(compaction.get("pressure_ratio", 0.8)),
+        context_window=(
+            int(compaction["context_window"])
+            if compaction.get("context_window") is not None
+            else None
+        ),
         summarization_model=compaction.get("summarization_model"),
         recall_enabled=bool(recall.get("enabled", False)),
         recall_backend=recall_backend,
@@ -488,6 +493,7 @@ def memory_profile_to_dict(profile: MemoryProfile) -> dict[str, Any]:
             "reserve_tokens": profile.reserve_tokens,
             "keep_recent_tokens": profile.keep_recent_tokens,
             "pressure_ratio": profile.pressure_ratio,
+            "context_window": profile.context_window,
             "summarization_model": profile.summarization_model,
         },
         "recall": {
@@ -592,22 +598,7 @@ def with_digest(artifact: Artifact, digest: str) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, digest=digest)
     if isinstance(artifact, AgentComposition):
         return AgentComposition(
             name=artifact.name,
@@ -676,22 +667,7 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, status=status)
     if isinstance(artifact, AgentComposition):
         return AgentComposition(
             name=artifact.name,
@@ -760,22 +736,7 @@ def with_metadata(artifact: Artifact, metadata: ArtifactMetadata) -> Artifact:
             metadata=metadata,
         )
     if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=metadata,
-        )
+        return replace(artifact, metadata=metadata)
     if isinstance(artifact, AgentComposition):
         return AgentComposition(
             name=artifact.name,

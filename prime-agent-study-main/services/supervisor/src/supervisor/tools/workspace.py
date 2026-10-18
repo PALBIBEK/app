@@ -1,7 +1,10 @@
 """The filesystem and shell a tool acts on, behind one interface.
 
-A session's files live either in a directory on the supervisor's host or in a
-sandbox reached through ``WorkspaceTreeIO``. Tools are written once against
+A session's files live in its sandbox (``SandboxWorkspace``: files and commands
+both inside the sandbox), in a sandbox file tree reached through
+``WorkspaceTreeIO`` (``TreeWorkspace``), or, for a harness that pins no
+sandbox, in a directory on the supervisor's host (``HostWorkspace``).
+``workspace_for`` picks the right one. Tools are written once against
 ``Workspace`` and never learn which one they were given:
 
 * every path a model supplies goes through ``relpath`` first, which confines it
@@ -26,6 +29,7 @@ from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 from supervisor.tools.errors import FileMissing, PathEscape, UnsupportedCapability
 
 if TYPE_CHECKING:
+    from supervisor.sandbox.base import Sandbox
     from supervisor.seams.services import WorkspaceTreeIO
 
 __all__ = [
@@ -33,8 +37,10 @@ __all__ = [
     "CommandResult",
     "Entry",
     "HostWorkspace",
+    "SandboxWorkspace",
     "TreeWorkspace",
     "Workspace",
+    "workspace_for",
 ]
 
 LOGICAL_ROOT: Final = "/workspace"
@@ -293,3 +299,110 @@ class TreeWorkspace:
         raise UnsupportedCapability(
             "this session's workspace is a sandbox file tree; it cannot run commands"
         )
+
+
+_MISSING: Final = 3
+"""Exit status the listing scripts use for "no such path"."""
+
+# POSIX sh only: sandbox images may ship busybox rather than GNU tools.
+_LIST_DIR: Final = """\
+cd -- "$1" 2>/dev/null || exit 3
+for entry in * .[!.]* ..?*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
+  if [ -d "$entry" ]; then echo "d $entry"; else echo "f $entry"; fi
+done
+"""
+_FILES: Final = """\
+if [ -f "$1" ]; then echo "$1"; elif [ -d "$1" ]; then find "$1" -type f; else exit 3; fi
+"""
+
+
+class SandboxWorkspace:
+    """The session's sandbox: files read and written there, commands run there.
+
+    Paths are confined lexically before they reach the sandbox; the sandbox
+    itself is the isolation boundary for everything else (symlinks included).
+    """
+
+    __slots__ = ("_sandbox",)
+
+    def __init__(self, sandbox: Sandbox) -> None:
+        self._sandbox = sandbox
+
+    def __repr__(self) -> str:
+        return f"SandboxWorkspace({self._sandbox.info.provider}:{self._sandbox.id})"
+
+    def relpath(self, path: str) -> str:
+        return _logical_relpath(path)
+
+    def _abs(self, rel: str) -> str:
+        root = self._sandbox.info.workdir.rstrip("/") or LOGICAL_ROOT
+        return f"{root}/{rel}" if rel else root
+
+    async def read_bytes(self, path: str) -> bytes:
+        rel = self.relpath(path)
+        with _sandbox_errors():
+            try:
+                return await self._sandbox.read_file(self._abs(rel))
+            except (FileNotFoundError, IsADirectoryError):
+                raise FileMissing(rel or ".") from None
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        rel = self.relpath(path)
+        if not rel:
+            raise PathEscape(path)
+        with _sandbox_errors():
+            await self._sandbox.write_file(self._abs(rel), data)
+
+    async def list_dir(self, path: str) -> list[Entry]:
+        rel = self.relpath(path)
+        lines = await self._script(
+            _LIST_DIR, rel, missing=FileMissing(rel or ".", kind="directory")
+        )
+        entries = (Entry(line[2:], line[0] == "d") for line in lines if line[1:2] == " ")
+        return sorted(entries, key=lambda entry: entry.name)
+
+    async def files(self, path: str) -> list[str]:
+        rel = self.relpath(path)
+        lines = await self._script(_FILES, rel, missing=FileMissing(rel or ".", kind="path"))
+        return sorted(line.removeprefix("./") for line in lines if line)
+
+    async def _script(self, script: str, rel: str, *, missing: FileMissing) -> list[str]:
+        with _sandbox_errors():
+            done = await self._sandbox.exec(["sh", "-c", script, "sh", f"./{rel}" if rel else "."])
+        if done.exit_code == _MISSING:
+            raise missing
+        return done.stdout_text.splitlines()
+
+    async def run(self, command: str, *, timeout_s: float) -> CommandResult:
+        from supervisor.sandbox.base import SandboxTimeout
+
+        with _sandbox_errors():
+            try:
+                done = await self._sandbox.exec(["sh", "-c", command], timeout=timeout_s)
+            except SandboxTimeout:
+                return CommandResult(exit_code=-1, stdout="", stderr="", timed_out=True)
+        stdout, cut_out = _clip(done.stdout)
+        stderr, cut_err = _clip(done.stderr)
+        return CommandResult(
+            exit_code=done.exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            truncated=cut_out or cut_err,
+        )
+
+
+@contextlib.contextmanager
+def _sandbox_errors() -> Iterator[None]:
+    """A sandbox that cannot do something is a capability gap, not a tool crash."""
+    from supervisor.sandbox.base import SandboxError
+
+    try:
+        yield
+    except (NotImplementedError, SandboxError) as exc:
+        raise UnsupportedCapability(f"the session's sandbox cannot do this: {exc}") from exc
+
+
+def workspace_for(sandbox: Sandbox | None, host_dir: str | os.PathLike[str]) -> Workspace:
+    """The workspace a session's tools act on: its sandbox when it has one."""
+    return SandboxWorkspace(sandbox) if sandbox is not None else HostWorkspace(host_dir)

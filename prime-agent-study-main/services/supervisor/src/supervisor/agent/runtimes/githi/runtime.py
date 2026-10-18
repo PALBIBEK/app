@@ -1,31 +1,37 @@
 """Githi AgentRuntime — the platform runtime protocol over ``AgentLoop``.
 
 Matches ``EchoRuntime`` / ``HarnessRuntime`` so ``SessionManager`` can
-``create_runtime("githi")`` without a special case. Durability lives outside
-the runtime: the session journal and its Temporal workflow (``temporal.steps``
-drives githi turns one model call and one tool call at a time).
+``create_runtime("githi")`` without a special case.
+
+Everything githi uses is pinned and handed in: seams (prompt, tools, model
+gateway, memory, subagents), the model, and the sandbox, whose workspace every
+tool call acts on. Turns with a model are driven by the session workflow
+(``temporal.steps``) one model call and one tool call at a time, from
+``loop()``; ``send`` only plays offline turns.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 from uuid import uuid4
 
-from supervisor.agent.base import AgentState
+from supervisor.agent.base import AgentPhase, AgentState
 from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.events import Envelope, RunEnd, TurnEnd
 from supervisor.agent.runtimes.githi.loop import AgentLoop
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.agent.stream import EventStream
 from supervisor.sandbox.base import Sandbox
+from supervisor.tools import HostWorkspace, SandboxWorkspace, Workspace
 
 _log = logging.getLogger(__name__)
 
 
 class GithiRuntime:
-    """In-process githi agent: model via the gateway seam, tools via the tool seam."""
+    """In-process githi agent over its pinned seams, model and sandbox."""
 
     def __init__(
         self,
@@ -41,7 +47,9 @@ class GithiRuntime:
         self._stream = EventStream()
         self._session_id: str | None = session_id or None
         self._session_dir: str | None = None
-        self._history: list[dict] = []
+        self._workspace: Workspace | None = None
+        self._on_mutate: Callable[[], None] | None = None
+        self._history: list[dict[str, Any]] = []
         self._busy = False
         self._abort_requested = False
         self._stopped = False
@@ -51,19 +59,46 @@ class GithiRuntime:
     def session_id(self) -> str | None:
         return self._session_id
 
+    @property
+    def model(self) -> str | None:
+        """The pinned model (route) every model call names."""
+        return self._model
+
+    @property
+    def workspace(self) -> Workspace | None:
+        """Where tools act: the pinned sandbox, else the session's host directory."""
+        return self._workspace
+
+    def set_on_mutate(self, callback: Callable[[], None]) -> None:
+        """Called whenever a tool changes the workspace (drives workspace sync)."""
+        self._on_mutate = callback
+
+    def loop(self, *, should_abort: Callable[[], bool] = lambda: False) -> AgentLoop:
+        """Turn pieces bound to this session's seams and workspace."""
+        return AgentLoop(
+            seams=self.seams,
+            session_id=self._session_id,
+            workspace=self._workspace,
+            on_mutate=self._on_mutate,
+            should_abort=should_abort,
+        )
+
     def seed_trace_id(self, trace_id: str) -> None:
         self._stream.seed_trace_id(trace_id)
 
     async def start(self, sandbox: Sandbox | None, session_dir: str | None) -> None:
-        del sandbox  # tools reach the workspace through the tool seam
         # The supervisor's session id; a fresh one only when run standalone.
         self._session_id = self._session_id or uuid4().hex
         self._session_dir = session_dir
         self._stream.session_id = self._session_id
+        if sandbox is not None:
+            self._workspace = SandboxWorkspace(sandbox)
+        elif session_dir is not None:
+            self._workspace = HostWorkspace(session_dir)
         _log.info(
-            "githi runtime started session_id=%s session_dir=%s model=%s",
+            "githi runtime started session_id=%s workspace=%r model=%s",
             self._session_id,
-            session_dir,
+            self._workspace,
             self._model,
         )
 
@@ -79,13 +114,7 @@ class GithiRuntime:
         self._busy = True
         self._abort_requested = False
         try:
-            loop = AgentLoop(
-                seams=self.seams,
-                model=self._model,
-                session_dir=self._session_dir,
-                should_abort=lambda: self._abort_requested,
-                session_id=self._session_id,
-            )
+            loop = self.loop(should_abort=lambda: self._abort_requested)
             async for payload in loop.run_turn(message, self._history):
                 if self._abort_requested and not isinstance(payload, (TurnEnd, RunEnd)):
                     self._stream.emit(TurnEnd(stop_reason="aborted"))
@@ -106,15 +135,12 @@ class GithiRuntime:
     async def get_state(self) -> AgentState:
         return AgentState(
             session_id=self._session_id or "",
-            is_busy=self._busy,
-            is_compacting=False,
-            pending_count=0,
+            phase=_phase(busy=self._busy, stopped=self._stopped),
             message_count=self._message_count,
             model=self._model,
-            context_window=None,
         )
 
-    async def get_history(self) -> list[dict]:
+    async def get_history(self) -> list[dict[str, Any]]:
         return list(self._history)
 
     async def get_capabilities(self) -> Capabilities:
@@ -136,3 +162,9 @@ class GithiRuntime:
         self._stopped = True
         self._abort_requested = True
         self._stream.close()
+
+
+def _phase(*, busy: bool, stopped: bool) -> AgentPhase:
+    if stopped:
+        return AgentPhase.STOPPED
+    return AgentPhase.EXECUTING if busy else AgentPhase.READY

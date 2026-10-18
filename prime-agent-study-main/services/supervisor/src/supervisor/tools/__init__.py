@@ -29,8 +29,10 @@ from supervisor.tools.workspace import (
     CommandResult,
     Entry,
     HostWorkspace,
+    SandboxWorkspace,
     TreeWorkspace,
     Workspace,
+    workspace_for,
 )
 
 __all__ = [
@@ -41,6 +43,7 @@ __all__ = [
     "HostWorkspace",
     "InvalidArguments",
     "PathEscape",
+    "SandboxWorkspace",
     "ToolArgs",
     "ToolClass",
     "ToolContext",
@@ -58,4 +61,5 @@ __all__ = [
     "json_schema",
     "path_field",
     "tool",
+    "workspace_for",
 ]

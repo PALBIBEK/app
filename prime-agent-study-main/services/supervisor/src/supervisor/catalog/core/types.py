@@ -448,6 +448,7 @@ class MemoryProfile:
         reserve_tokens: Tokens to reserve for output
         keep_recent_tokens: Recent tokens to preserve
         pressure_ratio: Compaction trigger threshold
+        context_window: Tokens the pinned model accepts (None: platform default)
         summarization_model: Model for summarization
         recall_enabled: Enable memory recall
         recall_backend: Recall backend type
@@ -464,6 +465,7 @@ class MemoryProfile:
     reserve_tokens: int = 16_384
     keep_recent_tokens: int = 20_000
     pressure_ratio: float = 0.8
+    context_window: int | None = None
     summarization_model: str | None = None
     recall_enabled: bool = False
     recall_backend: RecallBackend = RecallBackend.NONE
@@ -489,6 +491,8 @@ class MemoryProfile:
         }
         if self.summarization_model is not None:
             body["compaction"]["summarization_model"] = self.summarization_model
+        if self.context_window is not None:
+            body["compaction"]["context_window"] = self.context_window
         if self.recall_mcp_server_url is not None:
             body["recall"]["mcp_server_url"] = self.recall_mcp_server_url
         return body

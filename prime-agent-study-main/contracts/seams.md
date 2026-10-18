@@ -67,6 +67,25 @@ Tool result codes: `TOOL_NOT_FOUND`, `TOOL_NOT_IMPLEMENTED`, `BAD_ARGS`, `PATH_E
 `FILE_NOT_FOUND`, `TOOL_TIMEOUT`, `UNSUPPORTED_CAPABILITY`, `WORKSPACE_UNAVAILABLE`,
 `TOOL_ERROR`, `TOOL_INTERNAL`.
 
+## What a githi session takes from its pins
+
+Every githi model turn runs step by step under the session workflow
+(`temporal.steps`); there is no other path for a turn with a model. Each turn uses:
+
+| Pin | Used for |
+|---|---|
+| Prompt pack | The system message of every model call (`AgentLoop.messages_for_model`) |
+| Tool set | The tools offered and run (`RegistryToolProvider`), plus platform tools |
+| Plug bindings: gateway | Every model call (`model_gateway` seam) |
+| Plug bindings: model route | The model every call names (`session_model`: route, else the manifest's model) |
+| Plug bindings: subagents | `subagent` / `subagent_result` tools on the transport's default provider |
+| Memory profile | Compaction between turns past `min(window − reserve, window × pressure)`, keeping `keep_recent_tokens`; recall on the first model step |
+| Sandbox (harness + profile) | Where every tool acts (`SandboxWorkspace`: files and commands in the sandbox) and the `file_effects` policy on every tool call |
+| Harness manifest | Recovery class per tool, guards, budget, approvals, subagent depth and background |
+
+Create and resume build the runtime through one routine (`SessionManager._start_runtime`),
+so a resumed session gets exactly what it was created with.
+
 ## Catalog digests
 
 PromptPack / ToolSet / AgentComposition digests and session pin handshake are

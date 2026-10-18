@@ -1,6 +1,6 @@
 """Protocol definitions (contracts) for all seams."""
 
-from supervisor.seams.interfaces.tool_provider import ToolProvider
+from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
 from supervisor.seams.interfaces.subagent_transport import (
@@ -19,6 +19,7 @@ from supervisor.seams.interfaces.context_memory import (
 
 __all__ = [
     # ToolProvider
+    "ToolClassifier",
     "ToolProvider",
     # ModelGatewayClient
     "ModelGatewayClient",

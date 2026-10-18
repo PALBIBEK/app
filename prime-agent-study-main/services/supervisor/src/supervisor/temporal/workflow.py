@@ -43,6 +43,7 @@ from supervisor.temporal.contracts import (
     JOB_FINISHED_SIGNAL,
     NON_RETRYABLE,
     RETRYABLE_OPS,
+    START_JOB_SIGNAL,
     Accepted,
     Activity,
     ApprovalAsk,
@@ -71,6 +72,7 @@ from supervisor.temporal.contracts import (
     SessionOp,
     SessionResult,
     SessionStatus,
+    StartJob,
     StepRequest,
     StepResult,
     ToolRequest,
@@ -592,16 +594,21 @@ class AgentSessionWorkflow:
                 ) from err
             raise _domain_error(err) from err
         if op.kind is Op.START_BACKGROUND:
-            await self._start_job(op)
+            await self._start_job(op, provider=(result.body or {}).get("provider"))
         return result
 
     # --- background subagent jobs ----------------------------------------------
 
-    async def _start_job(self, op: SessionOp) -> None:
-        """Run the job journalled by ``op`` as its own workflow, owned by this session."""
+    async def _start_job(self, op: SessionOp, *, provider: str | None) -> None:
+        """Run the job journalled by ``op`` as its own workflow, owned by this session.
+
+        ``provider`` is the one the journalling activity resolved (the session's
+        pinned default when the request named none).
+        """
         job_id, run_id = job_ids(op.op_id)
         args = dict(op.args)
-        provider = str(args.pop("provider", "memory"))
+        named = args.pop("provider", None)
+        provider = str(provider or named or "memory")  # "memory": histories from before
         spec = JobSpec(self._session_id, job_id, run_id, provider, args, self._timing)
         try:
             await workflow.start_child_workflow(
@@ -623,6 +630,11 @@ class AgentSessionWorkflow:
             await workflow.get_external_workflow_handle(
                 job_workflow_id(self._session_id, job_id)
             ).cancel()
+
+    @workflow.signal(name=START_JOB_SIGNAL)
+    async def start_job(self, start: StartJob) -> None:
+        """A background subagent the model started from a tool call (already journalled)."""
+        await self._start_job(start.op, provider=start.provider)
 
     @workflow.signal(name=JOB_FINISHED_SIGNAL)
     def job_finished(self, job_id: str) -> None:

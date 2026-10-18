@@ -203,20 +203,26 @@ class CompactionStart:
 
 @dataclass(frozen=True)
 class CompactionEnd:
+    """``messages``: the compacted conversation, the checkpoint later turns build on."""
+
     compaction_id: str
     stop_reason: str  # ok | error | cancelled | deferred
     tokens_after: int | None = None
     summary_digest: str | None = None
+    messages: list[dict[str, Any]] | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
 @dataclass(frozen=True)
 class MemoryRecall:
+    """``text``: what was recalled for the run and shown to the model, when injected."""
+
     block_id: str
     source: str  # semantic | branch | custom
     token_estimate: int
     injected: bool
     relevance_score: float | None = None
+    text: str | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 

@@ -91,6 +91,11 @@ class RegistryToolProvider:
     def list_tools(self) -> list[ToolDescriptor]:
         return list(self._offered.values())
 
+    def tool_class(self, name: str) -> str | None:
+        """The implementation's effect class, for policy (``ToolClassifier``)."""
+        spec = self._specs.get(name)
+        return spec.tool_class.value if spec is not None else None
+
     def invoke(self, ctx: ToolInvokeContext, name: str, args: dict[str, Any]) -> ToolResult:
         """Run one call to completion; every failure becomes a typed ``ToolResult``."""
         try:
