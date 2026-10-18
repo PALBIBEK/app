@@ -31,6 +31,10 @@ class Base(DeclarativeBase):
 
 class SessionRow(Base):
     __tablename__ = "sessions"
+    __table_args__ = (
+        # Previous sessions of one agent version for one person (memory, phase 7).
+        Index("ix_sessions_owner_pin", "tenant_id", "owner_principal_id", "agent_pin"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(Text, nullable=False, default="default")
@@ -44,6 +48,11 @@ class SessionRow(Base):
     composition_pins: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     last_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=-1)
+    # Memory: who the session belongs to, the exact agent version it pins, and which
+    # notebooks it reads and writes (see supervisor.memory.binding).
+    owner_principal_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_pin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memory: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -80,6 +89,7 @@ class SessionIndexRow(Base):
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_cost: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False, default=0)
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CommandRow(Base):
@@ -332,3 +342,76 @@ class CatalogErrorRow(Base):
     principal_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+# =============================================================================
+# Memory: notebooks of facts (long-term memory per principal per pinned agent)
+# =============================================================================
+
+# SQLite only autoincrements INTEGER PRIMARY KEY; Postgres gets a 64-bit identity.
+_MemoryId = BigInteger().with_variant(Integer, "sqlite")
+
+
+class MemoryNotebookRow(Base):
+    """One named notebook. ``revision`` is bumped by every changing transaction and
+    doubles as the notebook's lock row (SELECT ... FOR UPDATE)."""
+
+    __tablename__ = "memory_notebooks"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "owner_principal_id", "agent_pin", "name", name="uq_memory_notebook_name"
+        ),
+        Index("ix_memory_notebooks_owner_pin", "tenant_id", "owner_principal_id", "agent_pin"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_principal_id: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_pin: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    archived_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_tidied_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class MemoryFactRow(Base):
+    """A fact's current state; ``deleted_at`` set means removed (history keeps it)."""
+
+    __tablename__ = "memory_facts"
+    __table_args__ = (Index("ix_memory_facts_notebook_live", "notebook_id", "deleted_at", "id"),)
+
+    id: Mapped[int] = mapped_column(_MemoryId, primary_key=True, autoincrement=True)
+    notebook_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("memory_notebooks.id"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    sensitivity: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class MemoryFactRevisionRow(Base):
+    """Append-only: every insert, update, delete or restore of a fact, in order."""
+
+    __tablename__ = "memory_fact_revisions"
+    __table_args__ = (Index("ix_memory_revisions_notebook", "notebook_id", "revision"),)
+
+    id: Mapped[int] = mapped_column(_MemoryId, primary_key=True, autoincrement=True)
+    notebook_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("memory_notebooks.id"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fact_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    op: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    sensitivity: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    at: Mapped[int] = mapped_column(BigInteger, nullable=False)
