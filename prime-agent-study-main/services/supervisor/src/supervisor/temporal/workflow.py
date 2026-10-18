@@ -12,46 +12,63 @@ Patterns (Temporal entity-workflow and message-passing guidance):
 - The session's live runtime sits in one worker. Its activities go to that
   worker's own task queue; if that worker is gone (schedule-to-start timeout),
   any worker adopts the session by cold-resuming it from the journal.
+- githi turns are driven step by step: one activity per model call and per tool
+  call. Tools retry or run at most once by their manifest class; the loop guard
+  and approval timers live here, so they survive any worker.
 - Continue-as-new only between turns, after every handler has finished.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from datetime import timedelta
-from typing import TypeVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import (
     ActivityError,
     ApplicationError,
-    TimeoutError,
     TimeoutType,
     is_cancelled_exception,
 )
+from temporalio.exceptions import TimeoutError as ActivityTimeout
 
 from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
     NON_RETRYABLE,
     Accepted,
     Activity,
+    ApprovalAsk,
     ApprovalChoice,
+    ApprovalDecision,
+    ApprovalNeeded,
     ApprovalRequest,
     Carried,
     CreateRequest,
+    EndRunRequest,
+    GuardSettings,
     Message,
     Phase,
     Placement,
+    PlannedCall,
+    RetryMode,
+    RunPlan,
     SessionInput,
     SessionResult,
     SessionStatus,
+    StepRequest,
+    StepResult,
+    ToolRequest,
     TurnOutcome,
     TurnRequest,
 )
 
-T = TypeVar("T")
+with workflow.unsafe.imports_passed_through():
+    # Pure, deterministic policy code: the loop guard runs inside the workflow.
+    from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard
+    from supervisor.policy.types import is_allow_choice
 
 SEEN_COMMANDS_WINDOW = 1_000
 
@@ -62,18 +79,21 @@ _RETRY = RetryPolicy(
     maximum_attempts=5,
     non_retryable_error_types=list(NON_RETRYABLE),
 )
-# A retried turn may repeat side effects; run_turn refuses to resend after tools ran.
+# A retried whole turn may repeat side effects; run_turn refuses to resend after tools ran.
 _TURN_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     maximum_attempts=3,
     non_retryable_error_types=list(NON_RETRYABLE),
 )
+_ONCE = RetryPolicy(maximum_attempts=1)
+_SHORT = timedelta(minutes=2)
+_MODEL_CALL = timedelta(minutes=10)
 
 
 def _is_placement_lost(err: BaseException) -> bool:
     return (
         isinstance(err, ActivityError)
-        and isinstance(err.cause, TimeoutError)
+        and isinstance(err.cause, ActivityTimeout)
         and err.cause.type is TimeoutType.SCHEDULE_TO_START
     )
 
@@ -88,6 +108,28 @@ def _domain_error(err: ActivityError) -> ApplicationError:
     return ApplicationError(str(err), type="ActivityFailed", non_retryable=True)
 
 
+def _failure(err: ActivityError) -> tuple[str, str]:
+    cause = err.cause
+    if isinstance(cause, ApplicationError):
+        return cause.type or "ActivityFailed", cause.message
+    return type(cause or err).__name__, str(cause or err)
+
+
+def _guard(settings: GuardSettings | None) -> LoopGuard | None:
+    if settings is None:
+        return None
+    guard = LoopGuard()
+    guard.configure(
+        "run",
+        GuardConfig(
+            repetition=GuardAction(settings.repetition),
+            oscillation=GuardAction(settings.oscillation),
+            stall_iterations=settings.stall_iterations,
+        ),
+    )
+    return guard
+
+
 @workflow.defn(name="AgentSession")
 class AgentSessionWorkflow:
     @workflow.init
@@ -95,13 +137,17 @@ class AgentSessionWorkflow:
         self._session_id = inp.session_id
         self._timing = inp.timing
         self._placement_timeout = timedelta(seconds=inp.timing.placement_timeout_s)
+        self._heartbeat = timedelta(seconds=inp.timing.heartbeat_timeout_s)
         self._state = inp.carried or Carried()
         self._running: Message | None = None
-        self._turn: asyncio.Task[TurnOutcome] | None = None
+        self._turn: asyncio.Task[object] | None = None
         self._terminate_requested = False
         self._abort_requested = False
         self._creation_error: ApplicationError | None = None
         self._submit_lock = asyncio.Lock()
+        # Approvals this workflow is waiting on (stepped turns), and their decisions.
+        self._awaiting: dict[str, ApprovalNeeded] = {}
+        self._decisions: dict[str, str] = {}
 
     # --- main loop -----------------------------------------------------------
 
@@ -139,7 +185,7 @@ class AgentSessionWorkflow:
                 Activity.CREATE,
                 CreateRequest(self._session_id, inp.create),
                 result_type=Placement,
-                start_to_close_timeout=timedelta(minutes=2),
+                start_to_close_timeout=_SHORT,
                 retry_policy=_RETRY,
             )
             self._state.phase = Phase.IDLE
@@ -150,19 +196,11 @@ class AgentSessionWorkflow:
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
         try:
-            outcome = await self._on_session_worker(
-                lambda queue: workflow.start_activity(
-                    Activity.RUN_TURN,
-                    TurnRequest(self._session_id, message),
-                    result_type=TurnOutcome,
-                    task_queue=queue,
-                    schedule_to_start_timeout=self._placement_timeout,
-                    start_to_close_timeout=timedelta(seconds=self._timing.turn_timeout_s),
-                    heartbeat_timeout=timedelta(seconds=self._timing.heartbeat_timeout_s),
-                    retry_policy=_TURN_RETRY,
-                    cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-                ),
-                track_turn=True,
+            plan = await self._session_activity(
+                Activity.BEGIN_RUN, TurnRequest(self._session_id, message), RunPlan
+            )
+            outcome = await (
+                self._run_steps(message, plan) if plan.stepped else self._run_whole(message)
             )
             if outcome.session_status in CLOSED_STATUSES:
                 # Policy closed the session (e.g. a loop guard): nothing more can run.
@@ -173,7 +211,7 @@ class AgentSessionWorkflow:
             if isinstance(err, asyncio.CancelledError) and not aborted:
                 raise  # the workflow itself is being cancelled
             if not aborted:
-                # run_turn journals the failure for clients; the session stays usable.
+                # The activities journal the failure for clients; the session stays usable.
                 workflow.logger.warning("turn %s failed: %s", message.command_id, err)
         finally:
             self._running, self._turn, self._abort_requested = None, None, False
@@ -181,30 +219,183 @@ class AgentSessionWorkflow:
             if self._state.phase is Phase.RUNNING:
                 self._state.phase = Phase.IDLE
 
+    async def _run_whole(self, message: Message) -> TurnOutcome:
+        """Runtime-driven turn (harness, echo, offline githi): one heartbeated activity."""
+        return await self._session_activity(
+            Activity.RUN_TURN,
+            TurnRequest(self._session_id, message),
+            TurnOutcome,
+            start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
+            retry=_TURN_RETRY,
+            heartbeat=True,
+            track=True,
+            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+        )
+
+    # --- stepped (workflow-driven) turns --------------------------------------
+
+    async def _run_steps(self, message: Message, plan: RunPlan) -> TurnOutcome:
+        """Model call, then each tool call, until the model answers or policy stops it."""
+        guard = _guard(plan.guard)
+        in_flight: str | None = None
+
+        async def end(stop_reason: str, **details: object) -> TurnOutcome:
+            return await self._session_activity(
+                Activity.END_RUN,
+                EndRunRequest(
+                    self._session_id, plan.run_id, message.command_id, stop_reason, **details
+                ),
+                TurnOutcome,
+            )
+
+        try:
+            for step in range(plan.max_steps):
+                result = await self._session_activity(
+                    Activity.MODEL_STEP,
+                    StepRequest(self._session_id, plan.run_id, step),
+                    StepResult,
+                    start_to_close=_MODEL_CALL,
+                    heartbeat=True,
+                    track=True,
+                )
+                if result.final:
+                    return await end(result.stop_reason)
+                for call in result.calls:
+                    if guard is not None:
+                        verdict = guard.observe("run", call.name, call.args_hash)
+                        if verdict.tripped and verdict.action is GuardAction.ABORT:
+                            return await end(
+                                "error",
+                                error_class="LoopGuard",
+                                detail=verdict.detail or "loop detected",
+                                close_session=True,
+                            )
+                    approved = call.approval is None or await self._approve(plan.run_id, call)
+                    in_flight = call.call_id
+                    try:
+                        await self._call_tool(plan.run_id, call, denied=not approved)
+                    except ActivityError as err:
+                        if is_cancelled_exception(err):
+                            raise
+                        # The tool may or may not have run: never guess, stop the turn.
+                        return await end(
+                            "interrupted",
+                            error_class="TurnInterrupted",
+                            detail=f"tool {call.name!r} did not complete: {_failure(err)[1]}",
+                            lost_call_id=call.call_id,
+                        )
+                    in_flight = None
+            return await end(
+                "error",
+                error_class="AgentLoopError",
+                detail=f"no answer after {plan.max_steps} model steps",
+            )
+        except (ActivityError, asyncio.CancelledError) as err:
+            if is_cancelled_exception(err) and self._abort_requested:
+                return await end(
+                    "aborted",
+                    lost_call_id=in_flight,
+                    lost_reason="the run was aborted while the tool ran",
+                )
+            if isinstance(err, ActivityError):
+                kind, detail = _failure(err)
+                return await end("error", error_class=kind, detail=detail)
+            raise
+
+    async def _call_tool(self, run_id: str, call: PlannedCall, *, denied: bool) -> None:
+        once = call.retry is RetryMode.ONCE and not denied
+        await self._session_activity(
+            Activity.TOOL_CALL,
+            ToolRequest(self._session_id, run_id, call.call_id, denied=denied),
+            bool,
+            start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
+            retry=_ONCE if once else _RETRY,
+            heartbeat=True,
+            track=True,
+            # An at-most-once tool whose worker died is not re-run by the adopting worker.
+            rerun_after_adopt=not once,
+        )
+
+    async def _approve(self, run_id: str, call: PlannedCall) -> bool:
+        """Wait durably for a human; on timeout apply the manifest's on_timeout."""
+        needed = call.approval
+        assert needed is not None
+        approval_id = await self._session_activity(
+            Activity.REQUEST_APPROVAL,
+            ApprovalAsk(self._session_id, run_id, call.call_id, call.name, needed),
+            str,
+        )
+        self._awaiting[approval_id] = needed
+        try:
+            with contextlib.suppress(TimeoutError):  # a durable timer: survives any restart
+                await workflow.wait_condition(
+                    lambda: approval_id in self._decisions or self._abort_requested,
+                    timeout=timedelta(seconds=needed.timeout_s),
+                )
+        finally:
+            self._awaiting.pop(approval_id, None)
+        if approval_id not in self._decisions:
+            # Timed out, or aborted: settle it so it does not stay pending.
+            choice = "deny" if self._abort_requested else needed.on_timeout
+            self._decisions[approval_id] = await self._session_activity(
+                Activity.RESOLVE_APPROVAL,
+                ApprovalDecision(self._session_id, approval_id, choice, timed_out=True),
+                str,
+            )
+        if self._abort_requested:
+            raise asyncio.CancelledError
+        return is_allow_choice(self._decisions.pop(approval_id))
+
     async def _terminate(self) -> None:
         if self._state.phase in (Phase.TERMINATED, Phase.FAILED):
             return
         if self._turn is not None and not self._turn.done():
             self._turn.cancel()
-        await self._on_session_worker(
-            lambda queue: workflow.start_activity(
-                Activity.TERMINATE,
-                self._session_id,
-                task_queue=queue,
-                schedule_to_start_timeout=self._placement_timeout,
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_RETRY,
-            )
-        )
+        await self._session_activity(Activity.TERMINATE, self._session_id, type(None))
         self._state.phase = Phase.TERMINATED
 
     # --- placement -----------------------------------------------------------
 
-    async def _on_session_worker(
+    async def _session_activity[T](
+        self,
+        activity: Activity,
+        arg: object,
+        result_type: type[T],
+        *,
+        start_to_close: timedelta = _SHORT,
+        retry: RetryPolicy = _RETRY,
+        heartbeat: bool = False,
+        track: bool = False,
+        rerun_after_adopt: bool = True,
+        cancellation_type: workflow.ActivityCancellationType = (
+            workflow.ActivityCancellationType.TRY_CANCEL
+        ),
+    ) -> T:
+        """Run an activity on the worker holding the session's runtime."""
+
+        def start(queue: str) -> asyncio.Task[T]:
+            return workflow.start_activity(
+                activity,
+                arg,
+                result_type=result_type,
+                task_queue=queue,
+                schedule_to_start_timeout=self._placement_timeout,
+                start_to_close_timeout=start_to_close,
+                heartbeat_timeout=self._heartbeat if heartbeat else None,
+                retry_policy=retry,
+                cancellation_type=cancellation_type,
+            )
+
+        return await self._on_session_worker(
+            start, track=track, rerun_after_adopt=rerun_after_adopt
+        )
+
+    async def _on_session_worker[T](
         self,
         start: Callable[[str], asyncio.Task[T]],
         *,
-        track_turn: bool = False,
+        track: bool = False,
+        rerun_after_adopt: bool = True,
     ) -> T:
         """Run on the worker holding the session; adopt it elsewhere if that worker is gone."""
         while True:
@@ -214,7 +405,7 @@ class AgentSessionWorkflow:
                 else workflow.info().task_queue
             )
             task = start(queue)
-            if track_turn:
+            if track:
                 self._turn = task
             try:
                 return await task
@@ -226,9 +417,11 @@ class AgentSessionWorkflow:
                     Activity.ADOPT,
                     self._session_id,
                     result_type=Placement,
-                    start_to_close_timeout=timedelta(minutes=2),
+                    start_to_close_timeout=_SHORT,
                     retry_policy=_RETRY,
                 )
+                if not rerun_after_adopt:
+                    raise
 
     # --- messages ------------------------------------------------------------
 
@@ -250,16 +443,7 @@ class AgentSessionWorkflow:
                 return Accepted(message.command_id, queued=True)
             # Idle: prepare now so recovery/budget/approval problems reach the caller.
             try:
-                await self._on_session_worker(
-                    lambda queue: workflow.start_activity(
-                        Activity.PREPARE_TURN,
-                        self._session_id,
-                        task_queue=queue,
-                        schedule_to_start_timeout=self._placement_timeout,
-                        start_to_close_timeout=timedelta(minutes=2),
-                        retry_policy=_RETRY,
-                    )
-                )
+                await self._session_activity(Activity.PREPARE_TURN, self._session_id, type(None))
             except ActivityError as err:
                 raise _domain_error(err) from err
             self._remember(message.command_id)
@@ -275,15 +459,19 @@ class AgentSessionWorkflow:
     @workflow.update(name="respond_approval")
     async def respond_approval(self, choice: ApprovalChoice) -> None:
         try:
-            await self._on_session_worker(
-                lambda queue: workflow.start_activity(
-                    Activity.RESPOND_APPROVAL,
-                    ApprovalRequest(self._session_id, choice),
-                    task_queue=queue,
-                    schedule_to_start_timeout=self._placement_timeout,
-                    start_to_close_timeout=timedelta(minutes=1),
-                    retry_policy=_RETRY,
+            if choice.approval_id in self._awaiting:
+                # A stepped turn is waiting on this one: settle it, then wake the turn.
+                self._decisions[choice.approval_id] = await self._session_activity(
+                    Activity.RESOLVE_APPROVAL,
+                    ApprovalDecision(self._session_id, choice.approval_id, choice.choice),
+                    str,
                 )
+                return
+            # A runtime-driven approval: deliver it to the runtime holding the request.
+            await self._session_activity(
+                Activity.RESPOND_APPROVAL,
+                ApprovalRequest(self._session_id, choice),
+                type(None),
             )
         except ActivityError as err:
             raise _domain_error(err) from err
@@ -293,11 +481,18 @@ class AgentSessionWorkflow:
         self._reject_if_closed()
         if not choice.approval_id or not choice.choice:
             raise ValueError("approval_id and choice are required")
+        needed = self._awaiting.get(choice.approval_id)
+        if needed is not None and choice.choice not in needed.options:
+            raise ApplicationError(
+                f"choice must be one of {needed.options}", type="InvalidApprovalChoice"
+            )
 
     @workflow.signal(name="abort")
     def abort(self) -> None:
+        if self._running is None:
+            return
+        self._abort_requested = True  # also wakes a turn waiting on an approval
         if self._turn is not None and not self._turn.done():
-            self._abort_requested = True
             self._turn.cancel()
 
     @workflow.update(name="terminate")
@@ -330,4 +525,3 @@ class AgentSessionWorkflow:
 
     def _is_queued(self, command_id: str) -> bool:
         return any(m.command_id == command_id for m in self._state.pending)
-

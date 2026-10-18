@@ -7,6 +7,7 @@ tests/support/temporal_env.py), so these also run across continue-as-new.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -104,11 +105,13 @@ def slow_tools() -> AsyncIterator[Callable[[float], None]]:
 
 
 async def _spawn_worker(
-    cluster: Cluster, *, tool_delay_s: float
+    cluster: Cluster, *, tool_delay_s: float = 0.0, spec: dict | None = None
 ) -> tuple[asyncio.subprocess.Process, str]:
+    spec = spec or {}
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "tests.support.worker_process",
-        cluster.db_url, str(cluster.blob_dir), cluster.address, cluster.queue, str(tool_delay_s),
+        cluster.db_url, str(cluster.blob_dir), cluster.address, cluster.queue,
+        json.dumps(spec | {"echo_delay_s": tool_delay_s}),
         stdout=asyncio.subprocess.PIPE,
         cwd=str(Path(__file__).resolve().parents[2]),
     )

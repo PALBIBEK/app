@@ -16,6 +16,7 @@ from supervisor.catalog.loading.bootstrap import (
 )
 from supervisor.catalog.repository import hydrate_composition_catalog
 from supervisor.harness import HarnessCatalog, load_manifest
+from tests.support.scripted import all_variants
 from tests.support.session_env import TrackingProvider
 
 MOCK_IMAGE = "sha256:" + hashlib.sha256(b"mock-githi-image").hexdigest()
@@ -41,7 +42,8 @@ async def boot_platform(
     sandboxes = TrackingProvider()
     state = build_supervisor(
         session_factory=factory,
-        catalog=shipped_harness_catalog(),
+        # Shipped manifests plus githi variants for approval, at-most-once and budget tests.
+        catalog=all_variants(shipped_harness_catalog()),
         blob_dir=blob_dir,
         sandbox_provider=sandboxes,
         composition_catalog=compositions,

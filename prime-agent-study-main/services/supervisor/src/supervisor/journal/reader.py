@@ -75,8 +75,8 @@ class JournalReader:
                 return -1
             return int(row.last_seq)
 
-    async def open_run_start(self, session_id: str) -> int | None:
-        """Seq of a RunStart whose run never finished (crashed mid-turn), else None.
+    async def open_run(self, session_id: str) -> tuple[int, str | None] | None:
+        """(seq, turn_id) of a RunStart whose run never finished (crashed), else None.
 
         A run ends with RunEnd, an ErrorEvent, or an aborted TurnEnd.
         """
@@ -94,6 +94,7 @@ class JournalReader:
             ).scalar_one_or_none()
             if boundary is None or boundary.type != "RunStart":
                 return None
+            run_start = (int(boundary.seq), boundary.turn_id)
             turn_ends = (
                 await db.execute(
                     select(EventRow).where(
@@ -108,7 +109,30 @@ class JournalReader:
             for row in turn_ends
         ):
             return None
-        return int(boundary.seq)
+        return run_start
+
+    async def read_turn(self, session_id: str, turn_id: str) -> list[Envelope]:
+        """One run's events, in order (workflow-driven runs tag every event with it)."""
+        async with self._factory() as db:
+            rows = (
+                await db.execute(
+                    select(EventRow)
+                    .where(EventRow.session_id == session_id, EventRow.turn_id == turn_id)
+                    .order_by(EventRow.seq.asc())
+                )
+            ).scalars().all()
+        return [self._to_envelope(row) for row in rows]
+
+    async def event(self, session_id: str, event_id: str) -> Envelope | None:
+        async with self._factory() as db:
+            row = (
+                await db.execute(
+                    select(EventRow).where(
+                        EventRow.session_id == session_id, EventRow.event_id == event_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return None if row is None else self._to_envelope(row)
 
     async def latest_history(self, session_id: str) -> list[dict] | None:
         """Messages from the most recent RunEnd, or None if none."""

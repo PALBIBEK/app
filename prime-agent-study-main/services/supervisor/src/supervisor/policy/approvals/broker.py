@@ -311,6 +311,22 @@ class ApprovalBroker:
 
         return expired
 
+    async def time_out(self, approval_id: str, choice: str) -> Approval:
+        """Time out one pending approval with ``choice``; a resolved one is returned as is.
+
+        Lets a workflow's durable timer resolve its own approval, racing the
+        sweeper harmlessly: both apply the same on_timeout policy.
+        """
+        async with self._db() as db:
+            row = await db.get(ApprovalRow, approval_id)
+            if row is None:
+                raise ApprovalNotFound(approval_id)
+            if row.status == ApprovalStatus.PENDING.value:
+                row.status = ApprovalStatus.TIMED_OUT.value
+                row.choice = choice
+                await db.commit()
+            return self._to_approval(row)
+
     async def wait_for_response(
         self,
         approval_id: str,

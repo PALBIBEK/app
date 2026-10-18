@@ -980,70 +980,14 @@ class SessionManager:
                         session_id, envelope.turn_id, payload
                     )
 
-                if isinstance(payload, RunStart) and envelope.trace_id:
-                    self._run_traces[session_id] = envelope.trace_id
-                if isinstance(payload, ToolEnd) and not payload.is_error:
-                    if payload.tool_name in _MUTATING_TOOLS:
-                        ws = self._workspace.get(session_id)
-                        if ws is not None:
-                            self._workspace_svc.mark_dirty(ws)
-
-                if isinstance(payload, RunEnd):
-                    self._run_traces.pop(session_id, None)
-                    ws = self._workspace.get(session_id)
-                    sbx = self._sandboxes.get(session_id)
-                    if ws is not None and ws.dirty and sbx is not None:
-                        try:
-                            await self._workspace_svc.sync_if_dirty(ws, sbx)
-                        except WorkspaceConflictError:
-                            _log.exception(
-                                "workspace CAS conflict session=%s", session_id
-                            )
-                        except Exception:
-                            _log.exception(
-                                "workspace sync after run failed session=%s",
-                                session_id,
-                            )
-
-                seq = await self._writer.append(
+                await self._record(
                     session_id,
                     payload,
                     turn_id=envelope.turn_id,
                     trace_id=envelope.trace_id,
-                )
-                live = Envelope(
-                    session_id=session_id,
-                    seq=seq,
                     event_id=envelope.event_id,
                     ts_ms=envelope.ts_ms,
-                    turn_id=envelope.turn_id,
-                    trace_id=envelope.trace_id,
-                    payload=payload,
                 )
-                self._live.publish(session_id, live)
-                try:
-                    from supervisor.obs.tracing import get_projector
-
-                    proj = get_projector()
-                    if proj is not None:
-                        # Tenant/harness attrs from session pins (D13) — never default/unknown.
-                        if hasattr(proj, "ensure_session"):
-                            row_pins = await self._get_session_row(session_id)
-                            harness_ver = getattr(row_pins, "harness_version", None) or "unknown"
-                            # Prefer composition id when pinned; else harness_version as id.
-                            harness_id = harness_ver
-                            pins_json = getattr(row_pins, "composition_pins", None)
-                            if isinstance(pins_json, dict) and pins_json.get("composition_id"):
-                                harness_id = str(pins_json["composition_id"])
-                            proj.ensure_session(
-                                session_id,
-                                tenant_id=getattr(row_pins, "tenant_id", None),
-                                harness_id=harness_id,
-                                harness_version=harness_ver,
-                            )
-                        proj.project(live)
-                except Exception:
-                    _log.exception("span projection failed session=%s", session_id)
 
                 if isinstance(payload, RunStart):
                     self._guards.reset(session_id)  # stall counts tool calls within one run
@@ -1674,23 +1618,90 @@ class SessionManager:
         )
 
     async def _record(
-        self, session_id: str, payload: Any, *, turn_id: str | None, trace_id: str | None
+        self,
+        session_id: str,
+        payload: Any,
+        *,
+        turn_id: str | None,
+        trace_id: str | None,
+        event_key: str | None = None,
+        event_id: str | None = None,
+        ts_ms: int | None = None,
     ) -> int:
-        """Journal an event and publish it live (SSE, turn activities), like the fan-out does."""
-        seq = await self._writer.append(session_id, payload, turn_id=turn_id, trace_id=trace_id)
-        self._live.publish(
-            session_id,
-            Envelope(
-                session_id=session_id,
-                seq=seq,
-                event_id=uuid4().hex,
-                ts_ms=int(time.time() * 1000),
-                turn_id=turn_id,
-                trace_id=trace_id,
-                payload=payload,
-            ),
+        """Journal one event and apply its effects; the single path every event takes.
+
+        Workspace effects run before the append (files are synced before clients see
+        RunEnd); then the event is published live and projected into tracing. With
+        ``event_key`` the append is idempotent (retried workflow activities).
+        """
+        await self._workspace_effects(session_id, payload, trace_id=trace_id)
+        seq = await self._writer.append(
+            session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
+        envelope = Envelope(
+            session_id=session_id,
+            seq=seq,
+            event_id=event_id or uuid4().hex,
+            ts_ms=ts_ms if ts_ms is not None else int(time.time() * 1000),
+            turn_id=turn_id,
+            trace_id=trace_id,
+            payload=payload,
+        )
+        self._live.publish(session_id, envelope)
+        await self._project(session_id, envelope)
         return seq
+
+    async def _workspace_effects(
+        self, session_id: str, payload: Any, *, trace_id: str | None
+    ) -> None:
+        if isinstance(payload, RunStart) and trace_id:
+            self._run_traces[session_id] = trace_id
+        ws = self._workspace.get(session_id)
+        if (
+            isinstance(payload, ToolEnd)
+            and not payload.is_error
+            and payload.tool_name in _MUTATING_TOOLS
+            and ws is not None
+        ):
+            self._workspace_svc.mark_dirty(ws)
+        if isinstance(payload, RunEnd):
+            self._run_traces.pop(session_id, None)
+            sbx = self._sandboxes.get(session_id)
+            if ws is not None and ws.dirty and sbx is not None:
+                try:
+                    await self._workspace_svc.sync_if_dirty(ws, sbx)
+                except WorkspaceConflictError:
+                    _log.exception("workspace CAS conflict session=%s", session_id)
+                except Exception:
+                    _log.exception("workspace sync after run failed session=%s", session_id)
+
+    async def _project(self, session_id: str, envelope: Envelope) -> None:
+        """Project a journalled event into tracing spans (D13); never fails the event."""
+        try:
+            from supervisor.obs.tracing import get_projector
+
+            proj = get_projector()
+            if proj is None:
+                return
+            if hasattr(proj, "ensure_session"):
+                row = await self._get_session_row(session_id)
+                harness_ver = getattr(row, "harness_version", None) or "unknown"
+                # Prefer the composition id when pinned; else the harness version.
+                pins = getattr(row, "composition_pins", None)
+                harness_id = (
+                    str(pins["composition_id"])
+                    if isinstance(pins, dict) and pins.get("composition_id")
+                    else harness_ver
+                )
+                proj.ensure_session(
+                    session_id,
+                    tenant_id=getattr(row, "tenant_id", None),
+                    harness_id=harness_id,
+                    harness_version=harness_ver,
+                )
+            proj.project(envelope)
+        except Exception:
+            _log.exception("span projection failed session=%s", session_id)
 
     async def _policy_abort(
         self,

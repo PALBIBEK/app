@@ -8,14 +8,19 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import AgentEvent, MessageEnd, RunEnd
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
 from supervisor.journal.serde import encode_event, event_type_name
+
+
+def keyed_event_id(session_id: str, event_key: str) -> str:
+    """Deterministic event id (fits EventRow.event_id) for an idempotent append."""
+    return uuid5(NAMESPACE_URL, f"yal-journal:{session_id}:{event_key}").hex
 
 # Default: offload payloads larger than 64 KiB.
 _DEFAULT_BLOB_THRESHOLD = 64 * 1024
@@ -81,15 +86,40 @@ class JournalWriter:
         *,
         turn_id: str | None,
         trace_id: str | None,
+        event_key: str | None = None,
     ) -> int:
-        """Allocate seq, commit the row, return seq. Durable before return."""
-        last = await self.append_batch(session_id, [(event, turn_id, trace_id)])
-        return last
+        """Allocate seq, commit the row, return seq. Durable before return.
+
+        With ``event_key`` the append is idempotent: the event id is derived from
+        the key, and appending the same key again returns the original seq. This
+        is what lets a retried workflow activity journal safely.
+        """
+        event_id = None
+        if event_key is not None:
+            event_id = keyed_event_id(session_id, event_key)
+            if (seq := await self.seq_of(session_id, event_id)) is not None:
+                return seq
+        return await self.append_batch(
+            session_id, [(event, turn_id, trace_id)], event_ids=[event_id]
+        )
+
+    async def seq_of(self, session_id: str, event_id: str) -> int | None:
+        async with self._factory() as db:
+            seq = (
+                await db.execute(
+                    select(EventRow.seq).where(
+                        EventRow.session_id == session_id, EventRow.event_id == event_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return None if seq is None else int(seq)
 
     async def append_batch(
         self,
         session_id: str,
         events: list[tuple[AgentEvent, str | None, str | None]],
+        *,
+        event_ids: list[str | None] | None = None,
     ) -> int:
         """Atomically append n events. Returns the last allocated seq."""
         if not events:
@@ -126,7 +156,7 @@ class JournalWriter:
                         EventRow(
                             session_id=session_id,
                             seq=seq,
-                            event_id=uuid4().hex,
+                            event_id=(event_ids[i] if event_ids else None) or uuid4().hex,
                             turn_id=turn_id,
                             type=event_type_name(event),
                             payload=payload,

@@ -24,12 +24,20 @@ from supervisor.session import SessionManager, is_dropped_sentinel
 from supervisor.temporal.contracts import (
     NON_RETRYABLE,
     Activity,
+    ApprovalAsk,
+    ApprovalDecision,
     ApprovalRequest,
     CreateRequest,
+    EndRunRequest,
     Placement,
+    RunPlan,
+    StepRequest,
+    StepResult,
+    ToolRequest,
     TurnOutcome,
     TurnRequest,
 )
+from supervisor.temporal.steps import GithiSteps, heartbeating
 
 # How long an aborted turn gets to wind down before the next one may start.
 ABORT_GRACE_S = 10.0
@@ -92,6 +100,7 @@ class SessionActivities:
         self._reader = reader
         self._writer = writer
         self._home = Placement(home_queue)
+        self._steps = GithiSteps(manager, reader)
 
     @property
     def home_queue(self) -> str:
@@ -179,6 +188,38 @@ class SessionActivities:
         with _as_application_error():
             await self._manager.terminate(session_id)
 
+    # --- stepped (workflow-driven) githi turns ---------------------------------
+
+    @activity.defn(name=Activity.BEGIN_RUN)
+    async def begin_run(self, req: TurnRequest) -> RunPlan:
+        with _as_application_error():
+            return await self._steps.begin_run(req)
+
+    @activity.defn(name=Activity.MODEL_STEP)
+    async def model_step(self, req: StepRequest) -> StepResult:
+        with _as_application_error():
+            return await self._steps.model_step(req)
+
+    @activity.defn(name=Activity.TOOL_CALL)
+    async def tool_call(self, req: ToolRequest) -> bool:
+        with _as_application_error():
+            return await heartbeating(self._steps.tool_call(req))
+
+    @activity.defn(name=Activity.REQUEST_APPROVAL)
+    async def request_approval(self, ask: ApprovalAsk) -> str:
+        with _as_application_error():
+            return await self._steps.request_approval(ask)
+
+    @activity.defn(name=Activity.RESOLVE_APPROVAL)
+    async def resolve_approval(self, decision: ApprovalDecision) -> str:
+        with _as_application_error():
+            return await self._steps.resolve_approval(decision)
+
+    @activity.defn(name=Activity.END_RUN)
+    async def end_run(self, req: EndRunRequest) -> TurnOutcome:
+        with _as_application_error():
+            return await self._steps.end_run(req)
+
     def all(self) -> list[Any]:
         return [
             self.create,
@@ -187,13 +228,22 @@ class SessionActivities:
             self.run_turn,
             self.respond_approval,
             self.terminate,
+            self.begin_run,
+            self.model_step,
+            self.tool_call,
+            self.request_approval,
+            self.resolve_approval,
+            self.end_run,
         ]
 
     async def _refuse_if_interrupted(self, session_id: str) -> None:
         """Never silently re-run a turn a crashed worker left half done: tools may have run."""
-        if (seq := await self._reader.open_run_start(session_id)) is None:
+        if (open_run := await self._reader.open_run(session_id)) is None:
             return
-        detail = f"turn starting at seq {seq} was interrupted by a worker failure; re-send to retry"
+        detail = (
+            f"turn starting at seq {open_run[0]} was interrupted by a worker failure; "
+            "re-send to retry"
+        )
         await self._writer.append(
             session_id,
             ErrorEvent(error_class="TurnInterrupted", retryable=False, detail=detail),

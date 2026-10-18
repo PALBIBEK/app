@@ -66,7 +66,7 @@ class HttpModelGatewayClient:
     ) -> Completion:
         body: dict[str, Any] = {
             "model": model or self._default_model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [m.to_wire() for m in messages],
             "stream": False,
         }
         if tools:
@@ -106,7 +106,7 @@ class HttpModelGatewayClient:
     ) -> Iterator[StreamEvent]:
         body: dict[str, Any] = {
             "model": model or self._default_model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [m.to_wire() for m in messages],
             "stream": True,
         }
         if tools:

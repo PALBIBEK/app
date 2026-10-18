@@ -383,6 +383,10 @@ class AgentLoop:
                     "tool_calls": tool_calls,
                 }
             )
+            # The model must see its own tool calls before their results.
+            chat.append(
+                ChatMessage(role="assistant", content=assistant_text, tool_calls=tool_calls)
+            )
             for call in tool_calls:
                 if self._should_abort():
                     yield TurnEnd(stop_reason="aborted")
@@ -393,6 +397,7 @@ class AgentLoop:
                     ChatMessage(
                         role="tool",
                         content=json.dumps(call.get("_result", {})),
+                        tool_call_id=str(call.get("id")),
                     )
                 )
         else:
@@ -494,7 +499,14 @@ class AgentLoop:
                 )
             else:
                 text = str(content or "")
-            out.append(ChatMessage(role=role, content=text))
+            out.append(
+                ChatMessage(
+                    role=role,
+                    content=text,
+                    tool_calls=m.get("tool_calls") or None,
+                    tool_call_id=m.get("tool_call_id"),
+                )
+            )
         return out
 
     @staticmethod

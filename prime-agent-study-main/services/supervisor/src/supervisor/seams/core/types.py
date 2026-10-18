@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -124,11 +126,40 @@ class ChildInfo:
 
 @dataclass
 class ChatMessage:
-    """OpenAI-compat message shape (role + content + optional tool_calls)."""
+    """OpenAI-compat message shape.
+
+    An assistant message may carry ``tool_calls``; the ``tool`` message answering
+    one carries its ``tool_call_id``. Without both, a model cannot tell which call
+    a result belongs to.
+    """
 
     role: str
     content: str
     tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        """OpenAI chat-completions message. Tool calls may be ``{id, name, arguments}``."""
+        wire: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            wire["tool_calls"] = [_tool_call_to_wire(call) for call in self.tool_calls]
+        if self.tool_call_id is not None:
+            wire["tool_call_id"] = self.tool_call_id
+        return wire
+
+
+def _tool_call_to_wire(call: dict[str, Any]) -> dict[str, Any]:
+    if "function" in call:  # already in wire form
+        return call
+    args = call.get("arguments")
+    return {
+        "id": call.get("id"),
+        "type": "function",
+        "function": {
+            "name": call.get("name"),
+            "arguments": args if isinstance(args, str) else json.dumps(args or {}),
+        },
+    }
 
 
 @dataclass

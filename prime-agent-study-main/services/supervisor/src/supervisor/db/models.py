@@ -52,7 +52,11 @@ class SessionRow(Base):
 
 class EventRow(Base):
     __tablename__ = "events"
-    __table_args__ = (UniqueConstraint("session_id", "seq", name="uq_events_session_seq"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_events_session_seq"),
+        # Idempotent appends look events up by their deterministic id.
+        Index("ix_events_session_event_id", "session_id", "event_id"),
+    )
 
     session_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sessions.id"), primary_key=True

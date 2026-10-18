@@ -26,6 +26,13 @@ class Activity(StrEnum):
     RUN_TURN = "session.run_turn"
     RESPOND_APPROVAL = "session.respond_approval"
     TERMINATE = "session.terminate"
+    # Workflow-driven (stepped) turns: one model call or one tool call per activity.
+    BEGIN_RUN = "session.begin_run"
+    MODEL_STEP = "session.model_step"
+    TOOL_CALL = "session.tool_call"
+    REQUEST_APPROVAL = "session.request_approval"
+    RESOLVE_APPROVAL = "session.resolve_approval"
+    END_RUN = "session.end_run"
 
 
 class Phase(StrEnum):
@@ -119,6 +126,104 @@ class Placement:
 class TurnRequest:
     session_id: str
     message: Message
+
+
+class RetryMode(StrEnum):
+    """How a tool call may be retried, from the manifest's recovery policy for its class."""
+
+    RETRY = "retry"  # auto_resume: idempotent or pure, safe to run again
+    ONCE = "once"  # anything else: at most once, an unknown outcome stops the turn
+
+
+@dataclass(frozen=True, slots=True)
+class GuardSettings:
+    repetition: str
+    oscillation: str
+    stall_iterations: int
+
+
+@dataclass(frozen=True, slots=True)
+class RunPlan:
+    """How a turn runs: stepped by the workflow, or as one activity (runtime-driven)."""
+
+    run_id: str
+    stepped: bool
+    guard: GuardSettings | None = None
+    max_steps: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalNeeded:
+    prompt: str
+    options: list[str]
+    timeout_s: float
+    on_timeout: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedCall:
+    """A tool call the model asked for. Arguments stay in the journal; only a hash travels."""
+
+    call_id: str
+    name: str
+    args_hash: str
+    retry: RetryMode
+    approval: ApprovalNeeded | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StepRequest:
+    session_id: str
+    run_id: str
+    step: int
+
+
+@dataclass(frozen=True, slots=True)
+class StepResult:
+    calls: list[PlannedCall]
+    # Final: the model answered (stop) or policy ended the run (e.g. budget_exceeded).
+    final: bool
+    stop_reason: str = "stop"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRequest:
+    session_id: str
+    run_id: str
+    call_id: str
+    denied: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalAsk:
+    session_id: str
+    run_id: str
+    call_id: str
+    tool_name: str
+    needed: ApprovalNeeded
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalDecision:
+    session_id: str
+    approval_id: str
+    choice: str
+    timed_out: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class EndRunRequest:
+    session_id: str
+    run_id: str
+    command_id: str
+    stop_reason: str
+    error_class: str | None = None
+    detail: str | None = None
+    # A loop guard trip: the session is closed (failed), not just the run.
+    close_session: bool = False
+    # A tool call that started but whose outcome is unknown (worker lost, or aborted).
+    lost_call_id: str | None = None
+    lost_reason: str = "the worker running this tool was lost"
 
 
 # Session row statuses after which no turn can ever run again.
