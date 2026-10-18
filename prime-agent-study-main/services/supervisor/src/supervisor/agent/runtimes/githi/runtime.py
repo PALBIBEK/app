@@ -53,12 +53,13 @@ class GithiRuntime:
         seams: RuntimeSeams | None = None,
         model: str | None = None,
         provider: str | None = None,
+        session_id: str = "",
     ) -> None:
         del provider  # model-gateway owns provider routing
         self.seams = seams
         self._model = model
         self._stream = EventStream()
-        self._session_id: str | None = None
+        self._session_id: str | None = session_id or None
         self._session_dir: str | None = None
         self._history: list[dict] = []  # Cached from PostgreSQL
         self._busy = False
@@ -76,7 +77,8 @@ class GithiRuntime:
 
     async def start(self, sandbox: Sandbox | None, session_dir: str | None) -> None:
         del sandbox  # Phase 1: requires_sandbox false
-        self._session_id = uuid4().hex
+        # The supervisor's session id; a fresh one only when run standalone.
+        self._session_id = self._session_id or uuid4().hex
         self._session_dir = session_dir
         self._stream.session_id = self._session_id
         self._ensure_tool_provider()

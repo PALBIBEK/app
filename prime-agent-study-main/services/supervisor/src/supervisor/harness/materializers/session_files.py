@@ -131,7 +131,7 @@ def materialize_harness_binds(
 
     # pins.json
     pins_path = yal / "pins.json"
-    _write_json(pins_path, pins.to_json())
+    _write_json(pins_path, pins.to_dict())
     created_files["pins_json"] = str(pins_path)
 
     # sandbox_profile.json

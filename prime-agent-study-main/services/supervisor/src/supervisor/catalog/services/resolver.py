@@ -92,6 +92,13 @@ def resolve_composition(
                 digest=composition_digest,
             )
         kind, name = lookup
+        if composition_id is not None and name != composition_id:
+            # The digest belongs to a different artifact: never silently run it.
+            raise NotOffered(
+                kind=ArtifactKind.COMPOSITION.value,
+                artifact_id=composition_id,
+                digest=composition_digest,
+            )
         comp = catalog.get(ArtifactKind.COMPOSITION, name, composition_digest)
     else:
         assert composition_id is not None

@@ -27,10 +27,10 @@ from supervisor.sandbox.base import Sandbox
 class EchoRuntime:
     """No subprocess, no model, no sandbox, no cost."""
 
-    def __init__(self, *, seams: RuntimeSeams | None = None) -> None:
+    def __init__(self, *, seams: RuntimeSeams | None = None, session_id: str = "") -> None:
         self.seams = seams
         self._stream = EventStream()
-        self._session_id: str | None = None
+        self._session_id: str | None = session_id or None
         self._history: list[dict] = []
         self._busy = False
         self._abort_requested = False
@@ -50,7 +50,8 @@ class EchoRuntime:
     async def start(self, sandbox: Sandbox | None, session_dir: str | None) -> None:
         # Ignores sandbox and session_dir entirely — sandbox-optional is real.
         del sandbox, session_dir
-        self._session_id = uuid4().hex
+        # The supervisor's session id; a fresh one only when run standalone.
+        self._session_id = self._session_id or uuid4().hex
         self._stream.session_id = self._session_id
 
     async def send(self, message: str, *, command_id: str, mode: str = "prompt") -> None:

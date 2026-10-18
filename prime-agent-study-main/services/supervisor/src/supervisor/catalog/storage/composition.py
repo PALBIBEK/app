@@ -24,6 +24,9 @@ from supervisor.catalog.core.types import (
 )
 from supervisor.catalog.storage.converters import kind_of, with_digest, with_status
 
+# Authoring markers meaning "compute the digest on offer" (see catalog/loading/loader.py).
+_UNSET_DIGEST_PREFIXES: tuple[str, ...] = ("sha256:PLACEHOLDER", "sha256:REPLACE")
+
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
 
@@ -78,18 +81,15 @@ class CompositionCatalog:
         kind = kind_of(artifact)
         name = artifact.name
 
-        # Compute digest if needed
+        # A digest is a proof of content: sessions pin by it, so a claimed digest
+        # that does not hash to this body would let anyone rewrite pinned content.
         expected = content_digest(artifact.body_for_digest())
-        if not artifact.digest or artifact.digest in ("", "sha256:PLACEHOLDER"):
+        if not artifact.digest or artifact.digest.startswith(_UNSET_DIGEST_PREFIXES):
             artifact = with_digest(artifact, expected)
+        elif artifact.digest != expected:
+            raise DigestMismatch(expected=artifact.digest, actual=expected)
 
         digest = artifact.digest
-
-        # Verify digest if already set
-        if digest != expected:
-            # Allow placeholder digests during loading
-            if not digest.startswith("sha256:PLACEHOLDER"):
-                pass  # Accept provided digest for flexibility
 
         # Set status to offered
         if artifact.status != ArtifactStatus.OFFERED:
@@ -143,10 +143,12 @@ class CompositionCatalog:
                     break
 
         if artifact is None:
-            raise NotOffered(kind_str, artifact_id, digest)
+            raise NotOffered(kind=kind_str, artifact_id=artifact_id, digest=digest)
 
         if require_offered and artifact.status != ArtifactStatus.OFFERED:
-            raise NotOffered(kind_str, artifact_id, digest)
+            raise NotOffered(
+                kind=kind_str, artifact_id=artifact_id, digest=digest, status=str(artifact.status)
+            )
 
         return artifact
 

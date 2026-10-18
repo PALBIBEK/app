@@ -32,6 +32,7 @@ class HarnessRuntime:
         model: str = "anthropic/claude-sonnet-4",
         rpc_timeout: float = 60.0,
         seams: RuntimeSeams | None = None,
+        session_id: str = "",
     ) -> None:
         self.seams = seams
         self._provider = provider
@@ -43,7 +44,7 @@ class HarnessRuntime:
         self._stream = EventStream()
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
-        self._session_id: str | None = None
+        self._session_id: str | None = session_id or None
         self._history: list[dict] = []
         self._stopped = False
 
@@ -84,8 +85,9 @@ class HarnessRuntime:
         self._stderr_task = asyncio.create_task(self._drain_stderr(), name="harness-stderr")
         await self._rpc(commands.set_auto_retry(False, id=uuid4().hex))
         state = await self.get_state()
-        self._session_id = state.session_id
-        self._stream.session_id = state.session_id
+        # Events carry the supervisor's id; Pi's own id only when run standalone.
+        self._session_id = self._session_id or state.session_id
+        self._stream.session_id = self._session_id
 
     async def send(self, message: str, *, command_id: str, mode: str = "prompt") -> None:
         if mode != "prompt":

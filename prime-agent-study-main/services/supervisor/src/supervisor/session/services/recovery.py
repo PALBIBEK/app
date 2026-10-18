@@ -107,7 +107,7 @@ def pinned_manifest(
     stored = session_row.manifest
     if stored:
         return manifest_from_dict(dict(stored))
-    return catalog.resolve(session_row.harness_version, for_create=False)
+    return catalog.resolve_sync(session_row.harness_version, for_create=False)
 
 
 # =============================================================================

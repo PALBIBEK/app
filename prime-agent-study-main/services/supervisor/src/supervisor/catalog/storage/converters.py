@@ -490,43 +490,13 @@ def memory_profile_to_dict(profile: MemoryProfile) -> dict[str, Any]:
 # =============================================================================
 
 def session_pins_from_dict(data: dict[str, Any]) -> SessionPins:
-    """Parse SessionPins from dict.
-
-    Args:
-        data: Dict with session pins fields
-
-    Returns:
-        Frozen SessionPins instance
-    """
-    return SessionPins(
-        composition_id=data["composition_id"],
-        composition_digest=data["composition_digest"],
-        prompt_pack_digest=data["prompt_pack_digest"],
-        tool_set_digest=data["tool_set_digest"],
-        sandbox_profile_digest=data.get("sandbox_profile_digest"),
-        memory_profile_digest=data.get("memory_profile_digest"),
-        harness_version=data["harness_version"],
-    )
+    """Parse SessionPins from dict (delegates to the dataclass, the single source of truth)."""
+    return SessionPins.from_dict(data)
 
 
 def session_pins_to_dict(pins: SessionPins) -> dict[str, Any]:
-    """Serialize SessionPins to dict.
-
-    Args:
-        pins: SessionPins instance
-
-    Returns:
-        Dict representation
-    """
-    return {
-        "composition_id": pins.composition_id,
-        "composition_digest": pins.composition_digest,
-        "prompt_pack_digest": pins.prompt_pack_digest,
-        "tool_set_digest": pins.tool_set_digest,
-        "sandbox_profile_digest": pins.sandbox_profile_digest,
-        "memory_profile_digest": pins.memory_profile_digest,
-        "harness_version": pins.harness_version,
-    }
+    """Serialize SessionPins to dict (delegates to the dataclass, the single source of truth)."""
+    return pins.to_dict()
 
 
 # =============================================================================

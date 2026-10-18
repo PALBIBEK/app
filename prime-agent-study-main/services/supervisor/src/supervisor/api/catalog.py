@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -18,11 +18,24 @@ router = APIRouter(prefix="/v1/catalog", tags=["catalog"])
 KindPath = Literal["prompt_pack", "tool_set", "composition", "sandbox_profile"]
 
 
+_CATALOG_ERROR_STATUS: Final[dict[str, int]] = {
+    "NOT_OFFERED": 404,
+    "DIGEST_MISSING": 404,
+    "DIGEST_MISMATCH": 422,
+    "INVALID_DIGEST": 422,
+    "INVALID_ARTIFACT": 422,
+    "FLOATING_REF": 422,
+    "COMPOSITION_INCOMPLETE": 422,
+    "CATALOG_PERMISSION_DENIED": 403,
+    "CATALOG_OWNERSHIP_REQUIRED": 403,
+}
+
+
 def _catalog_error(exc: CatalogError) -> HTTPException:
-    status = 409
-    if exc.code == "DIGEST_MISSING":
-        status = 404
-    return HTTPException(status_code=status, detail={"message": str(exc), "code": exc.code})
+    return HTTPException(
+        status_code=_CATALOG_ERROR_STATUS.get(exc.error_code, 409),
+        detail={"message": str(exc), "code": exc.error_code},
+    )
 
 
 @router.post("/{kind}/publish", response_model=CatalogArtifactOut)

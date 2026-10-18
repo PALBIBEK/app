@@ -251,7 +251,7 @@ class SessionManager:
         scope_id: str | None = None,
         principal_id: str | None = None,
     ) -> str:
-        manifest = self._catalog.resolve(harness_version, for_create=True)
+        manifest = await self._catalog.resolve(harness_version, for_create=True)
         check(
             manifest,
             capabilities_for(manifest.runtime),
@@ -287,7 +287,7 @@ class SessionManager:
                     composition=pins.harness_version,
                 )
             seams = bind_runtime_seams(pins, self._composition_catalog)
-            pins_json = pins.to_json()
+            pins_json = pins.to_dict()
 
         profile = None
         memory_profile = None
@@ -350,6 +350,7 @@ class SessionManager:
             runtime_name,
             seams=seams,
             model=manifest.model,
+            session_id=session_id,
         )
         set_mutate = getattr(runtime, "set_on_mutate", None)
         if callable(set_mutate):
@@ -577,7 +578,7 @@ class SessionManager:
         profile = None
         memory_profile = None
         if row.composition_pins and self._composition_catalog is not None:
-            pins = SessionPins.from_json(dict(row.composition_pins))
+            pins = SessionPins.from_dict(dict(row.composition_pins))
             seams = bind_runtime_seams(pins, self._composition_catalog)
             profile = load_pinned_sandbox_profile(pins, self._composition_catalog)
             memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
@@ -596,6 +597,7 @@ class SessionManager:
             row.runtime,
             seams=seams,
             model=harness.model,
+            session_id=session_id,
         )
         session_dir: str | None = None
         if pins is not None and seams is not None:
@@ -945,7 +947,7 @@ class SessionManager:
         """Resume/recovery always use the snapshot stored on the session."""
         if row.manifest:
             return manifest_from_dict(dict(row.manifest))
-        return self._catalog.resolve(row.harness_version, for_create=False)
+        return self._catalog.resolve_sync(row.harness_version, for_create=False)
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:
         old = self._fanout.get(session_id)
@@ -1558,7 +1560,7 @@ class SessionManager:
         if cached is not None:
             return cached
         if row.composition_pins and self._composition_catalog is not None:
-            pins = SessionPins.from_json(dict(row.composition_pins))
+            pins = SessionPins.from_dict(dict(row.composition_pins))
             seams = bind_runtime_seams(pins, self._composition_catalog)
             self._seams[session_id] = seams
             return seams
@@ -1566,7 +1568,7 @@ class SessionManager:
 
     def _sandbox_profile_for_row(self, row: SessionRow):
         if row.composition_pins and self._composition_catalog is not None:
-            pins = SessionPins.from_json(dict(row.composition_pins))
+            pins = SessionPins.from_dict(dict(row.composition_pins))
             return load_pinned_sandbox_profile(pins, self._composition_catalog)
         return None
 

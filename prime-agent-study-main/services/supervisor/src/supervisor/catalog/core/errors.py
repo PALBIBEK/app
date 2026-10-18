@@ -147,9 +147,9 @@ class InvalidDigest(CatalogError):
 # =============================================================================
 
 class NotOffered(CatalogError):
-    """Artifact exists but is not in 'offered' status.
+    """Artifact is absent, or present but not in 'offered' status.
 
-    Cannot use draft or deprecated artifacts for session creation.
+    Cannot use missing, draft or deprecated artifacts for session creation.
     """
 
     error_code = "NOT_OFFERED"
@@ -160,7 +160,7 @@ class NotOffered(CatalogError):
         kind: str,
         artifact_id: str,
         digest: str,
-        status: str,
+        status: str = "missing",
     ) -> None:
         super().__init__(
             f"{kind} id={artifact_id!r} digest={digest!r} status={status!r} (not offered)",
