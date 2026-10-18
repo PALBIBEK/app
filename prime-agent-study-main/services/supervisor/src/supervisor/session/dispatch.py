@@ -7,13 +7,14 @@ HTTP API returns, so every path shares one conversion.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any, Final
 
 from supervisor.seams import CompactionPreparation, SubagentRequest
 from supervisor.session.manager import SessionManager
-from supervisor.temporal.contracts import Op, SessionOp
+from supervisor.temporal.contracts import Op, SessionOp, job_ids
 
 type Result = dict[str, Any] | None
 type Handler = Callable[[SessionManager, SessionOp], Awaitable[Result]]
@@ -83,8 +84,28 @@ async def _fork_child(m: SessionManager, op: SessionOp) -> Result:
 
 
 async def _start_background(m: SessionManager, op: SessionOp) -> Result:
-    handle = await m.start_subagent_background(op.session_id, **_subagent(op))
+    """Validate and journal the job; the session's workflow then runs it durably."""
+    job_id, run_id = job_ids(op.op_id)
+    handle = await m.begin_subagent_background(
+        op.session_id, **_subagent(op), job_id=job_id, run_id=run_id
+    )
     return {"job_id": handle.job_id}
+
+
+async def run_job_inline(m: SessionManager, op: SessionOp) -> None:
+    """In-process mode only (no workflows): run a started job to its end, here and now."""
+    job_id, run_id = job_ids(op.op_id)
+    args = _subagent(op)
+    request, provider = args["request"], args["provider"]
+    ops = await m.subagent_job_ops(op.session_id, request)
+    try:
+        result = await asyncio.to_thread(ops.run_background, provider, request)
+        stop_reason, output = result.status or "ok", result.text or None
+    except Exception as exc:  # noqa: BLE001 - any provider failure is the job's end
+        stop_reason, output = "error", str(exc)
+    await ops.finish_background(
+        job_id=job_id, run_id=run_id, stop_reason=stop_reason, output=output
+    )
 
 
 async def _start_continuable(m: SessionManager, op: SessionOp) -> Result:

@@ -3,7 +3,8 @@
 Usage: python -m tests.support.worker_process <db_url> <blob_dir> <temporal_address> \
            <task_queue> <spec_json>
 
-spec: {"echo_delay_s": float, "scripted_calls": [[tool, args], ...], "slow_tool": [tool, s]}
+spec: {"echo_delay_s": float, "scripted_calls": [[tool, args], ...], "slow_tool": [tool, s],
+       "slow_subagent": s}
 Prints ``READY <home_queue>`` once polling.
 """
 
@@ -21,7 +22,7 @@ from supervisor.db.engine import open_db
 from supervisor.temporal.client import connect
 from supervisor.temporal.worker import session_worker
 from tests.support.platform import boot_platform
-from tests.support.scripted import ScriptedGateway, scripted_model, slow_tool
+from tests.support.scripted import ScriptedGateway, scripted_model, slow_subagent, slow_tool
 
 
 async def main(db_url: str, blob_dir: str, address: str, queue: str, spec: dict) -> None:
@@ -31,6 +32,8 @@ async def main(db_url: str, blob_dir: str, address: str, queue: str, spec: dict)
             patches.enter_context(scripted_model(ScriptedGateway([tuple(c) for c in calls])))
         if slow := spec.get("slow_tool"):
             patches.enter_context(slow_tool(slow[0], float(slow[1])))
+        if (seconds := spec.get("slow_subagent")) is not None:
+            patches.enter_context(slow_subagent(float(seconds)))
         client = await connect(TemporalSettings(address=address, task_queue=queue))
         async with open_db(db_url) as (_, factory):
             state, _ = await boot_platform(factory, Path(blob_dir))

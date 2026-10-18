@@ -58,6 +58,7 @@ from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sand
 from supervisor.seams import (
     build_runtime_seams,
     CompactionPreparation,
+    JobHandle,
     SubagentRequest,
     ToolInvokeContext,
     ToolResult,
@@ -1388,29 +1389,41 @@ class SessionManager:
             trace_id=trace_id,
         )
 
-    async def start_subagent_background(
+    async def begin_subagent_background(
         self,
         session_id: str,
         *,
         tenant_id: str,
         provider: str,
         request: SubagentRequest,
+        job_id: str,
+        run_id: str,
         turn_id: str | None = None,
         trace_id: str | None = None,
-    ):
+    ) -> JobHandle:
+        """Validate and journal a background job; its work runs as its own durable job."""
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
         request.parent_depth = await self._trusted_parent_depth(
             session_id, request.parent_depth
         )
-        ops = self._subagent_ops(session_id, row)
-        return await ops.start_background(
-            provider,
-            request,
-            turn_id=turn_id,
-            trace_id=trace_id,
+        return await self._subagent_ops(session_id, row).begin_background(
+            provider, request, job_id=job_id, run_id=run_id, turn_id=turn_id, trace_id=trace_id
         )
+
+    async def subagent_job_ops(
+        self, session_id: str, request: SubagentRequest
+    ) -> SubagentOps:
+        """The session's subagent transport, on any worker (the session need not be live).
+
+        ``request.parent_depth`` is re-derived from the journal, never trusted.
+        """
+        row = await self._get_session_row(session_id)
+        request.parent_depth = await self._trusted_parent_depth(
+            session_id, request.parent_depth
+        )
+        return self._subagent_ops(session_id, row)
 
     async def start_subagent_continuable(
         self,

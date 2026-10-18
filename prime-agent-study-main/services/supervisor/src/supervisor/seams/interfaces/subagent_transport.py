@@ -127,6 +127,10 @@ class SubagentTransport(Protocol):
     ) -> JobHandle:
         ...
 
+    def check_background(self, provider_name: str, request: SubagentRequest) -> None:
+        """Raise what start_background would, without starting anything."""
+        ...
+
     def start_continuable(
         self, provider_name: str, request: SubagentRequest
     ) -> ChildHandle:
@@ -182,6 +186,12 @@ class SubagentTransportImpl:
     def start_background(
         self, provider_name: str, request: SubagentRequest
     ) -> JobHandle:
+        return self._background_provider(provider_name, request).start_background(request)
+
+    def check_background(self, provider_name: str, request: SubagentRequest) -> None:
+        self._background_provider(provider_name, request)
+
+    def _background_provider(self, provider_name: str, request: SubagentRequest) -> Any:
         provider = self._prepare(provider_name, request)
         start_bg = getattr(provider, "start_background", None)
         if not callable(start_bg):
@@ -194,7 +204,7 @@ class SubagentTransportImpl:
                 "provider does not support capability 'background'",
                 capability=CAP_BACKGROUND,
             )
-        return start_bg(request)
+        return provider
 
     def start_continuable(
         self, provider_name: str, request: SubagentRequest

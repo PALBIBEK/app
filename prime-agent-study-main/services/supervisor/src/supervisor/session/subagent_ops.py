@@ -25,6 +25,32 @@ from supervisor.session.tree import SessionTree, build_session_tree
 DEFAULT_MAX_DEPTH = 3
 
 
+async def journal_background_end(
+    writer: JournalWriter,
+    session_id: str,
+    *,
+    job_id: str,
+    run_id: str,
+    stop_reason: str,
+    output: str | None,
+) -> None:
+    """Journal a background job's end; the first end recorded (done, error, interrupted) wins."""
+    await writer.append(
+        session_id,
+        JobEnd(job_id=job_id, stop_reason=stop_reason, output=output),
+        turn_id=None,
+        trace_id=None,
+        event_key=f"job:{job_id}:end",
+    )
+    await writer.append(
+        session_id,
+        SubagentEnd(run_id=run_id, stop_reason=stop_reason, output=output),
+        turn_id=None,
+        trace_id=None,
+        event_key=f"job:{job_id}:subagent_end",
+    )
+
+
 class SubagentOps:
     """Bridge: SubagentTransport ↔ AGENT_CONTRACT subagent_*/job_* journal events."""
 
@@ -174,30 +200,36 @@ class SubagentOps:
             meta=result.meta,
         )
 
-    async def start_background(
+    async def begin_background(
         self,
         provider_name: str,
         request: SubagentRequest,
         *,
+        job_id: str,
+        run_id: str,
         turn_id: str | None = None,
         trace_id: str | None = None,
-        complete_immediately: bool = False,
     ) -> JobHandle:
-        """Journal JobStart (+ SubagentStart). Optional immediate end for sync fakes."""
+        """Validate and journal a background job's start; nothing runs yet.
+
+        The job itself runs durably elsewhere (``run_background`` in a workflow-owned
+        activity) and is closed by ``finish_background``. Keyed by ``job_id``, so a
+        retried start journals once.
+        """
         self._enforce_depth(request)
-        handle = self._transport.start_background(provider_name, request)
+        self._transport.check_background(provider_name, request)
         await self._writer.append(
             self._parent,
-            JobStart(job_id=handle.job_id, kind="subagent"),
+            JobStart(job_id=job_id, kind="subagent"),
             turn_id=turn_id,
             trace_id=trace_id,
+            event_key=f"job:{job_id}:start",
         )
-        run_id = self._run_id()
         await self._writer.append(
             self._parent,
             SubagentStart(
                 run_id=run_id,
-                child_session_id=handle.job_id,
+                child_session_id=job_id,
                 parent_session_id=self._parent,
                 mode="background",
                 provider=provider_name,
@@ -205,21 +237,25 @@ class SubagentOps:
             ),
             turn_id=turn_id,
             trace_id=trace_id,
+            event_key=f"job:{job_id}:subagent",
         )
-        if complete_immediately:
-            await self._writer.append(
-                self._parent,
-                JobEnd(job_id=handle.job_id, stop_reason="ok", output=None),
-                turn_id=turn_id,
-                trace_id=trace_id,
-            )
-            await self._writer.append(
-                self._parent,
-                SubagentEnd(run_id=run_id, stop_reason="ok", output=None),
-                turn_id=turn_id,
-                trace_id=trace_id,
-            )
-        return handle
+        return JobHandle(job_id=job_id)
+
+    def run_background(self, provider_name: str, request: SubagentRequest) -> SubagentRunResult:
+        """The job's work: the provider's run of the request. Blocking; call in a thread."""
+        return self._transport.start_one_shot(provider_name, request)
+
+    async def finish_background(
+        self, *, job_id: str, run_id: str, stop_reason: str, output: str | None
+    ) -> None:
+        await journal_background_end(
+            self._writer,
+            self._parent,
+            job_id=job_id,
+            run_id=run_id,
+            stop_reason=stop_reason,
+            output=output,
+        )
 
     async def start_continuable(
         self,

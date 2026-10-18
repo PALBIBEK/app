@@ -30,6 +30,7 @@ from supervisor.maintenance import approval_sweeper, idle_reaper
 from supervisor.session import drain_for_deploy
 from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
+from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.workflow import AgentSessionWorkflow
 
 _log = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def session_worker(
     shared = Worker(
         client,
         task_queue=task_queue,
-        workflows=[AgentSessionWorkflow],
+        workflows=[AgentSessionWorkflow, SubagentJobWorkflow],
         activities=activities.all(),
         graceful_shutdown_timeout=GRACEFUL_SHUTDOWN,
     )

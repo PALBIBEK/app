@@ -30,6 +30,9 @@ from supervisor.temporal.contracts import (
     CreateRequest,
     EndRunRequest,
     ForkRequest,
+    JobEndRequest,
+    JobOutcome,
+    JobSpec,
     LostCall,
     OpResult,
     Placement,
@@ -42,6 +45,7 @@ from supervisor.temporal.contracts import (
     TurnRequest,
 )
 from supervisor.temporal.domain import domain_kind, error_details
+from supervisor.temporal.jobs import JobSteps
 from supervisor.temporal.steps import GithiSteps, heartbeating
 
 # How long an aborted turn gets to wind down before the next one may start.
@@ -83,6 +87,7 @@ class SessionActivities:
         self._writer = writer
         self._home = Placement(home_queue)
         self._steps = GithiSteps(manager, reader)
+        self._jobs = JobSteps(manager, reader)
 
     @property
     def home_queue(self) -> str:
@@ -220,6 +225,16 @@ class SessionActivities:
             await self._manager.ensure_ready(op.session_id)
             return OpResult(await heartbeating(run_operation(self._manager, op)))
 
+    @activity.defn(name=Activity.RUN_JOB)
+    async def run_job(self, spec: JobSpec) -> JobOutcome:
+        with _as_application_error():
+            return await self._jobs.run(spec)
+
+    @activity.defn(name=Activity.END_JOB)
+    async def end_job(self, req: JobEndRequest) -> JobOutcome:
+        with _as_application_error():
+            return await self._jobs.end(req)
+
     @activity.defn(name=Activity.CLOSE_LOST_CALL)
     async def close_lost_call(self, lost: LostCall) -> None:
         with _as_application_error():
@@ -242,6 +257,8 @@ class SessionActivities:
             self.end_run,
             self.close_lost_call,
             self.session_op,
+            self.run_job,
+            self.end_job,
         ]
 
     @contextlib.asynccontextmanager

@@ -20,6 +20,7 @@ from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion
+from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
 
 
 @dataclasses.dataclass
@@ -96,6 +97,22 @@ def slow_tool(name: str, seconds: float) -> Iterator[None]:
         yield
     finally:
         CatalogToolProvider.invoke = original  # type: ignore[method-assign]
+
+
+@contextmanager
+def slow_subagent(seconds: float) -> Iterator[None]:
+    """Make every subagent run (any provider) take ``seconds`` (in the caller's thread)."""
+    original = SubagentTransportImpl.start_one_shot
+
+    def start_one_shot(self: SubagentTransportImpl, provider: str, request: Any) -> Any:
+        time.sleep(seconds)
+        return original(self, provider, request)
+
+    SubagentTransportImpl.start_one_shot = start_one_shot  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        SubagentTransportImpl.start_one_shot = original  # type: ignore[method-assign]
 
 
 def githi_variant(catalog: HarnessCatalog, version: str, **changes: Any) -> HarnessManifest:

@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 
 from supervisor.api import deps
 from supervisor.api.workflow_errors import to_http
-from supervisor.session.dispatch import run_operation
+from supervisor.session.dispatch import run_job_inline, run_operation
 from supervisor.temporal.contracts import Op, SessionOp
 from supervisor.temporal.domain import domain_kind, error_details
 from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
@@ -43,8 +43,12 @@ async def run_op(
             return await workflows.op(op)
         except (SessionCommandError, TemporalUnavailable) as exc:
             raise to_http(exc) from exc
+    manager = deps.get_manager(request)
     try:
-        return await run_operation(deps.get_manager(request), op)
+        body = await run_operation(manager, op)
+        if kind is Op.START_BACKGROUND:
+            await run_job_inline(manager, op)  # no workflow to run it durably
+        return body
     except Exception as exc:
         if (http := domain_http_error(exc)) is None:
             raise

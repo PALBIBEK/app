@@ -27,17 +27,20 @@ from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import (
     ActivityError,
     ApplicationError,
     TimeoutType,
+    WorkflowAlreadyStartedError,
     is_cancelled_exception,
 )
 from temporalio.exceptions import TimeoutError as ActivityTimeout
+from temporalio.workflow import ParentClosePolicy
 
 from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
+    JOB_FINISHED_SIGNAL,
     NON_RETRYABLE,
     RETRYABLE_OPS,
     Accepted,
@@ -52,6 +55,7 @@ from supervisor.temporal.contracts import (
     EndRunRequest,
     ForkRequest,
     GuardSettings,
+    JobSpec,
     LostCall,
     Message,
     Op,
@@ -70,7 +74,10 @@ from supervisor.temporal.contracts import (
     ToolRequest,
     TurnOutcome,
     TurnRequest,
+    job_ids,
+    job_workflow_id,
 )
+from supervisor.temporal.job_workflow import SubagentJobWorkflow
 
 with workflow.unsafe.imports_passed_through():
     # Pure, deterministic policy code: the loop guard runs inside the workflow.
@@ -188,6 +195,8 @@ class AgentSessionWorkflow:
             raise
         if self._state.phase is not Phase.FAILED:
             await self._terminate()
+        for job_id in list(self._state.jobs):  # a closed session's jobs stop with it
+            await self._cancel_job(job_id)
         await workflow.wait_condition(workflow.all_handlers_finished)
         return SessionResult(self._session_id, self._state.phase, self._state.turns_completed)
 
@@ -497,9 +506,12 @@ class AgentSessionWorkflow:
         await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
         if self._creation_error is not None:
             raise self._creation_error
+        if op.kind is Op.INTERRUPT_CHILD and op.args.get("child_id") in self._state.jobs:
+            await self._cancel_job(op.args["child_id"])  # a durable background job
+            return OpResult()
         lost = LostCall(self._session_id, None, op.op_id) if op.kind is Op.INVOKE_TOOL else None
         try:
-            return await self._session_activity(
+            result = await self._session_activity(
                 Activity.SESSION_OP,
                 op,
                 OpResult,
@@ -525,6 +537,43 @@ class AgentSessionWorkflow:
                     non_retryable=True,
                 ) from err
             raise _domain_error(err) from err
+        if op.kind is Op.START_BACKGROUND:
+            await self._start_job(op)
+        return result
+
+    # --- background subagent jobs ----------------------------------------------
+
+    async def _start_job(self, op: SessionOp) -> None:
+        """Run the job journalled by ``op`` as its own workflow, owned by this session."""
+        job_id, run_id = job_ids(op.op_id)
+        args = dict(op.args)
+        provider = str(args.pop("provider", "memory"))
+        spec = JobSpec(self._session_id, job_id, run_id, provider, args, self._timing)
+        try:
+            await workflow.start_child_workflow(
+                SubagentJobWorkflow.run,
+                spec,
+                id=job_workflow_id(self._session_id, job_id),
+                task_queue=workflow.info().task_queue,
+                # Outlives this run's continue-as-new; the session cancels it explicitly.
+                parent_close_policy=ParentClosePolicy.ABANDON,
+                # A re-sent start never runs a job twice, even one that already ended.
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            )
+        except WorkflowAlreadyStartedError:
+            return  # the same op, re-sent (e.g. after continue-as-new): already running
+        self._state.jobs.append(job_id)
+
+    async def _cancel_job(self, job_id: str) -> None:
+        with contextlib.suppress(Exception):  # it may have just ended
+            await workflow.get_external_workflow_handle(
+                job_workflow_id(self._session_id, job_id)
+            ).cancel()
+
+    @workflow.signal(name=JOB_FINISHED_SIGNAL)
+    def job_finished(self, job_id: str) -> None:
+        with contextlib.suppress(ValueError):
+            self._state.jobs.remove(job_id)
 
     @session_op.validator
     def _validate_session_op(self, op: SessionOp) -> None:

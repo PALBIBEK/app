@@ -7,6 +7,7 @@ in the journal, never in workflow history (Temporal payloads are capped at 2 MB)
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -16,6 +17,21 @@ WORKFLOW_ID_PREFIX = "session/"
 
 def workflow_id(session_id: str) -> str:
     return f"{WORKFLOW_ID_PREFIX}{session_id}"
+
+
+def job_workflow_id(session_id: str, job_id: str) -> str:
+    """A background subagent job's workflow, named under its session's."""
+    return f"{workflow_id(session_id)}/job/{job_id}"
+
+
+def job_ids(op_id: str) -> tuple[str, str]:
+    """(job_id, run_id) for the START_BACKGROUND op ``op_id``: same op, same job."""
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"yal-job:{op_id}").hex
+    return f"job-{digest[:16]}", f"run-{digest[16:28]}"
+
+
+# Signal a job's workflow sends its session's when it ends.
+JOB_FINISHED_SIGNAL = "job_finished"
 
 
 class Activity(StrEnum):
@@ -40,6 +56,9 @@ class Activity(StrEnum):
     CLOSE_LOST_CALL = "session.close_lost_call"
     # Any other session operation (tool invoke, memory, subagents, workspace).
     SESSION_OP = "session.op"
+    # A background subagent job's work and its end, on any worker.
+    RUN_JOB = "subagent.run_job"
+    END_JOB = "subagent.end_job"
 
 
 class Phase(StrEnum):
@@ -277,6 +296,32 @@ class SessionOp:
 
 
 @dataclass(frozen=True, slots=True)
+class JobSpec:
+    """A background subagent job; ``request`` is the SubagentRequest's fields."""
+
+    session_id: str
+    job_id: str
+    run_id: str
+    provider: str
+    request: dict[str, Any]
+    timing: Timing
+
+
+@dataclass(frozen=True, slots=True)
+class JobOutcome:
+    job_id: str
+    stop_reason: str  # ok | error | interrupted (or the provider's status)
+    output: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class JobEndRequest:
+    spec: JobSpec
+    stop_reason: str
+    output: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OpResult:
     """The operation's HTTP response body; None for operations that answer 204."""
 
@@ -333,6 +378,8 @@ class Carried:
     # even across continue-as-new (Temporal's update-id dedup is per run only).
     seen_commands: list[str] = field(default_factory=list)
     turns_completed: int = 0
+    # Background jobs still running (their workflows are cancelled with the session).
+    jobs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
