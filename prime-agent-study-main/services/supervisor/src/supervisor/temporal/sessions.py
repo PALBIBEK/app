@@ -27,6 +27,7 @@ from supervisor.temporal.contracts import (
     Message,
     SessionInput,
     SessionStatus,
+    Timing,
     workflow_id,
 )
 from supervisor.temporal.workflow import AgentSessionWorkflow
@@ -79,11 +80,13 @@ class SessionWorkflows:
             AgentSessionWorkflow.run, workflow_id(session_id)
         )
 
-    async def create(self, session_id: str, spec: CreateSession) -> SessionStatus:
+    async def create(
+        self, session_id: str, spec: CreateSession, *, timing: Timing | None = None
+    ) -> SessionStatus:
         """Start the session's workflow and wait until the session exists (or why it cannot)."""
         start = WithStartWorkflowOperation(
             AgentSessionWorkflow.run,
-            SessionInput(session_id, create=spec),
+            SessionInput(session_id, create=spec, timing=timing or Timing()),
             id=workflow_id(session_id),
             task_queue=self._task_queue,
             # Re-sending the same create is idempotent; a closed session id is never reused.

@@ -185,6 +185,8 @@ class LoopGuard:
             session_id: Session to reset
         """
         self._stall_count[session_id] = 0
+        # Loops are within a run: identical calls in separate user turns are not one.
+        self._hashes.pop(session_id, None)
 
     def clear(self, session_id: str) -> None:
         """Clear all state for session.

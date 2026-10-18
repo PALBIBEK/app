@@ -121,11 +121,17 @@ class TurnRequest:
     message: Message
 
 
+# Session row statuses after which no turn can ever run again.
+CLOSED_STATUSES = frozenset({"failed", "terminated"})
+
+
 @dataclass(frozen=True, slots=True)
 class TurnOutcome:
     command_id: str
     stop_reason: str
     last_seq: int
+    # The session row's status after the turn: policy may have closed the session.
+    session_status: str = "active"
 
 
 @dataclass(slots=True)
@@ -142,10 +148,24 @@ class Carried:
 
 
 @dataclass(frozen=True, slots=True)
+class Timing:
+    """Durability timeouts; per deployment, and shortened in tests."""
+
+    # How long an activity may wait for the worker holding the session before
+    # another worker adopts it. Long enough to ride out a busy worker.
+    placement_timeout_s: float = 60.0
+    # A turn that stops heartbeating this long is treated as a dead worker.
+    heartbeat_timeout_s: float = 30.0
+    # Upper bound for one turn, including approval waits inside a runtime.
+    turn_timeout_s: float = 24 * 3600.0
+
+
+@dataclass(frozen=True, slots=True)
 class SessionInput:
     session_id: str
     create: CreateSession | None = None
     carried: Carried | None = None
+    timing: Timing = field(default_factory=Timing)
 
 
 @dataclass(frozen=True, slots=True)

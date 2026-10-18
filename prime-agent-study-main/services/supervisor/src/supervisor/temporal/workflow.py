@@ -33,6 +33,7 @@ from temporalio.exceptions import (
 )
 
 from supervisor.temporal.contracts import (
+    CLOSED_STATUSES,
     NON_RETRYABLE,
     Accepted,
     Activity,
@@ -52,8 +53,6 @@ from supervisor.temporal.contracts import (
 
 T = TypeVar("T")
 
-# Long enough to ride out a busy worker, short enough to notice a dead one.
-PLACEMENT_TIMEOUT = timedelta(seconds=60)
 SEEN_COMMANDS_WINDOW = 1_000
 
 _RETRY = RetryPolicy(
@@ -94,6 +93,8 @@ class AgentSessionWorkflow:
     @workflow.init
     def __init__(self, inp: SessionInput) -> None:
         self._session_id = inp.session_id
+        self._timing = inp.timing
+        self._placement_timeout = timedelta(seconds=inp.timing.placement_timeout_s)
         self._state = inp.carried or Carried()
         self._running: Message | None = None
         self._turn: asyncio.Task[TurnOutcome] | None = None
@@ -120,7 +121,7 @@ class AgentSessionWorkflow:
                     await workflow.wait_condition(workflow.all_handlers_finished)
                     if not self._terminate_requested:
                         workflow.continue_as_new(
-                            SessionInput(self._session_id, carried=self._state)
+                            SessionInput(self._session_id, carried=self._state, timing=self._timing)
                         )
         except asyncio.CancelledError:
             # Workflow cancelled from outside (e.g. the Temporal UI): clean up like terminate.
@@ -149,20 +150,24 @@ class AgentSessionWorkflow:
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
         try:
-            await self._on_session_worker(
+            outcome = await self._on_session_worker(
                 lambda queue: workflow.start_activity(
                     Activity.RUN_TURN,
                     TurnRequest(self._session_id, message),
                     result_type=TurnOutcome,
                     task_queue=queue,
-                    schedule_to_start_timeout=PLACEMENT_TIMEOUT,
-                    start_to_close_timeout=timedelta(hours=24),
-                    heartbeat_timeout=timedelta(seconds=30),
+                    schedule_to_start_timeout=self._placement_timeout,
+                    start_to_close_timeout=timedelta(seconds=self._timing.turn_timeout_s),
+                    heartbeat_timeout=timedelta(seconds=self._timing.heartbeat_timeout_s),
                     retry_policy=_TURN_RETRY,
                     cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
                 ),
                 track_turn=True,
             )
+            if outcome.session_status in CLOSED_STATUSES:
+                # Policy closed the session (e.g. a loop guard): nothing more can run.
+                workflow.logger.info("session closed by policy: %s", outcome.stop_reason)
+                self._state.phase = Phase.FAILED
         except (ActivityError, asyncio.CancelledError) as err:
             aborted = is_cancelled_exception(err) and self._abort_requested
             if isinstance(err, asyncio.CancelledError) and not aborted:
@@ -186,7 +191,7 @@ class AgentSessionWorkflow:
                 Activity.TERMINATE,
                 self._session_id,
                 task_queue=queue,
-                schedule_to_start_timeout=PLACEMENT_TIMEOUT,
+                schedule_to_start_timeout=self._placement_timeout,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=_RETRY,
             )
@@ -250,7 +255,7 @@ class AgentSessionWorkflow:
                         Activity.PREPARE_TURN,
                         self._session_id,
                         task_queue=queue,
-                        schedule_to_start_timeout=PLACEMENT_TIMEOUT,
+                        schedule_to_start_timeout=self._placement_timeout,
                         start_to_close_timeout=timedelta(minutes=2),
                         retry_policy=_RETRY,
                     )
@@ -275,7 +280,7 @@ class AgentSessionWorkflow:
                     Activity.RESPOND_APPROVAL,
                     ApprovalRequest(self._session_id, choice),
                     task_queue=queue,
-                    schedule_to_start_timeout=PLACEMENT_TIMEOUT,
+                    schedule_to_start_timeout=self._placement_timeout,
                     start_to_close_timeout=timedelta(minutes=1),
                     retry_policy=_RETRY,
                 )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from decimal import Decimal
 import logging
 from dataclasses import dataclass
@@ -1085,7 +1086,7 @@ class SessionManager:
         except Exception as exc:
             _log.exception("fan-out failed session=%s", session_id)
             try:
-                await self._writer.append(
+                await self._record(
                     session_id,
                     ErrorEvent(
                         error_class=type(exc).__name__,
@@ -1106,7 +1107,7 @@ class SessionManager:
             choice=choice,
             status=approval.status,
         )
-        await self._writer.append(
+        await self._record(
             approval.session_id,
             resolved,
             turn_id=approval.turn_id,
@@ -1164,7 +1165,7 @@ class SessionManager:
         touched: set[str] = set()
         for approval in expired:
             touched.add(approval.session_id)
-            await self._writer.append(
+            await self._record(
                 approval.session_id,
                 ApprovalResolved(
                     approval_id=approval.approval_id,
@@ -1267,13 +1268,13 @@ class SessionManager:
         run_trace = self._trace_for(session_id)
         if denial is not None:
             result = ToolResult(ok=False, error=denial, code="FILE_EFFECTS_DENIED")
-            await self._writer.append(
+            await self._record(
                 session_id,
                 ToolStart(tool_call_id=call_id, tool_name=name, args=dict(arguments)),
                 turn_id=None,
                 trace_id=run_trace,
             )
-            await self._writer.append(
+            await self._record(
                 session_id,
                 ToolEnd(
                     tool_call_id=call_id,
@@ -1307,7 +1308,7 @@ class SessionManager:
                     ),
                 )
                 if parked:
-                    await self._writer.append(
+                    await self._record(
                         session_id,
                         payload,
                         turn_id=None,
@@ -1640,7 +1641,7 @@ class SessionManager:
                 choice=auto_choice,
                 status="responded",
             )
-            await self._writer.append(
+            await self._record(
                 session_id,
                 resolved,
                 turn_id=turn_id,
@@ -1672,6 +1673,25 @@ class SessionManager:
             True,
         )
 
+    async def _record(
+        self, session_id: str, payload: Any, *, turn_id: str | None, trace_id: str | None
+    ) -> int:
+        """Journal an event and publish it live (SSE, turn activities), like the fan-out does."""
+        seq = await self._writer.append(session_id, payload, turn_id=turn_id, trace_id=trace_id)
+        self._live.publish(
+            session_id,
+            Envelope(
+                session_id=session_id,
+                seq=seq,
+                event_id=uuid4().hex,
+                ts_ms=int(time.time() * 1000),
+                turn_id=turn_id,
+                trace_id=trace_id,
+                payload=payload,
+            ),
+        )
+        return seq
+
     async def _policy_abort(
         self,
         session_id: str,
@@ -1685,22 +1705,23 @@ class SessionManager:
             await runtime.abort()
         except Exception:
             _log.exception("abort failed session=%s", session_id)
-        await self._writer.append(
-            session_id,
-            ErrorEvent(error_class=error_class, retryable=False, detail=detail),
-            turn_id=None,
-            trace_id=self._trace_for(session_id, runtime),
-        )
+        # Status first: anyone reacting to the ErrorEvent must already see it closed.
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
             if row is not None:
                 row.status = status
                 await db.commit()
+        await self._record(
+            session_id,
+            ErrorEvent(error_class=error_class, retryable=False, detail=detail),
+            turn_id=None,
+            trace_id=self._trace_for(session_id, runtime),
+        )
         try:
-            await runtime.stop()
+            # Stops the runtime and releases its sandbox; the session row keeps its status.
+            await self._stop_runtime_keep_session(session_id)
         except Exception:
-            pass
-        self._registry.remove(session_id)
+            _log.exception("cleanup after policy abort failed session=%s", session_id)
         self._run_traces.pop(session_id, None)
 
     async def _stop_runtime_keep_session(self, session_id: str) -> None:

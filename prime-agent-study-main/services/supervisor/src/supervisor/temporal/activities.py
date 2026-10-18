@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 from collections.abc import Iterator
 from dataclasses import asdict
+from datetime import timedelta
 from typing import Any
 
 from temporalio import activity
@@ -30,7 +31,6 @@ from supervisor.temporal.contracts import (
     TurnRequest,
 )
 
-HEARTBEAT_EVERY_S = 10.0
 # How long an aborted turn gets to wind down before the next one may start.
 ABORT_GRACE_S = 10.0
 
@@ -134,11 +134,13 @@ class SessionActivities:
                     inbound_trace_id=message.trace_id,
                 )
             )
+            # Heartbeat well inside the timeout so a live worker is never declared dead.
+            heartbeat_every = (activity.info().heartbeat_timeout or timedelta(seconds=30)) / 3
             try:
                 while True:
                     try:
                         item = await asyncio.wait_for(
-                            subscription.queue.get(), timeout=HEARTBEAT_EVERY_S
+                            subscription.queue.get(), timeout=heartbeat_every.total_seconds()
                         )
                     except TimeoutError:
                         activity.heartbeat(tools_started)
@@ -152,7 +154,8 @@ class SessionActivities:
                     if _is_terminal(item.payload):
                         await send
                         stop = getattr(item.payload, "stop_reason", type(item.payload).__name__)
-                        return TurnOutcome(message.command_id, str(stop), item.seq)
+                        status = await self._manager.session_status(session_id) or "terminated"
+                        return TurnOutcome(message.command_id, str(stop), item.seq, status)
             except asyncio.CancelledError:
                 # Abort: stop the runtime's turn and let it wind down before reporting.
                 await self._manager.abort(session_id)

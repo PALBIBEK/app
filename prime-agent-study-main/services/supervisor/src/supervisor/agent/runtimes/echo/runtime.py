@@ -27,6 +27,14 @@ from supervisor.sandbox.base import Sandbox
 class EchoRuntime:
     """No subprocess, no model, no sandbox, no cost."""
 
+    # Test hooks, class-level so a runtime built inside a worker picks them up.
+    # Zero usage by default so budgets never trip.
+    forced_usage: Usage | None = None
+    # Repeat the echo tool call (fresh ids, same args) to trip loop guards.
+    repeat_tool_times: int = 1
+    # Hold each tool open this long (abortable), to exercise mid-turn failures.
+    tool_delay_s: float = 0.0
+
     def __init__(self, *, seams: RuntimeSeams | None = None, session_id: str = "") -> None:
         self.seams = seams
         self._stream = EventStream()
@@ -36,9 +44,6 @@ class EchoRuntime:
         self._abort_requested = False
         self._stopped = False
         self._message_count = 0
-        # Test hooks — zero by default so budgets never trip.
-        self.forced_usage: Usage | None = None
-        self.repeat_tool_times: int = 1
 
     @property
     def session_id(self) -> str | None:
@@ -103,11 +108,19 @@ class EchoRuntime:
                 if isinstance(payload, RunEnd):
                     self._history = list(payload.messages)
                     self._message_count = len(self._history)
+                if isinstance(payload, ToolStart) and self.tool_delay_s > 0:
+                    await self._hold(self.tool_delay_s)
                 # Yield so abort() can interleave mid-sequence.
                 await asyncio.sleep(0)
         finally:
             self._busy = False
             self._abort_requested = False
+
+    async def _hold(self, seconds: float) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + seconds
+        while not self._abort_requested and loop.time() < deadline:
+            await asyncio.sleep(0.05)
 
     async def abort(self) -> None:
         if self._busy:
