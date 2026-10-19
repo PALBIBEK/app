@@ -101,8 +101,20 @@ async def test_every_model_calling_seam_uses_the_pinned_gateway_and_session_key(
 ) -> None:
     state = await boot()
     sid = await _create(state)
-    assert state.keys.minted[-1]["allowed_models"] == ["echo"]  # type: ignore[attr-defined]
     _assert_one_keyed_gateway(state, sid, "token-1")
+
+
+async def test_the_session_key_admits_the_summarizer_its_memory_profile_names(
+    boot: Boot,
+) -> None:
+    """githi-v1 runs on ``echo`` and compacts with ``cheap-summary`` (memory_profiles/default).
+
+    A key limited to ``echo`` alone has the gateway refuse every summary, and
+    compaction then silently falls back to dropping the span behind a notice.
+    """
+    state = await boot()
+    await _create(state)
+    assert state.keys.minted[-1]["allowed_models"] == ["echo", "cheap-summary"]  # type: ignore[attr-defined]
 
 
 async def test_every_session_path_uses_the_runtimes_seams(boot: Boot) -> None:

@@ -17,7 +17,13 @@ _STATUS: Final[dict[str, int]] = {
     "SessionAwaitingApproval": 409,
     "RecoveryBlocked": 409,
     "BudgetExceeded": 429,
+    "BudgetCostExceeded": 429,
+    "BudgetTokensExceeded": 429,
+    # A worker reports the concrete class; each quota a tenant can run out of is a 429.
     "QuotaExceeded": 429,
+    "SessionQuotaExceeded": 429,
+    "SandboxQuotaExceeded": 429,
+    "CostQuotaExceeded": 429,
     "GrantDenied": 403,
     "NotScopeMember": 403,
     "HarnessVersionMismatch": 422,
@@ -57,8 +63,10 @@ def _detail(err: SessionCommandError) -> Any:
                 "tool_call_ids": tools,
                 "message": f"recovery blocked by unpaired tool call(s): {', '.join(tools)}",
             }
-        case "BudgetExceeded":
+        case "BudgetExceeded" | "BudgetCostExceeded" | "BudgetTokensExceeded":
             return {"reason": "budget_exceeded", "message": message}
+        case "QuotaExceeded" | "SessionQuotaExceeded" | "SandboxQuotaExceeded" | "CostQuotaExceeded":
+            return {"reason": "quota_exceeded", "message": message}
         case "HarnessVersionMismatch":
             return {"code": err.details.get("code", err.kind), "message": message}
         case "SessionTerminated" | "SessionClosed":

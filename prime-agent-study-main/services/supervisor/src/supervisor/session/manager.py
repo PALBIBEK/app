@@ -457,7 +457,12 @@ class SessionManager:
         """
         model = session_model(manifest, pins)
         token = self._mint_gateway_key(
-            session_id, tenant_id=tenant_id, principal=principal, model=model, ws_state=ws_state
+            session_id,
+            tenant_id=tenant_id,
+            principal=principal,
+            model=model,
+            summarizer_model=_summarizer_model(memory_profile),
+            ws_state=ws_state,
         )
         seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
         session_dir: str | None = None
@@ -554,8 +559,13 @@ class SessionManager:
         principal: Principal,
         model: str | None,
         ws_state: SessionWorkspaceState,
+        summarizer_model: str | None = None,
     ) -> str | None:
-        """A gateway key for this session, limited to its model; None without a key service.
+        """A gateway key for this session, limited to the models it calls; None without a key service.
+
+        Those are its own model and, when its memory profile compacts with a
+        dedicated summarizer, that model too: a key limited to the session's
+        model alone has the gateway refuse every summary.
 
         Through the routed model gateway the key is limited to the gateway model
         group the session's model is served by (an alias's target, a discovered
@@ -564,12 +574,16 @@ class SessionManager:
         if self._vk_client is None:
             return None
         router = model_router()
-        allowed = (router.target_for(model) if router is not None and model else None) or model
+
+        def group(name: str) -> str:
+            return (router.target_for(name) if router is not None else None) or name
+
+        allowed = list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
         minted = self._vk_client.mint(
             tenant_id=tenant_id,
             session_id=session_id,
             principal_id=principal.id,
-            allowed_models=[allowed] if allowed else [],
+            allowed_models=allowed,
             scope_id=ws_state.scope_id,
         )
         ws_state.virtual_key_token = minted.token
@@ -2002,3 +2016,10 @@ class SessionManager:
                 )
             ).scalars().all()
         return [(int(r.seq), r.event_id) for r in rows]
+
+
+def _summarizer_model(profile: MemoryProfile | None) -> str | None:
+    """The model a session's compaction summarizes with, when it names its own."""
+    if profile is None or not profile.compaction_enabled:
+        return None
+    return profile.summarization_model or None
