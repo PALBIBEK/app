@@ -12,7 +12,14 @@ from supervisor.catalog import CatalogError, ArtifactKind, ToolSet
 from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict
 
-from supervisor.catalog.repository import artifact_summary, persist_deprecate, persist_offer
+from supervisor.catalog.core.errors import CatalogOwnershipRequired, NotOffered
+from supervisor.catalog.repository import (
+    artifact_summary,
+    persist_deprecate,
+    persist_offer,
+    persisted_owner,
+)
+from supervisor.catalog.storage.composition import SYSTEM_OWNER
 
 router = APIRouter(prefix="/v1/catalog", tags=["catalog"])
 
@@ -44,21 +51,26 @@ async def publish_artifact(
     kind: KindPath,
     body: dict[str, Any],
     request: Request,
-    _tenant_id: str = Depends(deps.current_tenant),
+    tenant_id: str = Depends(deps.current_tenant),
 ) -> CatalogArtifactOut:
+    """Publish a version of ``body``; its name belongs to the first tenant that publishes it."""
     catalog: CompositionCatalog = deps.get_composition_catalog(request)
+    factory = deps.get_session_factory(request)
     try:
         artifact = artifact_from_dict(kind, body)
         if isinstance(artifact, ToolSet):
             require_implemented(artifact)  # 422 before it can be pinned
-        offered = catalog.offer(artifact)
+        if (owner := await persisted_owner(factory, kind, artifact.name)) is not None:
+            catalog.claim(kind, artifact.name, owner)  # another replica may have published it
+        offered = catalog.offer(artifact, owner=tenant_id)
     except CatalogError as exc:
         raise _catalog_error(exc) from exc
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    factory = deps.get_session_factory(request)
-    await persist_offer(factory, catalog, kind, offered.name, offered.digest)
+    await persist_offer(
+        factory, catalog, kind, offered.name, offered.digest, created_by=tenant_id
+    )
     summary = artifact_summary(offered)
     return CatalogArtifactOut(kind=kind, **summary)
 
@@ -69,25 +81,37 @@ async def deprecate_artifact(
     artifact_id: str,
     digest: str,
     request: Request,
-    _tenant_id: str = Depends(deps.current_tenant),
+    tenant_id: str = Depends(deps.current_tenant),
 ) -> None:
+    """Only the owning tenant deprecates; shipped artifacts are read-only to tenants."""
     catalog: CompositionCatalog = deps.get_composition_catalog(request)
+    factory = deps.get_session_factory(request)
+    owner = await persisted_owner(factory, kind, artifact_id) or catalog.owner(kind, artifact_id)
     try:
+        if owner not in (None, tenant_id):
+            if owner == SYSTEM_OWNER:
+                raise CatalogOwnershipRequired(
+                    principal_id=tenant_id, artifact_kind=kind, artifact_id=artifact_id, owner_id=owner
+                )
+            raise NotOffered(kind=kind, artifact_id=artifact_id, digest=digest)  # not disclosed
         catalog.deprecate(kind, artifact_id, digest)
     except CatalogError as exc:
         raise _catalog_error(exc) from exc
-    factory = deps.get_session_factory(request)
-    await persist_deprecate(factory, kind, artifact_id, digest)
+    await persist_deprecate(factory, kind, artifact_id, digest, deprecated_by=tenant_id)
 
 
 @router.get("/compositions", response_model=list[CatalogArtifactOut])
 async def list_compositions(
     request: Request,
-    _tenant_id: str = Depends(deps.current_tenant),
+    tenant_id: str = Depends(deps.current_tenant),
     status: str | None = None,
 ) -> list[CatalogArtifactOut]:
     catalog: CompositionCatalog = deps.get_composition_catalog(request)
-    arts = catalog.list_artifacts("composition", status=status)
+    arts = [
+        a
+        for a in catalog.list_artifacts("composition", status=status)
+        if catalog.visible_to("composition", a.name, tenant_id)
+    ]
     return [
         CatalogArtifactOut(kind="composition", **artifact_summary(a)) for a in arts
     ]
@@ -99,10 +123,12 @@ async def get_artifact(
     artifact_id: str,
     digest: str,
     request: Request,
-    _tenant_id: str = Depends(deps.current_tenant),
+    tenant_id: str = Depends(deps.current_tenant),
 ) -> CatalogArtifactOut:
     catalog: CompositionCatalog = deps.get_composition_catalog(request)
     try:
+        if not catalog.visible_to(kind, artifact_id, tenant_id):
+            raise NotOffered(kind=kind, artifact_id=artifact_id, digest=digest)
         art = catalog.get(kind, artifact_id, digest)
     except CatalogError as exc:
         raise _catalog_error(exc) from exc

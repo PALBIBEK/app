@@ -32,7 +32,7 @@ from supervisor.agent.factory import create_runtime
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.catalog.providers.binder import bind_runtime_seams
 from supervisor.catalog import HarnessVersionMismatch
-from supervisor.catalog.services.resolver import resolve_composition
+from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog import MemoryProfile, SessionPins
 from supervisor.catalog.repository import sync_composition
@@ -315,6 +315,7 @@ class SessionManager:
                 composition_id=composition_id,
                 composition_digest=composition_digest,
             )
+            require_tenant_access(self._composition_catalog, pins, tenant_id)
             if pins.harness_version != harness_version:
                 raise HarnessVersionMismatch(
                     requested=harness_version,

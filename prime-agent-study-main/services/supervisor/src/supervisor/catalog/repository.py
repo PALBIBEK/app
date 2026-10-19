@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.catalog.core.types import ArtifactKind, ArtifactStatus
 from supervisor.catalog.storage import CompositionCatalog
+from supervisor.catalog.storage.composition import SYSTEM_OWNER
 from supervisor.catalog.storage.converters import artifact_from_dict, artifact_to_dict
 from supervisor.db.models import CatalogArtifactRow
 
@@ -80,6 +81,28 @@ async def persist_offer(
             row.status = ArtifactStatus.OFFERED.value
             row.deprecated_by = None
             row.deprecated_at = None
+
+
+async def persisted_owner(
+    factory: async_sessionmaker[AsyncSession], kind: ArtifactKind | str, artifact_id: str
+) -> str | None:
+    """The tenant that owns ``artifact_id`` according to the database, if it was ever published.
+
+    Every replica decides ownership from here, so a stale in-memory catalog on
+    one process cannot hand a name to a second tenant.
+    """
+    async with factory() as db:
+        owner = (
+            await db.execute(
+                select(CatalogArtifactRow.owner_id)
+                .where(
+                    CatalogArtifactRow.kind == _kind_str(kind),
+                    CatalogArtifactRow.artifact_id == artifact_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    return owner
 
 
 async def persist_deprecate(
@@ -174,7 +197,9 @@ async def sync_composition(
 
 def _reconcile(catalog: CompositionCatalog, row: CatalogArtifactRow) -> None:
     """Make the cached artifact match its database row (content is digest-addressed)."""
-    offered = catalog.offer(artifact_from_dict(row.kind, dict(row.body)))
+    offered = catalog.offer(
+        artifact_from_dict(row.kind, dict(row.body)), owner=row.owner_id or SYSTEM_OWNER
+    )
     if row.status == ArtifactStatus.DEPRECATED.value:
         catalog.deprecate(row.kind, offered.name, offered.digest)
 

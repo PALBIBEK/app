@@ -33,10 +33,12 @@ from supervisor.catalog.core.types import (
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.protocols import ArtifactStoreProtocol
+    from supervisor.catalog.storage.composition import CompositionCatalog
 
 
 __all__ = [
     "CompositionResolver",
+    "require_tenant_access",
     "resolve_composition",
 ]
 
@@ -521,3 +523,24 @@ class CompositionResolver:
                 digest=digests[-1],
             )
         return art
+
+
+_PINNED_PARTS: tuple[tuple[ArtifactKind, str, str], ...] = (
+    (ArtifactKind.COMPOSITION, "composition_id", "composition_digest"),
+    (ArtifactKind.PROMPT_PACK, "prompt_pack_id", "prompt_pack_digest"),
+    (ArtifactKind.TOOL_SET, "tool_set_id", "tool_set_digest"),
+    (ArtifactKind.SANDBOX_PROFILE, "sandbox_profile_id", "sandbox_profile_digest"),
+    (ArtifactKind.MEMORY_PROFILE, "memory_profile_id", "memory_profile_digest"),
+)
+
+
+def require_tenant_access(catalog: CompositionCatalog, pins: SessionPins, tenant_id: str) -> None:
+    """Every artifact ``pins`` names is shipped or ``tenant_id``'s own — else ``NotOffered``.
+
+    Reported as not offered (404), the same as an artifact that doesn't exist,
+    so one tenant cannot probe for another's artifacts.
+    """
+    for kind, id_field, digest_field in _PINNED_PARTS:
+        name = getattr(pins, id_field)
+        if name and not catalog.visible_to(kind, name, tenant_id):
+            raise NotOffered(kind=kind.value, artifact_id=name, digest=getattr(pins, digest_field) or "")
