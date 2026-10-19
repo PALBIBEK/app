@@ -58,7 +58,7 @@ from supervisor.policy.budget import BudgetExceeded, BudgetTracker
 from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard, call_hash
 from supervisor.policy.quotas import QuotaExceeded, TenantQuotaEnforcer
 from supervisor.policy.sandbox_policy import SandboxPolicy
-from supervisor.sandbox.base import Sandbox, SandboxProvider
+from supervisor.sandbox.base import Sandbox, SandboxProvider, SnapshotUnsupported
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
 from supervisor.tools import SandboxWorkspace
@@ -1134,6 +1134,10 @@ class SessionManager:
             if mode == SessionMode.STICKY and sandbox is not None:
                 try:
                     await sandbox.pause()
+                except SnapshotUnsupported:
+                    # Expected for providers without snapshots (local_process): the
+                    # adopting worker starts the sandbox afresh. Not an error.
+                    _log.info("drain: %s keeps no snapshot session=%s", sandbox.info.provider, sid)
                 except Exception:
                     _log.exception("drain pause failed session=%s", sid)
             if runtime is not None:

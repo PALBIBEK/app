@@ -41,6 +41,9 @@ def fail(message: str) -> NoReturn:
 
 def main() -> None:
     wait_ready()
+    memory = httpx.get("http://127.0.0.1:8092/v1/readyz", timeout=10)
+    if memory.status_code != 200:
+        fail(f"the memory service is not ready: {memory.status_code} {memory.text[:200]}")
     user = User("smoke", "ci")
     r = user.post("/v1/sessions", {"harness_version": "kg-v1"})
     if r.status_code != 201:
