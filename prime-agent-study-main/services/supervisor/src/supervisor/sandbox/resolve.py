@@ -25,7 +25,11 @@ from typing import TYPE_CHECKING
 
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.sandbox.factory import create_sandbox_provider
-from supervisor.sandbox.security.guards import is_placeholder_image_digest
+from supervisor.sandbox.security.guards import (
+    assert_multi_tenant_provider,
+    is_placeholder_image_digest,
+    multi_tenant_strict_enabled,
+)
 
 if TYPE_CHECKING:
     from supervisor.catalog.storage import CompositionCatalog
@@ -227,6 +231,7 @@ def _resolve_provider(
     deploy_provider: SandboxProvider | None,
     client: object | None,
     hydrator: WorkspaceHydrator | None = None,
+    strict: bool = False,
 ) -> SandboxProvider:
     """Instantiate provider from profile, with fallback to deploy provider.
 
@@ -253,7 +258,8 @@ def _resolve_provider(
         # The deploy provider's hydrator, so profile sandboxes can hydrate and sync scopes.
         return create_sandbox_provider(profile_provider, client=client, hydrator=hydrator)
     except ModuleNotFoundError:
-        if deploy_provider is not None:
+        # In strict mode a missing isolating provider is an error, never a quiet downgrade.
+        if deploy_provider is not None and not strict:
             return deploy_provider
         raise
 
@@ -269,6 +275,7 @@ def resolve_sandbox_create(
     profile: SandboxProfile | None = None,
     client: object | None = None,
     hydrator: WorkspaceHydrator | None = None,
+    multi_tenant_strict: bool | None = None,
 ) -> tuple[SandboxProvider | None, str | None]:
     """Resolve sandbox provider and image for sandbox creation.
 
@@ -313,13 +320,17 @@ def resolve_sandbox_create(
         return None, None
 
     # Sandbox required - resolve provider and image
+    strict = multi_tenant_strict_enabled() if multi_tenant_strict is None else multi_tenant_strict
     if profile is not None:
         assert_sandbox_profile_compatible(manifest, profile)
+        # A tenant-published profile picks its provider: strict mode must hold per session.
+        assert_multi_tenant_provider(_provider_name(profile.provider), multi_tenant_strict=strict)
         provider = _resolve_provider(
             profile.provider,
             deploy_provider=deploy_provider,
             client=client,
             hydrator=hydrator,
+            strict=strict,
         )
         # Profile image takes precedence, fall back to manifest
         image = profile.image_digest or manifest.image_digest
@@ -330,6 +341,9 @@ def resolve_sandbox_create(
     # Validate we have what we need
     if provider is None:
         raise MissingProviderError()
+    assert_multi_tenant_provider(
+        _provider_name(getattr(provider, "name", "")), multi_tenant_strict=strict
+    )
 
     if not image:
         raise MissingImageDigest()
@@ -380,3 +394,8 @@ def resolve_sandbox_create_full(
         requires_sandbox=manifest.requires_sandbox,
         profile_used=profile.name if profile else None,
     )
+
+
+def _provider_name(provider: object) -> str:
+    """A provider's name as the strict-mode guard spells it (enum or string)."""
+    return str(getattr(provider, "value", provider))

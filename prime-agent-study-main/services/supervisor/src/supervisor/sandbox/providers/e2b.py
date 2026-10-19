@@ -15,6 +15,8 @@ Operators must allow DNS + model-gateway egress in E2B policy. See
 
 from __future__ import annotations
 
+import importlib.util
+
 import asyncio
 import logging
 from typing import Any
@@ -610,6 +612,9 @@ class E2BProvider(SandboxProvider):
         staging_config: BlobStagingConfig | None = None,
         token_minter: CapabilityTokenMinter | None = None,
     ) -> None:
+        if client is None and importlib.util.find_spec("e2b") is None:
+            # Fail at construction (boot), not at the first user's session.
+            raise ModuleNotFoundError("the e2b provider needs the 'e2b' package (pip install e2b)")
         self._client = client
         self._api_key = api_key
         self._hydrator = hydrator

@@ -16,6 +16,8 @@ Reference:
 
 from __future__ import annotations
 
+import os
+
 import re
 from dataclasses import dataclass
 from enum import StrEnum, auto
@@ -88,6 +90,11 @@ _SAFE_PROVIDERS: Final[frozenset[str]] = frozenset({
     "none",
     "firecracker",  # Future: VM-based isolation
 })
+
+
+def multi_tenant_strict_enabled() -> bool:
+    """``MULTI_TENANT_STRICT``: tenants share this deployment, so sandboxes must isolate them."""
+    return os.environ.get("MULTI_TENANT_STRICT", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def assert_multi_tenant_provider(
