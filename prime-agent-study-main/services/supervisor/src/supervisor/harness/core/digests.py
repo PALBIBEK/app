@@ -1,17 +1,15 @@
 """Content digests for harness manifests.
 
-Provides sha256 digests of canonical JSON for content-addressable
-artifact identification.
-
-Reference: catalog/core/digests.py pattern.
+The hashing itself (canonical JSON, sha256) is the catalog's, so a harness
+and a catalog artifact with the same content always have the same digest.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from typing import Any, Final
+
+from supervisor.catalog.core.digests import canonical_json_bytes, content_digest
 
 __all__ = [
     "DIGEST_PATTERN",
@@ -27,39 +25,6 @@ DIGEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"^sha256:[a-fA-F0-9]{64}$")
 REPOSITORY_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?:[a-zA-Z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
 )
-
-
-def canonical_json_bytes(obj: Any) -> bytes:
-    """Return UTF-8 JSON with sorted keys and no insignificant whitespace.
-
-    This produces a deterministic byte sequence for any JSON-serializable
-    object, suitable for computing content digests.
-
-    Args:
-        obj: JSON-serializable object
-
-    Returns:
-        Canonical UTF-8 encoded JSON bytes
-    """
-    return json.dumps(
-        obj,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-
-def content_digest(obj: Any) -> str:
-    """Return sha256:<hex> digest of canonical UTF-8 JSON body.
-
-    Args:
-        obj: JSON-serializable object
-
-    Returns:
-        Digest string in format sha256:<64 hex chars>
-    """
-    digest = hashlib.sha256(canonical_json_bytes(obj)).hexdigest().lower()
-    return f"sha256:{digest}"
 
 
 def verify_digest(obj: Any, expected: str) -> None:

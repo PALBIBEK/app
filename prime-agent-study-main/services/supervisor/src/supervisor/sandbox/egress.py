@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Final
+
+from supervisor.sandbox.security.env import DROPPED_PROXY_ENV
 
 _log = logging.getLogger(__name__)
 
@@ -31,8 +32,6 @@ __all__ = [
     "EgressPolicyError",
     "ProxyEnvVars",
     "force_through_proxy_env",
-    "inject_proxy_env",
-    "strip_proxy_env",
 ]
 
 
@@ -40,19 +39,7 @@ __all__ = [
 # Constants
 # =============================================================================
 
-# Proxy environment variables that should be stripped from caller
-DROPPED_PROXY_ENV: Final[frozenset[str]] = frozenset({
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "FTP_PROXY",
-    "ftp_proxy",
-})
+# One list of proxy variables, kept with the rest of the sandbox environment rules.
 
 
 # =============================================================================
@@ -143,54 +130,6 @@ class ProxyEnvVars:
 # =============================================================================
 # Functions
 # =============================================================================
-
-
-def strip_proxy_env(env: dict[str, str]) -> dict[str, str]:
-    """Strip caller's proxy environment variables.
-
-    Prevents sandbox from inheriting host proxy settings
-    that could bypass egress controls.
-
-    Args:
-        env: Environment dictionary to filter.
-
-    Returns:
-        Environment with proxy vars removed.
-
-    Example:
-        >>> env = {"PATH": "/usr/bin", "HTTP_PROXY": "http://attacker.com"}
-        >>> clean = strip_proxy_env(env)
-        >>> "HTTP_PROXY" in clean
-        False
-    """
-    return {k: v for k, v in env.items() if k not in DROPPED_PROXY_ENV}
-
-
-def inject_proxy_env(
-    env: dict[str, str],
-    proxy_vars: ProxyEnvVars,
-) -> dict[str, str]:
-    """Inject proxy environment variables.
-
-    Forces traffic through specified proxy.
-
-    Args:
-        env: Base environment dictionary.
-        proxy_vars: Proxy configuration to inject.
-
-    Returns:
-        Environment with proxy vars injected.
-
-    Example:
-        >>> env = {"PATH": "/usr/bin"}
-        >>> proxy = ProxyEnvVars(http_proxy="http://proxy:8080", https_proxy="http://proxy:8080")
-        >>> result = inject_proxy_env(env, proxy)
-        >>> result["HTTP_PROXY"]
-        'http://proxy:8080'
-    """
-    result = strip_proxy_env(env)
-    result.update(proxy_vars.as_dict())
-    return result
 
 
 def force_through_proxy_env(
