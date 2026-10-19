@@ -297,82 +297,101 @@ _FINISH: Mapping[str, StopReason] = {
 
 def call_completions(call: WireCall) -> AssistantTurn:
     url, headers, body = build_request(call)
-    order: list[str | _ToolCall] = []
-    text: list[str] = []
-    thinking: list[str] = []
-    thinking_field: str | None = None
-    by_index: dict[int, _ToolCall] = {}
-    by_id: dict[str, _ToolCall] = {}
-    usage = TokenUsage()
-    stop: StopReason | None = None
-    response_id: str | None = None
+    stream = _CompletionStream()
     for event in stream_events(call, url, headers, body):
-        if not event.data or event.data == "[DONE]":
-            continue
-        chunk = parse_json(event.data, "chat completion")
-        if not isinstance(chunk, dict):
-            continue
-        response_id = response_id or chunk.get("id")
+        if event.data and event.data != "[DONE]":
+            chunk = parse_json(event.data, "chat completion")
+            if isinstance(chunk, dict):
+                stream.feed(chunk)
+    if stream.stop is None:
+        raise ModelCallError("Stream ended without finish_reason")
+    return AssistantTurn(
+        blocks=stream.blocks(),
+        usage=stream.usage,
+        cost=call.spec.pricing.cost(stream.usage),
+        stop_reason=stream.stop,
+        response_id=stream.response_id,
+    )
+
+
+class _CompletionStream:
+    """Folds chat-completion chunks into text, thinking and tool calls, in first-seen order."""
+
+    def __init__(self) -> None:
+        self.order: list[str | _ToolCall] = []
+        self.text: list[str] = []
+        self.thinking: list[str] = []
+        self.thinking_field: str | None = None
+        self.by_index: dict[int, _ToolCall] = {}
+        self.by_id: dict[str, _ToolCall] = {}
+        self.usage = TokenUsage()
+        self.stop: StopReason | None = None
+        self.response_id: str | None = None
+
+    def feed(self, chunk: Mapping[str, Any]) -> None:
+        self.response_id = self.response_id or chunk.get("id")
         if isinstance(chunk.get("usage"), dict):
-            usage = _usage(chunk["usage"])
+            self.usage = _usage(chunk["usage"])
         choices = chunk.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         if not isinstance(choice, dict):
-            continue
+            return
         if not isinstance(chunk.get("usage"), dict) and isinstance(choice.get("usage"), dict):
-            usage = _usage(choice["usage"])
-        reason = choice.get("finish_reason")
-        if reason:
+            self.usage = _usage(choice["usage"])
+        if reason := choice.get("finish_reason"):
             if reason not in _FINISH:
                 raise ModelCallError(f"Provider finish_reason: {reason}")
-            stop = _FINISH[reason]
+            self.stop = _FINISH[reason]
         delta = choice.get("delta") or {}
+        self._text(delta)
+        self._thinking(delta)
+        for raw in delta.get("tool_calls") or []:
+            self._tool_call(raw)
+
+    def _text(self, delta: Mapping[str, Any]) -> None:
         if isinstance(delta.get("content"), str) and delta["content"]:
-            if "text" not in order:
-                order.append("text")
-            text.append(delta["content"])
+            if "text" not in self.order:
+                self.order.append("text")
+            self.text.append(delta["content"])
+
+    def _thinking(self, delta: Mapping[str, Any]) -> None:
         for name in _REASONING_FIELDS:
             value = delta.get(name)
             if isinstance(value, str) and value:
-                if "thinking" not in order:
-                    order.append("thinking")
-                    thinking_field = name
-                thinking.append(value)
-                break
-        for raw in delta.get("tool_calls") or []:
-            index = raw.get("index")
-            current = by_index.get(index) if isinstance(index, int) else None
-            if current is None and raw.get("id"):
-                current = by_id.get(raw["id"])
-            if current is None:
-                current = _ToolCall()
-                order.append(current)
-                if isinstance(index, int):
-                    by_index[index] = current
-            if raw.get("id") and not current.id:
-                current.id = raw["id"]
-                by_id[current.id] = current
-            function = raw.get("function") or {}
-            if function.get("name") and not current.name:
-                current.name = function["name"]
-            current.arguments += function.get("arguments") or ""
-    if stop is None:
-        raise ModelCallError("Stream ended without finish_reason")
-    blocks: list[TextBlock | ThinkingBlock | ToolCallBlock] = []
-    for entry in order:
-        if entry == "text":
-            blocks.append(TextBlock("".join(text)))
-        elif entry == "thinking":
-            blocks.append(ThinkingBlock("".join(thinking), thinking_field))
-        elif isinstance(entry, _ToolCall):
-            blocks.append(ToolCallBlock(entry.id, entry.name, parse_partial_json(entry.arguments)))
-    return AssistantTurn(
-        blocks=tuple(blocks),
-        usage=usage,
-        cost=call.spec.pricing.cost(usage),
-        stop_reason=stop,
-        response_id=response_id,
-    )
+                if "thinking" not in self.order:
+                    self.order.append("thinking")
+                    self.thinking_field = name
+                self.thinking.append(value)
+                return
+
+    def _tool_call(self, raw: Mapping[str, Any]) -> None:
+        index = raw.get("index")
+        current = self.by_index.get(index) if isinstance(index, int) else None
+        if current is None and raw.get("id"):
+            current = self.by_id.get(raw["id"])
+        if current is None:
+            current = _ToolCall()
+            self.order.append(current)
+            if isinstance(index, int):
+                self.by_index[index] = current
+        if raw.get("id") and not current.id:
+            current.id = raw["id"]
+            self.by_id[current.id] = current
+        function = raw.get("function") or {}
+        if function.get("name") and not current.name:
+            current.name = function["name"]
+        current.arguments += function.get("arguments") or ""
+
+    def blocks(self) -> tuple[TextBlock | ThinkingBlock | ToolCallBlock, ...]:
+        out: list[TextBlock | ThinkingBlock | ToolCallBlock] = []
+        for entry in self.order:
+            if entry == "text":
+                out.append(TextBlock("".join(self.text)))
+            elif entry == "thinking":
+                out.append(ThinkingBlock("".join(self.thinking), self.thinking_field))
+            elif isinstance(entry, _ToolCall):
+                out.append(ToolCallBlock(entry.id, entry.name, parse_partial_json(entry.arguments)))
+        return tuple(out)
 
 
 def _usage(raw: Mapping[str, Any]) -> TokenUsage:

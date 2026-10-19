@@ -321,82 +321,15 @@ _STOP: Mapping[str, StopReason] = {
 
 def call_messages(call: WireCall) -> AssistantTurn:
     url, headers, body = build_request(call)
-    blocks: list[_Open] = []
-    usage: dict[str, int] = {}
-    stop: StopReason = "stop"
-    response_id: str | None = None
-    started = finished = False
+    stream = _MessageStream()
     for event in stream_events(call, url, headers, body):
         if event.event == "error":
             raise ModelCallError(event.data, error_type="stream_error")
-        if event.event not in _MESSAGE_EVENTS:
-            continue
-        payload = parse_json(event.data, f"Anthropic {event.event}")
-        kind = payload.get("type")
-        if kind == "message_start":
-            started = True
-            message = payload.get("message") or {}
-            response_id = message.get("id")
-            _merge_usage(usage, message.get("usage") or {})
-        elif kind == "message_stop":
-            finished = True
-        elif kind == "content_block_start":
-            block = payload.get("content_block") or {}
-            index = payload.get("index", len(blocks))
-            if block.get("type") == "text":
-                blocks.append(_Open("text", index, text=block.get("text") or ""))
-            elif block.get("type") == "thinking":
-                blocks.append(_Open("thinking", index, text=block.get("thinking") or ""))
-            elif block.get("type") == "redacted_thinking":
-                blocks.append(
-                    _Open(
-                        "thinking",
-                        index,
-                        text="[Reasoning redacted]",
-                        signature=block.get("data") or "",
-                        redacted=True,
-                    )
-                )
-            elif block.get("type") == "tool_use":
-                blocks.append(
-                    _Open(
-                        "tool",
-                        index,
-                        call_id=block.get("id") or "",
-                        name=block.get("name") or "",
-                        initial_input=block.get("input") or {},
-                    )
-                )
-        elif kind == "content_block_delta":
-            target = next((b for b in blocks if b.index == payload.get("index")), None)
-            delta = payload.get("delta") or {}
-            if target is None:
-                continue
-            match delta.get("type"):
-                case "text_delta" if target.kind == "text":
-                    target.text += delta.get("text", "")
-                case "thinking_delta" if target.kind == "thinking":
-                    target.text += delta.get("thinking", "")
-                case "signature_delta" if target.kind == "thinking":
-                    target.signature += delta.get("signature", "")
-                case "input_json_delta" if target.kind == "tool":
-                    target.partial_json += delta.get("partial_json", "")
-        elif kind == "message_delta":
-            delta = payload.get("delta") or {}
-            reason = delta.get("stop_reason")
-            if reason:
-                if reason in ("refusal", "sensitive"):
-                    details = delta.get("stop_details") or {}
-                    raise ModelCallError(
-                        details.get("explanation") or "The model refused to complete the request",
-                        error_type=reason,
-                    )
-                if reason not in _STOP:
-                    raise ModelCallError(f"Unhandled stop reason: {reason}")
-                stop = _STOP[reason]
-            _merge_usage(usage, payload.get("usage") or {})
-    if started and not finished:
+        if event.event in _MESSAGE_EVENTS:
+            stream.feed(parse_json(event.data, f"Anthropic {event.event}"))
+    if stream.started and not stream.finished:
         raise ModelCallError("Anthropic stream ended before message_stop")
+    usage = stream.usage
     tokens = TokenUsage(
         input=usage.get("input_tokens", 0),
         output=usage.get("output_tokens", 0),
@@ -406,12 +339,97 @@ def call_messages(call: WireCall) -> AssistantTurn:
         reasoning=usage.get("thinking_tokens", 0),
     )
     return AssistantTurn(
-        blocks=tuple(b.block() for b in blocks),
+        blocks=tuple(b.block() for b in stream.blocks),
         usage=tokens,
         cost=call.spec.pricing.cost(tokens),
-        stop_reason=stop,
-        response_id=response_id,
+        stop_reason=stream.stop,
+        response_id=stream.response_id,
     )
+
+
+class _MessageStream:
+    """Folds an Anthropic Messages event stream into content blocks."""
+
+    def __init__(self) -> None:
+        self.blocks: list[_Open] = []
+        self.usage: dict[str, int] = {}
+        self.stop: StopReason = "stop"
+        self.response_id: str | None = None
+        self.started = self.finished = False
+
+    def feed(self, payload: Mapping[str, Any]) -> None:
+        match payload.get("type"):
+            case "message_start":
+                self.started = True
+                message = payload.get("message") or {}
+                self.response_id = message.get("id")
+                _merge_usage(self.usage, message.get("usage") or {})
+            case "message_stop":
+                self.finished = True
+            case "content_block_start":
+                opened = _open_block(
+                    payload.get("content_block") or {}, payload.get("index", len(self.blocks))
+                )
+                if opened is not None:
+                    self.blocks.append(opened)
+            case "content_block_delta":
+                target = next((b for b in self.blocks if b.index == payload.get("index")), None)
+                if target is not None:
+                    _apply_delta(target, payload.get("delta") or {})
+            case "message_delta":
+                delta = payload.get("delta") or {}
+                if reason := delta.get("stop_reason"):
+                    self.stop = _stop_reason(reason, delta)
+                _merge_usage(self.usage, payload.get("usage") or {})
+
+
+def _open_block(block: Mapping[str, Any], index: int) -> _Open | None:
+    match block.get("type"):
+        case "text":
+            return _Open("text", index, text=block.get("text") or "")
+        case "thinking":
+            return _Open("thinking", index, text=block.get("thinking") or "")
+        case "redacted_thinking":
+            return _Open(
+                "thinking",
+                index,
+                text="[Reasoning redacted]",
+                signature=block.get("data") or "",
+                redacted=True,
+            )
+        case "tool_use":
+            return _Open(
+                "tool",
+                index,
+                call_id=block.get("id") or "",
+                name=block.get("name") or "",
+                initial_input=block.get("input") or {},
+            )
+    return None
+
+
+def _apply_delta(target: _Open, delta: Mapping[str, Any]) -> None:
+    match delta.get("type"):
+        case "text_delta" if target.kind == "text":
+            target.text += delta.get("text", "")
+        case "thinking_delta" if target.kind == "thinking":
+            target.text += delta.get("thinking", "")
+        case "signature_delta" if target.kind == "thinking":
+            target.signature += delta.get("signature", "")
+        case "input_json_delta" if target.kind == "tool":
+            target.partial_json += delta.get("partial_json", "")
+
+
+def _stop_reason(reason: str, delta: Mapping[str, Any]) -> StopReason:
+    if reason in ("refusal", "sensitive"):
+        details = delta.get("stop_details") or {}
+        raise ModelCallError(
+            details.get("explanation") or "The model refused to complete the request",
+            error_type=reason,
+        )
+    if reason not in _STOP:
+        raise ModelCallError(f"Unhandled stop reason: {reason}")
+    return _STOP[reason]
 
 
 def _merge_usage(into: dict[str, int], raw: Mapping[str, Any]) -> None:

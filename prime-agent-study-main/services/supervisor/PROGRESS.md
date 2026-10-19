@@ -379,26 +379,110 @@ Earlier:
 - **The gateway's virtual-key store and QM's model-call audit are in-process.**
   One gateway replica, and the audit resets on restart (the journal is the
   durable record of every call).
-- **Two intermittent tests** (see above) need a real fix, not a retry.
+- ~~**Two intermittent tests** need a real fix, not a retry.~~ Fixed at their causes (W2 below).
+
+---
+
+## Hardening to 10/10 (branch `hardening/ten`)
+
+The honest review rated the system 5/10. The plan to reach 10 is in the doc
+"Supervisor Review and 10/10 Plan": ten machine-checked gates, closed by nine
+workstreams (W1 to W9), one commit per item on `hardening/ten`.
+
+### Status
+
+| # | Workstream | Status |
+|---|---|---|
+| W1 | CI that enforces the gates (lint, types, suites on Postgres + Temporal, compose smoke, live e2e) | Done |
+| W2 | The two flaky tests, fixed at their causes | Done |
+| W3 | Security: catalog tenancy, session ownership, approval responder, strict sandboxes, memory-service auth | Done |
+| W4 | Long-term memory that works; compaction defaults that fit any window | Done |
+| W5 | Harness management through the API; publish refuses configs that can never work | Done |
+| W6 | A deployable default: migrations, a runnable bundled harness, the memory service in compose | Done |
+| W7 | Robustness: scope write conflicts, sandbox files on worker loss, loop guard, idempotency, error shapes | Done |
+| W8 | Code health: lint 0, types 0, structure, complexity | In progress |
+| W9 | Re-verify everything, re-measure, final rating | Not started |
+
+### What W7 fixed (all verified on the live stack)
+
+- **F20 (data loss):** a session's sync compared its files with the scope's
+  *current* files, so a session that hydrated earlier overwrote other
+  sessions' writes and deleted files they had created. Sync is now three-way
+  against the base the session started from; a race is a conflict, the
+  sandbox is refreshed from the scope, and the run carries a
+  `WORKSPACE_CONFLICT` event naming the files.
+- **F21 (data loss):** a session without a scope lost its files when its
+  worker died. Resume now adopts the surviving sandbox (local directory or
+  Docker container) instead of starting an empty one.
+- **F32:** the loop guard ends the runaway turn, not the whole session.
+- **F33:** a command id reused with a different message is a 409, not a
+  silent drop.
+- **F16:** refused tool calls have the same result shape as any tool.
+- **F22:** a symlink out of the workspace is `PATH_ESCAPE`, not a crash.
+- **F34:** the event stream honours `?since=`.
+- **Browser token:** no longer in every shell's environment; a sandbox
+  profile must ask for it (`browser_model`).
+- **Compose smoke:** the shipped Docker githi agent (`githi-tools-v1`) had no
+  shell tool, so the smoke test never passed. It now pins
+  `githi-coding-tools`, and a test fails if any shipped composition does not
+  verify at boot.
+
+### What W8 has done so far
+
+- Line endings normalized repo-wide (`.gitattributes`, 185 files were CRLF).
+- About 20,000 lines of dead or duplicated code deleted: an abandoned rewrite
+  of the session layer, a never-wired sandbox pool, a shadow copy of the
+  whole session package, a never-wired async catalog stack, and 128 classes
+  and functions nothing used. Found by an import graph and a symbol scan,
+  each deletion checked by the full suite and the live stages.
+- **A real bug the cleanup exposed:** the API caught session errors from one
+  copy of the error classes while the manager raised another, so on the
+  in-process path those handlers never matched. One hierarchy now, with a test.
+- One copy each of the sandbox proxy rules and the digest hashing.
+- The 2,147-line session manager split into six layered modules (largest 794
+  lines).
+- Every `except Exception` now logs its traceback, is narrowed, or states why
+  it is reported in-band. The logger is `logger` everywhere.
+- The three model transports refactored into small stream accumulators.
+
+### Gates now
+
+| Gate | Start of W8 | Now | Target |
+|---|---|---|---|
+| ruff, supervisor | 767 | 0 | 0 |
+| ruff, model-gateway | 12 | 3 | 0 |
+| ruff, memory | 32 | 12 | 0 |
+| mypy, supervisor | 105 | 73 | 0 |
+| Largest supervisor module | 2,147 lines | 794 | under 1,000 |
+| Functions above complexity 20 | 4 | 0 | 0 |
+| Supervisor tests | 730 passing | 795 passing, 22 skipped without a Postgres URL | all pass |
+| Live e2e stages (local) | 2 failing | all pass except stage 2's Docker check, which passes in CI | all pass |
+| CI jobs | lint-and-types failing | only lint-and-types failing | all green |
+
+The transport refactor that takes ruff and complexity to zero is committed;
+the full suite passes on it (795).
+
+### What is left
+
+**W8 (code health):**
+1. ruff to zero in model-gateway (3) and memory (12).
+2. mypy to zero in the supervisor (73 errors in 31 files; many are real
+   type mismatches, e.g. two `BudgetSpec` types, a `JournalProjector` call
+   with arguments it does not take).
+3. Audit the fixed sleeps in tests and replace them with waits on events.
+4. CI's lint-and-types job green.
+
+**W9 (re-verify):**
+1. Every e2e stage green locally and in CI.
+2. Re-measure every gate; update the plan doc's statuses and this file.
+3. A final honest rating against the ten gates.
+4. Optional: a real-model CI job (needs a `MODEL_E2E_API_KEY` secret).
+5. Stretch: the coding-v1 Pi harness runtime (needs its image pushed to a
+   registry and the external Pi agent). Report honestly if not done.
 
 ---
 
 ## Next step
 
-**Merge the stack, then close the security gaps the live tests found.** In order:
-
-1. Merge PRs #2 to #6, so main carries the six live fixes.
-2. Ownership and audit: tenant ownership on catalog artifacts, owner checks on
-   session routes, the responder on every approval (F10, F29, F30).
-3. Strict-mode sandboxes checked per session; fail boot instead of falling back
-   (F19).
-4. Long-term memory: the memory service's own session id, facts scoped to the
-   user (F27).
-5. Harness management through the API: read bodies, register manifests, list
-   harnesses and tools (F5, F6, F4, F12).
-6. A deployable default: migrations, a real image, the memory service in
-   compose, a served summarizer; then Temporal in the staging compose and
-   Kubernetes manifests (F1, F3, F2, F24).
-7. A real-model pass and a dedicated failure-injection pass.
-
-After that, per the roadmap: the backend, then the frontend.
+Finish W8 (items above), then W9. After that, per the roadmap: the backend,
+then the frontend.

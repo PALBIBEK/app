@@ -263,76 +263,103 @@ _STATUS: Mapping[str, StopReason] = {
 
 def call_responses(call: WireCall) -> AssistantTurn:
     url, headers, body = build_request(call)
-    order: list[_Slot] = []
-    open_slots: dict[int, _Slot] = {}
-    reasoning_by_id: dict[str, _Slot] = {}
-    final: Body | None = None
-    response_id: str | None = None
+    stream = _ResponsesStream()
     for event in stream_events(call, url, headers, body):
-        if not event.data or event.data == "[DONE]":
-            continue
-        payload = parse_json(event.data, "Responses")
-        kind = payload.get("type")
+        if event.data and event.data != "[DONE]":
+            stream.feed(parse_json(event.data, "Responses"))
+    if stream.final is None:
+        raise ModelCallError("OpenAI Responses stream ended before a terminal response event")
+    _attach_encrypted_reasoning(stream.final, stream.reasoning_by_id)
+    return _turn(call, stream.final, stream.order, stream.response_id)
+
+
+class _ResponsesStream:
+    """Folds a Responses event stream into output slots, in output order."""
+
+    _DELTAS: Mapping[str, tuple[str, str]] = {  # event -> (slot kind, slot field)
+        "response.reasoning_summary_text.delta": ("thinking", "text"),
+        "response.reasoning_text.delta": ("thinking", "text"),
+        "response.output_text.delta": ("text", "text"),
+        "response.refusal.delta": ("text", "text"),
+        "response.function_call_arguments.delta": ("tool", "partial_json"),
+    }
+
+    def __init__(self) -> None:
+        self.order: list[_Slot] = []
+        self.open_slots: dict[int, _Slot] = {}
+        self.reasoning_by_id: dict[str, _Slot] = {}
+        self.final: Body | None = None
+        self.response_id: str | None = None
+
+    def feed(self, payload: Mapping[str, Any]) -> None:
+        kind = str(payload.get("type"))
         index = payload.get("output_index")
-        slot = open_slots.get(index) if isinstance(index, int) else None
-        if kind == "response.created":
-            response_id = (payload.get("response") or {}).get("id")
+        slot = self.open_slots.get(index) if isinstance(index, int) else None
+        if kind in self._DELTAS:
+            want, attr = self._DELTAS[kind]
+            if slot is not None and slot.kind == want:
+                setattr(slot, attr, getattr(slot, attr) + payload.get("delta", ""))
+        elif kind == "response.created":
+            self.response_id = (payload.get("response") or {}).get("id")
         elif kind == "response.output_item.added" and isinstance(index, int):
-            created = _slot(payload.get("item") or {})
-            if created is not None:
-                open_slots[index] = created
-                order.append(created)
-        elif kind in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
-            if slot is not None and slot.kind == "thinking":
-                slot.text += payload.get("delta", "")
+            self._open(index, payload.get("item") or {})
         elif kind == "response.reasoning_summary_part.done":
             if slot is not None and slot.kind == "thinking":
                 slot.text += "\n\n"
-        elif kind in ("response.output_text.delta", "response.refusal.delta"):
-            if slot is not None and slot.kind == "text":
-                slot.text += payload.get("delta", "")
-        elif kind == "response.function_call_arguments.delta":
-            if slot is not None and slot.kind == "tool":
-                slot.partial_json += payload.get("delta", "")
         elif kind == "response.function_call_arguments.done":
             if slot is not None and slot.kind == "tool":
                 slot.partial_json = payload.get("arguments", slot.partial_json)
         elif kind == "response.output_item.done" and isinstance(index, int):
-            item = payload.get("item") or {}
-            if slot is None:
-                slot = _slot(item)
-                if slot is None:
-                    continue
-                order.append(slot)
-            _finish(slot, item, reasoning_by_id)
-            open_slots.pop(index, None)
+            self._close(index, slot, payload.get("item") or {})
         elif kind in ("response.completed", "response.incomplete"):
-            final = payload.get("response") or {}
+            self.final = payload.get("response") or {}
         elif kind == "error":
             raise ModelCallError(f"Error Code {payload.get('code')}: {payload.get('message')}")
         elif kind == "response.failed":
-            response = payload.get("response") or {}
-            error = response.get("error") or {}
-            details = response.get("incomplete_details") or {}
-            message = (
-                f"{error.get('code') or 'unknown'}: {error.get('message') or 'no message'}"
-                if error
-                else f"incomplete: {details['reason']}"
-                if details.get("reason")
-                else "Unknown error (no error details in response)"
-            )
-            raise ModelCallError(message)
-    if final is None:
-        raise ModelCallError("OpenAI Responses stream ended before a terminal response event")
+            raise ModelCallError(_failure_message(payload.get("response") or {}))
+
+    def _open(self, index: int, item: Mapping[str, Any]) -> None:
+        created = _slot(item)
+        if created is not None:
+            self.open_slots[index] = created
+            self.order.append(created)
+
+    def _close(self, index: int, slot: _Slot | None, item: Mapping[str, Any]) -> None:
+        if slot is None:
+            slot = _slot(item)
+            if slot is None:
+                return
+            self.order.append(slot)
+        _finish(slot, item, self.reasoning_by_id)
+        self.open_slots.pop(index, None)
+
+
+def _failure_message(response: Mapping[str, Any]) -> str:
+    error = response.get("error") or {}
+    details = response.get("incomplete_details") or {}
+    if error:
+        return f"{error.get('code') or 'unknown'}: {error.get('message') or 'no message'}"
+    if details.get("reason"):
+        return f"incomplete: {details['reason']}"
+    return "Unknown error (no error details in response)"
+
+
+def _attach_encrypted_reasoning(final: Body, reasoning_by_id: Mapping[str, _Slot]) -> None:
+    """The terminal response carries encrypted reasoning the streamed items may lack."""
     for item in final.get("output") or []:
-        if item.get("type") == "reasoning" and item.get("encrypted_content"):
-            target = reasoning_by_id.get(item.get("id"))
-            if target is not None and target.signature:
-                stored = json.loads(target.signature)
-                if not stored.get("encrypted_content"):
-                    target.signature = json.dumps(
-                        {**stored, "encrypted_content": item["encrypted_content"]}
-                    )
+        if item.get("type") != "reasoning" or not item.get("encrypted_content"):
+            continue
+        target = reasoning_by_id.get(item.get("id"))
+        if target is None or not target.signature:
+            continue
+        stored = json.loads(target.signature)
+        if not stored.get("encrypted_content"):
+            target.signature = json.dumps({**stored, "encrypted_content": item["encrypted_content"]})
+
+
+def _turn(
+    call: WireCall, final: Body, order: list[_Slot], response_id: str | None
+) -> AssistantTurn:
     usage = _usage(final.get("usage") or {})
     status = final.get("status")
     if status in ("failed", "cancelled"):
