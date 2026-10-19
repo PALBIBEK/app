@@ -137,7 +137,9 @@ class RouteTable(Mapping[str, Route]):
 
     def with_defaults(self, extra: Mapping[str, Route]) -> RouteTable:
         """Add ``extra`` routes whose ids are not already configured."""
-        return RouteTable({**self._routes, **{k: v for k, v in extra.items() if k not in self._routes}})
+        return RouteTable(
+            {**self._routes, **{k: v for k, v in extra.items() if k not in self._routes}}
+        )
 
     def __getitem__(self, route_id: str) -> Route:
         return self._routes[route_id]

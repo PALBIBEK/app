@@ -1,97 +1,106 @@
 # YAL Model Gateway
 
-Independent OpenAI-compat model access service. Develop and test this package
-**alone** — no supervisor DB, catalog, or harness imports required.
+Independently deployable model access service. It serves the LiteLLM end-user
+contract a QM-style client discovers and calls — model listing and model-group
+metadata, plus chat completions, Anthropic Messages and OpenAI Responses — and
+holds every vendor key. Develop and test this package **alone** — no supervisor
+DB, catalog, or harness imports required. Normative contract:
+[`contracts/model_gateway.md`](../../contracts/model_gateway.md).
 
 ## Config
 
 | Env | Default | Meaning |
 |---|---|---|
-| `MODEL_GATEWAY_TOKEN` | empty | Shared service Bearer. **Required** when `AUTH_REQUIRED=true` or `ENV=production\|staging` (fail-closed). Empty only for local/dev. |
+| `MODEL_GATEWAY_TOKEN` | empty | Shared service key. **Required** when `AUTH_REQUIRED=true` or `ENV=production\|staging` (fail-closed). Empty only for local/dev. |
+| `MODEL_GATEWAY_API_KEY_HEADER` | `Authorization` | Header a caller's key arrives in (e.g. `x-litellm-api-key`); `Authorization` and `x-api-key` are also read. `Bearer ` prefix optional. |
 | `AUTH_REQUIRED` | `false` | Force fail-closed auth even outside prod/staging |
 | `ENV` | empty | `production` / `staging` → auth required |
-| `MODEL_GATEWAY_DEFAULT_ROUTE` | `echo` | Route id when request omits `model` / route header |
-| `MODEL_GATEWAY_ROUTES_JSON` | see below | JSON map `route_id → {provider, upstream_model, …}` |
-| `OPENAI_API_KEY` | empty | Vendor key for `openai` provider (gateway process only; never harness / `NEXT_PUBLIC_*`) |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Upstream OpenAI-compat base |
-| `OPENROUTER_API_KEY` | empty | Vendor key for `openrouter` provider (`githi` route) |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter OpenAI-compat base |
+| `MODEL_GATEWAY_DEFAULT_ROUTE` | `echo` | Route id when a request omits `model` / route header |
+| `MODEL_GATEWAY_ROUTES_JSON` | see below | JSON map `route_id → route` |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | empty / `https://api.openai.com/v1` | `openai` provider (chat completions + Responses) |
+| `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | empty / `https://openrouter.ai/api/v1` | `openrouter` provider (chat completions) |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | empty / `https://api.anthropic.com` | `anthropic` provider (Messages + its OpenAI-compatible chat) |
 | `PORT` | `8090` | Listen port |
 
-Default routes (when `MODEL_GATEWAY_ROUTES_JSON` unset):
+## Routes
+
+A route is one model group: what it calls and the metadata `/model_group/info`
+advertises for it. Unknown fields are rejected; an invalid table fails closed.
 
 ```json
 {
-  "echo": {"provider": "echo", "upstream_model": "echo", "context_window": 200000},
-  "fake": {"provider": "echo", "upstream_model": "fake", "context_window": 200000},
-  "githi": {"provider": "openrouter", "upstream_model": "anthropic/claude-sonnet-4", "context_window": 200000}
+  "claude": {
+    "provider": "anthropic",
+    "upstream_model": "claude-sonnet-5",
+    "context_window": 1000000,
+    "max_output_tokens": 128000,
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 10e-6,
+    "cache_read_input_token_cost": 2e-7,
+    "cache_creation_input_token_cost": 2.5e-6,
+    "supports_vision": true,
+    "supports_reasoning": true,
+    "supports_adaptive_thinking": true,
+    "supported_openai_params": ["max_tokens", "tools", "tool_choice", "reasoning_effort"],
+    "retries": 1,
+    "fallback_route_ids": []
+  }
 }
 ```
 
-`context_window` is the upstream model's limit in tokens. It is optional, but
-set it on every route: the supervisor compacts conversations against it.
+Also: `mode` (`chat` | `embedding`), `providers` (LiteLLM provider labels;
+default `[provider]` — clients pick the wire protocol from them), and
+`supports_function_calling` (default `true`).
 
-**Echo-only + vendor keys:** Staging compose pins an echo-only
-`MODEL_GATEWAY_ROUTES_JSON` so `/v1/readyz` is green in CI. If
-`OPENROUTER_API_KEY` / `OPENAI_API_KEY` is later set, the gateway
-**auto-registers** `githi` / `openai` (see `Settings.routes`). Set
-`MODEL_GATEWAY_DEFAULT_ROUTE=githi` when you want real chat by default.
+Default routes (when `MODEL_GATEWAY_ROUTES_JSON` is unset): `echo`, `fake`
+(echo, priced at 0.0005 USD/token so budgets move) and `githi` (OpenRouter
+`anthropic/claude-sonnet-4`). Each vendor key that is set adds its default
+route when the table lacks it: `githi` (OpenRouter), `gpt-5.5` (OpenAI),
+`claude-sonnet-5` (Anthropic).
 
-## Auth (prod / staging)
-
-- Protected routes require `Authorization: Bearer <MODEL_GATEWAY_TOKEN>` or a
-  live `vk_…` virtual key.
-- Empty token under prod/staging / `AUTH_REQUIRED` → **503** `AUTH_UNCONFIGURED`
-  (and `/v1/readyz` reason `auth`). Compare with constant-time equality.
-- Local/dev may omit the token (auth off) only when not in those profiles.
-
-## Streaming
-
-- `stream: false` — JSON completion (echo, openai, openrouter).
-- `stream: true` — `text/event-stream` for **echo** (synthetic) and for
-  **openai** / **openrouter** (upstream SSE relay; not 501).
-
-## Metering
-
-- Completions normalize `usage` with `prompt_tokens` / `completion_tokens` and
-  supervisor-readable `cost` / `cost_total` (same USD float).
-- Prefer upstream cost; else token pricing estimate. Echo invents a small cost.
-
-## Virtual keys + budget
-
-- `POST /v1/virtual-keys` (service token) mints session `vk_…` with
-  `allowed_models`, `max_budget_usd`, expiry.
-- Chat accepts `Bearer vk_…`; allowlist / expiry / revoke are enforced.
-- **`max_budget_usd` is enforced:** gateway accumulates spend from
-  `usage.cost_total`. When `spent >= max_budget_usd` → **403**
-  `VIRTUAL_KEY_BUDGET_EXCEEDED`.
-
-## Retries / fallback
-
-Route meta may include `retries` (extra attempts on HTTP 429; default 1) and
-`fallback_route_ids` (try alternate route ids after primary failure).
-
-## Semantics
+## API
 
 - `GET /v1/healthz` — liveness
-- `GET /v1/readyz` — routes + providers + non-echo credentials + auth (prod/staging)
-- `GET /v1/routes` — configured routes: id, provider, upstream model, context window (no secrets)
-- `GET /v1/routes/{route_id}` — one route; a virtual key may read only the routes it allows
-- `POST /v1/chat/completions` — OpenAI-compat; `model` field = **route id** (G-2)
-- Optional header `X-YAL-Route-Id` overrides body `model`
-- Auth: when configured, missing/wrong Bearer → **401** / **503**
-- Unknown route → **404** with `{ "error": { "code": "ROUTE_UNKNOWN", … } }`
+- `GET /v1/readyz` — routes valid, providers registered, vendor keys set, auth (prod/staging)
+- `GET /v1/models` — OpenAI model list of the routes the caller may call
+- `GET /model_group/info` — LiteLLM model-group metadata for those routes
+- `GET /v1/routes`, `GET /v1/routes/{id}` — route catalog (id, provider, upstream model, window)
+- `POST /v1/chat/completions` — OpenAI chat completions; `model` = route id
+- `POST /v1/messages` — Anthropic Messages passthrough
+- `POST /v1/responses` — OpenAI Responses passthrough
+- `POST /v1/virtual-keys`, `POST /v1/virtual-keys/revoke` — session keys (service key only)
 
-Providers:
+Inference bodies are relayed with only `model` rewritten, so signed thinking,
+encrypted reasoning and `service_tier` reach the upstream intact. Every wire
+streams (`"stream": true`) in its own SSE format. Header `X-YAL-Route-Id`
+overrides the body's `model`.
 
-- `echo` — deterministic assistant reply (local CI / solo development)
-- `openai` — forward to OpenAI-compat upstream using gateway-held keys
-- `openrouter` — forward to OpenRouter (used by the `githi` route)
+## Providers
+
+| Provider | Wires |
+|---|---|
+| `echo` | all three — deterministic, network-free, and as strict as the vendors about replayed thinking signatures and encrypted reasoning |
+| `openai` | chat completions, Responses |
+| `openrouter` | chat completions |
+| `anthropic` | Messages, chat completions |
+
+Upstream calls retry transient failures (408/409/429/5xx, connection errors,
+timeouts) with backoff honouring `Retry-After`, then fail over to
+`fallback_route_ids`. An upstream 4xx other than 429 is relayed as is.
+
+## Metering and keys
+
+Each call is priced from the upstream's figure, else the route's prices, else
+an estimate, and the price is returned in `x-litellm-response-cost`. Chat
+completions also carry `usage.cost` / `usage.cost_total`. Virtual keys see only
+their `allowed_models`, and spend on every wire (streams included) counts
+toward their budget; an exhausted budget is **429**
+`VIRTUAL_KEY_BUDGET_EXCEEDED`.
 
 ## Staging / local non-echo Test (D5 E1)
 
-Vendor keys (`OPENROUTER_API_KEY` / `OPENAI_API_KEY`) live **only** in the gateway
-container. To make supervisor session pins use `githi` instead of catalog `echo`:
+Vendor keys live **only** in the gateway container. To make supervisor session
+pins use `githi` instead of catalog `echo`:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
@@ -100,18 +109,18 @@ export MODEL_GATEWAY_DEFAULT_ROUTE=githi   # optional; mirror on gateway + super
 docker compose up --build
 ```
 
+To let the supervisor discover this gateway's groups and speak each group's
+native protocol, also set on the supervisor `MODEL_GATEWAY_URL`,
+`MODEL_GATEWAY_API_KEY` and `MODEL_GATEWAY_API_KEY_HEADER`
+([`contracts/model_routing.md`](../../contracts/model_routing.md)).
+
 Do **not** copy vendor keys onto the supervisor service.
 
-## Limits (MVP)
+## Limits
 
-- Not a full LiteLLM product (no billing UI, complex fallback graphs)
-- Does **not** import `supervisor.*`
-
-## Extension points
-
-- Add a provider under `model_gateway/providers/` and register in `factory.py`
-- Point supervisor at this service via `GATEWAY_BASE_URL` + `HttpModelGatewayClient`
-- Swap routes via env without rebuilding consumers
+- Not a full LiteLLM product (no billing UI, protocol translation between
+  wires, or complex fallback graphs); the virtual-key store is in-process.
+- Does **not** import `supervisor.*`.
 
 ## Run alone
 

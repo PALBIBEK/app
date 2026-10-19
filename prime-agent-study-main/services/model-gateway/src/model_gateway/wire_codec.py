@@ -184,11 +184,12 @@ def _chat_events(response: Body) -> Iterator[bytes]:
     if message.get("content"):
         delta["content"] = message["content"]
     if message.get("tool_calls"):
-        delta["tool_calls"] = [
-            {"index": i, **call} for i, call in enumerate(message["tool_calls"])
-        ]
+        delta["tool_calls"] = [{"index": i, **call} for i, call in enumerate(message["tool_calls"])]
     yield encode_sse({**head, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]})
-    final: Body = {**head, "choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]}
+    final: Body = {
+        **head,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}],
+    }
     if "usage" in response:
         final["usage"] = response["usage"]
     yield encode_sse(final)
@@ -212,7 +213,12 @@ def _messages_events(response: Body) -> Iterator[bytes]:
                 ]
             case "tool_use":
                 opened = {**block, "input": {}}
-                deltas = [{"type": "input_json_delta", "partial_json": json.dumps(block.get("input") or {})}]
+                deltas = [
+                    {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block.get("input") or {}),
+                    }
+                ]
             case "text":
                 opened = {"type": "text", "text": ""}
                 deltas = [{"type": "text_delta", "text": block.get("text", "")}]
@@ -250,7 +256,9 @@ def _responses_events(response: Body) -> Iterator[bytes]:
     for index, item in enumerate(response.get("output") or []):
         kind = item.get("type")
         if kind == "message":
-            yield event("response.output_item.added", output_index=index, item={**item, "content": []})
+            yield event(
+                "response.output_item.added", output_index=index, item={**item, "content": []}
+            )
             for part in item.get("content") or []:
                 yield event(
                     "response.output_text.delta",
@@ -260,7 +268,9 @@ def _responses_events(response: Body) -> Iterator[bytes]:
                     delta=part.get("text", ""),
                 )
         elif kind == "reasoning":
-            yield event("response.output_item.added", output_index=index, item={**item, "summary": []})
+            yield event(
+                "response.output_item.added", output_index=index, item={**item, "summary": []}
+            )
             for summary_index, part in enumerate(item.get("summary") or []):
                 yield event(
                     "response.reasoning_summary_text.delta",
@@ -270,7 +280,9 @@ def _responses_events(response: Body) -> Iterator[bytes]:
                     delta=part.get("text", ""),
                 )
         elif kind == "function_call":
-            yield event("response.output_item.added", output_index=index, item={**item, "arguments": ""})
+            yield event(
+                "response.output_item.added", output_index=index, item={**item, "arguments": ""}
+            )
             yield event(
                 "response.function_call_arguments.delta",
                 output_index=index,
@@ -286,5 +298,7 @@ def _responses_events(response: Body) -> Iterator[bytes]:
         else:
             yield event("response.output_item.added", output_index=index, item=item)
         yield event("response.output_item.done", output_index=index, item=item)
-    terminal = "response.completed" if response.get("status") == "completed" else "response.incomplete"
+    terminal = (
+        "response.completed" if response.get("status") == "completed" else "response.incomplete"
+    )
     yield event(terminal, response=response)

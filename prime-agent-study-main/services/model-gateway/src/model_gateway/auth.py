@@ -74,7 +74,9 @@ def require_service_token(request: Request) -> None:
     """Mint/revoke paths: the shared service token only, never a virtual key."""
     token = _settings(request).model_gateway_token
     if not token:
-        raise gateway_error(503, "AUTH_UNCONFIGURED", "MODEL_GATEWAY_TOKEN required to mint virtual keys")
+        raise gateway_error(
+            503, "AUTH_UNCONFIGURED", "MODEL_GATEWAY_TOKEN required to mint virtual keys"
+        )
     got = presented_key(request)
     if got is None or not _matches(got, token):
         raise gateway_error(401, "AUTH_INVALID", "service token required")

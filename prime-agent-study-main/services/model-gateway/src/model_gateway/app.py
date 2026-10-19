@@ -62,7 +62,11 @@ COST_HEADER = "x-litellm-response-cost"
 JSONObject = Annotated[dict[str, Any], JSONBody()]
 """A request body taken verbatim: the gateway relays it, so it never reshapes it."""
 
-_REQUIRED_FIELD: dict[Wire, str] = {Wire.CHAT: "messages", Wire.MESSAGES: "messages", Wire.RESPONSES: "input"}
+_REQUIRED_FIELD: dict[Wire, str] = {
+    Wire.CHAT: "messages",
+    Wire.MESSAGES: "messages",
+    Wire.RESPONSES: "input",
+}
 
 
 class MintVirtualKeyRequest(BaseModel):
@@ -260,10 +264,17 @@ def _resolve_route(request: Request, model: Any, route_header: str | None) -> tu
 
 
 def _transient(exc: UpstreamError) -> bool:
-    return exc.status is None or exc.status == 429 or exc.status >= 500 or isinstance(exc, ProviderUnconfigured)
+    return (
+        exc.status is None
+        or exc.status == 429
+        or exc.status >= 500
+        or isinstance(exc, ProviderUnconfigured)
+    )
 
 
-def _dispatch(request: Request, wire: Wire, body: Body, route_id: str, route: Route) -> tuple[str, Route, Body | SSE]:
+def _dispatch(
+    request: Request, wire: Wire, body: Body, route_id: str, route: Route
+) -> tuple[str, Route, Body | SSE]:
     """Call the route's provider, then each fallback route once, until one answers.
 
     A non-transient upstream rejection (a 4xx other than 429) is the caller's
@@ -288,11 +299,19 @@ def _dispatch(request: Request, wire: Wire, body: Body, route_id: str, route: Ro
                     f"route {rid!r} ({candidate.provider}) does not serve /v1/{wire.value.split('.')[0]}",
                 )
             continue
-        upstream_body = {**body, "model": candidate.upstream_model, "stream": body.get("stream") is True}
+        upstream_body = {
+            **body,
+            "model": candidate.upstream_model,
+            "stream": body.get("stream") is True,
+        }
         if wire is Wire.CHAT and upstream_body["stream"]:
             upstream_body.setdefault("stream_options", {"include_usage": True})
         try:
-            return rid, candidate, provider.call(Call(wire, upstream_body, retries=candidate.retries))
+            return (
+                rid,
+                candidate,
+                provider.call(Call(wire, upstream_body, retries=candidate.retries)),
+            )
         except UpstreamError as exc:
             if not _transient(exc):
                 raise gateway_error(exc.status or 400, "UPSTREAM_REJECTED", str(exc)) from exc
@@ -307,7 +326,9 @@ def _charge(store: VirtualKeyStore, caller: Caller, cost: float) -> None:
         store.add_spend(caller.virtual_key, cost)
 
 
-def _metered(stream: SSE, wire: Wire, route: Route, caller: Caller, store: VirtualKeyStore) -> Iterator[bytes]:
+def _metered(
+    stream: SSE, wire: Wire, route: Route, caller: Caller, store: VirtualKeyStore
+) -> Iterator[bytes]:
     tap = UsageTap(wire)
     try:
         for chunk in stream:
@@ -357,7 +378,11 @@ def _infer(
             }
         )
         if wire is Wire.CHAT:
-            result = {**result, "model": used_id, "usage": normalize_usage(result.get("usage"), cost=cost)}
+            result = {
+                **result,
+                "model": used_id,
+                "usage": normalize_usage(result.get("usage"), cost=cost),
+            }
         return JSONResponse(result, headers={COST_HEADER: f"{cost:.10f}"})
 
 
@@ -379,7 +404,9 @@ def messages(
     traceparent: str | None = Header(default=None),
 ) -> Any:
     """Anthropic Messages passthrough: thinking blocks and their signatures round-trip intact."""
-    return _infer(request, Wire.MESSAGES, body, route_header=x_yal_route_id, traceparent=traceparent)
+    return _infer(
+        request, Wire.MESSAGES, body, route_header=x_yal_route_id, traceparent=traceparent
+    )
 
 
 @app.post("/v1/responses")
@@ -390,4 +417,6 @@ def responses(
     traceparent: str | None = Header(default=None),
 ) -> Any:
     """OpenAI Responses passthrough: encrypted reasoning and ``service_tier`` reach the upstream."""
-    return _infer(request, Wire.RESPONSES, body, route_header=x_yal_route_id, traceparent=traceparent)
+    return _infer(
+        request, Wire.RESPONSES, body, route_header=x_yal_route_id, traceparent=traceparent
+    )

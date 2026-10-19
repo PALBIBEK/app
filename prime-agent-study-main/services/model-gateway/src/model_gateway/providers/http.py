@@ -61,7 +61,9 @@ class HttpUpstream:
                 if attempt + 1 < attempts:
                     self._sleep(attempt, None)
                     continue
-                raise UpstreamError(f"{self.vendor} upstream unreachable: {type(exc).__name__}") from exc
+                raise UpstreamError(
+                    f"{self.vendor} upstream unreachable: {type(exc).__name__}"
+                ) from exc
             if response.is_success:
                 if stream:
                     return _relay(response, client)
@@ -77,7 +79,9 @@ class HttpUpstream:
             if status in _TRANSIENT_STATUS and attempt + 1 < attempts:
                 self._sleep(attempt, response.headers.get("retry-after"))
                 continue
-            raise UpstreamError(f"{self.vendor} upstream returned HTTP {status}: {detail}", status=status)
+            raise UpstreamError(
+                f"{self.vendor} upstream returned HTTP {status}: {detail}", status=status
+            )
         raise AssertionError("unreachable")
 
     def _request(self, client: httpx.Client, path: str, body: Body) -> httpx.Request:

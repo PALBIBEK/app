@@ -5,7 +5,9 @@ same conversation semantics, and it is as strict as the real vendors about the
 state a client must replay:
 
 * the reply is ``echo:<text>`` for the last user turn or tool result;
-* a user turn ``/tool <name> <json-args>`` naming an offered tool produces a tool call;
+* a user turn ``/tool <name> <json-args>`` naming an offered tool produces a tool call,
+  and so does a ``tool_choice`` forcing an offered tool (its arguments: the user
+  turn, when that is a JSON object);
 * Messages requests with thinking enabled get a signed ``thinking`` block, and any
   replayed thinking block whose signature does not verify is rejected (HTTP 400),
   as Anthropic rejects tampered or unsigned thinking;
@@ -59,7 +61,9 @@ def _words(value: Any) -> int:
     if isinstance(value, str):
         return len(value.split())
     if isinstance(value, dict):
-        return sum(_words(v) for k, v in value.items() if k not in ("signature", "encrypted_content"))
+        return sum(
+            _words(v) for k, v in value.items() if k not in ("signature", "encrypted_content")
+        )
     if isinstance(value, list):
         return sum(_words(v) for v in value)
     return 0
@@ -95,11 +99,44 @@ def _tool_call(text: str, offered: set[str]) -> _ToolCall | None:
     return _ToolCall(name=name, arguments=arguments, call_id=f"call_echo_{uuid.uuid4().hex[:12]}")
 
 
-def _reply(last_text: str, *, tool_result: bool, offered: set[str], prompt_tokens: int) -> _Reply:
+def _forced(choice: Any) -> str | None:
+    """The tool a ``tool_choice`` forces, in any wire's spelling."""
+    if not isinstance(choice, dict):
+        return None
+    if isinstance(choice.get("function"), dict):
+        name = choice["function"].get("name")
+    else:
+        name = choice.get("name") if choice.get("type") in ("tool", "function") else None
+    return name if isinstance(name, str) else None
+
+
+def _reply(
+    last_text: str,
+    *,
+    tool_result: bool,
+    offered: set[str],
+    prompt_tokens: int,
+    forced: str | None = None,
+) -> _Reply:
+    if forced is not None and forced in offered:
+        try:
+            arguments = json.loads(last_text)
+        except json.JSONDecodeError:
+            arguments = None
+        call_id = f"call_echo_{uuid.uuid4().hex[:12]}"
+        return _Reply(
+            text=None,
+            tool_call=_ToolCall(forced, arguments if isinstance(arguments, dict) else {}, call_id),
+            prompt_tokens=prompt_tokens,
+        )
     call = None if tool_result else _tool_call(last_text, offered)
     if call is not None:
         return _Reply(text=None, tool_call=call, prompt_tokens=prompt_tokens)
-    return _Reply(text=f"echo:{last_text}" if last_text else "echo:ok", tool_call=None, prompt_tokens=prompt_tokens)
+    return _Reply(
+        text=f"echo:{last_text}" if last_text else "echo:ok",
+        tool_call=None,
+        prompt_tokens=prompt_tokens,
+    )
 
 
 def _reject(message: str) -> UpstreamError:
@@ -114,7 +151,11 @@ class EchoChatProvider:
         return True
 
     def call(self, call: Call) -> Body | SSE:
-        build = {Wire.CHAT: self._chat, Wire.MESSAGES: self._messages, Wire.RESPONSES: self._responses}
+        build = {
+            Wire.CHAT: self._chat,
+            Wire.MESSAGES: self._messages,
+            Wire.RESPONSES: self._responses,
+        }
         response = build[call.wire](call.body)
         return sse_from_response(call.wire, response) if call.stream else response
 
@@ -126,13 +167,16 @@ class EchoChatProvider:
         offered = {
             t["function"]["name"]
             for t in body.get("tools") or []
-            if isinstance(t, dict) and isinstance(t.get("function"), dict) and "name" in t["function"]
+            if isinstance(t, dict)
+            and isinstance(t.get("function"), dict)
+            and "name" in t["function"]
         }
         reply = _reply(
             _text(last.get("content")),
             tool_result=last.get("role") == "tool",
             offered=offered,
             prompt_tokens=_words(messages),
+            forced=_forced(body.get("tool_choice")),
         )
         message: Body = {"role": "assistant", "content": reply.text}
         if reply.tool_call is not None:
@@ -184,12 +228,15 @@ class EchoChatProvider:
         tool_result = isinstance(content, list) and any(
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         )
-        offered = {t["name"] for t in body.get("tools") or [] if isinstance(t, dict) and "name" in t}
+        offered = {
+            t["name"] for t in body.get("tools") or [] if isinstance(t, dict) and "name" in t
+        }
         reply = _reply(
             _text(content),
             tool_result=tool_result,
             offered=offered,
             prompt_tokens=_words(messages) + _words(body.get("system")),
+            forced=_forced(body.get("tool_choice")),
         )
         blocks: list[Body] = []
         thinking = body.get("thinking")
@@ -227,7 +274,9 @@ class EchoChatProvider:
     def _responses(self, body: Body) -> Body:
         raw_input = body.get("input")
         items: list[Any] = (
-            [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) else list(raw_input or [])
+            [{"role": "user", "content": raw_input}]
+            if isinstance(raw_input, str)
+            else list(raw_input or [])
         )
         for item in items:
             if isinstance(item, dict) and item.get("type") == "reasoning":
@@ -247,6 +296,7 @@ class EchoChatProvider:
             tool_result=tool_result,
             offered=offered,
             prompt_tokens=_words(items) + _words(body.get("instructions")),
+            forced=_forced(body.get("tool_choice")),
         )
         output: list[Body] = []
         reasoning = body.get("reasoning")
