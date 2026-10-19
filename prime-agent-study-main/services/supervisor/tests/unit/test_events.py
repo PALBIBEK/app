@@ -12,6 +12,7 @@ import supervisor.agent.events as events_mod
 from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
+    BackgroundResults,
     CompactionEnd,
     CompactionStart,
     Envelope,
@@ -187,6 +188,7 @@ def test_agent_event_union_covers_all_payloads() -> None:
         CompactionStart,
         MemoryInjected,
         MemoryContext,
+        BackgroundResults,
         CompactionEnd,
         MemoryRecall,
     }

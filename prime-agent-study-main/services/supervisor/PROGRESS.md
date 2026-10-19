@@ -231,6 +231,24 @@ imported, because they reference modules that no longer exist.
 - `tests/integration/test_githi_pinned.py` checks each pin end to end against
   a Temporal dev server; every built-in tool is also tested in a sandbox.
 
+### 12. One set of seams per session; the gateway knows each model's window
+- **Seams bound once, on the session's key.** The gateway key used to be
+  attached afterwards, and only to the agent's own gateway: the compaction
+  summarizer and nested-session subagents kept a client without the key, the
+  attached client came from `GATEWAY_BASE_URL` rather than the composition's
+  pinned gateway, and memory/subagent operations used a second, un-keyed copy
+  of the seams. Now the key is minted first and every seam is bound once with
+  it, on the pinned gateway; every session path uses the runtime's seams.
+- **Context window from the gateway.** Gateway routes carry `context_window`
+  (`GET /v1/routes/{route_id}`). The supervisor's gateway client reports it
+  (`ModelCatalog`), and compaction measures against: the memory profile's
+  pinned window, else the gateway's report for the session's model, else
+  200,000.
+- **Background results arrive on their own.** When a background subagent
+  finishes, the next run starts with a `BackgroundResults` event shown to the
+  model ahead of the user's message, once; `subagent_result` stays for asking
+  sooner.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -240,7 +258,7 @@ imported, because they reference modules that no longer exist.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 583 passing, 0 failing, 0 that cannot be imported** (from 228
+- **Test suite: 595 passing, 0 failing, 0 that cannot be imported** (from 228
   passing at the start). Two tests are intermittent and are run separately:
   `test_memory_histories_replay_deterministically` (can time out under full
   suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
@@ -265,12 +283,12 @@ imported, because they reference modules that no longer exist.
 - **Deployment.** The staging compose files and Kubernetes manifests don't
   include Temporal yet. `docker compose` itself hasn't been run in this
   environment (no Docker here).
-- **Context window per model.** Compaction uses the memory profile's
-  `context_window`, or 200,000 tokens when the profile pins none; the gateway
-  does not report a model's real window.
-- **Background results are pulled, not pushed.** A background subagent's
-  outcome reaches the model when it calls `subagent_result`; it is not injected
-  into the next turn on its own.
+- **Gateway routes without a window.** A route configured without
+  `context_window` makes compaction fall back to 200,000 tokens; set it on
+  every route in `MODEL_GATEWAY_ROUTES_JSON`.
+- **Gateway test `test_mg_u6`** expects 502 for the `githi` route without an
+  OpenRouter key; the gateway returns 500 `PROVIDER_MISSING` (provider not
+  registered without a key). Predates this work.
 - **Two intermittent tests** (see above) need a real fix, not a retry.
 
 ---

@@ -4,7 +4,9 @@ A session pins a ``MemoryProfile`` (compaction policy, recall backend), which
 binds to its ``context_memory`` seam. Every stepped turn consults it:
 
 * **Compaction**, between turns. When the carried-over conversation passes the
-  profile's limit, the seam summarises everything but the most recent
+  profile's limit, measured against the model's context window (pinned on the
+  profile, else as the gateway reports it for the session's model), the seam
+  summarises everything but the most recent
   ``keep_recent_tokens`` (whole tool exchanges only), and the compacted
   conversation is journalled on ``CompactionEnd`` as the new checkpoint later
   turns build on.
@@ -25,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
-from supervisor.seams import CompactionPreparation, MemoryInvokeContext
+from supervisor.seams import CompactionPreparation, MemoryInvokeContext, ModelCatalog
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
     extract_previous_summary,
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
 __all__ = ["DEFAULT_CONTEXT_WINDOW", "PinnedContextMemory"]
 
 DEFAULT_CONTEXT_WINDOW: Final = 200_000
-"""Tokens assumed for the model when the memory profile pins no ``context_window``."""
+"""Last resort: neither the memory profile nor the gateway says how much the model holds."""
 
 type Record = Callable[[str, str, str, Any], Awaitable[int]]
 """``(session_id, run_id, key, event)``: journal ``event`` under a run-scoped key."""
@@ -58,11 +60,23 @@ class _Binding:
     profile: MemoryProfile
     memory: ContextMemoryProvider
     context: MemoryInvokeContext
+    gateway: object
+    model: str | None
 
-    @property
-    def limit(self) -> int:
+    async def context_window(self) -> int:
+        """The model's window: pinned on the profile, else reported by the gateway."""
+        if self.profile.context_window:
+            return self.profile.context_window
+        if (
+            isinstance(self.gateway, ModelCatalog)
+            and self.model
+            and (reported := await asyncio.to_thread(self.gateway.context_window, self.model))
+        ):
+            return reported
+        return DEFAULT_CONTEXT_WINDOW
+
+    def limit(self, window: int) -> int:
         """Compact once the conversation needs more than this many tokens."""
-        window = self.profile.context_window or DEFAULT_CONTEXT_WINDOW
         return min(window - self.profile.reserve_tokens, int(window * self.profile.pressure_ratio))
 
 
@@ -75,8 +89,8 @@ class PinnedContextMemory:
     async def _binding(self, session_id: str) -> _Binding | None:
         row = await self._manager._get_session_row(session_id)
         profile = self._manager.memory_profile(row)
-        runtime = self._manager._registry.get(session_id)
-        memory = getattr(getattr(runtime, "seams", None), "context_memory", None)
+        seams = getattr(self._manager._registry.get(session_id), "seams", None)
+        memory = getattr(seams, "context_memory", None)
         if profile is None or memory is None:
             return None
         context = MemoryInvokeContext(
@@ -84,7 +98,13 @@ class PinnedContextMemory:
             tenant_id=row.tenant_id,
             workspace_path=str(session_workspace(session_id)),
         )
-        return _Binding(profile, memory, context)
+        return _Binding(
+            profile,
+            memory,
+            context,
+            gateway=getattr(seams, "model_gateway", None),
+            model=self._manager.session_model(row),
+        )
 
     # --- compaction ----------------------------------------------------------------
 
@@ -96,7 +116,8 @@ class PinnedContextMemory:
         if binding is None or not binding.profile.compaction_enabled:
             return
         tokens = binding.memory.estimate_tokens(prior)
-        if tokens <= binding.limit:
+        window = await binding.context_window()
+        if tokens <= binding.limit(window):
             return
         tail = _recent(prior, binding.profile.keep_recent_tokens, binding.memory)
         head = prior[: len(prior) - len(tail)]
@@ -120,7 +141,7 @@ class PinnedContextMemory:
             messages_to_summarize=head,
             tokens_before=tokens,
             previous_summary=extract_previous_summary(prior),
-            context_window=binding.profile.context_window or DEFAULT_CONTEXT_WINDOW,
+            context_window=window,
             reserve_tokens=binding.profile.reserve_tokens,
         )
         end = await self._summarise(compaction_id, binding, preparation, tail)

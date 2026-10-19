@@ -8,6 +8,10 @@ composition binds a subagent transport (ACP, nested session, …):
   the child runs as the session's durable ``SubagentJob`` workflow instead.
 * ``subagent_result`` reads a background child's outcome from the journal.
 
+A background child that finishes is also announced without being asked: the
+next run starts with a ``BackgroundResults`` event listing every finished job
+the model has not yet seen, shown ahead of that run's user message.
+
 Depth, background permission and provider all come from what the session
 pinned; nothing here is chosen by the model beyond the task itself.
 """
@@ -21,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import ValidationError
 from temporalio import activity
 
-from supervisor.agent.events import JobEnd, JobStart
+from supervisor.agent.events import BackgroundResults, JobEnd, JobStart, ToolEnd
 from supervisor.seams import SubagentRequest
 from supervisor.temporal.contracts import (
     START_JOB_SIGNAL,
@@ -37,7 +41,14 @@ if TYPE_CHECKING:
     from supervisor.journal.reader import JournalReader
     from supervisor.session import SessionManager
 
-__all__ = ["SUBAGENT", "SUBAGENT_RESULT", "SUBAGENT_TOOLS", "SubagentTools"]
+__all__ = [
+    "SUBAGENT",
+    "SUBAGENT_RESULT",
+    "SUBAGENT_TOOLS",
+    "SubagentTools",
+    "announcement",
+    "render",
+]
 
 SUBAGENT: Final = "subagent"
 SUBAGENT_RESULT: Final = "subagent_result"
@@ -161,6 +172,29 @@ class SubagentTools:
         await handle.signal(START_JOB_SIGNAL, StartJob(op=op, provider=provider))
         return Outcome({"job_id": job_id, "status": "started"})
 
+    async def unannounced(self, session_id: str) -> list[dict[str, Any]]:
+        """Finished background subagents the model has neither been told about nor asked for."""
+        jobs: list[str] = []
+        ended: dict[str, JobEnd] = {}
+        announced: set[str] = set()
+        for envelope in await self._reader.read(session_id):
+            match envelope.payload:
+                case JobStart(job_id=job_id, kind="subagent"):
+                    jobs.append(job_id)
+                case JobEnd(job_id=job_id) as end:
+                    ended[job_id] = end
+                case BackgroundResults(results=results):
+                    announced.update(str(r["job_id"]) for r in results)
+                case ToolEnd(tool_name=name, result=result) if name == SUBAGENT_RESULT:
+                    payload = (result or {}).get("payload") or {}
+                    if payload.get("status") not in (None, "running"):
+                        announced.add(str(payload.get("job_id")))
+        return [
+            {"job_id": job_id, "status": ended[job_id].stop_reason, "text": ended[job_id].output}
+            for job_id in jobs
+            if job_id in ended and job_id not in announced
+        ]
+
     async def _result(self, session_id: str, args: SubagentResultArgs) -> Outcome:
         started = ended = None
         for envelope in await self._reader.read(session_id):
@@ -202,3 +236,12 @@ def render(outcome: Outcome) -> dict[str, Any]:
         "error": error,
         "code": outcome.payload.get("code") if outcome.is_error else None,
     }
+
+
+def announcement(event: BackgroundResults) -> str:
+    """How finished background subagents are put to the model."""
+    lines = ["Background subagents you started have finished:"]
+    for result in event.results:
+        text = (result.get("text") or "").strip() or "(no output)"
+        lines.append(f"- {result['job_id']} ({result['status']}): {text}")
+    return "\n".join(lines)

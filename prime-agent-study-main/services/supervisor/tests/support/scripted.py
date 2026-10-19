@@ -39,6 +39,8 @@ class ScriptedGateway:
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
     sensitivity: str = "ordinary"
+    # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
+    window: int | None = None
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
@@ -84,6 +86,9 @@ class ScriptedGateway:
         with self._lock:
             self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
         return answer
+
+    def context_window(self, model: str) -> int | None:
+        return self.window
 
     def stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:  # pragma: no cover
         raise NotImplementedError

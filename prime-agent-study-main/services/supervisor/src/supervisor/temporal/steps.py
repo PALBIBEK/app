@@ -22,6 +22,7 @@ from temporalio import activity
 from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
+    BackgroundResults,
     ErrorEvent,
     MemoryInjected,
     MemoryRecall,
@@ -70,6 +71,7 @@ from supervisor.temporal.subagent_tools import (
     SUBAGENT_RESULT,
     SUBAGENT_TOOLS,
     SubagentTools,
+    announcement,
     render,
 )
 
@@ -98,19 +100,21 @@ async def heartbeating[T](work: Awaitable[T]) -> T:
 def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, Any]]:
     """The run's messages, rebuilt from its journalled events on top of earlier history.
 
-    Memory shown for the run (notebook facts, and whatever the pinned recall backend
-    found) comes right before the run's user message, so it is part of the history
+    What the run shows the model besides its own messages (notebook facts, what the
+    pinned recall backend found, background subagents that finished) comes right
+    before the run's user message, so it is part of the history
     later runs carry (what the next run's delta assumes is held).
     """
     messages = list(prior)
     user_at: int | None = None
     for envelope in run:
         event = envelope.payload
-        if isinstance(event, (MemoryInjected, MemoryRecall)):
-            if event.text:
+        if isinstance(event, (MemoryInjected, MemoryRecall, BackgroundResults)):
+            shown = announcement(event) if isinstance(event, BackgroundResults) else event.text
+            if shown:
                 at = len(messages) if user_at is None else user_at
                 messages.insert(
-                    at, {"role": "system", "content": [{"type": "text", "text": event.text}]}
+                    at, {"role": "system", "content": [{"type": "text", "text": shown}]}
                 )
             continue
         if isinstance(event, MessageEnd) and event.role == "user" and user_at is None:
@@ -204,6 +208,7 @@ class GithiSteps:
         await heartbeating(
             self._pinned.compact(session_id, run_id, await self._memory.prior_history(session_id))
         )
+        await self._announce_background(session_id, run_id)
         guards = (await self._manifest(session_id)).guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
@@ -217,6 +222,13 @@ class GithiSteps:
             max_steps=MAX_TOOL_ITERATIONS,
             capture=await self._capture_plan(session_id),
         )
+
+    async def _announce_background(self, session_id: str, run_id: str) -> None:
+        """Tell the model, once, about background subagents that finished since it last ran."""
+        if await self._keyed(session_id, run_id, "background") is not None:
+            return
+        if results := await self._subagents.unannounced(session_id):
+            await self._record(session_id, run_id, "background", BackgroundResults(run_id, results))
 
     async def _capture_plan(self, session_id: str) -> CaptureConfig | None:
         """Automatic capture after this turn (QM per-turn strategy), if the session has it."""
@@ -269,9 +281,7 @@ class GithiSteps:
                 await self._memory.recall(sid, run_id, _user_text(run), self._record)
                 await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
-            chat = loop.messages_for_model(
-                conversation(await self._memory.prior_history(sid), run)
-            )
+            chat = loop.messages_for_model(conversation(await self._memory.prior_history(sid), run))
             schemas = await self._tool_schemas(sid, loop)
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             completion = await heartbeating(

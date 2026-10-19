@@ -255,6 +255,20 @@ class MemoryContext:
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
+@dataclass(frozen=True)
+class BackgroundResults:
+    """Background subagents that finished since the model last heard about them.
+
+    Recorded at the start of the next run and shown to the model ahead of that
+    run's user message, so a background job's outcome reaches the agent without
+    it having to ask. ``results``: ``{job_id, status, text}`` per finished job.
+    """
+
+    run_id: str
+    results: list[dict[str, Any]] = field(default_factory=list)
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
 # ── Meta Events ────────────────────────────────────────────────────────────────
 
 
@@ -282,6 +296,7 @@ AgentEvent = Union[
     ApprovalRequired, ApprovalResolved,
     SubagentStart, SubagentEnd, JobStart, JobEnd,
     CompactionStart, CompactionEnd, MemoryRecall, MemoryInjected, MemoryContext,
+    BackgroundResults,
     Settled, ErrorEvent,
 ]
 

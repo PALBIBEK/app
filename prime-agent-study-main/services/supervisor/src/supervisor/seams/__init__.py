@@ -32,7 +32,7 @@ from supervisor.seams.interfaces.context_memory import (
     MemoryInvokeContext,
     RecallBlock,
 )
-from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
+from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
 from supervisor.seams.interfaces.subagent_transport import (
     NamedProviderRegistry,
@@ -98,6 +98,7 @@ __all__ = [
     "CompactionResult",
     "ContextMemoryProvider",
     "MemoryInvokeContext",
+    "ModelCatalog",
     "ModelGatewayClient",
     "NamedProviderRegistry",
     "PromptAssembler",

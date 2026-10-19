@@ -57,6 +57,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "MemoryRecall": "search_memory",
     "MemoryInjected": "event_on_turn",
     "MemoryContext": "event_on_turn",
+    "BackgroundResults": "event_on_turn",
     "SubagentStart": "nested_invoke",
     "SubagentEnd": "close_nested",
     "JobStart": "platform_span",

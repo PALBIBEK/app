@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from decimal import Decimal
 import logging
@@ -70,7 +71,6 @@ from supervisor.seams.services import (
     AuthzService,
     GrantStore,
     Principal,
-    attach_minted_gateway,
     SessionWorkspaceService,
     SessionWorkspaceState,
     WorkspaceConflictError,
@@ -291,7 +291,6 @@ class SessionManager:
             principal=principal if scope_id else None,
         )
 
-        seams: RuntimeSeams | None = None
         pins_json: dict[str, str] | None = None
         pins: SessionPins | None = None
         if composition_id is not None or composition_digest is not None:
@@ -309,7 +308,6 @@ class SessionManager:
                     requested=harness_version,
                     composition=pins.harness_version,
                 )
-            seams = bind_runtime_seams(pins, self._composition_catalog)
             pins_json = pins.to_dict()
 
         profile = None
@@ -349,7 +347,6 @@ class SessionManager:
             runtime_name=runtime_name,
             manifest=manifest,
             pins=pins,
-            seams=seams,
             sandbox=sandbox,
             sandbox_profile=profile,
             memory_profile=memory_profile,
@@ -434,7 +431,6 @@ class SessionManager:
         runtime_name: str,
         manifest: HarnessManifest,
         pins: SessionPins | None,
-        seams: RuntimeSeams | None,
         sandbox: Sandbox | None,
         sandbox_profile: Any | None,
         memory_profile: Any | None,
@@ -444,10 +440,15 @@ class SessionManager:
     ) -> Any:
         """Build and start a session's runtime from what it pinned (create and resume alike).
 
-        Everything the runtime uses comes from here: its bound seams (with the
-        session's gateway key), its pinned model, its sandbox, and the hook that
-        marks the workspace dirty when a tool changes it.
+        Everything the runtime uses comes from here: its pinned model, its seams
+        (bound once, every model-calling seam on the session's gateway key), its
+        sandbox, and the hook that marks the workspace dirty when a tool changes it.
         """
+        model = session_model(manifest, pins)
+        token = self._mint_gateway_key(
+            session_id, tenant_id=tenant_id, principal=principal, model=model, ws_state=ws_state
+        )
+        seams = self._bind_seams(pins, gateway_token=token)
         session_dir: str | None = None
         if pins is not None and seams is not None:
             ws = session_workspace(session_id)
@@ -461,17 +462,8 @@ class SessionManager:
                 tenant_id=tenant_id,
             )
             session_dir = str(ws)
+        if seams is not None:
             self._seams[session_id] = seams
-        model = session_model(manifest, pins)
-        seams = await self._maybe_attach_virtual_key(
-            seams,
-            session_id=session_id,
-            tenant_id=tenant_id,
-            principal=principal,
-            scope_id=ws_state.scope_id,
-            model=model,
-            ws_state=ws_state,
-        )
         runtime = create_runtime(runtime_name, seams=seams, model=model, session_id=session_id)
         set_mutate = getattr(runtime, "set_on_mutate", None)
         if callable(set_mutate):
@@ -509,30 +501,39 @@ class SessionManager:
             extra["on_mutate"] = lambda: self._workspace_svc.mark_dirty(ws)
         return extra
 
-    async def _maybe_attach_virtual_key(
+    def _mint_gateway_key(
         self,
-        seams: RuntimeSeams | None,
-        *,
         session_id: str,
+        *,
         tenant_id: str,
         principal: Principal,
-        scope_id: str | None,
         model: str | None,
         ws_state: SessionWorkspaceState,
-    ) -> RuntimeSeams | None:
+    ) -> str | None:
+        """A gateway key for this session, limited to its model; None without a key service."""
         if self._vk_client is None:
-            return seams
-        allowed = [model] if model else []
+            return None
         minted = self._vk_client.mint(
             tenant_id=tenant_id,
             session_id=session_id,
             principal_id=principal.id,
-            allowed_models=allowed,
-            scope_id=scope_id,
+            allowed_models=[model] if model else [],
+            scope_id=ws_state.scope_id,
         )
         ws_state.virtual_key_token = minted.token
         ws_state.virtual_key_id = minted.key_id
-        return attach_minted_gateway(seams, token=minted.token, model=model)
+        return minted.token
+
+    def _bind_seams(
+        self, pins: SessionPins | None, *, gateway_token: str | None
+    ) -> RuntimeSeams | None:
+        """The session's seams: from its pins, else (unpinned) just a keyed gateway, if any."""
+        if pins is not None and self._composition_catalog is not None:
+            return bind_runtime_seams(pins, self._composition_catalog, gateway_token=gateway_token)
+        if gateway_token is not None and os.environ.get("GATEWAY_BASE_URL"):
+            return build_runtime_seams(gateway_token=gateway_token)
+        return None
+
     async def get(self, session_id: str, *, tenant_id: str) -> SessionInfo | None:
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
@@ -677,13 +678,11 @@ class SessionManager:
             capabilities_for(harness.runtime),
             sandbox_provider=self._provider,
         )
-        seams: RuntimeSeams | None = None
         pins: SessionPins | None = None
         profile = None
         memory_profile = None
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
-            seams = bind_runtime_seams(pins, self._composition_catalog)
             profile = load_pinned_sandbox_profile(pins, self._composition_catalog)
             memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
         principal = Principal(
@@ -711,7 +710,6 @@ class SessionManager:
             runtime_name=row.runtime,
             manifest=harness,
             pins=pins,
-            seams=seams,
             sandbox=sandbox,
             sandbox_profile=profile,
             memory_profile=memory_profile,
@@ -1307,7 +1305,7 @@ class SessionManager:
         if ws is not None:
             self._workspace_svc.assert_ready(ws)
         seams = self._seams_for_session(session_id, row)
-        if seams is None:
+        if seams is None or seams.tool_provider is None:
             raise ToolInvokeNotConfigured(
                 f"session {session_id!r} has no composition tool provider"
             )
@@ -1653,6 +1651,10 @@ class SessionManager:
         return str(default)
 
     def _seams_for_session(self, session_id: str, row: SessionRow) -> RuntimeSeams | None:
+        """The seams the session's runtime holds: one set for every path that uses them."""
+        live = getattr(self._registry.get(session_id), "seams", None)
+        if live is not None:
+            return live
         cached = self._seams.get(session_id)
         if cached is not None:
             return cached
