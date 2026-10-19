@@ -23,6 +23,10 @@ __all__ = [
 
 # Regex pattern for valid sha256 digests: sha256:<64 hex chars>
 DIGEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"^sha256:[a-fA-F0-9]{64}$")
+# An OCI repository: optional registry host[:port], then lowercase path components.
+REPOSITORY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(?:[a-zA-Z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
+)
 
 
 def canonical_json_bytes(obj: Any) -> bytes:
@@ -95,7 +99,7 @@ def validate_digest_format(digest: str) -> None:
 
 
 def assert_digest(value: str) -> None:
-    """Assert that value is a valid sha256 digest.
+    """Assert that value is a sha256 digest, bare or pinning a repository (repo@sha256:...).
 
     This is used for validating image_digest fields in manifests.
 
@@ -108,6 +112,11 @@ def assert_digest(value: str) -> None:
     from supervisor.harness.core.errors import ManifestValidationError
 
     if value.startswith("sha256:") and DIGEST_PATTERN.match(value):
+        return
+    # A digest-pinned reference (repository@sha256:...) is as immutable as a bare
+    # digest, and a registry can pull it; a tag (repository:tag) is neither.
+    repository, at, digest = value.rpartition("@")
+    if at and REPOSITORY_PATTERN.match(repository) and DIGEST_PATTERN.match(digest):
         return
     if ":" in value and not value.startswith("sha256:"):
         raise ManifestValidationError(

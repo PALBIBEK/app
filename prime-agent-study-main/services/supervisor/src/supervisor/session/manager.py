@@ -57,7 +57,7 @@ from supervisor.policy.approvals import ApprovalBroker
 from supervisor.policy.budget import BudgetExceeded, BudgetTracker
 from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard, call_hash
 from supervisor.policy.quotas import QuotaExceeded, TenantQuotaEnforcer
-from supervisor.policy.sandbox_policy import SandboxPolicy
+from supervisor.policy.sandbox_policy import ISOLATING_PROVIDERS, SandboxPolicy
 from supervisor.sandbox.base import Sandbox, SandboxProvider, SnapshotUnsupported
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
@@ -1825,7 +1825,12 @@ class SessionManager:
                 stall_iterations=g.stall_iterations,
             ),
         )
-        self._sandbox_policy.configure(session_id, sandbox_profile)
+        sandbox = self._sandboxes.get(session_id)
+        self._sandbox_policy.configure(
+            session_id,
+            sandbox_profile,
+            isolated=sandbox is not None and sandbox.info.provider in ISOLATING_PROVIDERS,
+        )
 
     async def _handle_approval_required(
         self,

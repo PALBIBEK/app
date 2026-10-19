@@ -12,7 +12,7 @@ Reference: QM's sandbox policy pattern.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from supervisor.policy.types import (
     ApprovalDefault,
@@ -95,6 +95,12 @@ class SandboxPolicyConfig:
     """Per-session sandbox policy configuration."""
     file_effects: FileEffects = FileEffects.WORKSPACE_WRITE
     approval_default: ApprovalDefault = ApprovalDefault.ASK
+    # The session's sandbox confines commands (a container or a VM), not the host.
+    isolated: bool = False
+
+
+ISOLATING_PROVIDERS: Final[frozenset[str]] = frozenset({"local_docker", "e2b"})
+"""Providers whose sandboxes confine whatever a command does to the sandbox."""
 
 
 # Default configuration
@@ -141,15 +147,23 @@ class SandboxPolicy:
     def configure(
         self,
         session_id: str,
-        config: SandboxPolicyConfig | None = None,
+        config: Any | None = None,
+        *,
+        isolated: bool = False,
     ) -> None:
         """Configure policy for session.
 
         Args:
             session_id: Session to configure
-            config: Configuration (defaults to DEFAULT_CONFIG)
+            config: A policy config or a sandbox profile (defaults to DEFAULT_CONFIG)
+            isolated: The session's sandbox isolates commands from the host
         """
-        self._configs[session_id] = config or DEFAULT_CONFIG
+        base = config or DEFAULT_CONFIG
+        self._configs[session_id] = SandboxPolicyConfig(
+            file_effects=FileEffects(_value(base.file_effects)),
+            approval_default=ApprovalDefault(_value(base.approval_default)),
+            isolated=isolated,
+        )
 
     def configure_from_profile(
         self,
@@ -245,11 +259,13 @@ class SandboxPolicy:
                   ToolClass.IDEMPOTENT, ToolClass.TRANSACTIONAL):
             return None
 
-        # Block shell/non-atomic
-        if tc in (ToolClass.SHELL, ToolClass.NON_ATOMIC):
+        # Shell/non-atomic: inside an isolating sandbox a command can only change the
+        # sandbox, as the file tools can; on the host it could change anything.
+        if tc in (ToolClass.SHELL, ToolClass.NON_ATOMIC) and not config.isolated:
             return (
                 f"tool {tool_name!r} blocked by sandbox profile "
-                f"(file_effects=workspace_write; requires danger_full_access)"
+                f"(file_effects=workspace_write on a host-process sandbox; "
+                f"needs an isolating sandbox or danger_full_access)"
             )
 
         # Default: allow
@@ -310,3 +326,7 @@ class SandboxPolicy:
 
 # Backward compatibility alias
 SandboxPolicy.DEFAULT = DEFAULT_CONFIG
+
+
+def _value(enum_or_str: Any) -> str:
+    return str(getattr(enum_or_str, "value", enum_or_str))

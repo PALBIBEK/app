@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:7854af32d78f8e05eefc062b30773e83c2f1410c029c5bcca88d74728f8749a8",
+  "digest": "sha256:0775608141ef6e165148c658d2299c7000c5b7dd6a1772318556b5b38fc38c3a",
   "harness_version": "githi-v1",
   "memory_profile": {
     "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
@@ -16,7 +16,7 @@
   },
   "protocol_version": 1,
   "sandbox_profile": {
-    "digest": "sha256:b2ef6ff9146285f849f68d09e581f3058222089be426820c4835e111b79b1431",
+    "digest": "sha256:f31d062a8a12b20df2bcb6467399210830ab74b93547ead08f9aad6391e8e837",
     "id": "githi-docker-v1"
   },
   "semver": "1.0.0",

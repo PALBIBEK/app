@@ -2,7 +2,7 @@ harness_version: githi-v1
 protocol_version: 1
 runtime: githi
 requires_sandbox: true
-image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+image_digest: buildpack-deps@sha256:8ea58fbc817960cd62d512044956ff00cb94865e549eeec32c12139413262004  # buildpack-deps:bookworm-scm (bash, git, curl): githi's tools run here
 mode: sticky
 model: anthropic/claude-sonnet-4
 # tools: recovery classification only — NOT the production ToolSet catalog.

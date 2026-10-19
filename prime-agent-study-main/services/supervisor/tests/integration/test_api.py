@@ -93,8 +93,13 @@ async def test_dedup_survives_process_restart(tmp_path) -> None:
             )
             assert r1.status_code == 202
             body1 = r1.json()
-            await asyncio.sleep(0.15)
-            payloads_before = await state.manager.event_payloads(sid)
+            # Wait for the turn to end, not a fixed time (slow CI runners took longer).
+            for _ in range(200):
+                payloads_before = await state.manager.event_payloads(sid)
+                if "RunEnd" in payloads_before:
+                    break
+                await asyncio.sleep(0.05)
+            assert payloads_before.count("RunEnd") == 1
 
     async with open_db(db_url) as (_, factory2):
         state2 = build_supervisor(
