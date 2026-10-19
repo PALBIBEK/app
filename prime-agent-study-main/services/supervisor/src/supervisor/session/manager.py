@@ -535,13 +535,15 @@ class SessionManager:
         """What this turn's commands may hold: the browse runner's model access, if any.
 
         A fresh browser capability per turn (an hour long), bound to the session,
-        its owner and its model; none for strict sessions or without a model.
+        its owner and its model; only for a sandbox profile that asks for it
+        (``browser_model``), never for strict sessions or without a model.
         """
         if self._browser is None:
             return {}
         row = await self._get_session_row(session_id)
+        profile = self._sandbox_profile_for_row(row)
         model = self.session_model(row)
-        if not model or self.strict_posture(row):
+        if not model or profile is None or not profile.browser_model or self.strict_posture(row):
             return {}
         grant = BrowserGrant(
             session_id=session_id,

@@ -186,10 +186,17 @@ def test_a_session_key_is_scoped_to_its_group_and_its_budget(
 
 
 async def create_on(
-    env: Env, state: SupervisorState, gateway: LiveGateway, model: str, *, read_only: bool = False
+    env: Env,
+    state: SupervisorState,
+    gateway: LiveGateway,
+    model: str,
+    *,
+    read_only: bool = False,
+    browser: bool = False,
 ) -> str:
-    """A githi session whose composition pins this gateway and ``model`` (and, when
-    ``read_only``, a read-only sandbox: a strict session)."""
+    """A githi session whose composition pins this gateway and ``model``; when
+    ``read_only``, on a read-only sandbox (a strict session); when ``browser``,
+    on a sandbox profile that grants the browser model."""
     catalog = state.composition_catalog
     assert catalog is not None
     base = catalog.get(
@@ -197,7 +204,7 @@ async def create_on(
     )
     plug = dataclasses.replace(base.plug_bindings, gateway_base_url=gateway.url, model_route=model)
     changes: dict[str, Any] = {"plug_bindings": plug}
-    if read_only:
+    if read_only or browser:
         profile = catalog.get(
             "sandbox_profile",
             "githi-docker-v1",
@@ -210,7 +217,8 @@ async def create_on(
                 digest="",
                 provider=SandboxProviderName.LOCAL_PROCESS,
                 image_digest=f"sha256:{hashlib.sha256(b'test-image').hexdigest()}",
-                file_effects=FileEffects.READ_ONLY,
+                file_effects=FileEffects.READ_ONLY if read_only else profile.file_effects,
+                browser_model=browser,
             )
         )
         await persist_offer(env.factory, catalog, "sandbox_profile", strict.name, strict.digest)  # type: ignore[arg-type]
@@ -274,7 +282,7 @@ async def test_the_browser_endpoint_relays_and_converts_on_the_sessions_key(
     )
     state.manager._browser = access
     async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await create_on(env, state, gateway, "gateway/mix")
+        sid = await create_on(env, state, gateway, "gateway/mix", browser=True)
         await env.sessions.submit(sid, Message("c1", "hello"))
         await env.wait_for(state, sid, run_ended())
         granted = await state.manager.tool_env(sid)
@@ -292,7 +300,7 @@ async def test_the_browser_endpoint_relays_and_converts_on_the_sessions_key(
         ]
         forged = post({"model": "gateway/mix", "messages": []}, token="a.b.c")
 
-        native_sid = await create_on(env, state, gateway, "gpt-6-astra-ultrafast")
+        native_sid = await create_on(env, state, gateway, "gpt-6-astra-ultrafast", browser=True)
         native_env = await state.manager.tool_env(native_sid)
         native = post(
             {
@@ -331,6 +339,21 @@ async def test_the_browser_endpoint_relays_and_converts_on_the_sessions_key(
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_commands_get_no_browser_capability_unless_the_profile_grants_it(
+    env: Env, router: ModelRouter, gateway: LiveGateway
+) -> None:
+    """Every shell command could read it, so a prompt injection could send it away."""
+    state = await env.state()
+    capability = BrowserCapability(["capability-secret-" + "x" * 16])
+    state.manager._browser = BrowserAccess(capability, "http://supervisor.internal:8080")
+    async with session_worker(env.client, state, task_queue=env.queue):
+        plain = await create_on(env, state, gateway, "gateway/mix")
+        granted = await create_on(env, state, gateway, "gateway/mix", browser=True)
+        assert await state.manager.tool_env(plain) == {}
+        assert "BROWSE_LAB_MODEL_TOKEN" in await state.manager.tool_env(granted)
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_strict_sessions_get_no_browser_access(
     env: Env, router: ModelRouter, gateway: LiveGateway
 ) -> None:
@@ -340,7 +363,7 @@ async def test_strict_sessions_get_no_browser_access(
     capability = BrowserCapability(["capability-secret-" + "x" * 16])
     state.manager._browser = BrowserAccess(capability, "http://supervisor.internal:8080")
     async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await create_on(env, state, gateway, "gateway/mix", read_only=True)
+        sid = await create_on(env, state, gateway, "gateway/mix", read_only=True, browser=True)
         row = await state.manager._get_session_row(sid)
         assert state.manager.strict_posture(row)
         assert await state.manager.tool_env(sid) == {}

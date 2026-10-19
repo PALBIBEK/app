@@ -397,6 +397,10 @@ class SandboxProfile:
         approval_default: Default approval behavior
         sticky_eligible: Can sessions stick to this sandbox
         image_digest: Optional container image digest
+        browser_model: Commands may call the session's model through the
+            browser endpoint (they get a short-lived capability for it). Off
+            unless a profile asks: a token every shell can read is one a
+            prompt injection can send away.
         metadata: Creator and ownership info
     """
 
@@ -410,6 +414,7 @@ class SandboxProfile:
     approval_default: ApprovalDefault = ApprovalDefault.ASK
     sticky_eligible: bool = True
     image_digest: str | None = None
+    browser_model: bool = False
     metadata: ArtifactMetadata | None = None
 
     def body_for_digest(self) -> dict[str, Any]:
@@ -425,6 +430,8 @@ class SandboxProfile:
         }
         if self.image_digest is not None:
             body["image_digest"] = self.image_digest
+        if self.browser_model:  # only when set, so profiles without it keep their digests
+            body["browser_model"] = True
         return body
 
 

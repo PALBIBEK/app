@@ -400,6 +400,7 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         approval_default=approval_default,
         sticky_eligible=bool(data.get("sticky_eligible", True)),
         image_digest=data.get("image_digest"),
+        browser_model=bool(data.get("browser_model", False)),
         metadata=metadata_from_dict(data.get("metadata")),
     )
 
@@ -424,6 +425,7 @@ def sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         "approval_default": profile.approval_default.value if isinstance(profile.approval_default, ApprovalDefault) else profile.approval_default,
         "sticky_eligible": profile.sticky_eligible,
         "image_digest": profile.image_digest,
+        "browser_model": profile.browser_model,
         "metadata": metadata_to_dict(profile.metadata),
     }
 
@@ -584,19 +586,7 @@ def with_digest(artifact: Artifact, digest: str) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, digest=digest)
     if isinstance(artifact, MemoryProfile):
         return replace(artifact, digest=digest)
     if isinstance(artifact, AgentComposition):
@@ -653,19 +643,7 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, status=status)
     if isinstance(artifact, MemoryProfile):
         return replace(artifact, status=status)
     if isinstance(artifact, AgentComposition):
@@ -722,19 +700,7 @@ def with_metadata(artifact: Artifact, metadata: ArtifactMetadata) -> Artifact:
             metadata=metadata,
         )
     if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=metadata,
-        )
+        return replace(artifact, metadata=metadata)
     if isinstance(artifact, MemoryProfile):
         return replace(artifact, metadata=metadata)
     if isinstance(artifact, AgentComposition):
