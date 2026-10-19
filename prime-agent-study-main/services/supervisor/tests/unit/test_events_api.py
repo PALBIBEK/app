@@ -129,9 +129,15 @@ async def _reconnect_once(iteration: int) -> None:
                 tenant_id="t1", harness_version="kg-v1", runtime_name="echo"
             )
             await state.manager.send(sid, "hi", command_id=f"c-{iteration}")
-            await asyncio.sleep(0.05)
-            snap = await state.manager.snapshot_events(sid)
-            stop = snap[-1][0]
+            # Wait for the echo turn to journal its events instead of a fixed
+            # sleep, which fails on a cold start.
+            snap = []
+            for _ in range(500):
+                snap = await state.manager.snapshot_events(sid)
+                if snap and snap[-1][0] >= 5:
+                    break
+                await asyncio.sleep(0.01)
+            stop = snap[-1][0] if snap else 0
             assert stop >= 5
 
             first, _ = await _collect(state, sid, max_events=5)

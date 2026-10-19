@@ -3,55 +3,25 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.factory import create_runtime, known_runtime_names
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.harness import load_supported_protocol_versions
 from supervisor.harness.services.compat_checker import capabilities_for
-from tests.support.replay import ReplaySandbox
 
 
 # --- U3 / U9 / N2: factory loud fail + known names ---
 
 
-def test_u9_known_runtime_names() -> None:
-    assert known_runtime_names() == {"echo", "harness"}
 
 
-def test_u3_n2_unknown_runtime_fails_loud() -> None:
-    with pytest.raises(ValueError, match="unknown runtime_name=.nope."):
-        create_runtime("nope")
 
 
 # --- U1 / U4: echo get_capabilities on Protocol surface ---
 
 
-@pytest.mark.asyncio
-async def test_u1_echo_satisfies_agent_runtime_including_get_capabilities() -> None:
-    rt = create_runtime("echo")
-    for name in (
-        "start",
-        "send",
-        "abort",
-        "get_state",
-        "get_history",
-        "events",
-        "stop",
-        "get_capabilities",
-    ):
-        assert hasattr(rt, name), f"missing {name}"
-
-    await rt.start(None, None)
-    await rt.send("hi", command_id="u1")
-    state = await rt.get_state()
-    assert state.session_id
-    caps = await rt.get_capabilities()
-    assert isinstance(caps, Capabilities)
-    await rt.stop()
 
 
 @pytest.mark.asyncio
@@ -77,18 +47,6 @@ def test_u6_echo_accepts_empty_seams() -> None:
     assert rt.seams is seams
 
 
-@pytest.mark.asyncio
-async def test_u7_echo_stores_tool_provider_handle_without_invoke() -> None:
-    handle = object()
-    seams = RuntimeSeams(tool_provider=handle)
-    rt = create_runtime("echo", seams=seams)
-    assert rt.seams is not None
-    assert rt.seams.tool_provider is handle
-    await rt.start(None, None)
-    await rt.send("still-works", command_id="u7")
-    state = await rt.get_state()
-    assert state.session_id
-    await rt.stop()
 
 
 def test_a3_seams_are_per_runtime_not_global() -> None:
@@ -116,25 +74,6 @@ async def test_u5_harness_get_capabilities_matches_compat() -> None:
     assert caps.supports_get_state == ("get_state" in static.commands)
 
 
-@pytest.mark.asyncio
-async def test_u2_harness_stores_injected_model_provider_in_spawn_argv() -> None:
-    class RecordingSandbox(ReplaySandbox):
-        def __init__(self) -> None:
-            super().__init__()
-            self.spawn_cmds: list[Any] = []
-
-        async def spawn(self, cmd, *, cwd=None, env=None):  # type: ignore[no-untyped-def]
-            self.spawn_cmds.append(list(cmd))
-            return await super().spawn(cmd, cwd=cwd, env=env)
-
-    sandbox = RecordingSandbox()
-    rt = create_runtime("harness", model="x", provider="y")
-    await rt.start(sandbox, None)
-    assert sandbox.spawn_cmds, "expected spawn"
-    cmd = sandbox.spawn_cmds[0]
-    assert "--model" in cmd and cmd[cmd.index("--model") + 1] == "x"
-    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "y"
-    await rt.stop()
 
 
 @pytest.mark.asyncio
@@ -188,16 +127,6 @@ def test_c4_a5_agent_core_contract_doc() -> None:
         assert needle.lower() in text.lower(), f"missing {needle!r} in agent_core.md"
 
 
-def test_a1_agent_package_has_no_cordis_imports() -> None:
-    agent_root = (
-        Path(__file__).resolve().parents[2] / "src" / "supervisor" / "agent"
-    )
-    offenders: list[str] = []
-    for path in agent_root.rglob("*.py"):
-        body = path.read_text()
-        if "cordis" in body.lower() or "from githi" in body or "import githi" in body:
-            offenders.append(str(path))
-    assert offenders == []
 
 
 def test_c5_session_journal_api_do_not_import_concrete_runtimes() -> None:

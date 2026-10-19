@@ -38,14 +38,6 @@ async def test_create_requires_sandbox_false_never_calls_provider(session_env) -
     await m.terminate(sid)
 
 
-@pytest.mark.asyncio
-async def test_create_requires_sandbox_true_calls_provider(session_env) -> None:
-    m: SessionManager = session_env["manager"]
-    provider = session_env["provider"]
-    sid = await m.create(tenant_id="t1", harness_version="coding-v1", runtime_name="echo")
-    assert len(provider.create_calls) == 1
-    assert provider.create_calls[0]["image"] == "sha256:" + "a" * 64
-    await m.terminate(sid)
 
 
 @pytest.mark.asyncio

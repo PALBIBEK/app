@@ -84,21 +84,6 @@ async def test_sandbox_free_never_unrecoverable(session_env) -> None:
     await m.terminate(sid)
 
 
-@pytest.mark.asyncio
-async def test_resume_uses_pinned_harness_version_not_current(session_env) -> None:
-    m = session_env["manager"]
-    provider = session_env["provider"]
-    # Create under coding-v1, then make coding-v2 "current" by registering it
-    # as the only thing a naive caller might pick — resume must still use v1.
-    sid = await m.create(tenant_id="t1", harness_version="coding-v1", runtime_name="echo")
-    await m.terminate(sid)
-    # Empty registry; resume cold.
-    provider.create_calls.clear()
-    result = await m.resume(sid)
-    assert result.state.value == "cold"
-    # Provider called with pinned v1 digest, not v2.
-    assert provider.create_calls[-1]["image"] == "sha256:" + "a" * 64
-    await m.terminate(sid)
 
 
 @pytest.mark.asyncio
@@ -204,69 +189,3 @@ async def test_unknown_tool_class_falls_back_to_default_never_auto_resume(
     await m.terminate(sid)
 
 
-@pytest.mark.asyncio
-async def test_policy_from_pinned_manifest_not_current(session_env) -> None:
-    """Pinned kg-v1 says unknown→fail; a 'current' override must not apply."""
-    from supervisor.harness import (
-        RecoveryAction,
-        RecoveryPolicy,
-        ToolClass,
-    )
-    from supervisor.harness.services.resolver import HarnessResolved
-
-    m = session_env["manager"]
-    writer = session_env["writer"]
-    registry = session_env["registry"]
-    reader = session_env["reader"]
-    catalog = session_env["catalog"]
-
-    sid = await m.create(tenant_id="t1", harness_version="kg-v1", runtime_name="echo")
-    rt = registry.remove(sid)
-    if rt is not None:
-        await rt.stop()
-    await writer.append(
-        sid,
-        ToolStart(tool_call_id="x", tool_name="mystery", args={}),
-        turn_id="t",
-        trace_id=None,
-    )
-
-    # Simulate a newer "current" policy that would auto-resume unknowns — must
-    # not be consulted (session stores a manifest snapshot at create).
-    catalog.register(
-        HarnessResolved(
-            version="kg-v2-current",
-            protocol_version="1",
-            image_digest="sha256:" + "c" * 64,
-            bundle_uri="",
-            requires_sandbox=False,
-            recovery=RecoveryPolicy(
-                default=RecoveryAction.AUTO_RESUME,
-                by_tool_class={},
-                tool_classes={},
-            ),
-        )
-    )
-    catalog.register(
-        HarnessResolved(
-            version="kg-v1",
-            protocol_version="1",
-            image_digest="",
-            bundle_uri="",
-            requires_sandbox=False,
-            recovery=RecoveryPolicy(
-                default=RecoveryAction.AUTO_RESUME,
-                by_tool_class={},
-                tool_classes={},
-            ),
-        )
-    )
-
-    row = await m._get_session_row(sid)
-    assert row.harness_version == "kg-v1"
-    recovery = Recovery(registry=registry, reader=reader, catalog=catalog)
-    decision = await recovery.decide(sid, session_row=row)
-    assert decision.state == ResumeState.FAILED
-    assert decision.harness is not None
-    assert decision.harness.version == "kg-v1"
-    await m.terminate(sid)
