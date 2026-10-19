@@ -141,7 +141,7 @@ class JournalWriter:
                     {
                         "n": n,
                         "id": session_id,
-                        "now": datetime.now(timezone.utc).isoformat(),
+                        "now": datetime.now(timezone.utc),
                     },
                 )
                 last_seq = result.scalar_one()
@@ -199,7 +199,7 @@ class JournalWriter:
             ),
             {
                 "id": session_id,
-                "now": datetime.now(timezone.utc).isoformat(),
+                "now": datetime.now(timezone.utc),
             },
         )
         seq = int(result.scalar_one())

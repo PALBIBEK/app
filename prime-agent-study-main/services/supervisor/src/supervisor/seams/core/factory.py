@@ -136,6 +136,7 @@ def _resolve_gateway(
     gateway_base_url: str | None,
     gateway_token: str | None,
     session_id: str | None = None,
+    default_model: str | None = None,
 ) -> ModelGatewayClient:
     """The session's model access, most specific first.
 
@@ -143,7 +144,9 @@ def _resolve_gateway(
     (``MODEL_GATEWAY_URL`` — discovery, the native registry, three wire protocols),
     unless the composition pins a *different* gateway; then the pinned gateway's
     (or ``GATEWAY_BASE_URL``'s) chat-completions client; else the offline fake.
-    ``gateway_token`` is the session's key either way.
+    ``gateway_token`` is the session's key and ``default_model`` its pinned model
+    either way, so a seam that calls the model without naming one (the compaction
+    summarizer, a nested-session subagent) uses the session's model.
     """
     if model_gateway is not None:
         return model_gateway
@@ -156,10 +159,12 @@ def _resolve_gateway(
 
     router = model_router()
     if router is not None and (gateway_base_url is None or router.serves(gateway_base_url)):
-        return RoutedModelClient(router, api_key=gateway_token, session_id=session_id)
+        return RoutedModelClient(
+            router, api_key=gateway_token, session_id=session_id, default_model=default_model
+        )
     url = gateway_base_url if gateway_base_url is not None else os.environ.get("GATEWAY_BASE_URL")
     if url:
-        return HttpModelGatewayClient(base_url=url, token=token or None)
+        return HttpModelGatewayClient(base_url=url, token=token or None, default_model=default_model)
     return FakeModelGatewayClient()
 
 
@@ -231,6 +236,7 @@ def build_runtime_seams(
     gateway_base_url: str | None = None,
     gateway_token: str | None = None,
     session_id: str | None = None,
+    default_model: str | None = None,
     register_memory: bool | None = None,
     register_lab_echo: bool | None = None,
     register_acp: bool = False,
@@ -267,6 +273,7 @@ def build_runtime_seams(
         gateway_base_url=gateway_base_url,
         gateway_token=gateway_token,
         session_id=session_id,
+        default_model=default_model,
     )
 
     # register_memory is deprecated alias for register_lab_echo.

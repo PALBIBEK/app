@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from supervisor.catalog.storage import CompositionCatalog
     from supervisor.catalog import SandboxProfile, SessionPins
     from supervisor.harness import HarnessManifest
+    from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 
 __all__ = [
     "load_pinned_sandbox_profile",
@@ -225,6 +226,7 @@ def _resolve_provider(
     *,
     deploy_provider: SandboxProvider | None,
     client: object | None,
+    hydrator: WorkspaceHydrator | None = None,
 ) -> SandboxProvider:
     """Instantiate provider from profile, with fallback to deploy provider.
 
@@ -248,7 +250,8 @@ def _resolve_provider(
         ModuleNotFoundError: If provider deps missing and no fallback.
     """
     try:
-        return create_sandbox_provider(profile_provider, client=client)
+        # The deploy provider's hydrator, so profile sandboxes can hydrate and sync scopes.
+        return create_sandbox_provider(profile_provider, client=client, hydrator=hydrator)
     except ModuleNotFoundError:
         if deploy_provider is not None:
             return deploy_provider
@@ -265,6 +268,7 @@ def resolve_sandbox_create(
     deploy_provider: SandboxProvider | None,
     profile: SandboxProfile | None = None,
     client: object | None = None,
+    hydrator: WorkspaceHydrator | None = None,
 ) -> tuple[SandboxProvider | None, str | None]:
     """Resolve sandbox provider and image for sandbox creation.
 
@@ -315,6 +319,7 @@ def resolve_sandbox_create(
             profile.provider,
             deploy_provider=deploy_provider,
             client=client,
+            hydrator=hydrator,
         )
         # Profile image takes precedence, fall back to manifest
         image = profile.image_digest or manifest.image_digest

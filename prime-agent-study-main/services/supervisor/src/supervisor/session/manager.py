@@ -35,6 +35,7 @@ from supervisor.catalog import HarnessVersionMismatch
 from supervisor.catalog.services.resolver import resolve_composition
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog import MemoryProfile, SessionPins
+from supervisor.catalog.repository import sync_composition
 from supervisor.catalog.core.types import FileEffects
 from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.harness import (
@@ -304,6 +305,10 @@ class SessionManager:
                 raise RuntimeError(
                     "composition_id/composition_digest provided but no CompositionCatalog configured"
                 )
+            if composition_id is not None:
+                await sync_composition(
+                    self._composition_catalog, self._db, composition_id, composition_digest
+                )
             pins = resolve_composition(
                 self._composition_catalog,
                 composition_id=composition_id,
@@ -454,7 +459,7 @@ class SessionManager:
         token = self._mint_gateway_key(
             session_id, tenant_id=tenant_id, principal=principal, model=model, ws_state=ws_state
         )
-        seams = self._bind_seams(pins, gateway_token=token, session_id=session_id)
+        seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
         session_dir: str | None = None
         if pins is not None and seams is not None:
             ws = session_workspace(session_id)
@@ -572,15 +577,30 @@ class SessionManager:
         return minted.token
 
     def _bind_seams(
-        self, pins: SessionPins | None, *, gateway_token: str | None, session_id: str
+        self,
+        pins: SessionPins | None,
+        *,
+        gateway_token: str | None,
+        session_id: str,
+        model: str | None,
     ) -> RuntimeSeams | None:
-        """The session's seams: from its pins, else (unpinned) just a keyed gateway, if any."""
+        """The session's seams: from its pins, else (unpinned) just a keyed gateway, if any.
+
+        Every model-calling seam carries the session's key and, as its default,
+        the session's pinned model.
+        """
         if pins is not None and self._composition_catalog is not None:
             return bind_runtime_seams(
-                pins, self._composition_catalog, gateway_token=gateway_token, session_id=session_id
+                pins,
+                self._composition_catalog,
+                gateway_token=gateway_token,
+                session_id=session_id,
+                model=model,
             )
         if gateway_token is not None and (os.environ.get("GATEWAY_BASE_URL") or model_router()):
-            return build_runtime_seams(gateway_token=gateway_token, session_id=session_id)
+            return build_runtime_seams(
+                gateway_token=gateway_token, session_id=session_id, default_model=model
+            )
         return None
 
     async def get(self, session_id: str, *, tenant_id: str) -> SessionInfo | None:
@@ -732,6 +752,9 @@ class SessionManager:
         memory_profile = None
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
+            await sync_composition(
+                self._composition_catalog, self._db, pins.composition_id, pins.composition_digest
+            )
             profile = load_pinned_sandbox_profile(pins, self._composition_catalog)
             memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
         principal = Principal(
@@ -1096,6 +1119,7 @@ class SessionManager:
             manifest,
             deploy_provider=self._provider,
             profile=sandbox_profile,
+            hydrator=self._workspace_svc.hydrator,
         )
         if provider is None:
             return None
@@ -1709,7 +1733,12 @@ class SessionManager:
             return cached
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
-            seams = bind_runtime_seams(pins, self._composition_catalog, session_id=session_id)
+            seams = bind_runtime_seams(
+                pins,
+                self._composition_catalog,
+                session_id=session_id,
+                model=session_model(self._pinned_manifest(row), pins),
+            )
             self._seams[session_id] = seams
             return seams
         return None
