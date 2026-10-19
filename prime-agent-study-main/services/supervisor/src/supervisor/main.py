@@ -29,7 +29,6 @@ from supervisor.api import (
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
-from supervisor.session import drain_for_deploy
 
 _log = logging.getLogger(__name__)
 
@@ -127,9 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if state is not None:
         state.draining = True
         try:
-            await drain_for_deploy(
-                state.manager, timeout_seconds=state.drain_grace_s
-            )
+            await state.manager.drain(timeout_seconds=state.drain_grace_s)
         except Exception:
             _log.exception("drain failed")
         try:

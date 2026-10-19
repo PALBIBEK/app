@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from supervisor.session import SessionManager, reap_idle
+from supervisor.session import SessionManager
 
 _log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ async def idle_reaper(
     interval_s = max(5.0, interval_s)
     while not should_stop():
         try:
-            if reaped := await reap_idle(manager, max_idle_seconds=max_idle_s):
+            if reaped := await manager.reap_idle_sessions(max_idle_seconds=max_idle_s):
                 _log.info("idle reaper: reaped %d sessions %s", len(reaped), reaped[:8])
         except Exception:
             _log.exception("idle reaper failed")

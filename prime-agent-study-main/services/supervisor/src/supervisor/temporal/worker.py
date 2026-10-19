@@ -27,7 +27,6 @@ from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
 from supervisor.maintenance import approval_sweeper, idle_reaper
-from supervisor.session import drain_for_deploy
 from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
@@ -120,7 +119,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
             loop.cancel()
         await asyncio.gather(*loops, return_exceptions=True)
     # Workers have stopped taking work; park the runtimes this process still holds.
-    await drain_for_deploy(state.manager, timeout_seconds=state.drain_grace_s)
+    await state.manager.drain(timeout_seconds=state.drain_grace_s)
 
 
 def main() -> None:

@@ -85,6 +85,17 @@ from supervisor.seams.services import (
 )
 from supervisor.session.access import session_visibility, visible_to
 from supervisor.session.live import LiveHub, LiveSubscription
+from supervisor.session.errors import (
+    MemoryNotConfigured,
+    RecoveryBlocked,
+    SessionAwaitingApproval,
+    SessionError,
+    SessionNotFound,
+    SessionTerminated,
+    SubagentNotConfigured,
+    ToolInvokeNotConfigured,
+    WorkspaceUnavailable,
+)
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
 from supervisor.session.modes import SessionMode, mode_for_manifest
 from supervisor.session.recovery import Recovery, ResumeState
@@ -98,59 +109,6 @@ from supervisor.tools import SandboxWorkspace
 _log = logging.getLogger(__name__)
 _LIVE_QUEUE_MAX = 256
 _MUTATING_TOOLS = frozenset({"write", "edit", "edit_diff"})
-
-
-class SessionError(Exception):
-    pass
-
-
-class SessionNotFound(SessionError):
-    pass
-
-
-class SessionTerminated(SessionError):
-    pass
-
-
-class SessionAwaitingApproval(SessionError):
-    pass
-
-
-class ToolInvokeNotConfigured(SessionError):
-    pass
-
-
-class SubagentNotConfigured(SessionError):
-    pass
-
-
-class MemoryNotConfigured(SessionError):
-    pass
-
-
-class WorkspaceUnavailable(SessionError):
-    """The session has no scope-bound workspace or no sandbox to put it in."""
-
-
-class RecoveryBlocked(SessionError):
-    def __init__(
-        self,
-        state: ResumeState,
-        tool_call_ids: tuple[str, ...],
-        *,
-        session_id: str,
-        compaction_ids: tuple[str, ...] = (),
-    ) -> None:
-        self.state = state
-        self.tool_call_ids = tool_call_ids
-        self.compaction_ids = compaction_ids
-        self.session_id = session_id
-        tools = ", ".join(tool_call_ids) or "(none)"
-        compactions = ", ".join(compaction_ids) or "(none)"
-        super().__init__(
-            f"recovery blocked state={state} session={session_id} "
-            f"tools={tools} compactions={compactions}"
-        )
 
 
 @dataclass(frozen=True)

@@ -1,60 +1,11 @@
-"""Session management for the supervisor service.
+"""Sessions: the manager, its errors, recovery, live fan-out and the child tree.
 
-This module provides session lifecycle management including:
-- Session creation and termination
-- Message handling and abort
-- Recovery and resume
-- Subagent operations
-- Memory compaction/recall
-- Live event streaming
-
-Architecture:
-    session/
-    ├── core/        # Domain layer - pure types & interfaces
-    ├── storage/     # Persistence layer - registry, outbox
-    ├── config/      # Configuration layer - settings
-    ├── services/    # Business logic layer - recovery, fanout, lifecycle
-    └── operations/  # Domain operations - subagent, memory, tree
-
-Example:
-    from supervisor.session import (
-        SessionManager,
-        SessionMode,
-        ResumeState,
-        SessionError,
-    )
-
-    manager = SessionManager(...)
-    session_id = await manager.create(tenant_id="t1", harness_version="coding-v1")
+Every name here is defined in exactly one module of this package.
 """
 
 from __future__ import annotations
 
-# =============================================================================
-# Config
-# =============================================================================
-from supervisor.session.config.settings import (
-    SessionSettings,
-    get_settings,
-)
-
-# =============================================================================
-# Enums
-# =============================================================================
-from supervisor.session.core.enums import (
-    ChildActivity,
-    JobActivity,
-    ResumeState,
-    SessionMode,
-    SessionStatus,
-    mode_for_harness,
-    mode_for_manifest,
-)
-
-# =============================================================================
-# Errors
-# =============================================================================
-from supervisor.session.core.errors import (
+from supervisor.session.errors import (
     MemoryNotConfigured,
     RecoveryBlocked,
     SessionAwaitingApproval,
@@ -63,167 +14,49 @@ from supervisor.session.core.errors import (
     SessionTerminated,
     SubagentNotConfigured,
     ToolInvokeNotConfigured,
-    _auto_context,
+    WorkspaceUnavailable,
 )
-
-# =============================================================================
-# Protocols
-# =============================================================================
-from supervisor.session.core.protocols import (
-    RecoveryProtocol,
-    SessionManagerProtocol,
-    SessionRegistryProtocol,
-    SessionRowView,
-)
-
-# =============================================================================
-# Types
-# =============================================================================
-from supervisor.session.core.types import (
-    BeginOutcome,
-    ChildRow,
-    JobRow,
-    RegistryMetrics,
-    ResumeDecision,
+from supervisor.session.live import LiveHub, LiveSubscription, is_dropped_sentinel
+from supervisor.session.manager import (
     ResumeResult,
     SessionInfo,
-    SessionMetrics,
-    SessionTree,
+    SessionManager,
     ToolInvokeOutcome,
 )
-
-# =============================================================================
-# Manager (main facade)
-# =============================================================================
-from supervisor.session.manager import SessionManager
-from supervisor.session.operations.compaction_state import (
-    unpaired_compaction_starts,
-)
-from supervisor.session.operations.memory_ops import (
-    CompactMemoryOutcome,
-    MemoryOps,
-    RecallMemoryOutcome,
-)
-
-# =============================================================================
-# Operations
-# =============================================================================
-from supervisor.session.operations.subagent_ops import (
-    DEFAULT_MAX_DEPTH,
-    SubagentOps,
-)
-from supervisor.session.operations.tree import (
+from supervisor.session.modes import SessionMode
+from supervisor.session.recovery import Recovery, ResumeDecision, ResumeState
+from supervisor.session.registry import SessionRegistry
+from supervisor.session.tree import (
+    SessionTree,
     build_session_tree,
+    unpaired_compaction_starts,
     unpaired_subagent_starts,
 )
-from supervisor.session.services.fanout import (
-    LiveHub,
-    LiveSubscription,
-    is_dropped_sentinel,
-)
-from supervisor.session.services.lifecycle import (
-    drain_for_deploy,
-    reap_idle,
-)
-
-# =============================================================================
-# Services
-# =============================================================================
-from supervisor.session.services.recovery import (
-    Recovery,
-    decide_unpaired,
-    pinned_manifest,
-)
-from supervisor.session.services.workspace import (
-    session_workspace,
-    workspaces_root,
-)
-from supervisor.session.storage.converters import (
-    child_row_to_dict,
-    job_row_to_dict,
-    resume_decision_to_dict,
-    session_info_to_dict,
-)
-from supervisor.session.storage.outbox import (
-    ToolOutbox,
-    idempotency_key,
-    result_to_wire,
-    wire_to_result,
-)
-
-# =============================================================================
-# Storage
-# =============================================================================
-from supervisor.session.storage.registry import SessionRegistry
 
 __all__ = [
-    # Manager
-    "SessionManager",
-    # Enums
-    "ChildActivity",
-    "JobActivity",
-    "ResumeState",
-    "SessionMode",
-    "SessionStatus",
-    "mode_for_harness",
-    "mode_for_manifest",
-    # Types
-    "BeginOutcome",
-    "ChildRow",
-    "JobRow",
-    "RegistryMetrics",
-    "ResumeDecision",
-    "ResumeResult",
-    "SessionInfo",
-    "SessionMetrics",
-    "SessionTree",
-    "ToolInvokeOutcome",
-    # Errors
-    "MemoryNotConfigured",
-    "RecoveryBlocked",
-    "SessionAwaitingApproval",
-    "SessionError",
-    "SessionNotFound",
-    "SessionTerminated",
-    "SubagentNotConfigured",
-    "ToolInvokeNotConfigured",
-    "_auto_context",
-    # Protocols
-    "RecoveryProtocol",
-    "SessionManagerProtocol",
-    "SessionRegistryProtocol",
-    "SessionRowView",
-    # Storage
-    "SessionRegistry",
-    "ToolOutbox",
-    "idempotency_key",
-    "result_to_wire",
-    "wire_to_result",
-    "session_info_to_dict",
-    "resume_decision_to_dict",
-    "child_row_to_dict",
-    "job_row_to_dict",
-    # Config
-    "SessionSettings",
-    "get_settings",
-    # Services
-    "Recovery",
-    "decide_unpaired",
-    "pinned_manifest",
     "LiveHub",
     "LiveSubscription",
-    "is_dropped_sentinel",
-    "reap_idle",
-    "drain_for_deploy",
-    "workspaces_root",
-    "session_workspace",
-    # Operations
-    "SubagentOps",
-    "DEFAULT_MAX_DEPTH",
-    "MemoryOps",
-    "CompactMemoryOutcome",
-    "RecallMemoryOutcome",
+    "MemoryNotConfigured",
+    "Recovery",
+    "RecoveryBlocked",
+    "ResumeDecision",
+    "ResumeResult",
+    "ResumeState",
+    "SessionAwaitingApproval",
+    "SessionError",
+    "SessionInfo",
+    "SessionManager",
+    "SessionMode",
+    "SessionNotFound",
+    "SessionRegistry",
+    "SessionTerminated",
+    "SessionTree",
+    "SubagentNotConfigured",
+    "ToolInvokeNotConfigured",
+    "ToolInvokeOutcome",
+    "WorkspaceUnavailable",
     "build_session_tree",
-    "unpaired_subagent_starts",
+    "is_dropped_sentinel",
     "unpaired_compaction_starts",
+    "unpaired_subagent_starts",
 ]
