@@ -61,6 +61,17 @@ class SandboxError(Exception):
         self.retryable = retryable
 
 
+class SandboxPathEscape(SandboxError, ValueError):
+    """A path resolves outside the sandbox's root (``..``, an absolute path, or a symlink).
+
+    A refusal, not a failure: tools report it as ``PATH_ESCAPE``.
+    """
+
+    def __init__(self, path: str, **kw: Any) -> None:
+        super().__init__(f"path escapes sandbox: {path}", **kw)
+        self.path = path
+
+
 class SandboxGone(SandboxError):
     """The sandbox no longer exists (reaped, crashed, or destroyed).
 

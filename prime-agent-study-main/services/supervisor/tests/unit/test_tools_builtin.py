@@ -77,6 +77,20 @@ async def test_paths_cannot_leave_the_workspace(call: Callable[..., Any], path: 
         await call("read", file_path=path)
 
 
+@pytest.mark.parametrize("tool", ["read", "write"])
+async def test_a_symlink_out_of_the_workspace_is_a_path_escape(
+    call: Callable[..., Any], tmp_path: Path, tool: str
+) -> None:
+    """Not a tool crash: the model is told the path is outside, as for ``..`` (F22)."""
+    secret = tmp_path / "outside.txt"
+    secret.write_text("host secret\n")
+    (tmp_path / "ws" / "link").symlink_to(secret)
+    args = {"content": "x"} if tool == "write" else {}
+    with pytest.raises(PathEscape):
+        await call(tool, file_path="link", **args)
+    assert secret.read_text() == "host secret\n"
+
+
 async def test_read_missing_file(call: Callable[..., Any]) -> None:
     with pytest.raises(FileMissing, match="nope.txt"):
         await call("read", file_path="nope.txt")

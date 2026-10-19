@@ -110,7 +110,7 @@ r = invoke(full_sid, "write", file_path="../escape.txt", content="x")
 check("write ../escape.txt refused", r.get("code") == "PATH_ESCAPE", r.get("code"))
 invoke(full_sid, "bash", command="ln -sf /etc/passwd link")
 r = invoke(full_sid, "read", file_path="link")
-check("read through a symlink to /etc/passwd refused", r.get("ok") is not True, r)
+check("read through a symlink to /etc/passwd refused as PATH_ESCAPE", r.get("code") == "PATH_ESCAPE", r)
 r = invoke(full_sid, "bash", command=f"cat {os.environ['E2E_DIR']}/stack/env.sh | head -c 60; echo; ls /tmp/yal-local-sandboxes | wc -l")
 print("     (info) bash in local_process sees the host:", json.dumps(r.get("payload", {}).get("stdout", ""))[:160])
 

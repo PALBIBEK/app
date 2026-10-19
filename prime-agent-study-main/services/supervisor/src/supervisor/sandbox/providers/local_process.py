@@ -43,6 +43,7 @@ from supervisor.sandbox.base import (
     ProcessHandle,
     Sandbox,
     SandboxGone,
+    SandboxPathEscape,
     SandboxInfo,
     SandboxProvider,
     SandboxStatus,
@@ -230,7 +231,7 @@ class LocalProcessSandbox(Sandbox):
         try:
             resolved.relative_to(self._root)
         except ValueError:
-            raise ValueError(f"path escapes sandbox: {path}")
+            raise SandboxPathEscape(path, provider="local_process") from None
 
         return resolved
 

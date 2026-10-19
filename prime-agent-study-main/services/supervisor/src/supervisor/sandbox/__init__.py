@@ -109,6 +109,7 @@ from supervisor.sandbox.base import (
     SandboxProvider,
     SandboxStatus,
     SandboxTimeout,
+    SandboxPathEscape,
     SnapshotUnsupported,
     WorkspaceSyncUnsupported,
 )
@@ -237,6 +238,7 @@ __all__ = [
     "SandboxError",
     "SandboxGone",
     "SandboxTimeout",
+    "SandboxPathEscape",
     "SnapshotUnsupported",
     "WorkspaceSyncUnsupported",
     "ProvisionError",

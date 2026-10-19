@@ -264,16 +264,18 @@ class TreeWorkspace:
 
     async def read_bytes(self, path: str) -> bytes:
         rel = self.relpath(path)
-        try:
-            return await self._tree.read_bytes(rel)
-        except (FileNotFoundError, KeyError):
-            raise FileMissing(rel or ".") from None
+        with _store_escapes(path):
+            try:
+                return await self._tree.read_bytes(rel)
+            except (FileNotFoundError, KeyError):
+                raise FileMissing(rel or ".") from None
 
     async def write_bytes(self, path: str, data: bytes) -> None:
         rel = self.relpath(path)
         if not rel:
             raise PathEscape(path)
-        await self._tree.write_bytes(rel, data)
+        with _store_escapes(path):
+            await self._tree.write_bytes(rel, data)
 
     async def list_dir(self, path: str) -> list[Entry]:
         rel = self.relpath(path)
@@ -404,12 +406,26 @@ class SandboxWorkspace:
 
 
 @contextlib.contextmanager
-def _sandbox_errors() -> Iterator[None]:
-    """A sandbox that cannot do something is a capability gap, not a tool crash."""
-    from supervisor.sandbox.base import SandboxError
+def _store_escapes(path: str) -> Iterator[None]:
+    """The store refuses a symlink out of its tree; to the model that is ``PATH_ESCAPE`` (F22)."""
+    from supervisor.seams.services import WorkspacePathEscape
 
     try:
         yield
+    except WorkspacePathEscape as exc:
+        raise PathEscape(path) from exc
+
+
+@contextlib.contextmanager
+def _sandbox_errors() -> Iterator[None]:
+    """A sandbox that cannot do something is a capability gap, not a tool crash;
+    a path the sandbox refuses (a symlink out, say) is ``PATH_ESCAPE`` (F22)."""
+    from supervisor.sandbox.base import SandboxError, SandboxPathEscape
+
+    try:
+        yield
+    except SandboxPathEscape as exc:
+        raise PathEscape(exc.path) from exc
     except (NotImplementedError, SandboxError) as exc:
         raise UnsupportedCapability(f"the session's sandbox cannot do this: {exc}") from exc
 
