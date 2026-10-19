@@ -7,7 +7,7 @@ import inspect
 import pytest
 from fastapi.testclient import TestClient
 
-from model_gateway import app as app_module
+from model_gateway import auth as auth_module
 from model_gateway.app import app
 
 from .helpers import SERVICE_TOKEN, configure_app
@@ -50,11 +50,11 @@ def test_t1_auth_required_empty_token_fail_closed(
 
 def test_constant_time_token_compare_uses_hmac() -> None:
     """§6 A: service token compare is constant-time (hmac.compare_digest)."""
-    src = inspect.getsource(app_module._bearer_matches)
+    src = inspect.getsource(auth_module._matches)
     assert "compare_digest" in src
-    assert app_module._bearer_matches("abcd", "abcd") is True
-    assert app_module._bearer_matches("abcd", "abce") is False
-    assert app_module._bearer_matches("short", "longer!") is False
+    assert auth_module._matches("abcd", "abcd") is True
+    assert auth_module._matches("abcd", "abce") is False
+    assert auth_module._matches("short", "longer!") is False
 
 
 def test_t2_valid_service_token_echo_ok(
