@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from supervisor.tools.errors import WorkspaceUnavailable
@@ -31,6 +31,8 @@ class ToolContext:
     timeout_s: float = DEFAULT_TIMEOUT_S
     on_mutate: Callable[[], None] | None = None
     bound_workspace: Workspace | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
+    """Variables the session grants this call's commands (the browse runner's access)."""
 
     @property
     def workspace(self) -> Workspace:
@@ -55,7 +57,8 @@ class ToolContext:
 
         ``extra`` may carry, most specific first: a ``tree`` (the session runs
         in a sandbox), a ``working_directory`` on the host, or just the
-        ``session_id`` whose host workspace is then used.
+        ``session_id`` whose host workspace is then used; and an ``env`` for the
+        commands the call runs.
         """
         extra: Mapping[str, Any] = ctx.extra or {}
         session_id = _text(extra.get("session_id"))
@@ -66,6 +69,7 @@ class ToolContext:
             timeout_s=timeout_s,
             on_mutate=extra.get("on_mutate"),
             bound_workspace=_workspace(extra, session_id),
+            env=dict(extra.get("env") or {}),
         )
 
 

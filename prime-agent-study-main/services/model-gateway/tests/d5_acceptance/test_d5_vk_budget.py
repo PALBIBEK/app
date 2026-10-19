@@ -29,10 +29,10 @@ def _mint(client: TestClient, *, max_budget_usd: float) -> str:
     return token
 
 
-def test_t7_vk_over_budget_returns_403_virtual_key_budget_exceeded(
+def test_t7_vk_over_budget_returns_429_virtual_key_budget_exceeded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T7: VK spend past max_budget_usd → 403 VIRTUAL_KEY_BUDGET_EXCEEDED."""
+    """T7: VK spend past max_budget_usd → 429 VIRTUAL_KEY_BUDGET_EXCEEDED."""
     configure_app(monkeypatch)
     with TestClient(app) as client:
         configure_app(monkeypatch)
@@ -40,7 +40,7 @@ def test_t7_vk_over_budget_returns_403_virtual_key_budget_exceeded(
 
         # First completion may succeed or immediately deny depending on
         # whether zero budget blocks before first spend; either way, once
-        # spend would exceed, chat must 403 with the stable code.
+        # spend would exceed, chat must 429 with the stable code.
         statuses: list[int] = []
         codes: list[str] = []
         for _ in range(3):
@@ -57,10 +57,10 @@ def test_t7_vk_over_budget_returns_403_virtual_key_budget_exceeded(
             err = detail.get("error") if isinstance(detail, dict) else {}
             if isinstance(err, dict) and err.get("code"):
                 codes.append(str(err["code"]))
-            if r.status_code == 403:
+            if r.status_code == 429:
                 break
 
-    assert 403 in statuses, f"expected budget 403, got statuses={statuses} codes={codes}"
+    assert 429 in statuses, f"expected budget 429, got statuses={statuses} codes={codes}"
     assert "VIRTUAL_KEY_BUDGET_EXCEEDED" in codes
 
 
@@ -69,7 +69,7 @@ def test_vk_budget_claim_surface_or_enforced(
 ) -> None:
     """§6 A: max_budget_usd is either enforced or must not be advertised as enforced.
 
-    If mint still returns max_budget_usd, chat overspend must 403 — advertising
+    If mint still returns max_budget_usd, chat overspend must 429 — advertising
     without enforcement fails D5 acceptance.
     """
     configure_app(monkeypatch)
@@ -103,11 +103,11 @@ def test_vk_budget_claim_surface_or_enforced(
                     "messages": [{"role": "user", "content": "x" * 200}],
                 },
             )
-            if last.status_code == 403:
+            if last.status_code == 429:
                 break
         assert last is not None
         # Soft path: if metering not yet attributed to VK, still require that
-        # a dedicated spend API / record path exists OR 403 eventually fires.
+        # a dedicated spend API / record path exists OR 429 eventually fires.
         # Core acceptance: claiming max_budget_usd without any budget code path fails.
         from model_gateway import virtual_keys as vk_mod
 
@@ -118,7 +118,7 @@ def test_vk_budget_claim_surface_or_enforced(
             or "record_spend" in store_src
             or "accumulate" in store_src.lower()
         )
-        if last.status_code == 403:
+        if last.status_code == 429:
             detail = last.json().get("detail") or {}
             err = detail.get("error") if isinstance(detail, dict) else {}
             assert (err or {}).get("code") == "VIRTUAL_KEY_BUDGET_EXCEEDED"

@@ -131,12 +131,20 @@ class ChatMessage:
     An assistant message may carry ``tool_calls``; the ``tool`` message answering
     one carries its ``tool_call_id``. Without both, a model cannot tell which call
     a result belongs to.
+
+    An assistant message produced by a native-protocol model also carries
+    ``parts`` — its ordered ``text`` / ``reasoning`` / ``tool_call`` parts, with the
+    provider's signed or encrypted reasoning — and the ``model`` that produced it,
+    so that model can be shown its own reasoning again. Chat-completions callers
+    read only ``content`` and ``tool_calls``.
     """
 
     role: str
     content: str
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
+    parts: list[dict[str, Any]] | None = None
+    model: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         """OpenAI chat-completions message. Tool calls may be ``{id, name, arguments}``."""

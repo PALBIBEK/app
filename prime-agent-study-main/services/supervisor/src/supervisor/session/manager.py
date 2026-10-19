@@ -35,6 +35,7 @@ from supervisor.catalog import HarnessVersionMismatch
 from supervisor.catalog.services.resolver import resolve_composition
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog import MemoryProfile, SessionPins
+from supervisor.catalog.core.types import FileEffects
 from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.harness import (
     ApprovalSpec,
@@ -61,6 +62,7 @@ from supervisor.seams import (
     build_runtime_seams,
     CompactionPreparation,
     JobHandle,
+    ModelGatewayClient,
     SubagentRequest,
     ToolClassifier,
     ToolInvokeContext,
@@ -78,6 +80,8 @@ from supervisor.seams.services import (
 )
 from supervisor.memory.binding import MemoryRequest, agent_pin, resolve_binding
 from supervisor.memory.platform import MemoryPlatform
+from supervisor.models import model_router
+from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
 from supervisor.session.subagent_ops import SubagentOps
@@ -203,6 +207,7 @@ class SessionManager:
         workspace_service: SessionWorkspaceService | None = None,
         virtual_key_client: VirtualKeyClient | None = None,
         memory: MemoryPlatform | None = None,
+        browser: BrowserAccess | None = None,
     ) -> None:
         self._db = session_factory
         self._writer = writer
@@ -230,6 +235,7 @@ class SessionManager:
             hydrator=getattr(sandbox_provider, "_hydrator", None),
         )
         self._vk_client = virtual_key_client
+        self._browser = browser
         self._run_traces: dict[str, str] = {}
         self._tool_outbox = ToolOutbox(session_factory, writer)
         self._memory = memory or MemoryPlatform(session_factory)
@@ -448,7 +454,7 @@ class SessionManager:
         token = self._mint_gateway_key(
             session_id, tenant_id=tenant_id, principal=principal, model=model, ws_state=ws_state
         )
-        seams = self._bind_seams(pins, gateway_token=token)
+        seams = self._bind_seams(pins, gateway_token=token, session_id=session_id)
         session_dir: str | None = None
         if pins is not None and seams is not None:
             ws = session_workspace(session_id)
@@ -483,6 +489,40 @@ class SessionManager:
         pins = SessionPins.from_dict(dict(row.composition_pins)) if row.composition_pins else None
         return session_model(self._pinned_manifest(row), pins)
 
+    def strict_posture(self, row: SessionRow) -> bool:
+        """A session pinned to a read-only sandbox gets no outward capabilities (browser model)."""
+        profile = self._sandbox_profile_for_row(row)
+        return profile is not None and profile.file_effects == FileEffects.READ_ONLY
+
+    async def tool_env(self, session_id: str) -> dict[str, str]:
+        """What this turn's commands may hold: the browse runner's model access, if any.
+
+        A fresh browser capability per turn (an hour long), bound to the session,
+        its owner and its model; none for strict sessions or without a model.
+        """
+        if self._browser is None:
+            return {}
+        row = await self._get_session_row(session_id)
+        model = self.session_model(row)
+        if not model or self.strict_posture(row):
+            return {}
+        grant = BrowserGrant(
+            session_id=session_id,
+            tenant_id=row.tenant_id,
+            actor_id=row.owner_principal_id or "",
+            model=model,
+        )
+        return self._browser.env(grant)
+
+    def session_model_client(self, session_id: str, row: SessionRow) -> ModelGatewayClient | None:
+        """The model client the session's own calls go through (and so its key and budget)."""
+        seams = self._seams_for_session(session_id, row)
+        return seams.model_gateway if seams is not None else None
+
+    @property
+    def browser(self) -> BrowserAccess | None:
+        return self._browser
+
     def tool_denial(self, session_id: str, name: str, provider: ToolProvider | None) -> str | None:
         """Why the pinned sandbox profile forbids calling ``name`` now, or None if it may run."""
         tool_class = provider.tool_class(name) if isinstance(provider, ToolClassifier) else None
@@ -510,14 +550,21 @@ class SessionManager:
         model: str | None,
         ws_state: SessionWorkspaceState,
     ) -> str | None:
-        """A gateway key for this session, limited to its model; None without a key service."""
+        """A gateway key for this session, limited to its model; None without a key service.
+
+        Through the routed model gateway the key is limited to the gateway model
+        group the session's model is served by (an alias's target, a discovered
+        group's own id).
+        """
         if self._vk_client is None:
             return None
+        router = model_router()
+        allowed = (router.target_for(model) if router is not None and model else None) or model
         minted = self._vk_client.mint(
             tenant_id=tenant_id,
             session_id=session_id,
             principal_id=principal.id,
-            allowed_models=[model] if model else [],
+            allowed_models=[allowed] if allowed else [],
             scope_id=ws_state.scope_id,
         )
         ws_state.virtual_key_token = minted.token
@@ -525,13 +572,15 @@ class SessionManager:
         return minted.token
 
     def _bind_seams(
-        self, pins: SessionPins | None, *, gateway_token: str | None
+        self, pins: SessionPins | None, *, gateway_token: str | None, session_id: str
     ) -> RuntimeSeams | None:
         """The session's seams: from its pins, else (unpinned) just a keyed gateway, if any."""
         if pins is not None and self._composition_catalog is not None:
-            return bind_runtime_seams(pins, self._composition_catalog, gateway_token=gateway_token)
-        if gateway_token is not None and os.environ.get("GATEWAY_BASE_URL"):
-            return build_runtime_seams(gateway_token=gateway_token)
+            return bind_runtime_seams(
+                pins, self._composition_catalog, gateway_token=gateway_token, session_id=session_id
+            )
+        if gateway_token is not None and (os.environ.get("GATEWAY_BASE_URL") or model_router()):
+            return build_runtime_seams(gateway_token=gateway_token, session_id=session_id)
         return None
 
     async def get(self, session_id: str, *, tenant_id: str) -> SessionInfo | None:
@@ -1660,7 +1709,7 @@ class SessionManager:
             return cached
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
-            seams = bind_runtime_seams(pins, self._composition_catalog)
+            seams = bind_runtime_seams(pins, self._composition_catalog, session_id=session_id)
             self._seams[session_id] = seams
             return seams
         return None

@@ -1,4 +1,4 @@
-"""A6 — VK max_budget_usd enforced → 403 VIRTUAL_KEY_BUDGET_EXCEEDED."""
+"""A6 — VK max_budget_usd enforced → 429 VIRTUAL_KEY_BUDGET_EXCEEDED."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _mint(client: TestClient, *, max_budget_usd: float) -> str:
 
 
 def test_vk_budget_exceeded_after_spend(authed_client: TestClient) -> None:
-    # Echo invents 0.001 cost; budget of 0.001 allows one chat then blocks.
+    # Echo bills 0.0005/token; one chat spends 0.001, so a 0.001 budget allows exactly one.
     token = _mint(authed_client, max_budget_usd=0.001)
 
     ok = authed_client.post(
@@ -53,7 +53,7 @@ def test_vk_budget_exceeded_after_spend(authed_client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"model": "echo", "messages": [{"role": "user", "content": "two"}]},
     )
-    assert denied.status_code == 403
+    assert denied.status_code == 429
     assert denied.json()["detail"]["error"]["code"] == "VIRTUAL_KEY_BUDGET_EXCEEDED"
 
 
@@ -64,7 +64,7 @@ def test_vk_zero_budget_blocks_immediately(authed_client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"model": "echo", "messages": [{"role": "user", "content": "x"}]},
     )
-    assert denied.status_code == 403
+    assert denied.status_code == 429
     assert denied.json()["detail"]["error"]["code"] == "VIRTUAL_KEY_BUDGET_EXCEEDED"
 
 

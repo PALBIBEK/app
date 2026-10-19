@@ -45,6 +45,7 @@ from supervisor.memory.history import message_text
 from supervisor.memory.platform import gateway_one_shot
 from supervisor.memory.tools import PLATFORM_TOOLS
 from supervisor.memory.turn import SessionMemory
+from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ToolResult
 from supervisor.session import SessionManager
@@ -104,6 +105,10 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     pinned recall backend found, background subagents that finished) comes right
     before the run's user message, so it is part of the history
     later runs carry (what the next run's delta assumes is held).
+
+    An assistant message keeps the model that wrote it, and — when it carries
+    native reasoning or signed text — its journalled parts, so that model is shown
+    its own reasoning again on the next call.
     """
     messages = list(prior)
     user_at: int | None = None
@@ -129,6 +134,10 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
             message: dict[str, Any] = {"role": event.role, "content": text}
             if calls:
                 message["tool_calls"] = calls
+            if event.role == "assistant" and event.model:
+                message["model"] = event.model
+            if any(p.get("type") == REASONING or p.get("signature") for p in event.content):
+                message["parts"] = event.content
             messages.append(message)
         elif isinstance(event, ToolEnd):
             messages.append(
@@ -289,13 +298,10 @@ class GithiSteps:
                     runtime.seams.model_gateway.complete, chat, schemas, model=runtime.model
                 )
             )
-            calls = AgentLoop.extract_tool_calls(completion)
             usage = AgentLoop.usage_from_completion(completion)
-            text = (completion.message.content if completion.message else "") or ""
             assistant = MessageEnd(
                 role="assistant",
-                content=[{"type": "text", "text": text}]
-                + [{"type": "tool_call", **call} for call in calls],
+                content=AgentLoop.assistant_content(completion),
                 usage=usage,
                 model=completion.model,
                 finish_reason=completion.finish_reason,
@@ -394,7 +400,9 @@ class GithiSteps:
             else:
                 row = await self._manager._get_session_row(sid)
                 invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
-                end = await runtime.loop().run_tool(invocation, tenant_id=row.tenant_id)
+                end = await runtime.loop().run_tool(
+                    invocation, tenant_id=row.tenant_id, env=await self._manager.tool_env(sid)
+                )
                 result, is_error = end.result, end.is_error
         await self._record(
             sid,

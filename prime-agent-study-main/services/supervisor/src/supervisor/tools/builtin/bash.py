@@ -37,7 +37,7 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
     ceiling = max(ctx.timeout_s - _GRACE_S, 1.0)
     timeout = min(float(args.timeout), ceiling) if args.timeout else ceiling
 
-    result = await ctx.workspace.run(args.command, timeout_s=timeout)
+    result = await ctx.workspace.run(args.command, timeout_s=timeout, env=ctx.env)
     ctx.mutated()  # any command may have changed files
 
     payload: dict[str, Any] = {

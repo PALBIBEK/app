@@ -178,6 +178,8 @@ _VENDOR_HOSTS: Final[frozenset[str]] = frozenset({
     "generativelanguage.googleapis.com",
 })
 
+_COMPACT_JWS: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
 # Safe internal hostnames and patterns
 _SAFE_HOST_SUFFIXES: Final[tuple[str, ...]] = (
     ".internal",
@@ -417,6 +419,7 @@ def is_allowed_gateway_inject(key: str, value: str) -> bool:
         - OPENAI_API_KEY: Must start with "vk_" (virtual key prefix)
         - YAL_VK_BIND_PATH: Any non-empty path
         - OPENAI_API_KEY_FILE: Any non-empty path
+        - BROWSE_LAB_MODEL_TOKEN: A compact signed token (the browser capability)
 
     Example:
         >>> is_allowed_gateway_inject("OPENAI_BASE_URL", "http://gateway:8000")
@@ -440,6 +443,11 @@ def is_allowed_gateway_inject(key: str, value: str) -> bool:
     if upper in ("YAL_VK_BIND_PATH", "OPENAI_API_KEY_FILE"):
         # Path to key file - any non-empty value is acceptable
         return bool(text.strip())
+
+    if upper == "BROWSE_LAB_MODEL_TOKEN":
+        # A browser capability: a signed, hour-long grant for one session's model,
+        # made to be held by the browse runner. Never a vendor or gateway key.
+        return _COMPACT_JWS.fullmatch(text) is not None
 
     return False
 

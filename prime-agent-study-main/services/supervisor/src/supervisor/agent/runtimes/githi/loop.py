@@ -158,8 +158,17 @@ class AgentLoop:
     def offers(self, name: str) -> bool:
         return any(s["function"]["name"] == name for s in self.tool_schemas())
 
-    async def run_tool(self, call: dict[str, Any], *, tenant_id: str | None = None) -> ToolEnd:
-        """Run one tool call through the tool seam, in the session's workspace."""
+    async def run_tool(
+        self,
+        call: dict[str, Any],
+        *,
+        tenant_id: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ToolEnd:
+        """Run one tool call through the tool seam, in the session's workspace.
+
+        ``env`` is what the session grants this turn's commands (see ``ToolContext.env``).
+        """
         call_id = str(call.get("id") or uuid4().hex)
         name = str(call.get("name") or "unknown")
         raw_args = call.get("arguments")
@@ -174,6 +183,8 @@ class AgentLoop:
             extra["workspace"] = self._workspace
         if self._on_mutate is not None:
             extra["on_mutate"] = self._on_mutate
+        if env:
+            extra["env"] = env
         try:
             outcome = await asyncio.to_thread(
                 provider.invoke, ToolInvokeContext(trace_id=call_id, extra=extra), name, args
@@ -211,9 +222,27 @@ class AgentLoop:
                     content=text,
                     tool_calls=m.get("tool_calls") or None,
                     tool_call_id=m.get("tool_call_id"),
+                    parts=m.get("parts") or None,
+                    model=m.get("model"),
                 )
             )
         return out
+
+    @classmethod
+    def assistant_content(cls, completion: Any) -> list[dict[str, Any]]:
+        """The assistant turn as journal parts.
+
+        A routed model's native parts are kept as they are, in order (signed
+        thinking, encrypted reasoning, signed text, tool calls); a chat-completions
+        reply becomes its text followed by its tool calls.
+        """
+        message = getattr(completion, "message", None)
+        parts = getattr(message, "parts", None)
+        if parts:
+            return [dict(part) for part in parts]
+        text = (getattr(message, "content", None) if message is not None else None) or ""
+        calls = cls.extract_tool_calls(completion)
+        return [{"type": "text", "text": text}] + [{"type": "tool_call", **call} for call in calls]
 
     @staticmethod
     def extract_tool_calls(completion: Any) -> list[dict[str, Any]]:

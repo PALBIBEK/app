@@ -135,16 +135,30 @@ def _resolve_gateway(
     model_gateway: ModelGatewayClient | None,
     gateway_base_url: str | None,
     gateway_token: str | None,
+    session_id: str | None = None,
 ) -> ModelGatewayClient:
+    """The session's model access, most specific first.
+
+    An explicit client wins. Then the process's routed model gateway
+    (``MODEL_GATEWAY_URL`` — discovery, the native registry, three wire protocols),
+    unless the composition pins a *different* gateway; then the pinned gateway's
+    (or ``GATEWAY_BASE_URL``'s) chat-completions client; else the offline fake.
+    ``gateway_token`` is the session's key either way.
+    """
     if model_gateway is not None:
         return model_gateway
+    token = (
+        gateway_token
+        if gateway_token is not None
+        else os.environ.get("GATEWAY_TOKEN") or os.environ.get("MODEL_GATEWAY_TOKEN")
+    )
+    from supervisor.models import RoutedModelClient, model_router
+
+    router = model_router()
+    if router is not None and (gateway_base_url is None or router.serves(gateway_base_url)):
+        return RoutedModelClient(router, api_key=gateway_token, session_id=session_id)
     url = gateway_base_url if gateway_base_url is not None else os.environ.get("GATEWAY_BASE_URL")
     if url:
-        token = (
-            gateway_token
-            if gateway_token is not None
-            else os.environ.get("GATEWAY_TOKEN") or os.environ.get("MODEL_GATEWAY_TOKEN")
-        )
         return HttpModelGatewayClient(base_url=url, token=token or None)
     return FakeModelGatewayClient()
 
@@ -216,6 +230,7 @@ def build_runtime_seams(
     context_memory: "ContextMemoryProvider | None" = None,
     gateway_base_url: str | None = None,
     gateway_token: str | None = None,
+    session_id: str | None = None,
     register_memory: bool | None = None,
     register_lab_echo: bool | None = None,
     register_acp: bool = False,
@@ -227,8 +242,9 @@ def build_runtime_seams(
     **Only** this factory (and tests) may construct Null/Static/Memory/Fake/HTTP
     providers for production-shaped wiring (P-3). Runtimes must not call this.
 
-    When ``model_gateway`` is omitted, prefers ``gateway_base_url`` (or env
-    ``GATEWAY_BASE_URL``) → ``HttpModelGatewayClient``; else ``FakeModelGatewayClient``.
+    When ``model_gateway`` is omitted, see ``_resolve_gateway``: a pinned
+    ``gateway_base_url``, else the routed model gateway (``MODEL_GATEWAY_URL``),
+    else env ``GATEWAY_BASE_URL`` → ``HttpModelGatewayClient``, else the fake.
 
     Subagent defaults (D12):
     - Prefer ``acp`` when ``ACP_BASE_URL`` / ``acp_base_url`` / ``register_acp``.
@@ -250,6 +266,7 @@ def build_runtime_seams(
         model_gateway=model_gateway,
         gateway_base_url=gateway_base_url,
         gateway_token=gateway_token,
+        session_id=session_id,
     )
 
     # register_memory is deprecated alias for register_lab_echo.

@@ -16,6 +16,7 @@ from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.memory.platform import MemoryPlatform
+from supervisor.models.browser import BrowserAccess
 from supervisor.obs.metrics import MetricsRegistry
 from supervisor.policy.protocols import RateLimiterProtocol
 from supervisor.policy.quotas import TenantQuotaEnforcer
@@ -80,6 +81,7 @@ def build_supervisor(
     grant_store: object | None = None,
     virtual_key_client: object | None = None,
     workspace_store: WorkspaceStore | None = None,
+    browser: BrowserAccess | None = None,
 ) -> SupervisorState:
     writer = JournalWriter(session_factory, blob_dir=blob_dir)
     reader = JournalReader(session_factory, blob_dir=blob_dir)
@@ -109,6 +111,7 @@ def build_supervisor(
         workspace_service=workspace_service,
         virtual_key_client=vk,
         memory=memory,
+        browser=browser,
     )
 
     async def check_db() -> bool:

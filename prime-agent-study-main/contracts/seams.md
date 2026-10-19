@@ -76,11 +76,11 @@ Every githi model turn runs step by step under the session workflow
 |---|---|
 | Prompt pack | The system message of every model call (`AgentLoop.messages_for_model`) |
 | Tool set | The tools offered and run (`RegistryToolProvider`), plus platform tools |
-| Plug bindings: gateway | Every model call (`model_gateway` seam) |
-| Plug bindings: model route | The model every call names (`session_model`: route, else the manifest's model) |
+| Plug bindings: gateway | Every model call (`model_gateway` seam): the routed client when the pinned URL is the configured `MODEL_GATEWAY_URL` gateway (or nothing is pinned), else the pinned gateway's chat-completions client (`model_routing.md`) |
+| Plug bindings: model route | The model every call names (`session_model`: route, else the manifest's model) — a `gateway/<group>`, a native model id, or a legacy route id |
 | Plug bindings: subagents | `subagent` / `subagent_result` tools on the transport's default provider; finished background jobs announced at the next run (`BackgroundResults`) |
 | Memory profile | Compaction between turns past `min(window − reserve, window × pressure)`, keeping `keep_recent_tokens`; recall on the first model step. `window`: the profile's `context_window`, else the gateway's report for the session's model (`ModelCatalog`), else 200,000 |
-| Sandbox (harness + profile) | Where every tool acts (`SandboxWorkspace`: files and commands in the sandbox) and the `file_effects` policy on every tool call |
+| Sandbox (harness + profile) | Where every tool acts (`SandboxWorkspace`: files and commands in the sandbox) and the `file_effects` policy on every tool call; a read-only profile makes the session strict (no browser model capability) |
 | Harness manifest | Recovery class per tool, guards, budget, approvals, subagent depth and background |
 
 Create and resume build the runtime through one routine (`SessionManager._start_runtime`),
@@ -89,6 +89,13 @@ session, after its gateway key is minted: the agent's gateway, the compaction su
 and nested-session subagents all call the composition's pinned gateway with that key, and
 every session path (turns, direct tool invokes, memory and subagent operations) uses the
 runtime's own seams.
+
+An assistant `ChatMessage` from the routed client also carries `parts` — its ordered
+`text` / `reasoning` / `tool_call` parts, with the provider's signed or encrypted
+reasoning — and the `model` that wrote it. The stepped turn journals those parts as the
+assistant `MessageEnd` content and hands them back on later calls, so the model sees its
+own reasoning again; chat-completions clients read only `content` and `tool_calls`.
+A tool call's commands get the turn's `ToolContext.env` (the browse runner's model access).
 
 ## Catalog digests
 
