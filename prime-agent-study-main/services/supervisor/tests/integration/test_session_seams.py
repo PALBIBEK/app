@@ -156,3 +156,27 @@ async def test_a_resumed_session_is_rebound_the_same_way(boot: Boot) -> None:
     fresh = await boot()  # new process, same database
     await fresh.manager.resume(sid)
     _assert_one_keyed_gateway(fresh, sid, "token-2")  # a fresh key for the new process
+
+
+async def test_a_resumed_session_adopts_the_sandbox_its_last_worker_left(
+    boot: Boot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its files are there, so it must not start an empty one (F21)."""
+    first = await boot()
+    sid = await _create(first)
+    left = first.manager._sandboxes[sid]
+
+    fresh = await boot()
+    provider = fresh.manager._provider
+    asked: list[str] = []
+
+    async def adopt(session_id: str) -> object:
+        asked.append(session_id)
+        return left
+
+    monkeypatch.setattr(provider, "adopt", adopt)
+    creates = len(provider.create_calls)  # type: ignore[attr-defined]
+    await fresh.manager.resume(sid)
+    assert asked == [sid]
+    assert fresh.manager._sandboxes[sid] is left
+    assert len(provider.create_calls) == creates  # type: ignore[attr-defined]

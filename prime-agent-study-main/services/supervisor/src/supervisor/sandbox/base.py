@@ -866,6 +866,15 @@ class SandboxProvider(ABC):
         """
         ...
 
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """A live sandbox this provider made for ``session_id``, if one survived its worker.
+
+        A session moves to another worker when its worker dies; its sandbox may
+        still be there (a directory on the same host, a running container), and
+        with it everything the agent wrote. Default: none can be found.
+        """
+        return None
+
     async def close(self) -> None:
         """Release provider-level resources.
 

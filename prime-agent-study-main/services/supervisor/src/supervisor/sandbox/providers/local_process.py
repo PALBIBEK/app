@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import tempfile
 import time
@@ -101,6 +102,14 @@ class AsyncProcessHandle(ProcessHandle):
 
     async def kill(self) -> None:
         self._proc.kill()
+
+
+_LABELS_DIR = ".labels"
+_SESSION_LABEL = "supervisor.session_id"
+
+
+def _labels_file(root: Path) -> Path:
+    return root.parent / _LABELS_DIR / f"{root.name}.json"
 
 
 class LocalProcessSandbox(Sandbox):
@@ -278,6 +287,7 @@ class LocalProcessSandbox(Sandbox):
 
         if self._root.exists():
             await asyncio.to_thread(shutil.rmtree, self._root, ignore_errors=True)
+        _labels_file(self._root).unlink(missing_ok=True)
 
     async def is_alive(self) -> bool:
         return not self._destroyed and self._root.exists()
@@ -351,6 +361,20 @@ class LocalProcessProvider(SandboxProvider):
     def name(self) -> str:
         return "local_process"
 
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """The session's directory, if a worker on this host made one and it is still there."""
+        for path in sorted((self._base / _LABELS_DIR).glob("*.json")):
+            try:
+                labels = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            root = self._base / path.stem
+            if labels.get(_SESSION_LABEL) == session_id and root.is_dir():
+                sandbox = LocalProcessSandbox(root, path.stem, hydrator=self._hydrator)
+                self._sandboxes[path.stem] = sandbox
+                return sandbox
+        return None
+
     async def create(
         self,
         *,
@@ -363,6 +387,9 @@ class LocalProcessProvider(SandboxProvider):
         sandbox_id = uuid4().hex
         root = self._base / sandbox_id
         root.mkdir(parents=True, exist_ok=True)
+        if labels:  # kept beside the workspace, not in it: the agent cannot edit them
+            _labels_file(root).parent.mkdir(exist_ok=True)
+            _labels_file(root).write_text(json.dumps(labels))
 
         sandbox = LocalProcessSandbox(
             root,
@@ -382,9 +409,10 @@ class LocalProcessProvider(SandboxProvider):
         return self._sandboxes.get(sandbox_id)
 
     async def close(self) -> None:
-        # Clean up all sandboxes
+        # A session's sandbox outlives this worker (another adopts it); the rest go.
         for sandbox in list(self._sandboxes.values()):
-            await sandbox.destroy()
+            if not _labels_file(sandbox.root).exists():
+                await sandbox.destroy()
         self._sandboxes.clear()
 
     async def health_check(self) -> bool:

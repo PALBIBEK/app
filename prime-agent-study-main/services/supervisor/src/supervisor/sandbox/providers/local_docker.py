@@ -677,6 +677,38 @@ class LocalDockerProvider(SandboxProvider):
         )
         return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
 
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """The session's container, started again if it stopped (its files are kept)."""
+        client = self._ensure_client()
+        loop = asyncio.get_running_loop()
+
+        def _find() -> Any | None:
+            found = client.containers.list(
+                all=True, filters={"label": [f"{LABEL_MANAGED}=1", f"{LABEL_SESSION}={session_id}"]}
+            )
+            if not found:
+                return None
+            container = found[0]  # the newest
+            if getattr(container, "status", "running") != "running":
+                container.start()
+                container.reload()
+            return container
+
+        try:
+            container = await loop.run_in_executor(None, _find)
+        except Exception:  # noqa: BLE001 — no container to adopt: start afresh
+            _log.warning("adopting the sandbox of session=%s failed", session_id, exc_info=True)
+            return None
+        if container is None:
+            return None
+        info = SandboxInfo(
+            id=container.id,
+            provider=self.name,
+            supports_snapshot=True,
+            labels=dict(getattr(container, "labels", None) or {}),
+        )
+        return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
+
     async def list_managed(self) -> list[Sandbox]:
         """Containers labelled by this supervisor (for orphan reaping)."""
         client = self._ensure_client()

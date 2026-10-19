@@ -826,6 +826,7 @@ class SessionManager:
                 session_id=session_id,
                 harness_version=row.harness_version,
                 sandbox_profile=profile,
+                adopt=True,
             )
             if row.scope_id is not None and sandbox is not None:
                 await self._workspace_svc.ensure_hydrated(ws_state, sandbox)
@@ -1172,7 +1173,10 @@ class SessionManager:
         session_id: str | None = None,
         harness_version: str | None = None,
         sandbox_profile: Any | None = None,
+        adopt: bool = False,
     ) -> Sandbox | None:
+        """The session's sandbox: with ``adopt`` (a resume), the one its last worker
+        left if it survived (and the agent's files with it, F21), else a fresh one."""
         provider, digest = resolve_sandbox_create(
             manifest,
             deploy_provider=self._provider,
@@ -1181,6 +1185,14 @@ class SessionManager:
         )
         if provider is None:
             return None
+        if adopt and session_id:
+            adopted = await provider.adopt(session_id)
+            if adopted is not None:
+                _log.info(
+                    "resume: adopted %s sandbox %s session=%s",
+                    adopted.info.provider, adopted.info.id, session_id,
+                )
+                return adopted
         labels: dict[str, str] = {}
         if session_id:
             labels["supervisor.session_id"] = session_id
