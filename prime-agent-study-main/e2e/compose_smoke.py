@@ -62,13 +62,15 @@ def main() -> None:
 
 
 def githi_runs_a_tool_in_its_pinned_image(user: User) -> None:
-    """The shipped githi-v1 agent, on the stack's Docker sandboxes, runs a tool in its pinned image."""
+    """The shipped githi agent on Docker (githi-tools-v1), runs a shell in its pinned image.
+
+    (githi-v1 is the same agent without a sandbox: safe file tools only, no shell.)"""
     shipped = {a["artifact_id"]: a for a in user.get("/v1/catalog/compositions").json()}
-    if "githi-v1" not in shipped:
-        fail(f"githi-v1 is not in the shipped catalog: {sorted(shipped)}")
-    r = user.create("githi-v1", shipped["githi-v1"]["digest"], harness="githi-v1")
+    if "githi-tools-v1" not in shipped:
+        fail(f"githi-tools-v1 is not in the shipped catalog: {sorted(shipped)}")
+    r = user.create("githi-tools-v1", shipped["githi-tools-v1"]["digest"], harness="githi-v1")
     if r.status_code != 201:
-        fail(f"githi-v1 session create failed: {r.status_code} {r.text[:300]}")
+        fail(f"githi-tools-v1 session create failed: {r.status_code} {r.text[:300]}")
     sid = r.json()["session_id"]
     user.say(sid, '/tool bash {"command": "git --version && pwd"}')
     try:
@@ -79,7 +81,7 @@ def githi_runs_a_tool_in_its_pinned_image(user: User) -> None:
     result = (ends[0].get("result") or {}) if ends else {}
     if not ends or result.get("ok") is not True or "git version" not in str(result):
         fail(f"githi's tool did not run in its sandbox: {types(evs)} {str(result)[:300]}")
-    print(f"compose smoke: githi-v1 ran bash in its sandbox image: {str(result.get('payload'))[:120]}")
+    print(f"compose smoke: githi-tools-v1 ran bash in its sandbox image: {str(result.get('payload'))[:120]}")
 
 
 if __name__ == "__main__":
