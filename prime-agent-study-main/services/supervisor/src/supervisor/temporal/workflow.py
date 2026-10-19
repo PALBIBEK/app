@@ -349,11 +349,11 @@ class AgentSessionWorkflow:
                     if guard is not None:
                         verdict = guard.observe("run", call.name, call.args_hash)
                         if verdict.tripped and verdict.action is GuardAction.ABORT:
+                            # The runaway run ends; the conversation does not (F32).
                             return await end(
                                 "error",
                                 error_class="LoopGuard",
                                 detail=verdict.detail or "loop detected",
-                                close_session=True,
                             )
                     approved = call.approval is None or await self._approve(plan.run_id, call)
                     in_flight = call.call_id

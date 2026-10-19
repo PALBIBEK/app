@@ -10,7 +10,12 @@ from fastapi import Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from supervisor.auth.service_jwt import ServiceJwtVerifier
-from supervisor.journal.commands import CommandStore
+from supervisor.journal.commands import (
+    CommandConflict,
+    CommandStore,
+    check_same_payload,
+    fingerprint,
+)
 from supervisor.journal.reader import JournalReader
 from supervisor.seams.services import (
     AuthzService,
@@ -247,6 +252,35 @@ def get_reader(request: Request) -> JournalReader:
 
 def get_commands(request: Request) -> CommandStore:
     return _state(request).commands
+
+
+async def recorded_command(
+    request: Request, session_id: str, command_id: str, text: str
+) -> dict[str, Any] | None:
+    """The response already given to ``command_id``, or None if it is new.
+
+    A command id is an idempotency key: reused with a different message it is a
+    409, not a silent replay of the first message's answer (F33).
+    """
+    stored = await get_commands(request).get(session_id, command_id)
+    if stored is not None:
+        try:
+            check_same_payload(command_id, stored, fingerprint(text))
+        except CommandConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return stored
+
+
+async def claim_command(
+    request: Request, session_id: str, command_id: str, text: str
+) -> tuple[bool, dict[str, Any]]:
+    """Claim ``command_id`` for this message: (claimed, response); 409 if it names another."""
+    try:
+        return await get_commands(request).claim(
+            session_id, command_id, payload_fingerprint=fingerprint(text)
+        )
+    except CommandConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def get_workflows(request: Request) -> SessionWorkflows | None:

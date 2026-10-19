@@ -152,10 +152,9 @@ async def post_message(
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     await deps.require_session_access(tenant_id, session_id, request)
-    commands = deps.get_commands(request)
     manager = deps.get_manager(request)
 
-    existing = await commands.get(session_id, body.command_id)
+    existing = await deps.recorded_command(request, session_id, body.command_id, body.text)
     if existing is not None:
         return PostMessageResponse(
             turn_id=str(existing["turn_id"]),
@@ -178,7 +177,7 @@ async def post_message(
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
             raise to_http(exc) from exc
-        _, response = await commands.claim(session_id, body.command_id)
+        _, response = await deps.claim_command(request, session_id, body.command_id, body.text)
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),
             status=str(response.get("status", "accepted")),
@@ -213,7 +212,7 @@ async def post_message(
             },
         ) from exc
 
-    claimed, response = await commands.claim(session_id, body.command_id)
+    claimed, response = await deps.claim_command(request, session_id, body.command_id, body.text)
     if not claimed:
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),

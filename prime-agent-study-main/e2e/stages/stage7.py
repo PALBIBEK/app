@@ -135,9 +135,11 @@ def section_b_loop_guard() -> None:
     info(f"tool calls before the guard acted: {len(calls)}; errors: {errors(run)}")
     check("a model repeating the same call is stopped by the loop guard", "LoopGuard" in json.dumps(run), errors(run))
     check("...after a handful of calls, not max_steps", 0 < len(calls) <= 4, len(calls))
-    info(f"session status after the guard: {session_status(sid)}")
+    check("the runaway turn ends; the session stays open", session_status(sid) == "active", session_status(sid))
     r = alice.say(sid, "hello again")
-    info(f"message after the guard closed the session: HTTP {r.status_code} {r.text[:160]}")
+    evs = wait_for(sid, runs_ended(2), 60) if r.status_code == 202 else []
+    check("...and answers the next message", r.status_code == 202 and types(evs).count("run_end") >= 2,
+          (r.status_code, r.text[:120]))
     sid2 = session(comp("pol-ops", "githi-ops-v1"))
     for i, path in enumerate(["a.txt", "b.txt", "c.txt", "d.txt"], 1):
         alice.say(sid2, f'/tool read {{"path": "{path}"}}')
@@ -330,7 +332,7 @@ def section_f_commands() -> None:
     check("...even when retried after the run finished", types(alice.events(sid)).count("run_start") == 1,
           (r3.status_code, types(alice.events(sid)).count("run_start")))
     r = alice.say(sid, "different text, same id", command_id=cid)
-    info(f"same command_id, different text: HTTP {r.status_code} {r.text[:160]}")
+    check("a command_id reused with a different message is refused", r.status_code == 409, (r.status_code, r.text[:160]))
     alice.say(sid, "SLOWMODEL long one")
     time.sleep(2)
     r = alice.say(sid, "while you're busy")

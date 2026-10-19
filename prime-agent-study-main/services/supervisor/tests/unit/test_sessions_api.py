@@ -82,16 +82,26 @@ async def test_duplicate_command_id_returns_stored_and_sends_once(api) -> None:
     )
     r2 = await client.post(
         f"/v1/sessions/{sid}/messages",
-        json={"text": "hi again", "command_id": "dup"},
+        json={"text": "hi", "command_id": "dup"},
         headers=HEADERS,
     )
     assert r1.status_code == 202
     assert r2.status_code == 202
     assert r1.json() == r2.json()
-    # One echo turn → one RunEnd in journal (stateless cold may still one turn).
+    # The same id with another message is a conflict, not a replay of the first (F33).
+    r3 = await client.post(
+        f"/v1/sessions/{sid}/messages",
+        json={"text": "hi again", "command_id": "dup"},
+        headers=HEADERS,
+    )
+    assert r3.status_code == 409
     import asyncio
 
-    await asyncio.sleep(0.15)
+    for _ in range(100):  # wait for the one turn to finish, then make sure there is no second
+        if "RunEnd" in await state.manager.event_payloads(sid):
+            break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.1)
     payloads = await state.manager.event_payloads(sid)
     assert payloads.count("RunEnd") == 1
 

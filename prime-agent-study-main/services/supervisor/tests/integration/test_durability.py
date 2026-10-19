@@ -235,9 +235,10 @@ async def test_recorded_histories_replay_deterministically(cluster: Cluster) -> 
             assert result.replay_failure is None, result.replay_failure
 
 
-async def test_policy_abort_closes_the_session_and_its_workflow(
+async def test_a_loop_guard_trip_ends_the_turn_and_keeps_the_session(
     cluster: Cluster, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """F32: one runaway turn used to fail the whole session; now only that turn ends."""
     state = await cluster.state()
     async with session_worker(cluster.client, state, task_queue=cluster.queue):
         sid = uuid.uuid4().hex
@@ -245,15 +246,12 @@ async def test_policy_abort_closes_the_session_and_its_workflow(
         monkeypatch.setattr(EchoRuntime, "repeat_tool_times", 3)  # identical calls in one run
         await cluster.sessions.submit(sid, Message("loop", "again and again"))
         await cluster.wait_for(state, sid, _error("LoopGuard"))
-        handle = cluster.client.get_workflow_handle_for(AgentSessionWorkflow.run, workflow_id(sid))
-        async with asyncio.timeout(15):
-            result = await handle.result()
-        assert result.phase is Phase.FAILED
-        assert await state.manager.session_status(sid) == "failed"
-        with pytest.raises(SessionCommandError) as err:
-            await cluster.sessions.submit(sid, Message("after", "anything"))
-        assert err.value.kind == "SessionClosed"
-        await cluster.sessions.terminate(sid)  # closing a closed session is fine
+        await cluster.wait_for(state, sid, _count("RunEnd", 1))
+        assert await state.manager.session_status(sid) == "active"
+        monkeypatch.setattr(EchoRuntime, "repeat_tool_times", 0)
+        await cluster.sessions.submit(sid, Message("after", "anything"))  # the session still answers
+        await cluster.wait_for(state, sid, _count("RunEnd", 2))
+        await cluster.sessions.terminate(sid)
 
 
 async def _aiter(items: list) -> AsyncIterator:

@@ -1240,13 +1240,12 @@ class SessionManager:
                     else None
                 )
                 if verdict is not None and verdict.tripped and verdict.action == GuardAction.ABORT:
-                    await self._policy_abort(
-                        session_id,
-                        runtime,
-                        error_class="LoopGuard",
-                        detail=verdict.detail or "loop_detected",
+                    # End the runaway turn and keep pumping, so its end is journaled;
+                    # the session stays open for the next message (F32).
+                    await self._end_runaway_turn(
+                        session_id, runtime, detail=verdict.detail or "loop_detected"
                     )
-                    return
+                    continue
 
                 if isinstance(payload, MessageEnd) and payload.usage is not None:
                     usage = payload.usage
@@ -1457,7 +1456,7 @@ class SessionManager:
                 ToolEnd(
                     tool_call_id=call_id,
                     tool_name=name,
-                    result={"error": denial, "code": "FILE_EFFECTS_DENIED"},
+                    result={"ok": False, "payload": None, "error": denial, "code": "FILE_EFFECTS_DENIED"},
                     is_error=True,
                 ),
                 turn_id=None,
@@ -1978,6 +1977,20 @@ class SessionManager:
             proj.project(envelope)
         except Exception:
             _log.exception("span projection failed session=%s", session_id)
+
+    async def _end_runaway_turn(self, session_id: str, runtime: Any, *, detail: str) -> None:
+        """A loop guard trip: the error is journaled, the turn aborted, the session kept."""
+        await self._record(
+            session_id,
+            ErrorEvent(error_class="LoopGuard", retryable=False, detail=detail),
+            turn_id=None,
+            trace_id=self._trace_for(session_id, runtime),
+        )
+        self._guards.reset(session_id)
+        try:
+            await runtime.abort()
+        except Exception:
+            _log.exception("abort after loop guard failed session=%s", session_id)
 
     async def _policy_abort(
         self,

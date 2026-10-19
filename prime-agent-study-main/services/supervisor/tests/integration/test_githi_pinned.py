@@ -190,6 +190,7 @@ async def test_the_sandbox_profile_policy_governs_model_tool_calls(
 
     end = payloads(events, ToolEnd)[0]
     assert end.is_error and end.result["code"] == "FILE_EFFECTS_DENIED"
+    assert end.result["ok"] is False  # the shape of any tool result (F16)
 
 
 async def test_a_resumed_session_gets_the_same_pins(

@@ -158,6 +158,11 @@ def _user_text(run: list[Any]) -> str:
     return ""
 
 
+def denied_result(error: str, code: str) -> dict[str, Any]:
+    """A refused tool call's result in the same shape as a tool's own (F16)."""
+    return {"ok": False, "payload": None, "error": error, "code": code}
+
+
 def _platform_result(text: str, is_error: bool) -> dict[str, Any]:
     """A memory tool's result in the same shape as a catalog tool's."""
     return {
@@ -382,7 +387,7 @@ class GithiSteps:
         )
         tools = await self._memory.tools(sid)
         if req.denied:
-            result: dict[str, Any] = {"error": "denied by approval", "code": "APPROVAL_DENIED"}
+            result = denied_result("denied by approval", "APPROVAL_DENIED")
             is_error = True
         elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
             output = await tools.call(call["name"], call["arguments"])
@@ -396,7 +401,7 @@ class GithiSteps:
             runtime = await self._runtime(sid)
             provider = runtime.seams.tool_provider if runtime.seams else None
             if (denial := self._manager.tool_denial(sid, call["name"], provider)) is not None:
-                result, is_error = {"error": denial, "code": "FILE_EFFECTS_DENIED"}, True
+                result, is_error = denied_result(denial, "FILE_EFFECTS_DENIED"), True
             else:
                 row = await self._manager._get_session_row(sid)
                 invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}

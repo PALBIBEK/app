@@ -125,7 +125,13 @@ async def test_a_human_decides_a_gated_tool(
     (end,) = payloads(events, ToolEnd)
     assert end.is_error is not tool_ran
     if not tool_ran:
-        assert end.result["code"] == "APPROVAL_DENIED"
+        # The same shape as any tool's result, so a client reads ``ok`` either way (F16).
+        assert end.result == {
+            "ok": False,
+            "payload": None,
+            "error": "denied by approval",
+            "code": "APPROVAL_DENIED",
+        }
     (resolved,) = payloads(events, ApprovalResolved)
     assert (resolved.choice, resolved.status) == (choice, status)
 
@@ -183,18 +189,18 @@ async def test_approval_wait_survives_a_worker_restart(
 # --- policy gates ---------------------------------------------------------------
 
 
-async def test_a_looping_model_trips_the_guard_and_closes_the_session(
+async def test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
+    """F32: the runaway run ends at the third identical call; the session stays open."""
     model(LS, repeat=True)
     state = await env.state()
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "list forever"))
         events = await env.wait_for(state, sid, run_ended())
-        handle = env.client.get_workflow_handle_for(AgentSessionWorkflow.run, workflow_id(sid))
-        async with asyncio.timeout(15):
-            assert (await handle.result()).phase is Phase.FAILED
+        assert await state.manager.session_status(sid) == "active"
+        await env.sessions.terminate(sid)
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["LoopGuard"]
     assert len(payloads(events, ToolEnd)) == 2  # the third identical call never ran
 
