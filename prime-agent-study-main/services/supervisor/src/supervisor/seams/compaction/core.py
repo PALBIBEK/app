@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 CHARS_PER_TOKEN = 3.5
 DEFAULT_LIMIT_TOKENS = 120_000
@@ -237,8 +240,11 @@ def summarize_span(
     try:
         summary = summarizer(messages, previous_summary)
     except Exception:  # noqa: BLE001 — summarizer failure must not fail the run
+        # The run goes on, but the dropped span is lost rather than summarised, so say why.
+        logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
         return COMPACTION_NOTICE
     if not summary or not summary.strip():
+        logger.warning("compaction summarizer returned nothing; dropping the span behind a notice")
         return COMPACTION_NOTICE
     return f"{SUMMARY_MARKER}\n{summary.strip()}"
 

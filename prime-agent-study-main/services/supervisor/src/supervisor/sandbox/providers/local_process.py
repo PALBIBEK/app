@@ -57,6 +57,7 @@ from supervisor.sandbox.status import (
 from supervisor.sandbox.security.env import sanitize_sandbox_env
 
 if TYPE_CHECKING:
+    from supervisor.seams.services import WorkspaceTreeIO
     from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
 
@@ -289,21 +290,21 @@ class LocalProcessSandbox(Sandbox):
     # Workspace Sync (Track B)
     # -------------------------------------------------------------------------
 
+    def as_tree_io(self) -> WorkspaceTreeIO:
+        """The sandbox directory as the scope workspace's file tree (hydrate / sync target)."""
+        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
+
+        return LocalFsTreeIO(self._root)
+
     async def hydrate_workspace(self, scope_id: str) -> WorkspaceSyncReport:
         if self._hydrator is None:
             raise WorkspaceSyncUnsupported("local_process")
-
-        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
-        tree_io = LocalFsTreeIO(self._root)
-        return await self._hydrator.hydrate(scope_id, tree_io)
+        return await self._hydrator.hydrate(scope_id, self.as_tree_io())
 
     async def sync_workspace(self, scope_id: str) -> WorkspaceSyncReport:
         if self._hydrator is None:
             raise WorkspaceSyncUnsupported("local_process")
-
-        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
-        tree_io = LocalFsTreeIO(self._root)
-        return await self._hydrator.sync(scope_id, tree_io)
+        return await self._hydrator.sync(scope_id, self.as_tree_io())
 
     # -------------------------------------------------------------------------
     # Computer Status (basic)

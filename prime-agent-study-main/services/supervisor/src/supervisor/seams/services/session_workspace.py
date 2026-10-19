@@ -70,6 +70,11 @@ class SessionWorkspaceService:
         self._authz = authz
         self._hydrator = hydrator
 
+    @property
+    def hydrator(self) -> WorkspaceHydrator | None:
+        """The deployment's workspace hydrator (every sandbox provider must use it)."""
+        return self._hydrator
+
     def assert_ready(self, state: SessionWorkspaceState) -> None:
         """Refuse tools while hydrate incomplete (R8). No-op if no scope bound."""
         if state.scope_id is None:

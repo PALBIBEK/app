@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.catalog.core.types import ArtifactKind, ArtifactStatus
@@ -19,7 +19,13 @@ from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.storage.converters import artifact_from_dict, artifact_to_dict
 from supervisor.db.models import CatalogArtifactRow
 
-__all__ = ["artifact_summary", "hydrate_composition_catalog", "persist_deprecate", "persist_offer"]
+__all__ = [
+    "artifact_summary",
+    "hydrate_composition_catalog",
+    "persist_deprecate",
+    "persist_offer",
+    "sync_composition",
+]
 
 # Referenced artifacts must be offered before the compositions that pin them.
 _HYDRATE_ORDER: dict[str, int] = {
@@ -104,11 +110,73 @@ async def hydrate_composition_catalog(
 
     rows = sorted(rows, key=lambda r: (_HYDRATE_ORDER.get(r.kind, 1), r.created_at or _EPOCH))
     for row in rows:
-        artifact = artifact_from_dict(row.kind, dict(row.body))
-        offered = catalog.offer(artifact)
-        if row.status == ArtifactStatus.DEPRECATED.value:
-            catalog.deprecate(row.kind, offered.name, offered.digest)
+        _reconcile(catalog, row)
     return len(rows)
+
+
+_REFERENCES: tuple[tuple[str, str], ...] = (
+    ("prompt_pack", ArtifactKind.PROMPT_PACK.value),
+    ("tool_set", ArtifactKind.TOOL_SET.value),
+    ("sandbox_profile", ArtifactKind.SANDBOX_PROFILE.value),
+    ("memory_profile", ArtifactKind.MEMORY_PROFILE.value),
+)
+"""Composition body field → kind of the artifact it pins."""
+
+
+async def sync_composition(
+    catalog: CompositionCatalog,
+    factory: async_sessionmaker[AsyncSession],
+    composition_id: str,
+    digest: str | None = None,
+) -> None:
+    """Bring one composition, and every artifact it pins, up to date from the database.
+
+    The database is the catalog's source of truth; each process's in-memory
+    catalog is a cache of it. Another process (an API replica, or the API when
+    this is a worker) may have published or deprecated an artifact since this
+    process hydrated, so anything about to resolve a session's pins syncs them
+    first: missing artifacts are loaded, and statuses follow the database.
+    """
+    async with factory() as db:
+        query = select(CatalogArtifactRow).where(
+            CatalogArtifactRow.kind == ArtifactKind.COMPOSITION.value,
+            CatalogArtifactRow.artifact_id == composition_id,
+        )
+        if digest is not None:
+            query = query.where(CatalogArtifactRow.digest == digest)
+        compositions = list((await db.execute(query)).scalars())
+        pinned = {
+            (kind, ref["id"], ref["digest"])
+            for row in compositions
+            for field, kind in _REFERENCES
+            if isinstance(ref := row.body.get(field), dict) and ref.get("id") and ref.get("digest")
+        }
+        references = (
+            list(
+                (
+                    await db.execute(
+                        select(CatalogArtifactRow).where(
+                            tuple_(
+                                CatalogArtifactRow.kind,
+                                CatalogArtifactRow.artifact_id,
+                                CatalogArtifactRow.digest,
+                            ).in_(sorted(pinned))
+                        )
+                    )
+                ).scalars()
+            )
+            if pinned
+            else []
+        )
+    for row in (*references, *compositions):  # what a composition pins, before it
+        _reconcile(catalog, row)
+
+
+def _reconcile(catalog: CompositionCatalog, row: CatalogArtifactRow) -> None:
+    """Make the cached artifact match its database row (content is digest-addressed)."""
+    offered = catalog.offer(artifact_from_dict(row.kind, dict(row.body)))
+    if row.status == ArtifactStatus.DEPRECATED.value:
+        catalog.deprecate(row.kind, offered.name, offered.digest)
 
 
 def artifact_summary(artifact: Any) -> dict[str, str]:

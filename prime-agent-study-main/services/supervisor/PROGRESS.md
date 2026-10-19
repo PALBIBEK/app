@@ -290,6 +290,26 @@ QM's model layer and its gateway contract, ported with the same behaviour
   key scoping and budgets, a whole githi session replaying signed thinking
   across its steps, and the browser endpoint (relay, native, strict).
 
+### 14. Tested live, as a user would (PR #6)
+The whole stack run as separate processes with docker-compose's wiring
+(Postgres, Temporal, the model gateway, the memory service, S3, API and
+worker), driven only through the public API, stage by stage: harness and
+catalog management, configurations reaching the model, sandboxes, session
+memory, policy and journaling. All runs used the gateway's echo model.
+The full report, with every finding (F1–F35) and the fix plan, is the
+"Supervisor live test report" doc.
+- **Six bugs the suite missed, fixed:** the journal could not write on Postgres
+  (no turn ran in a real deployment); workers never saw compositions published
+  after they booted; nested subagents had no model; no githi session could use
+  a shared scope; the session key refused the compaction summarizer, so
+  compaction silently dropped turns; a tenant over quota got 503 instead of 429.
+- **Proven live:** pinned harnesses run on exactly what they pinned; every seam
+  combination starts a session; read-only / write / full-access sandboxes and
+  path confinement; scopes; conversation across turns, restarts and forks;
+  notebooks; budgets, loop guard, approvals (allow, deny, durable timeout);
+  quotas and rate limits; a journal that is contiguous, persisted 1:1 and
+  gap-free on reconnect.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -299,18 +319,40 @@ QM's model layer and its gateway contract, ported with the same behaviour
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 673 passing, 0 failing, 0 that cannot be imported** (from 228
-  passing at the start); the model gateway's own suite: 81 passing, 0 failing
-  (from 11 failures and 3 errors before section 13). Two tests are intermittent and are run separately:
-  `test_memory_histories_replay_deterministically` (can time out under full
-  suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
-  "database is locked" in its 100-round loop). The Temporal suites can also
-  time out once under load and pass on rerun.
+- **Test suite: 684 passing, 0 failing** (from 228 passing at the start); the
+  model gateway's own suite: 81 passing. Two tests are intermittent and are run
+  separately: `test_memory_histories_replay_deterministically` (times out under
+  full-suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
+  "database is locked" in its 100-round loop). Temporal-backed tests need
+  `TEMPORAL_CLI_PATH` where the dev-server download is blocked.
+- **Three user goals are not met yet:** registering or reading a harness through
+  the API, long-term memory across sessions, and keeping one user's sessions
+  away from another user in the same tenant.
 
 ---
 
 ## Known gaps
 
+Found by the live tests (numbers as in the report):
+- **Security and audit.** The catalog has no tenant ownership (F10). Strict
+  multi-tenant mode is bypassed by a local_process sandbox profile, and a
+  missing e2b package falls back to local_process (F19). Session access is
+  tenant-wide; the stored owner is never checked (F29). Approvals record no
+  responder (F30).
+- **Long-term memory doesn't work** (F27): recall always returns 404, and facts
+  are scoped per session.
+- **Harnesses can't be read or registered through the API** (F5, F6); no list
+  APIs for harnesses or tools (F4, F12).
+- **No runnable default.** The shipped githi-v1 and coding-v1 pin a placeholder
+  image (F3); API and worker race to create the schema (F1); compose has no
+  memory service (F2); the default memory profile's summarizer is unserved and
+  its sizes don't fit small windows (F24–F26).
+- **Sandboxes.** Concurrent scope writes overwrite each other (F20); a session
+  without a scope loses its files when its worker dies (F21).
+- **Publish accepts configs that can never work** (F11, F17, F28). One loop-guard
+  trip fails the whole session (F32).
+
+Earlier:
 - **Two parallel session error hierarchies.** `session/core/errors.py` and
   `session/manager.py` both define `SessionNotFound`, `RecoveryBlocked` and
   others. The workflow paths match errors by name, so they're unaffected, but
@@ -343,14 +385,20 @@ QM's model layer and its gateway contract, ported with the same behaviour
 
 ## Next step
 
-**Make the supervisor deployable with Temporal everywhere, then clean up what
-the gaps list.** In order:
+**Merge the stack, then close the security gaps the live tests found.** In order:
 
-1. Add Temporal and the `supervisor-worker` to the staging compose files and
-   the Kubernetes manifests, run `docker compose up` for real, and run the
-   durability scenarios against that stack.
-2. Unify the session error hierarchies into one (`session/core/errors.py`), and
-   remove the duplicate `session/operations/subagent_ops.py`.
-3. Fix the two intermittent tests.
+1. Merge PRs #2 to #6, so main carries the six live fixes.
+2. Ownership and audit: tenant ownership on catalog artifacts, owner checks on
+   session routes, the responder on every approval (F10, F29, F30).
+3. Strict-mode sandboxes checked per session; fail boot instead of falling back
+   (F19).
+4. Long-term memory: the memory service's own session id, facts scoped to the
+   user (F27).
+5. Harness management through the API: read bodies, register manifests, list
+   harnesses and tools (F5, F6, F4, F12).
+6. A deployable default: migrations, a real image, the memory service in
+   compose, a served summarizer; then Temporal in the staging compose and
+   Kubernetes manifests (F1, F3, F2, F24).
+7. A real-model pass and a dedicated failure-injection pass.
 
 After that, per the roadmap: the backend, then the frontend.
