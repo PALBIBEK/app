@@ -62,14 +62,16 @@ def test_the_deploy_default_is_checked_too(tmp_path: Path) -> None:
         )
 
 
-def test_a_missing_isolating_provider_is_an_error_not_a_downgrade(tmp_path: Path) -> None:
+@pytest.mark.parametrize("strict", [True, False])
+def test_a_missing_isolating_provider_is_an_error_not_a_downgrade(strict: bool, tmp_path: Path) -> None:
+    """A profile asking for e2b never quietly gets host processes instead, strict or not."""
     pytest.importorskip("supervisor.sandbox.providers.e2b")
     with pytest.raises(ModuleNotFoundError):  # e2b is not installed here
         resolve_sandbox_create(
             _githi(),
             deploy_provider=LocalProcessProvider(base_dir=tmp_path),
             profile=_profile("e2b"),
-            multi_tenant_strict=True,
+            multi_tenant_strict=strict,
         )
 
 

@@ -258,8 +258,9 @@ def _resolve_provider(
         # The deploy provider's hydrator, so profile sandboxes can hydrate and sync scopes.
         return create_sandbox_provider(profile_provider, client=client, hydrator=hydrator)
     except ModuleNotFoundError:
-        # In strict mode a missing isolating provider is an error, never a quiet downgrade.
-        if deploy_provider is not None and not strict:
+        # Only a stand-in of the same kind (a test double) may replace it: a different
+        # provider would silently change the isolation the profile asked for.
+        if deploy_provider is not None and not strict and _same_kind(deploy_provider, profile_provider):
             return deploy_provider
         raise
 
@@ -399,3 +400,7 @@ def resolve_sandbox_create_full(
 def _provider_name(provider: object) -> str:
     """A provider's name as the strict-mode guard spells it (enum or string)."""
     return str(getattr(provider, "value", provider))
+
+
+def _same_kind(provider: object, requested: object) -> bool:
+    return _provider_name(getattr(provider, "name", "")) == _provider_name(requested)

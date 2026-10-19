@@ -154,7 +154,8 @@ jobs:
         working-directory: ${{ env.PROJECT }}
         run: |
           docker compose ps -a
-          for svc in $(docker compose config --services); do
+          # The supervisor first: a step keeps only its first ten error annotations.
+          for svc in supervisor supervisor-worker $(docker compose config --services | grep -vx 'supervisor\|supervisor-worker'); do
             tail=$(docker compose logs --no-color --tail 25 "$svc" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=compose $svc::${tail:0:3500}"
           done

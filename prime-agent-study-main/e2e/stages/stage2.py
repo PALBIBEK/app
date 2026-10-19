@@ -91,8 +91,11 @@ check("read a published composition's content via the API", "prompt_pack" in r.j
 prompt = local("prompt_packs", "coding-prompt")
 prompt2 = copy.deepcopy(prompt) | {"semver": "1.1.0"}
 prompt2["sections"][1]["text"] = "Prefer small diffs. Always explain the change in one line."
+code, refused = publish("prompt_pack", prompt2)
+check("a new version under a shipped name is refused (shipped artifacts are read-only)", code == 403, refused)
+prompt2["name"] = "my-coding-prompt"  # a tenant changes a shipped artifact by publishing its own copy
 code, p2 = publish("prompt_pack", prompt2)
-check("publish coding-prompt 1.1.0 (changed rule)", code == 200 and p2["digest"] != json.loads(
+check("publish my-coding-prompt 1.1.0 (the shipped prompt with a changed rule)", code == 200 and p2["digest"] != json.loads(
     (HARNESS / "prompt_packs" / "coding-prompt.json").read_text())["digest"], p2)
 
 code, again = publish("prompt_pack", prompt2)

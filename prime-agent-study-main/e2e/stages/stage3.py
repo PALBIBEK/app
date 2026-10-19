@@ -138,7 +138,7 @@ for route, path in (("standin-chat", "/v1/chat/completions"), ("standin-response
 
 # --- B. prompts -------------------------------------------------------------------
 print("\n## B. Prompt changes reach the model")
-prompt2 = local("prompt_packs", "coding-prompt") | {"semver": "1.1.0"}
+prompt2 = local("prompt_packs", "coding-prompt") | {"name": "my-coding-prompt", "semver": "1.1.0"}
 prompt2["sections"] = [dict(s) for s in prompt2["sections"]]
 prompt2["sections"][1]["text"] = "Prefer small diffs. Always explain the change in one line."
 p2 = ref(publish("prompt_pack", prompt2))
