@@ -27,7 +27,10 @@ dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
   "httpx>=0.28",
-  "ruff>=0.8",
+  "mypy==2.4.0",
+  "moto[server]>=5.0",
+  "pytest-timeout>=2.3",
+  "ruff==0.17.1",  # pinned: newer releases enable more rules by default
 ]
 docker = ["docker>=7.0"]
 e2b = ["e2b>=1.0"]
@@ -51,6 +54,18 @@ markers = [
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+extend-select = ["C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI declares dependencies and parameters as argument defaults by design.
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+packages = ["supervisor"]
+mypy_path = "src"

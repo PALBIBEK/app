@@ -10,6 +10,7 @@ dependencies = [
   "pydantic-settings>=2.6",
   "sqlalchemy[asyncio]>=2.0",
   "aiosqlite>=0.20",
+  "PyJWT>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -17,7 +18,7 @@ dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
   "httpx>=0.28",
-  "ruff>=0.8",
+  "ruff==0.17.1",  # pinned: newer releases enable more rules by default
 ]
 postgres = [
   "asyncpg>=0.30",

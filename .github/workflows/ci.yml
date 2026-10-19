@@ -1,0 +1,144 @@
+name: ci
+
+# The quality gates of the agent platform (prime-agent-study-main/), on every push and PR:
+# lint, types, every service's test suite, the end-to-end suite against a real stack
+# (Postgres, Temporal, gateway, memory service, API and worker as separate processes),
+# and a docker-compose smoke test. A live model turn runs when MODEL_E2E_API_KEY is set.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PROJECT: prime-agent-study-main
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint-and-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the supervisor with its dev tools
+        run: pip install -e "$PROJECT/services/supervisor[dev,postgres,s3]"
+      - name: Lint (each service under its own rules)
+        run: |
+          status=0
+          for svc in supervisor model-gateway memory; do
+            echo "::group::ruff $svc"
+            (cd "$PROJECT/services/$svc" && ruff check src) || status=1
+            echo "::endgroup::"
+          done
+          (cd "$PROJECT/e2e" && ruff check .) || status=1
+          exit $status
+      - name: Types (supervisor)
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: mypy
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [supervisor, model-gateway, memory]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
+        run: |
+          case "${{ matrix.service }}" in
+            supervisor) pip install -e ".[dev,postgres,s3]" ;;
+            memory)     pip install -e ".[dev,postgres]" ;;
+            *)          pip install -e ".[dev]" ;;
+          esac
+      - name: Temporal CLI (the supervisor's workflow tests start a dev server)
+        if: matrix.service == 'supervisor'
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "TEMPORAL_CLI_PATH=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+      - name: Test
+        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
+        run: pytest -q
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: supervisor
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yal -d supervisor"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: One virtualenv per service, as each is deployed
+        working-directory: ${{ env.PROJECT }}/services
+        run: |
+          python -m venv supervisor/.venv && supervisor/.venv/bin/pip install -q -e "supervisor[dev,postgres,s3]"
+          python -m venv model-gateway/.venv && model-gateway/.venv/bin/pip install -q -e "model-gateway[dev]"
+          python -m venv memory/.venv && memory/.venv/bin/pip install -q -e "memory[dev,postgres]"
+      - name: Temporal CLI
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "TEMPORAL_CLI=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+      - name: Databases and service hostnames
+        run: |
+          PGPASSWORD=yal psql -h 127.0.0.1 -p 5433 -U yal -d supervisor -c "create database memory"
+          echo "127.0.0.1 model-gateway acp temporal memory-service" | sudo tee -a /etc/hosts
+      - name: Start the stack
+        run: $PROJECT/e2e/stack/up.sh
+      - name: End-to-end stages
+        run: $PROJECT/e2e/run.sh
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: ${{ env.PROJECT }}/e2e/.run/logs/
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the compose stack
+        working-directory: ${{ env.PROJECT }}
+        run: docker compose up -d --build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: A session runs a turn through the compose stack
+        working-directory: ${{ env.PROJECT }}/e2e
+        run: |
+          pip install -q httpx PyJWT
+          python compose_smoke.py
+      - name: Compose logs
+        if: failure()
+        working-directory: ${{ env.PROJECT }}
+        run: docker compose logs --no-color --tail 300
