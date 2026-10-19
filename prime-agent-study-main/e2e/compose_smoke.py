@@ -7,8 +7,10 @@ Exits non-zero (with the last events seen) if any step fails.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
+from typing import NoReturn
 
 import httpx
 
@@ -27,7 +29,14 @@ def wait_ready(timeout_s: float = 300) -> None:
         except httpx.HTTPError as exc:
             last = repr(exc)
         time.sleep(3)
-    sys.exit(f"supervisor never became ready: {last}")
+    fail(f"supervisor never became ready: {last}")
+
+
+def fail(message: str) -> NoReturn:
+    """Exit non-zero; in CI the reason also becomes an annotation."""
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::error title=compose smoke::{message}")
+    sys.exit(message)
 
 
 def main() -> None:
@@ -35,13 +44,16 @@ def main() -> None:
     user = User("smoke", "ci")
     r = user.post("/v1/sessions", {"harness_version": "kg-v1"})
     if r.status_code != 201:
-        sys.exit(f"session create failed: {r.status_code} {r.text[:300]}")
+        fail(f"session create failed: {r.status_code} {r.text[:300]}")
     sid = r.json()["session_id"]
     if user.say(sid, "hello from CI").status_code != 202:
-        sys.exit("message refused")
-    evs = user.wait(sid, runs_ended(1), timeout=120)
+        fail("message refused")
+    try:
+        evs = user.wait(sid, runs_ended(1), timeout=120)
+    except TimeoutError as exc:
+        fail(f"the turn never finished: {exc}")
     if "error" in types(evs):
-        sys.exit(f"the turn failed: {types(evs)}")
+        fail(f"the turn failed: {[e for e in evs if e.get('type') == 'error']}")
     print(f"compose smoke: session {sid} ran a turn: {types(evs)}")
 
 

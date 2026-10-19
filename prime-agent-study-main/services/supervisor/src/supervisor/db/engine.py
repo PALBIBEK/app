@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -81,13 +81,33 @@ def make_engine(url: str | None = None) -> AsyncEngine:
             "pool_pre_ping": _env_bool("DB_POOL_PRE_PING", True),
         })
     elif resolved_url.startswith("sqlite"):
-        # SQLite: smaller pool, no pre-ping needed
+        # SQLite: smaller pool, no pre-ping needed. Writers wait for the lock
+        # (sqlite3's own busy timeout) instead of failing at once.
         kwargs.update({
             "pool_size": _env_int("DB_POOL_SIZE", 5),
             "max_overflow": _env_int("DB_MAX_OVERFLOW", 0),
+            "connect_args": {"timeout": _SQLITE_BUSY_TIMEOUT_S},
         })
 
-    return create_async_engine(resolved_url, **kwargs)
+    engine = create_async_engine(resolved_url, **kwargs)
+    if resolved_url.startswith("sqlite") and ":memory:" not in resolved_url:
+        event.listen(engine.sync_engine, "connect", _sqlite_concurrent_writers)
+    return engine
+
+
+_SQLITE_BUSY_TIMEOUT_S = 30
+
+
+def _sqlite_concurrent_writers(dbapi_connection: Any, _record: Any) -> None:
+    """WAL lets readers run beside the writer; the busy timeout queues writers.
+
+    Without both, two coroutines writing at once (a turn's journal and its
+    post-turn bookkeeping) fail with "database is locked".
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_S * 1000}")
+    cursor.close()
 
 
 async def create_all(engine: AsyncEngine) -> None:

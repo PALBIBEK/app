@@ -26,8 +26,8 @@ jobs:
   lint-and-types:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -38,14 +38,20 @@ jobs:
           status=0
           for svc in supervisor model-gateway memory; do
             echo "::group::ruff $svc"
-            (cd "$PROJECT/services/$svc" && ruff check src) || status=1
+            (cd "$PROJECT/services/$svc" && ruff check src --output-format github) || status=1
             echo "::endgroup::"
           done
-          (cd "$PROJECT/e2e" && ruff check .) || status=1
+          (cd "$PROJECT/e2e" && ruff check . --output-format github) || status=1
           exit $status
       - name: Types (supervisor)
         working-directory: ${{ env.PROJECT }}/services/supervisor
-        run: mypy
+        run: |
+          set -o pipefail
+          mypy | tee mypy.out || {
+            grep -E '^src/.+:[0-9]+: error:' mypy.out | head -40 \
+              | sed -E 's#^([^:]+):([0-9]+): error: (.*)$#::error file=${{ env.PROJECT }}/services/supervisor/\1,line=\2::\3#'
+            exit 1
+          }
 
   tests:
     runs-on: ubuntu-latest
@@ -54,8 +60,8 @@ jobs:
       matrix:
         service: [supervisor, model-gateway, memory]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -74,7 +80,12 @@ jobs:
           echo "TEMPORAL_CLI_PATH=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
       - name: Test
         working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
-        run: pytest -q
+        run: |
+          set -o pipefail
+          pytest -q -rfE 2>&1 | tee pytest.out || {
+            grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/'
+            exit 1
+          }
 
   e2e:
     runs-on: ubuntu-latest
@@ -92,8 +103,8 @@ jobs:
           --health-cmd "pg_isready -U yal -d supervisor"
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -112,12 +123,12 @@ jobs:
           PGPASSWORD=yal psql -h 127.0.0.1 -p 5433 -U yal -d supervisor -c "create database memory"
           echo "127.0.0.1 model-gateway acp temporal memory-service" | sudo tee -a /etc/hosts
       - name: Start the stack
-        run: $PROJECT/e2e/stack/up.sh
+        run: $PROJECT/e2e/stack/up.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
       - name: End-to-end stages
-        run: $PROJECT/e2e/run.sh
+        run: $PROJECT/e2e/run.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
       - name: Logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-logs
           path: ${{ env.PROJECT }}/e2e/.run/logs/
@@ -126,11 +137,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and start the compose stack
         working-directory: ${{ env.PROJECT }}
         run: docker compose up -d --build
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: A session runs a turn through the compose stack
@@ -141,4 +152,9 @@ jobs:
       - name: Compose logs
         if: failure()
         working-directory: ${{ env.PROJECT }}
-        run: docker compose logs --no-color --tail 300
+        run: |
+          docker compose ps -a
+          for svc in $(docker compose config --services); do
+            tail=$(docker compose logs --no-color --tail 25 "$svc" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=compose $svc::${tail:0:3500}"
+          done

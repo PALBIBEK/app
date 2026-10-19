@@ -34,6 +34,7 @@ from tests.support.githi_env import (
     spawn_worker,
 )
 from tests.support.scripted import ScriptedGateway
+from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -201,10 +202,7 @@ async def test_fork_copy_is_safe_to_retry(env: Env, model: Callable[..., Scripte
 
 async def test_session_op_histories_replay_deterministically(env: Env) -> None:
     replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)
-    histories = [
-        await env.client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
-        async for run in env.client.list_workflows("WorkflowType = 'AgentSession'")
-    ]
+    histories = [h async for h in replayable_histories(env.client, "WorkflowType = 'AgentSession'")]
     for history in histories:
         result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
         assert result.replay_failure is None, result.replay_failure

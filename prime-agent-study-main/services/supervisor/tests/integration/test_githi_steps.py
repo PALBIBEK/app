@@ -44,6 +44,7 @@ from tests.support.githi_env import (
     spawn_worker,
 )
 from tests.support.scripted import ScriptedGateway, slow_tool
+from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -321,9 +322,8 @@ async def test_worker_killed_during_a_tool(
 # --- determinism ----------------------------------------------------------------
 
 
-async def _histories(client: Client) -> AsyncIterator[WorkflowHistory]:
-    async for run in client.list_workflows("WorkflowType = 'AgentSession'"):
-        yield await client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
+def _histories(client: Client) -> AsyncIterator[WorkflowHistory]:
+    return replayable_histories(client, "WorkflowType = 'AgentSession'")
 
 
 async def test_stepped_histories_replay_deterministically(
