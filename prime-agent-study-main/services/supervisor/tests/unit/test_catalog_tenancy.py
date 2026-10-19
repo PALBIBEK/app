@@ -95,7 +95,7 @@ async def test_a_name_belongs_to_the_tenant_that_published_it_first(boot: Boot) 
     assert r.status_code == 200, r.text
     digest = r.json()["digest"]
 
-    hijack = await _publish(client, T2, "prompt_pack", mine | {"system": "something else"})
+    hijack = await _publish(client, T2, "prompt_pack", mine | {"semver": "9.9.9"})
     assert hijack.status_code == 403
     assert (await client.get(f"/v1/catalog/prompt_pack/t1-prompt/{digest}", headers=T2)).status_code == 404
     deprecate = f"/v1/catalog/prompt_pack/t1-prompt/{digest}/deprecate"
@@ -139,4 +139,4 @@ async def test_ownership_survives_a_restart(boot: Boot) -> None:
     body = _shipped("prompt_packs", "coding-prompt") | {"name": "durable-name"}
     assert (await _publish(first, T1, "prompt_pack", body)).status_code == 200
     second = await boot()  # a new process: ownership comes back from the database
-    assert (await _publish(second, T2, "prompt_pack", body | {"system": "x"})).status_code == 403
+    assert (await _publish(second, T2, "prompt_pack", body | {"semver": "9.9.9"})).status_code == 403

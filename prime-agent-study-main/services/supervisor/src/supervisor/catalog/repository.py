@@ -9,7 +9,7 @@ published through the API survive a restart.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -204,7 +204,14 @@ def _reconcile(catalog: CompositionCatalog, row: CatalogArtifactRow) -> None:
         catalog.deprecate(row.kind, offered.name, offered.digest)
 
 
-def artifact_summary(artifact: Any) -> dict[str, str]:
+class ArtifactSummary(TypedDict):
+    artifact_id: str
+    digest: str
+    status: str
+    semver: str
+
+
+def artifact_summary(artifact: Any) -> ArtifactSummary:
     """Fields shared by every artifact kind, shaped for ``CatalogArtifactOut``."""
     return {
         "artifact_id": artifact.name,

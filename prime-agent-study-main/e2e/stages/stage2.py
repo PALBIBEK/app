@@ -32,6 +32,18 @@ def check(name: str, ok: bool, detail: object = "") -> bool:
     return ok
 
 
+skipped: list[tuple[str, str]] = []
+# The "harness" runtime (coding-v1) runs the Pi coding agent inside its own image; only a
+# deployment that built and pinned that image can start it (see harness/images/Dockerfile).
+PI_HARNESS = bool(os.environ.get("E2E_PI_HARNESS"))
+
+
+def skip(name: str, why: str) -> None:
+    """Not run here, and said so: a skip is never counted as a pass."""
+    skipped.append((name, why))
+    print(f"SKIP {name}  — {why}")
+
+
 def local(kind_dir: str, name: str) -> dict:
     body = json.loads((HARNESS / kind_dir / f"{name}.json").read_text())
     body.pop("digest", None)
@@ -67,6 +79,9 @@ print("\n## 1. Use a shipped harness as-is")
 shipped = {a["artifact_id"]: a for a in u.get("/v1/catalog/compositions").json()}
 for name in ("githi-v1", "githi-tools-v1", "coding-v1", "coding-durable-v1"):
     harness = json.loads((HARNESS / "compositions" / f"{name}.json").read_text())["harness_version"]
+    if harness == "coding-v1" and not PI_HARNESS:
+        skip(f"shipped composition {name} ({harness}) starts a session", "needs the Pi harness image")
+        continue
     code, body = create(name, shipped[name]["digest"], harness)
     check(f"shipped composition {name} ({harness}) starts a session", code == 201, f"{code} {body}")
 
@@ -86,7 +101,7 @@ STATE["my-githi"] = mine
 # --- 3. modify a registered harness ---------------------------------------------------
 print("\n## 3. Modify it: new prompt, tool set, memory → new versions; old pins keep working")
 r = u.get(f"/v1/catalog/composition/my-githi/{mine['digest']}")
-check("read a published composition's content via the API", "prompt_pack" in r.json(), list(r.json()))
+check("read a published composition's content via the API", "prompt_pack" in (r.json().get("body") or {}), list(r.json()))
 
 prompt = local("prompt_packs", "coding-prompt")
 prompt2 = copy.deepcopy(prompt) | {"semver": "1.1.0"}
@@ -151,12 +166,14 @@ check("custom prompt pack (new persona, own sections)", code == 200, pc)
 
 memories = {}
 for mname, recall in (("recall-markdown", {"enabled": True, "backend": "githi_markdown"}),
-                      ("recall-durable", {"enabled": True, "backend": "durable"}),
-                      ("recall-mcp-no-url", {"enabled": True, "backend": "mcp"})):
+                      ("recall-durable", {"enabled": True, "backend": "durable"})):
     body = local("memory_profiles", "default") | {"name": mname, "recall": recall}
     code, m = publish("memory_profile", body)
     check(f"memory profile {mname}", code == 200, m)
     memories[mname] = m
+code, m = publish("memory_profile", local("memory_profiles", "default")
+                  | {"name": "recall-mcp-no-url", "recall": {"enabled": True, "backend": "mcp"}})
+check("a memory profile that can never recall (mcp, no server) is refused at publish", code == 422, m)
 
 sandboxes = {}
 for sname, fields in (("sb-readonly", {"provider": "local_process", "file_effects": "read_only"}),
@@ -179,7 +196,6 @@ combos = {
     "c-no-memory": {"memory_profile": None},
     "c-recall-markdown": {"memory_profile": ref(memories["recall-markdown"])},
     "c-recall-durable": {"memory_profile": ref(memories["recall-durable"])},
-    "c-recall-mcp-no-url": {"memory_profile": ref(memories["recall-mcp-no-url"])},
     "c-sb-readonly": {"sandbox_profile": ref(sandboxes["sb-readonly"])},
     "c-sb-full": {"sandbox_profile": ref(sandboxes["sb-full"])},
     "c-sb-docker": {"sandbox_profile": ref(sandboxes["sb-docker"])},
@@ -201,6 +217,9 @@ for cname, change in combos.items():
         continue
     body = {k: v for k, v in (base | {"name": cname} | change).items() if v is not None}
     code, c = publish("composition", body)
+    if cname == "c-route-unknown":
+        check("a composition naming a model the gateway does not serve is refused at publish", code == 422, c)
+        continue
     if not check(f"publish composition {cname}", code == 200, c):
         continue
     code, s = create(cname, c["digest"])
@@ -212,6 +231,11 @@ for cname, change in combos.items():
 # other harness runtimes over the same seams
 for harness, name in (("coding-v1", "my-coding"), ("kg-v1", "my-kg")):
     body = base | {"name": name, "harness_version": harness}
+    if harness == "kg-v1":  # needs no sandbox, so it pins none (pinning one is refused)
+        body = {k: v for k, v in body.items() if k != "sandbox_profile"}
+    if harness == "coding-v1" and not PI_HARNESS:
+        skip(f"session from {name} ({harness}) starts", "needs the Pi harness image")
+        continue
     code, c = publish("composition", body)
     if check(f"publish {name} on harness {harness}", code == 200, c):
         code, s = create(name, c["digest"], harness)
@@ -261,7 +285,7 @@ check("v2 still starts sessions after restart", create("my-githi", v2["digest"])
 check("deprecation survived the restart", create("to-deprecate", dep["digest"])[0] != 201)
 
 (Path(os.environ["E2E_RUN_DIR"]) / "stage2_state.json").write_text(json.dumps(STATE, indent=1, default=str))
-print(f"\n{sum(ok for _, ok, _ in results)}/{len(results)} checks passed")
+print(f"\n{sum(ok for _, ok, _ in results)}/{len(results)} checks passed, {len(skipped)} skipped")
 for name, ok, detail in results:
     if not ok:
         print("  FAIL", name, "—", detail)

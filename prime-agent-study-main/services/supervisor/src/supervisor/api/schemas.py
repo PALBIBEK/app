@@ -188,6 +188,8 @@ class CatalogArtifactOut(BaseModel):
     digest: str
     status: str
     semver: str
+    # The artifact itself, on a single read: what a user copies and changes to make a new version.
+    body: dict[str, Any] | None = None
 
 
 # --- long-term memory (notebooks) ----------------------------------------------

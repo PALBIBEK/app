@@ -346,12 +346,13 @@ def resolve_sandbox_create(
         _provider_name(getattr(provider, "name", "")), multi_tenant_strict=strict
     )
 
-    if not image:
-        raise MissingImageDigest()
-
-    # D14: Reject placeholder/fixture digests
-    if is_placeholder_image_digest(image):
-        raise PlaceholderImageError(image)
+    # D14: an image a provider will actually run must be pinned to a real digest. A
+    # host-process sandbox runs no image, so the shipped placeholder does not block it.
+    if _runs_images(provider):
+        if not image:
+            raise MissingImageDigest()
+        if is_placeholder_image_digest(image):
+            raise PlaceholderImageError(image)
 
     return provider, image
 
@@ -404,3 +405,10 @@ def _provider_name(provider: object) -> str:
 
 def _same_kind(provider: object, requested: object) -> bool:
     return _provider_name(getattr(provider, "name", "")) == _provider_name(requested)
+
+
+_IMAGELESS_PROVIDERS = frozenset({"local_process", "none"})
+
+
+def _runs_images(provider: object) -> bool:
+    return _provider_name(getattr(provider, "name", "")) not in _IMAGELESS_PROVIDERS

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -36,7 +37,7 @@ def _url() -> str:
     return sync_url(explicit) if explicit else str(config.get_main_option("sqlalchemy.url"))
 
 
-def _configure(**kwargs: object) -> None:
+def _configure(**kwargs: Any) -> None:
     context.configure(
         target_metadata=target_metadata,
         compare_type=True,

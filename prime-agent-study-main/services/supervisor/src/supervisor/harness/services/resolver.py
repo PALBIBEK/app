@@ -107,6 +107,10 @@ class HarnessCatalog:
                 },
             )
 
+    def has(self, version: str) -> bool:
+        """Whether this catalog knows ``version`` (any status)."""
+        return version in self._versions
+
     def register_sync(
         self,
         manifest: HarnessManifest,

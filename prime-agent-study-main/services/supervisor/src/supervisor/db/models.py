@@ -116,6 +116,8 @@ class HarnessVersionRow(Base):
     manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The tenant that registered it through the API; None for shipped versions.
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CatalogArtifactRow(Base):

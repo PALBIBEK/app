@@ -156,6 +156,10 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+      - name: Report the githi sandbox image's registry digest (temporary, to pin it)
+        run: |
+          docker pull -q buildpack-deps:bookworm-scm >/dev/null
+          echo "::notice title=sandbox image digest::$(docker inspect --format '{{index .RepoDigests 0}}' buildpack-deps:bookworm-scm)"
       - name: Build and start the compose stack
         working-directory: ${{ env.PROJECT }}
         run: docker compose up -d --build

@@ -19,11 +19,8 @@ from supervisor.api.schemas import (
 )
 from supervisor.api.session_ops import domain_http_error, run_op
 from supervisor.api.workflow_errors import to_http
-from supervisor.catalog import HarnessVersionMismatch, NotOffered
-from supervisor.harness import HarnessNotOffered, IncompatibleHarness
 from supervisor.policy.budget import BudgetExceeded
-from supervisor.policy.quotas import QuotaExceeded
-from supervisor.seams.services import GrantDenied, NotScopeMember, Principal
+from supervisor.seams.services import Principal
 from supervisor.session import (
     RecoveryBlocked,
     SessionAwaitingApproval,
@@ -82,20 +79,9 @@ async def create_session(
             principal_id=principal.id,
             memory=body.memory.model_dump() if body.memory else None,
         )
-    except IncompatibleHarness as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except HarnessNotOffered as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except NotOffered as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except HarnessVersionMismatch as exc:
-        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    except QuotaExceeded as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
-    except (GrantDenied, NotScopeMember) as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # The same statuses as the workflow path: one table (api.workflow_errors).
+        raise domain_http_error(exc) or HTTPException(status_code=503, detail=str(exc)) from exc
     info = await manager.get(session_id, tenant_id=tenant_id)
     return CreateSessionResponse(
         session_id=session_id,

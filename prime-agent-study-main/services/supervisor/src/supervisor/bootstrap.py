@@ -19,6 +19,7 @@ from supervisor.catalog.storage import CompositionCatalog
 from supervisor.config import Settings
 from supervisor.db.engine import make_engine, session_factory
 from supervisor.db.migrate import migrate
+from supervisor.harness.repository import hydrate_harness_catalog
 from supervisor.harness import HarnessCatalog, load_manifest
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
@@ -60,6 +61,8 @@ async def bootstrap_supervisor(
         session_maker = session_factory(engine)
 
     harness_catalog = bootstrap_harness_catalog(settings.harness_versions_dir)
+    # Versions tenants registered through the API (shipped ones come from the directory).
+    await hydrate_harness_catalog(harness_catalog, session_maker)
     if composition_catalog is None and settings.load_composition_catalog:
         composition_catalog = bootstrap_composition_catalog(settings.resolved_catalog_dir())
 

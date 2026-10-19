@@ -48,6 +48,9 @@ from supervisor.harness import (
     materialize_harness_binds,
 )
 from supervisor.harness.services.compat_checker import capabilities_for, check
+from supervisor.harness.core.errors import UnknownHarness
+from supervisor.harness.repository import harness_owner, sync_harness_version
+from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.policy.approvals import ApprovalBroker
@@ -285,6 +288,9 @@ class SessionManager:
         memory: MemoryRequest | dict[str, Any] | None = None,
         session_id: str | None = None,
     ) -> str:
+        await sync_harness_version(self._catalog, self._db, harness_version)
+        if not harness_visible_to(await harness_owner(self._db, harness_version), tenant_id):
+            raise UnknownHarness(harness_version)  # another tenant's registered version
         manifest = await self._catalog.resolve(harness_version, for_create=True)
         check(
             manifest,

@@ -10,7 +10,8 @@ from supervisor.api import deps
 from supervisor.api.schemas import CatalogArtifactOut
 from supervisor.catalog import CatalogError, ArtifactKind, ToolSet
 from supervisor.catalog.services import require_implemented
-from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict
+from supervisor.catalog.services.publish_checks import check_publishable
+from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict, artifact_to_dict
 
 from supervisor.catalog.core.errors import CatalogOwnershipRequired, NotOffered
 from supervisor.catalog.repository import (
@@ -58,6 +59,7 @@ async def publish_artifact(
     factory = deps.get_session_factory(request)
     try:
         artifact = artifact_from_dict(kind, body)
+        check_publishable(kind, body, artifact)  # 422: unknown fields, unservable models, ...
         if isinstance(artifact, ToolSet):
             require_implemented(artifact)  # 422 before it can be pinned
         if (owner := await persisted_owner(factory, kind, artifact.name)) is not None:
@@ -132,4 +134,4 @@ async def get_artifact(
         art = catalog.get(kind, artifact_id, digest)
     except CatalogError as exc:
         raise _catalog_error(exc) from exc
-    return CatalogArtifactOut(kind=kind, **artifact_summary(art))
+    return CatalogArtifactOut(kind=kind, **artifact_summary(art), body=artifact_to_dict(art))

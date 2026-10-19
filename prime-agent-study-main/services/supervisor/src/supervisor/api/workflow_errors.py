@@ -28,8 +28,9 @@ _STATUS: Final[dict[str, int]] = {
     "NotScopeMember": 403,
     "HarnessVersionMismatch": 422,
     "UnknownHarness": 422,
-    "HarnessNotOffered": 409,
-    "NotOffered": 409,
+    # Absent, deprecated or another tenant's: one answer, as the catalog API gives (F13).
+    "HarnessNotOffered": 404,
+    "NotOffered": 404,
     "IncompatibleHarness": 503,
     "ApprovalNotFound": 404,
     "ApprovalAlreadyResponded": 409,

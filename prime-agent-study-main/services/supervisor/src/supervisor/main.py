@@ -14,6 +14,7 @@ from supervisor.api import (
     approvals,
     catalog,
     events,
+    harness,
     health,
     memory,
     metrics,
@@ -150,6 +151,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(events.router)
     app.include_router(approvals.router)
     app.include_router(tools.router)
+    app.include_router(harness.router)
     app.include_router(workspace.router)
     app.include_router(scopes.router)
     app.include_router(memory.router)

@@ -7,6 +7,7 @@ processes, per session and at boot.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from pathlib import Path
 
@@ -96,3 +97,36 @@ async def test_boot_refuses_to_fall_back_to_local_processes(
     monkeypatch.setenv("BLOB_DIR", str(tmp_path / "blobs"))
     with pytest.raises(RuntimeError, match="MULTI_TENANT_STRICT forbids"):
         await bootstrap_supervisor(Settings.from_env())
+
+
+PLACEHOLDER = "sha256:" + "b" * 64
+
+
+def test_a_host_process_sandbox_runs_no_image_so_a_placeholder_does_not_block_it(tmp_path: Path) -> None:
+    """F3: the shipped githi-v1 pins a placeholder image; local development must still run it."""
+    provider, _ = resolve_sandbox_create(
+        _githi(),
+        deploy_provider=LocalProcessProvider(base_dir=tmp_path),
+        profile=artifact_from_dict(
+            "sandbox_profile",
+            {"name": "p", "semver": "1.0.0", "protocol_version": 1, "status": "offered",
+             "provider": "local_process", "image_digest": PLACEHOLDER,
+             "file_effects": "workspace_write", "approval_default": "ask"},
+        ),
+        multi_tenant_strict=False,
+    )
+    assert provider is not None
+
+
+def test_a_provider_that_runs_images_still_refuses_a_placeholder() -> None:
+    from supervisor.sandbox.resolve import PlaceholderImageError
+
+    class DockerLike:
+        name = "local_docker"
+
+    with pytest.raises(PlaceholderImageError):
+        resolve_sandbox_create(
+            dataclasses.replace(_githi(), image_digest=PLACEHOLDER),
+            deploy_provider=DockerLike(),  # type: ignore[arg-type]
+            multi_tenant_strict=False,
+        )
