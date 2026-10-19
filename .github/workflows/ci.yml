@@ -43,6 +43,8 @@ jobs:
           done
           (cd "$PROJECT/e2e" && ruff check . --output-format github) || status=1
           exit $status
+      - name: Shipped catalog digests are current
+        run: python "$PROJECT/harness/scripts/recompute-digests.py" --check
       - name: Types (supervisor)
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |

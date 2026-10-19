@@ -8,6 +8,7 @@ invokes, memory and subagent operations) must use that same set.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 import pytest
 
 from supervisor.app import SupervisorState, build_supervisor
+from supervisor.catalog.core.types import DigestRef
 from supervisor.catalog.loading.bootstrap import (
     bootstrap_composition_catalog,
     default_catalog_dir,
@@ -107,13 +109,37 @@ async def test_every_model_calling_seam_uses_the_pinned_gateway_and_session_key(
 async def test_the_session_key_admits_the_summarizer_its_memory_profile_names(
     boot: Boot,
 ) -> None:
-    """githi-v1 runs on ``echo`` and compacts with ``cheap-summary`` (memory_profiles/default).
+    """A profile that compacts with its own summarizer gets that model in the session's key.
 
-    A key limited to ``echo`` alone has the gateway refuse every summary, and
-    compaction then silently falls back to dropping the span behind a notice.
+    A key limited to the session's model alone has the gateway refuse every
+    summary, and compaction then silently falls back to dropping the span.
+    The shipped default summarises with the session's own model.
     """
     state = await boot()
     await _create(state)
+    assert state.keys.minted[-1]["allowed_models"] == ["echo"]  # type: ignore[attr-defined]
+
+    catalog = state.composition_catalog
+    assert catalog is not None
+    default = catalog.get("memory_profile", "default", catalog.list_versions("memory_profile", "default")[-1])
+    summarizing = catalog.offer(
+        dataclasses.replace(default, name="summarizing", digest="", summarization_model="cheap-summary")
+    )
+    githi = catalog.get("composition", "githi-v1", catalog.list_versions("composition", "githi-v1")[-1])
+    variant = catalog.offer(
+        dataclasses.replace(
+            githi,
+            name="githi-summarizing",
+            digest="",
+            memory_profile=DigestRef(id=summarizing.name, digest=summarizing.digest),
+        )
+    )
+    await state.manager.create(
+        tenant_id="t1",
+        harness_version="githi-v1",
+        composition_id=variant.name,
+        composition_digest=variant.digest,
+    )
     assert state.keys.minted[-1]["allowed_models"] == ["echo", "cheap-summary"]  # type: ignore[attr-defined]
 
 

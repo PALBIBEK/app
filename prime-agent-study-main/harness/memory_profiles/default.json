@@ -3,10 +3,9 @@
     "enabled": true,
     "keep_recent_tokens": 20000,
     "pressure_ratio": 0.8,
-    "reserve_tokens": 16384,
-    "summarization_model": "cheap-summary"
+    "reserve_tokens": 16384
   },
-  "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
+  "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
   "name": "default",
   "protocol_version": 1,
   "recall": {

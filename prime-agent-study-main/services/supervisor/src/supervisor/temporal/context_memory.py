@@ -76,9 +76,26 @@ class _Binding:
             return reported
         return DEFAULT_CONTEXT_WINDOW
 
+    def reserve(self, window: int) -> int:
+        """Room kept for the reply: the profile's, at most a quarter of the window."""
+        return min(self.profile.reserve_tokens, int(window * _MAX_RESERVE_SHARE))
+
+    def keep_recent(self, window: int) -> int:
+        """Recent conversation kept verbatim: the profile's, at most 30% of the window."""
+        return min(self.profile.keep_recent_tokens, int(window * _MAX_KEEP_SHARE))
+
     def limit(self, window: int) -> int:
-        """Compact once the conversation needs more than this many tokens."""
-        return min(window - self.profile.reserve_tokens, int(window * self.profile.pressure_ratio))
+        """Compact once the conversation needs more than this many tokens.
+
+        The profile's sizes are absolute (the defaults suit large windows), so they
+        are capped to the model's window: unscaled, a 16k reserve on an 8k model
+        made the limit negative and a 20k recent span kept everything.
+        """
+        return min(window - self.reserve(window), int(window * self.profile.pressure_ratio))
+
+
+_MAX_RESERVE_SHARE = 0.25
+_MAX_KEEP_SHARE = 0.30
 
 
 class PinnedContextMemory:
@@ -125,7 +142,7 @@ class PinnedContextMemory:
         window = await binding.context_window()
         if tokens <= binding.limit(window):
             return
-        tail = _recent(prior, binding.profile.keep_recent_tokens, binding.memory)
+        tail = _recent(prior, binding.keep_recent(window), binding.memory)
         head = prior[: len(prior) - len(tail)]
         if not head:
             return
@@ -148,7 +165,7 @@ class PinnedContextMemory:
             tokens_before=tokens,
             previous_summary=extract_previous_summary(prior),
             context_window=window,
-            reserve_tokens=binding.profile.reserve_tokens,
+            reserve_tokens=binding.reserve(window),
         )
         end = await self._summarise(compaction_id, binding, preparation, tail)
         await self._record(session_id, run_id, "compaction:end", end)
@@ -222,10 +239,15 @@ def _recent(
     keep_tokens: int,
     memory: ContextMemoryProvider,
 ) -> list[dict[str, Any]]:
-    """The newest messages worth ``keep_tokens``, widened so no tool result is orphaned."""
+    """The newest messages worth ``keep_tokens``, widened so no tool result is orphaned.
+
+    A newest message larger than the whole budget is summarised with the rest
+    rather than kept: kept, one oversized reply left the conversation above the
+    window after compaction.
+    """
     kept: list[dict[str, Any]] = []
     for message in reversed(messages):
-        if kept and memory.estimate_tokens([*kept, message]) > keep_tokens:
+        if memory.estimate_tokens([*kept, message]) > keep_tokens:
             break
         kept.insert(0, message)
     return whole_exchanges(kept, messages)
