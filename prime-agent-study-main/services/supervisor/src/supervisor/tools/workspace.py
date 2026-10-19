@@ -21,7 +21,7 @@ import contextlib
 import os
 import shutil
 import signal
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
@@ -97,8 +97,11 @@ class Workspace(Protocol):
         """Every file at or below ``path``, workspace-relative and sorted."""
         ...
 
-    async def run(self, command: str, *, timeout_s: float) -> CommandResult:
-        """Run a shell command in the workspace root. Raises ``UnsupportedCapability``."""
+    async def run(
+        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+    ) -> CommandResult:
+        """Run a shell command in the workspace root, with ``env`` added to its
+        scrubbed environment. Raises ``UnsupportedCapability``."""
         ...
 
 
@@ -190,16 +193,18 @@ class HostWorkspace:
             for name in filenames:
                 yield (Path(dirpath) / name).relative_to(self._root).as_posix()
 
-    async def run(self, command: str, *, timeout_s: float) -> CommandResult:
+    async def run(
+        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+    ) -> CommandResult:
         shell = shutil.which("bash") or "/bin/sh"
-        env = {key: os.environ[key] for key in _SHELL_ENV_KEYS if key in os.environ}
-        env |= {"HOME": str(self._root), "PWD": str(self._root), "TERM": "dumb"}
+        scrubbed = {key: os.environ[key] for key in _SHELL_ENV_KEYS if key in os.environ}
+        scrubbed |= {**(env or {}), "HOME": str(self._root), "PWD": str(self._root), "TERM": "dumb"}
         proc = await asyncio.create_subprocess_exec(
             shell,
             "-c",
             command,
             cwd=self._root,
-            env=env,
+            env=scrubbed,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -295,7 +300,9 @@ class TreeWorkspace:
             raise FileMissing(rel, kind="path")
         return matched
 
-    async def run(self, command: str, *, timeout_s: float) -> CommandResult:
+    async def run(
+        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+    ) -> CommandResult:
         raise UnsupportedCapability(
             "this session's workspace is a sandbox file tree; it cannot run commands"
         )
@@ -374,12 +381,16 @@ class SandboxWorkspace:
             raise missing
         return done.stdout_text.splitlines()
 
-    async def run(self, command: str, *, timeout_s: float) -> CommandResult:
+    async def run(
+        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+    ) -> CommandResult:
         from supervisor.sandbox.base import SandboxTimeout
 
         with _sandbox_errors():
             try:
-                done = await self._sandbox.exec(["sh", "-c", command], timeout=timeout_s)
+                done = await self._sandbox.exec(
+                    ["sh", "-c", command], env=dict(env) if env else None, timeout=timeout_s
+                )
             except SandboxTimeout:
                 return CommandResult(exit_code=-1, stdout="", stderr="", timed_out=True)
         stdout, cut_out = _clip(done.stdout)

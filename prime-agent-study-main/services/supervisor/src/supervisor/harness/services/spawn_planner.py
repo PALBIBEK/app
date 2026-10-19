@@ -218,9 +218,9 @@ class SpawnPlanner:
                     "plug_bindings.gateway_base_url refuses FakeModelGatewayClient"
                 )
 
-            if cls_name != "HttpModelGatewayClient":
+            if cls_name not in ("HttpModelGatewayClient", "RoutedModelClient"):
                 raise InvalidGatewayConfig(
-                    "plug_bindings.gateway_base_url requires HttpModelGatewayClient"
+                    "plug_bindings.gateway_base_url requires an HTTP model gateway client"
                 )
 
             base = gateway_url.rstrip("/")

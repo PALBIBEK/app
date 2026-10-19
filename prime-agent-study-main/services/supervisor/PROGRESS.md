@@ -249,6 +249,47 @@ imported, because they reference modules that no longer exist.
   model ahead of the user's message, once; `subagent_result` stays for asking
   sooner.
 
+### 13. Model access the way QM does it (YC's QM, MIT)
+QM's model layer and its gateway contract, ported with the same behaviour
+(`contracts/model_routing.md`, `contracts/model_gateway.md`):
+- **The gateway serves LiteLLM's end-user contract.** `GET /v1/models` and
+  `GET /model_group/info` (routes now carry mode, provider labels, limits,
+  per-token prices and capability flags), and `POST /v1/messages` and
+  `POST /v1/responses` beside chat completions — passthroughs, streaming on
+  every wire, metered from each wire's own usage, priced from the route and
+  returned in `x-litellm-response-cost`. A new Anthropic provider; OpenAI
+  serves Responses; the provider layer is rebuilt on one HTTP leg (retries,
+  `Retry-After`, SSE relay), which also fixes the provider regressions behind
+  the gateway suite's eleven failures and three errors. Echo answers all three wires and rejects
+  forged thinking signatures and stripped encrypted reasoning, as the vendors
+  do. The key may come in a configurable header; a spent virtual-key budget is
+  429.
+- **The supervisor discovers models and speaks each one's protocol.**
+  `supervisor/models/`: QM's native registry on pi-ai's templates (pricing
+  tiers, reasoning levels, Ultrafast as request overrides), `MODEL_GATEWAY_*`
+  configuration, the discovery catalog (admission rules, 5-minute refresh,
+  30-second retry, 15-minute stale window, aliases), routing with session
+  affinity, and three streaming transports ported from pi-ai — Anthropic
+  Messages (signed thinking, prompt caching), OpenAI Responses (stateless,
+  encrypted reasoning, service tiers) and chat completions. A session's model
+  id is a `gateway/<group>`, a native id served through an alias, or a legacy
+  route id; nothing unrouted ever falls back to another provider.
+- **Native reasoning survives the journal.** Assistant turns are journalled as
+  ordered `text` / `reasoning` / `tool_call` parts and replayed to the model
+  that produced them; any other model sees the reasoning as text, with tool
+  call ids re-spelled and orphaned calls closed.
+- **The browse runner gets model access without a key.** Each tool call of a
+  non-strict turn carries an hour-long browser capability;
+  `POST /v1/browser-model/chat/completions` re-checks it against the session
+  and calls the model on the session's own gateway key — relayed to the
+  gateway's chat completions, or (for Ultrafast) through the native transport
+  with screenshots and structured output converted. `GET /v1/models` lists
+  what a session can select.
+- **Proved end to end** against the real gateway over HTTP: discovery, a tool
+  loop on all three protocols, forged reasoning refused, Ultrafast on the wire,
+  key scoping and budgets, a whole githi session replaying signed thinking
+  across its steps, and the browser endpoint (relay, native, strict).
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -258,8 +299,9 @@ imported, because they reference modules that no longer exist.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 595 passing, 0 failing, 0 that cannot be imported** (from 228
-  passing at the start). Two tests are intermittent and are run separately:
+- **Test suite: 673 passing, 0 failing, 0 that cannot be imported** (from 228
+  passing at the start); the model gateway's own suite: 81 passing, 0 failing
+  (from 11 failures and 3 errors before section 13). Two tests are intermittent and are run separately:
   `test_memory_histories_replay_deterministically` (can time out under full
   suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
   "database is locked" in its 100-round loop). The Temporal suites can also
@@ -284,11 +326,17 @@ imported, because they reference modules that no longer exist.
   include Temporal yet. `docker compose` itself hasn't been run in this
   environment (no Docker here).
 - **Gateway routes without a window.** A route configured without
-  `context_window` makes compaction fall back to 200,000 tokens; set it on
+  `context_window` makes compaction fall back to 200,000 tokens, and is not
+  discoverable (QM admits only groups with limits and prices); set them on
   every route in `MODEL_GATEWAY_ROUTES_JSON`.
-- **Gateway test `test_mg_u6`** expects 502 for the `githi` route without an
-  OpenRouter key; the gateway returns 500 `PROVIDER_MISSING` (provider not
-  registered without a key). Predates this work.
+- **Not ported from QM:** direct provider keys in the supervisor (keys stay in
+  the gateway), per-user subscription accounts, custom provider overlays, Fast
+  mode, and document inputs (specs record QM's document support; sessions send
+  none). The routed client's `stream()` yields the finished turn rather than
+  token deltas; turns use `complete()`.
+- **The gateway's virtual-key store and QM's model-call audit are in-process.**
+  One gateway replica, and the audit resets on restart (the journal is the
+  durable record of every call).
 - **Two intermittent tests** (see above) need a real fix, not a retry.
 
 ---

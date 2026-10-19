@@ -44,6 +44,15 @@ class HttpModelGatewayClient:
         self._closed = False
         self._windows: dict[str, int | None] = {}
 
+    @property
+    def base_url(self) -> str:
+        return self._base
+
+    @property
+    def token(self) -> str | None:
+        """The key this client calls with (the session's virtual key, when it has one)."""
+        return self._token
+
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self._token:

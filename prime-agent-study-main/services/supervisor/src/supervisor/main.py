@@ -17,6 +17,7 @@ from supervisor.api import (
     health,
     memory,
     metrics,
+    models,
     notebooks,
     scopes,
     sessions,
@@ -154,6 +155,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(memory.router)
     app.include_router(notebooks.router)
     app.include_router(subagents.router)
+    app.include_router(models.router)
     return app
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -43,6 +44,11 @@ async def bootstrap_supervisor(
 ) -> SupervisorState:
     """Build fully wired supervisor state for production or integration tests."""
     settings.require_auth_configured()
+    # A half-set or invalid MODEL_GATEWAY_* configuration fails boot, not a turn.
+    from supervisor.models import model_router
+    from supervisor.models.browser import BrowserAccess
+
+    model_router()
 
     if session_maker is None:
         engine = make_engine(settings.database_url)
@@ -139,4 +145,5 @@ async def bootstrap_supervisor(
         grant_store=grant_store,
         virtual_key_client=vk_client,
         workspace_store=workspace_store,
+        browser=BrowserAccess.from_env(os.environ),
     )

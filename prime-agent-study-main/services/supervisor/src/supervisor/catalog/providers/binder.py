@@ -17,12 +17,14 @@ def bind_runtime_seams(
     catalog: CompositionCatalog,
     *,
     gateway_token: str | None = None,
+    session_id: str | None = None,
 ) -> RuntimeSeams:
     """Materialize catalog + plug bindings from pinned digests (single bind path).
 
-    ``gateway_token`` is the session's gateway key. Every seam that calls the
-    model (the agent's gateway, the compaction summarizer, nested-session
-    subagents) is built on the one gateway client that carries it.
+    ``gateway_token`` is the session's gateway key and ``session_id`` its gateway
+    affinity id. Every seam that calls the model (the agent's gateway, the
+    compaction summarizer, nested-session subagents) is built on the one gateway
+    client that carries them.
     """
     pack = catalog.get(
         "prompt_pack",
@@ -51,6 +53,7 @@ def bind_runtime_seams(
         prompt_assembler=CatalogPromptAssembler(pack),
         gateway_base_url=gateway_url,
         gateway_token=gateway_token,
+        session_id=session_id,
         mcp_server_url=mcp_url,
         acp_base_url=acp_url,
         register_acp=bool(acp_url),
