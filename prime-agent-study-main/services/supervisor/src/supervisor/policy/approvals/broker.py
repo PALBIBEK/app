@@ -135,12 +135,15 @@ class ApprovalBroker:
 
         return approval_id
 
-    async def respond(self, approval_id: str, choice: str) -> Approval:
+    async def respond(
+        self, approval_id: str, choice: str, *, responded_by: str | None = None
+    ) -> Approval:
         """Respond to approval with choice.
 
         Args:
             approval_id: Approval to respond to
             choice: Selected option
+            responded_by: The principal who answered, recorded for audit
 
         Returns:
             Updated approval
@@ -184,6 +187,8 @@ class ApprovalBroker:
                 else ApprovalStatus.DENIED.value
             )
             row.choice = choice
+            row.responded_by = responded_by
+            row.responded_at = datetime.now(timezone.utc)
 
             await db.commit()
             await db.refresh(row)
@@ -305,6 +310,7 @@ class ApprovalBroker:
 
                 row.status = ApprovalStatus.TIMED_OUT.value
                 row.choice = choice
+                row.responded_at = datetime.now(timezone.utc)
                 expired.append(self._to_approval(row))
 
             await db.commit()
@@ -324,6 +330,7 @@ class ApprovalBroker:
             if row.status == ApprovalStatus.PENDING.value:
                 row.status = ApprovalStatus.TIMED_OUT.value
                 row.choice = choice
+                row.responded_at = datetime.now(timezone.utc)
                 await db.commit()
             return self._to_approval(row)
 
@@ -373,4 +380,6 @@ class ApprovalBroker:
             timeout_s=int(float(row.timeout_s)),
             created_at_ms=_datetime_to_ms(row.created_at),
             harness_request_id=row.harness_request_id,
+            responded_by=row.responded_by,
+            responded_at_ms=_datetime_to_ms(row.responded_at) if row.responded_at else None,
         )

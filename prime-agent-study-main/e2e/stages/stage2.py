@@ -257,7 +257,7 @@ check("published compositions are listed after restart", {"my-githi", "c-power-t
 check("v2 still starts sessions after restart", create("my-githi", v2["digest"])[0] == 201)
 check("deprecation survived the restart", create("to-deprecate", dep["digest"])[0] != 201)
 
-Path(os.environ["E2E_RUN_DIR"]) / "stage2_state.json".write_text(json.dumps(STATE, indent=1, default=str))
+(Path(os.environ["E2E_RUN_DIR"]) / "stage2_state.json").write_text(json.dumps(STATE, indent=1, default=str))
 print(f"\n{sum(ok for _, ok, _ in results)}/{len(results)} checks passed")
 for name, ok, detail in results:
     if not ok:

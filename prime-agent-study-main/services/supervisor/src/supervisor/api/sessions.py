@@ -111,7 +111,9 @@ async def list_sessions(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> list[SessionSummary]:
     manager = deps.get_manager(request)
-    rows = await manager.list_sessions(tenant_id=tenant_id)
+    rows = await manager.list_sessions(
+        tenant_id=tenant_id, principal_id=deps.request_principal_id(request, tenant_id)
+    )
     return [
         SessionSummary(
             session_id=r.session_id,

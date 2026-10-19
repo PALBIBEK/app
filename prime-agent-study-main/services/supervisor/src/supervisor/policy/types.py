@@ -277,6 +277,8 @@ class Approval:
     timeout_s: int
     created_at_ms: int
     harness_request_id: str | None = None
+    responded_by: str | None = None
+    responded_at_ms: int | None = None
 
     @property
     def is_pending(self) -> bool:

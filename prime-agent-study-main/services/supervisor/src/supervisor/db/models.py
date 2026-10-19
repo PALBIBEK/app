@@ -168,6 +168,9 @@ class ApprovalRow(Base):
     timeout_s: Mapped[float] = mapped_column(Numeric(18, 3), nullable=False, default=300)
     harness_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Who settled it and when: a principal id, or None for a timeout or the sweeper.
+    responded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ToolOutboxRow(Base):

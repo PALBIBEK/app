@@ -654,7 +654,12 @@ class AgentSessionWorkflow:
                 # A stepped turn is waiting on this one: settle it, then wake the turn.
                 self._decisions[choice.approval_id] = await self._session_activity(
                     Activity.RESOLVE_APPROVAL,
-                    ApprovalDecision(self._session_id, choice.approval_id, choice.choice),
+                    ApprovalDecision(
+                        self._session_id,
+                        choice.approval_id,
+                        choice.choice,
+                        responded_by=choice.responded_by,
+                    ),
                     str,
                 )
                 return

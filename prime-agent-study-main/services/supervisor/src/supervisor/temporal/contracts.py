@@ -162,6 +162,7 @@ class Accepted:
 class ApprovalChoice:
     approval_id: str
     choice: str
+    responded_by: str | None = None  # the principal answering; recorded for audit
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +281,7 @@ class ApprovalDecision:
     approval_id: str
     choice: str
     timed_out: bool = False
+    responded_by: str | None = None
 
 
 LOST_WORKER = "the worker running this tool was lost"

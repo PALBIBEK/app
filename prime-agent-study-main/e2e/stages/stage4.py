@@ -181,7 +181,7 @@ check("no scope: files survive a worker crash", r.get("payload") == "unsaved wor
 r = invoke(scoped["session_id"], "read", file_path="saved.txt")
 check("scope: the adopting worker rehydrates the workspace", r.get("payload") == "saved work", r)
 
-Path(os.environ["E2E_RUN_DIR"]) / "stage4_state.json".write_text(json.dumps({"scope": scope}))
+(Path(os.environ["E2E_RUN_DIR"]) / "stage4_state.json").write_text(json.dumps({"scope": scope}))
 print(f"\n{sum(ok for _, ok, _ in results)}/{len(results)} checks passed")
 for name, ok, detail in results:
     if not ok:

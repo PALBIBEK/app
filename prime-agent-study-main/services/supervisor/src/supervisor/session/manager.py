@@ -83,6 +83,7 @@ from supervisor.memory.binding import MemoryRequest, agent_pin, resolve_binding
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models import model_router
 from supervisor.models.browser import BrowserAccess, BrowserGrant
+from supervisor.session.access import session_visibility, visible_to
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
 from supervisor.session.subagent_ops import SubagentOps
@@ -617,10 +618,15 @@ class SessionManager:
             )
         return None
 
-    async def get(self, session_id: str, *, tenant_id: str) -> SessionInfo | None:
+    async def get(
+        self, session_id: str, *, tenant_id: str, principal_id: str | None = None
+    ) -> SessionInfo | None:
+        """The session, if it is in ``tenant_id`` and visible to ``principal_id`` (``session.access``)."""
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
             if row is None or row.tenant_id != tenant_id:
+                return None
+            if not visible_to(row.owner_principal_id, tenant_id=tenant_id, principal_id=principal_id):
                 return None
             idx = await db.get(SessionIndexRow, session_id)
             is_busy: bool | None = None
@@ -644,7 +650,9 @@ class SessionManager:
                 total_cost=float(idx.total_cost) if idx else 0.0,
             )
 
-    async def list_sessions(self, *, tenant_id: str) -> list[SessionInfo]:
+    async def list_sessions(
+        self, *, tenant_id: str, principal_id: str | None = None
+    ) -> list[SessionInfo]:
         async with self._db() as db:
             rows = (
                 await db.execute(
@@ -654,6 +662,7 @@ class SessionManager:
                         SessionIndexRow.session_id == SessionRow.id,
                     )
                     .where(SessionRow.tenant_id == tenant_id)
+                    .where(session_visibility(tenant_id, principal_id))
                     .order_by(SessionRow.created_at.desc())
                 )
             ).all()
@@ -1241,12 +1250,15 @@ class SessionManager:
                 _log.exception("failed to write terminal event session=%s", session_id)
             self._registry.remove(session_id)
 
-    async def respond_approval(self, approval_id: str, choice: str) -> ApprovalResolved:
-        approval = await self._approvals.respond(approval_id, choice)
+    async def respond_approval(
+        self, approval_id: str, choice: str, *, responded_by: str | None = None
+    ) -> ApprovalResolved:
+        approval = await self._approvals.respond(approval_id, choice, responded_by=responded_by)
         resolved = ApprovalResolved(
             approval_id=approval.approval_id,
             choice=choice,
             status=approval.status,
+            responded_by=responded_by,
         )
         await self._record(
             approval.session_id,

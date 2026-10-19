@@ -455,7 +455,9 @@ class GithiSteps:
         approval = (
             await approvals.time_out(decision.approval_id, decision.choice)
             if decision.timed_out
-            else await approvals.respond(decision.approval_id, decision.choice)
+            else await approvals.respond(
+                decision.approval_id, decision.choice, responded_by=decision.responded_by
+            )
         )
         await self._manager._record(
             decision.session_id,
@@ -463,6 +465,7 @@ class GithiSteps:
                 approval_id=approval.approval_id,
                 choice=str(approval.choice),
                 status=str(approval.status),
+                responded_by=approval.responded_by,
             ),
             turn_id=approval.turn_id,
             trace_id=None,

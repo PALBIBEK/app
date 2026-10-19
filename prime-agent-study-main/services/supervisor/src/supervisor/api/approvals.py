@@ -30,6 +30,7 @@ class ApprovalOut(BaseModel):
     status: str
     choice: str | None = None
     timeout_s: float
+    responded_by: str | None = None
 
 
 @router.get("/v1/sessions/{session_id}/approvals", response_model=list[ApprovalOut])
@@ -49,6 +50,7 @@ async def list_approvals(
             status=a.status,
             choice=a.choice,
             timeout_s=a.timeout_s,
+            responded_by=a.responded_by,
         )
         for a in pending
     ]
@@ -73,17 +75,22 @@ async def respond_approval(
         if existing.status == "timed_out":
             raise HTTPException(status_code=409, detail="approval already timed out")
         await deps.require_session_access(tenant_id, existing.session_id, request)
+        responder = deps.request_principal_id(request, tenant_id)
         if (workflows := deps.get_workflows(request)) is not None:
             # Delivered through the session's workflow, to the worker holding its runtime.
             try:
-                await workflows.respond_approval(existing.session_id, approval_id, body.choice)
+                await workflows.respond_approval(
+                    existing.session_id, approval_id, body.choice, responded_by=responder
+                )
             except (SessionCommandError, TemporalUnavailable) as exc:
                 raise to_http(exc) from exc
             approval = await broker.get(approval_id)
             assert approval is not None
             status = approval.status
         else:
-            status = (await manager.respond_approval(approval_id, body.choice)).status
+            status = (
+                await manager.respond_approval(approval_id, body.choice, responded_by=responder)
+            ).status
             approval = await broker.get(approval_id)
             assert approval is not None
     except ApprovalNotFound as exc:
@@ -103,4 +110,5 @@ async def respond_approval(
         status=status,
         choice=approval.choice,
         timeout_s=approval.timeout_s,
+        responded_by=approval.responded_by,
     )
