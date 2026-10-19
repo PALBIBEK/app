@@ -91,10 +91,8 @@ class HybridRecall:
             cost = estimate_tokens(row.content)
             if tokens + cost > budget.max_tokens and packed:
                 break
-            if tokens + cost > budget.max_tokens and not packed:
-                # Always allow at least one if it alone overflows? skip if huge
-                if cost > budget.max_tokens:
-                    continue
+            if tokens + cost > budget.max_tokens and not packed and cost > budget.max_tokens:
+                continue  # a single row larger than the whole budget is skipped
             packed.append(_row_to_item(row))
             tokens += cost
             if tokens >= budget.max_tokens:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -111,7 +113,7 @@ def test_vk_budget_claim_surface_or_enforced(
         # Core acceptance: claiming max_budget_usd without any budget code path fails.
         from model_gateway import virtual_keys as vk_mod
 
-        store_src = open(vk_mod.__file__, encoding="utf-8").read()
+        store_src = Path(vk_mod.__file__).read_text(encoding="utf-8")
         enforced_in_code = (
             "VIRTUAL_KEY_BUDGET_EXCEEDED" in store_src
             or "spent" in store_src.lower()

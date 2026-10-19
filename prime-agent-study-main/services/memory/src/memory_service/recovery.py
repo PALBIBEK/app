@@ -95,8 +95,7 @@ def build_recovery_closers(events: list[SessionEvent]) -> list[SessionEvent]:
         working.append(ev)
         next_seq += 1
 
-    if working and working[-1].type != "turn/end":
-        if unanswered or step_open or mid_turn:
+    if working and working[-1].type != "turn/end" and (unanswered or step_open or mid_turn):
             closers.append(
                 SessionEvent(
                     type="turn/end",

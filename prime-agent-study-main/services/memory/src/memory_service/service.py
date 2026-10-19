@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import text
@@ -45,6 +46,8 @@ from memory_service.types import (
     SessionSummary,
     StaleFence,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SeqConflict(Exception):
@@ -184,18 +187,15 @@ class MemoryService:
                     seq_from = prev + 1
                     await self._extraction.enqueue(session_id, seq_from, last)
                     self._last_extracted_seq[session_id] = last
-        except Exception:
-            pass
+        except Exception:  # extraction is off the request path; the flush itself succeeded
+            logger.warning("enqueueing extraction failed session=%s", session_id, exc_info=True)
         return last
 
     async def load(self, session_id: str) -> LogicalSession:
         if not self._ready:
             await self.startup()
         row = await self._store.get_session_row(session_id)
-        try:
-            assert_format_supported(row.format_version)
-        except FormatUnsupported:
-            raise
+        assert_format_supported(row.format_version)
         if row.status == "corrupt":
             METRICS.inc("resume_corrupt")
             raise SessionCorrupt(f"SESSION_CORRUPT: {session_id}", code="SESSION_CORRUPT")

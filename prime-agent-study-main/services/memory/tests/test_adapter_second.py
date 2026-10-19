@@ -19,9 +19,11 @@ SCOPE = {"tenant": "t-loop", "subject": "agent:custom-loop", "namespace": "facts
 async def app_client():
     app = create_app(database_url="sqlite+aiosqlite:///:memory:")
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=transport, base_url="http://memory.test") as client:
-            yield app, client
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://memory.test") as client,
+    ):
+        yield app, client
 
 
 @pytest.mark.asyncio
@@ -89,23 +91,25 @@ async def test_dual_adapters_share_one_service():
     app.state.memory = svc
 
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=transport, base_url="http://shared.test") as client:
-            loop = SimpleLoopAdapter(
-                base_url="http://shared.test",
-                scope={"tenant": "shared", "subject": "repo:yal", "namespace": "facts"},
-                client=client,
-                session_id="shared-sess",
-            )
-            await loop.begin()
-            hit = await loop.recall("postgres deploy", max_tokens=128, log=False)
-            assert any("postgres" in i["content"].lower() for i in hit["items"])
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://shared.test") as client,
+    ):
+        loop = SimpleLoopAdapter(
+            base_url="http://shared.test",
+            scope={"tenant": "shared", "subject": "repo:yal", "namespace": "facts"},
+            client=client,
+            session_id="shared-sess",
+        )
+        await loop.begin()
+        hit = await loop.recall("postgres deploy", max_tokens=128, log=False)
+        assert any("postgres" in i["content"].lower() for i in hit["items"])
 
-            loop.note("user/message", {"text": "I prefer explicit checkpoints"})
-            loop.note("turn/end", {"kind": "ok"})
-            await loop.checkpoint()
-            loaded = await svc.load("shared-sess")
-            assert any(e.type == "user/message" for e in loaded.events)
+        loop.note("user/message", {"text": "I prefer explicit checkpoints"})
+        loop.note("turn/end", {"kind": "ok"})
+        await loop.checkpoint()
+        loaded = await svc.load("shared-sess")
+        assert any(e.type == "user/message" for e in loaded.events)
 
     await svc.aclose()
 
