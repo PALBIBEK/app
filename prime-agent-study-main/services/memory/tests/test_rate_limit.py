@@ -13,7 +13,8 @@ from memory_service.rate_limit import TokenBucketLimiter, rate_limit_key
 def limited(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MEMORY_SERVICE_TOKEN", "rl-secret")
     monkeypatch.setenv("MEMORY_ALLOW_STATIC_TOKEN", "1")
-    monkeypatch.setenv("MEMORY_RATE_LIMIT_PER_SECOND", "100")
+    # Slow refill: the bucket empties however long each request takes.
+    monkeypatch.setenv("MEMORY_RATE_LIMIT_PER_SECOND", "0.01")
     monkeypatch.setenv("MEMORY_RATE_LIMIT_BURST", "3")
     monkeypatch.delenv("SERVICE_JWT_SECRET", raising=False)
     monkeypatch.delenv("MEMORY_SERVICE_JWT_SECRET", raising=False)

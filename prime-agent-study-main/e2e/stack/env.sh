@@ -46,7 +46,8 @@ export ALLOW_LAB_ECHO=0   # production subagent default: nested sessions through
 
 # --- memory service ----------------------------------------------------------
 export MEM_ENV="MEMORY_DATABASE_URL=postgresql+asyncpg://$PG_USER:$PG_PASSWORD@$PG_HOST:$PG_PORT/memory MEMORY_PORT=8092 \
-MEMORY_HOST=127.0.0.1 MEMORY_SERVICE_TOKEN=dev-local-memory-token MEMORY_ALLOW_STATIC_TOKEN=1 ENV=development"
+MEMORY_HOST=127.0.0.1 MEMORY_SERVICE_TOKEN=dev-local-memory-token MEMORY_ALLOW_STATIC_TOKEN=1 ENV=development \
+SERVICE_JWT_SECRET=dev-local-service-jwt-secret-32b!!"
 
 # --- test helpers ------------------------------------------------------------
 export RELAY_LOG=$E2E_RUN_DIR/relay.jsonl ACP_LOG=$E2E_RUN_DIR/acp.jsonl

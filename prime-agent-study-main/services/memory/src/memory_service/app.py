@@ -5,9 +5,17 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from memory_service.auth import (
+    caller_tenant,
+    enforce_item_tenant,
+    enforce_scope_tenant,
+    resolve_http_auth,
+)
+from memory_service.rate_limit import TokenBucketLimiter, is_mutating_method, rate_limit_key
 from memory_service.service import MemoryService
 from memory_service.types import (
     FormatUnsupported,
@@ -104,7 +112,52 @@ def _svc(request: Request) -> MemoryService:
     return request.app.state.memory
 
 
+def _scope(request: Request, scope: ScopeIn) -> Scope:
+    """The request's scope, refused (403) unless it is the verified caller's tenant."""
+    enforce_scope_tenant(request, scope.tenant)
+    return Scope(tenant=scope.tenant, subject=scope.subject, namespace=scope.namespace)
+
+
+async def _own_session(request: Request, session_id: str) -> None:
+    """A session addressed by id belongs to the caller's tenant, or it is not found (404)."""
+    tenant = await _svc(request).session_tenant(session_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "SESSION_NOT_FOUND", "message": session_id}
+        )
+    enforce_item_tenant(request, tenant)
+
+
+PUBLIC_PATHS = frozenset({"/v1/healthz", "/v1/readyz"})
+"""Process and readiness probes: answered without credentials (compose and k8s health checks)."""
+
+
+async def _guard(request: Request) -> None:
+    """Every other route: a verified caller (``auth.resolve_http_auth``), and mutations rate-limited.
+
+    The bucket is per verified tenant (else per client address); an empty bucket is a
+    429 with ``Retry-After``.
+    """
+    if request.url.path in PUBLIC_PATHS:
+        return
+    resolve_http_auth(request)
+    if not is_mutating_method(request.method):
+        return
+    key = rate_limit_key(
+        tenant_id=caller_tenant(request) or request.headers.get("x-tenant-id"),
+        client_ip=request.client.host if request.client else None,
+    )
+    if not request.app.state.rate_limiter.allow(key):
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "RATE_LIMITED", "message": "too many mutating requests"},
+            headers={"Retry-After": "1"},
+        )
+
+
 def _map_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):  # already an answer (a tenant check, say): keep it
+        return exc
     if isinstance(exc, SessionNotFound):
         return HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (SessionCorrupt, FormatUnsupported)):
@@ -135,20 +188,29 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         if owned:
             await app.state.memory.aclose()
 
-    app = FastAPI(title="yal-memory-service", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="yal-memory-service",
+        version="0.1.0",
+        lifespan=lifespan,
+        dependencies=[Depends(_guard)],
+    )
+    app.state.rate_limiter = TokenBucketLimiter()
 
     @app.get("/v1/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/v1/readyz", response_model=None)
+    async def readyz(request: Request) -> dict[str, str] | JSONResponse:
+        """Ready when the database answers; the process probe is /v1/healthz."""
+        if await _svc(request).ping_db():
+            return {"status": "ready"}
+        return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "database"})
+
     @app.post("/v1/sessions", status_code=201)
     async def create_session(body: CreateSessionIn, request: Request) -> dict[str, Any]:
         try:
-            scope = Scope(
-                tenant=body.scope.tenant,
-                subject=body.scope.subject,
-                namespace=body.scope.namespace,
-            )
+            scope = _scope(request, body.scope)
             handle = await _svc(request).create_session(scope, session_id=body.session_id)
         except Exception as exc:
             raise _map_error(exc) from exc
@@ -166,6 +228,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
     async def buffer_events(
         session_id: str, body: BufferEventsIn, request: Request
     ) -> dict[str, Any]:
+        await _own_session(request, session_id)
         svc = _svc(request)
         seqs: list[int] = []
         for ev in body.events:
@@ -175,6 +238,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.post("/v1/sessions/{session_id}/flush")
     async def flush(session_id: str, body: FlushIn, request: Request) -> dict[str, Any]:
+        await _own_session(request, session_id)
         try:
             last = await _svc(request).flush(session_id, fence=body.fence)
         except Exception as exc:
@@ -183,6 +247,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.get("/v1/sessions/{session_id}")
     async def load_session(session_id: str, request: Request) -> dict[str, Any]:
+        await _own_session(request, session_id)
         try:
             logical: LogicalSession = await _svc(request).load(session_id)
         except Exception as exc:
@@ -208,6 +273,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.post("/v1/sessions/{session_id}/fork", status_code=201)
     async def fork(session_id: str, body: ForkIn, request: Request) -> dict[str, Any]:
+        await _own_session(request, session_id)
         try:
             handle = await _svc(request).fork(session_id, at_seq=body.at_seq)
         except Exception as exc:
@@ -222,6 +288,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         namespace: str = Query(...),
     ) -> dict[str, Any]:
         try:
+            enforce_scope_tenant(request, tenant)
             scope = Scope(tenant=tenant, subject=subject, namespace=namespace)
             items = await _svc(request).list_sessions(scope)
         except Exception as exc:
@@ -240,6 +307,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.post("/v1/sessions/{session_id}/lease")
     async def lease(session_id: str, body: LeaseIn, request: Request) -> dict[str, Any]:
+        await _own_session(request, session_id)
         try:
             fence = await _svc(request).acquire_lease(session_id, body.owner)
         except Exception as exc:
@@ -250,6 +318,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
     async def outbox_execute(
         session_id: str, body: OutboxExecuteIn, request: Request
     ) -> dict[str, Any]:
+        await _own_session(request, session_id)
         def echo(payload: dict[str, Any]) -> dict[str, Any]:
             return {"echo": payload, "mode": body.mode}
 
@@ -266,11 +335,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         from memory_service.tier2_types import NewMemoryItem
 
         try:
-            scope = Scope(
-                tenant=payload.scope.tenant,
-                subject=payload.scope.subject,
-                namespace=payload.scope.namespace,
-            )
+            scope = _scope(request, payload.scope)
             item_id = await _svc(request).write(
                 scope,
                 NewMemoryItem(
@@ -291,6 +356,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
             raise HTTPException(
                 status_code=404, detail={"code": "ITEM_NOT_FOUND", "message": item_id}
             )
+        enforce_item_tenant(request, item.scope.tenant)
         return {
             "id": item.id,
             "content": item.content,
@@ -312,11 +378,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         from memory_service.tier2_types import NewMemoryItem
 
         try:
-            scope = Scope(
-                tenant=payload.scope.tenant,
-                subject=payload.scope.subject,
-                namespace=payload.scope.namespace,
-            )
+            scope = _scope(request, payload.scope)
             new_id = await _svc(request).supersede(
                 item_id,
                 NewMemoryItem(
@@ -336,11 +398,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         from memory_service.tier2_types import TokenBudget
 
         try:
-            scope = Scope(
-                tenant=payload.scope.tenant,
-                subject=payload.scope.subject,
-                namespace=payload.scope.namespace,
-            )
+            scope = _scope(request, payload.scope)
             result = await _svc(request).recall(
                 scope,
                 payload.query,
@@ -363,11 +421,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
         from memory_service.tier2_types import ForgetSelector
 
         try:
-            scope = Scope(
-                tenant=payload.scope.tenant,
-                subject=payload.scope.subject,
-                namespace=payload.scope.namespace,
-            )
+            scope = _scope(request, payload.scope)
             n = await _svc(request).forget(
                 scope,
                 ForgetSelector(
@@ -384,6 +438,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.post("/v1/memory/erase_subject")
     async def erase_subject(payload: EraseSubjectIn, request: Request) -> dict[str, Any]:
+        enforce_scope_tenant(request, payload.tenant)
         try:
             result = await _svc(request).erase_subject(
                 tenant=payload.tenant,
@@ -397,6 +452,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
 
     @app.post("/v1/sessions/{session_id}/archive")
     async def archive_session(session_id: str, request: Request) -> dict[str, Any]:
+        await _own_session(request, session_id)
         try:
             return await _svc(request).archive_session(session_id)
         except Exception as exc:

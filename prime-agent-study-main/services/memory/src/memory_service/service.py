@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from memory_service.buffer import WriteBehindBuffer
@@ -92,6 +93,23 @@ class MemoryService:
 
     async def aclose(self) -> None:
         await self._engine.dispose()
+
+    async def ping_db(self) -> bool:
+        """Whether the database answers (the readiness probe)."""
+        try:
+            async with self._engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception:  # noqa: BLE001 — any failure means not ready
+            return False
+        return True
+
+    async def session_tenant(self, session_id: str) -> str | None:
+        """The tenant a logical session belongs to, or None if there is no such session."""
+        try:
+            row = await self._store.get_session_row(session_id)
+        except SessionNotFound:
+            return None
+        return str(row.tenant)
 
     def _buf(self, session_id: str) -> WriteBehindBuffer:
         if session_id not in self._buffers:
