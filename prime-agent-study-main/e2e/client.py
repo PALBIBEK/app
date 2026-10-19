@@ -80,14 +80,21 @@ class User:
     def say(self, sid: str, text: str, command_id: str | None = None) -> httpx.Response:
         return self.post(f"/v1/sessions/{sid}/messages", {"text": text, "command_id": command_id or uuid.uuid4().hex})
 
-    def events(self, sid: str, since: int = -1, quiet_s: float = 1.0) -> list[dict[str, Any]]:
-        """The journal so far: SSE replay, read until the stream goes quiet (it always follows)."""
+    def events(
+        self, sid: str, since: int = -1, quiet_s: float = 1.0, *, query: bool = False
+    ) -> list[dict[str, Any]]:
+        """The journal so far: SSE replay, read until the stream goes quiet (it always follows).
+
+        The cursor goes in Last-Event-ID, or in ``?since=`` when ``query`` is set.
+        """
         out: list[dict[str, Any]] = []
         timeout = httpx.Timeout(connect=10, read=quiet_s, write=10, pool=10)
+        cursor = since >= 0
         try:
             with self.http.stream(
                 "GET", f"/v1/sessions/{sid}/events", timeout=timeout,
-                headers=self._h() | ({"Last-Event-ID": str(since)} if since >= 0 else {}),
+                params={"since": since} if cursor and query else None,
+                headers=self._h() | ({"Last-Event-ID": str(since)} if cursor and not query else {}),
             ) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"events {r.status_code}: {r.read()[:200]!r}")

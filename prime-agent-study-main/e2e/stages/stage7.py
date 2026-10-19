@@ -271,6 +271,8 @@ def section_e_journal() -> None:
     tail = alice.events(sid, since=mid)
     check("replay from a cursor returns exactly what came after it", [e["seq"] for e in tail] == seqs[mid + 1:],
           ([e["seq"] for e in tail][:5], mid))
+    check("?since= gives the same replay as Last-Event-ID",
+          [e["seq"] for e in alice.events(sid, since=mid, query=True)] == seqs[mid + 1:])
     check("replay from the last event returns nothing", alice.events(sid, since=seqs[-1]) == [])
     check("a replay is identical to the first read", alice.events(sid) == evs)
     pg = {k: os.environ.get(k, d) for k, d in (("PG_HOST", "127.0.0.1"), ("PG_PORT", "5433"), ("PG_USER", "yal"))}

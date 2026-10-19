@@ -243,3 +243,27 @@ async def test_sse_heartbeat_comment_on_idle(supervisor_stack) -> None:
 async def test_d12_multi_replica_live_sse_deferred() -> None:
     """Explicit out-of-scope marker: cross-process live tail is D12."""
     raise AssertionError("D12 multi-replica live hub not required for D4")
+
+
+@pytest.mark.parametrize(
+    ("last_event_id", "since", "cursor"),
+    [(None, None, -1), (None, 7, 7), ("3", None, 3), ("3", 7, 3), ("", 7, 7), (None, -1, -1)],
+)
+def test_the_stream_starts_after_the_cursor_the_client_gives(
+    last_event_id: str | None, since: int | None, cursor: int
+) -> None:
+    """``?since=`` is honoured (F34); a reconnect's Last-Event-ID takes precedence."""
+    from supervisor.api.events import stream_cursor
+
+    assert stream_cursor(last_event_id, since) == cursor
+
+
+@pytest.mark.parametrize(("last_event_id", "since"), [("x", None), ("-5", None), (None, -2)])
+def test_a_cursor_that_is_not_a_seq_is_refused(last_event_id: str | None, since: int | None) -> None:
+    from fastapi import HTTPException
+
+    from supervisor.api.events import stream_cursor
+
+    with pytest.raises(HTTPException) as refused:
+        stream_cursor(last_event_id, since)
+    assert refused.value.status_code == 400
