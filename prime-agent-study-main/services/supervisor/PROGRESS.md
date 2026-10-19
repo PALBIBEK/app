@@ -1,8 +1,9 @@
 # Supervisor: progress log
 
 Where the supervisor stood when this work began, what has been done since, and
-what comes next. The branch is `feat/agent-pipeline-stages` (on top of PR #1,
-`fix/supervisor-boot`).
+what comes next. `fix/supervisor-boot` and `feat/agent-pipeline-stages` are
+merged into `main`; `chore/clean-supervisor` (stale tests and docs removed) and
+`feat/tool-registry` (sections 9 and 10) build on it.
 
 The goal throughout: the supervisor runs composable agents (catalog →
 composition → session pins → runtime seams → runtime → journal and policy), and
@@ -147,6 +148,89 @@ imported, because they reference modules that no longer exist.
   - however it ends, exactly one `JobEnd` and one `SubagentEnd` reach the
     session's journal.
 
+### 8. Durable memory (phases 1–3)
+- Phase 1: a notebook store with provenance, disclosure and classification.
+- Phase 2: sessions bind notebooks; a memory HTTP API.
+- Phase 3: recall in turns, memory and history tools for the model, and
+  durable capture of what a session learns.
+
+### 9. Tools come from one registry, through the tool seam
+- **Before,** the same tools existed twice: plain functions in
+  `catalog/tools/handlers.py` (host-only) and githi's own classes and registry
+  (sandbox-aware), with different outputs. A published ToolSet was never checked
+  against code, so a tool with no implementation failed only when the model
+  called it. githi built its own tool provider, which the seams contract forbids.
+- **Now,** `supervisor/tools/` is the only place tools live:
+  - one module per built-in tool (`read`, `write`, `edit`, `ls`, `grep`, `bash`,
+    `echo`, `remember`, `git_commit`), each an `async def` registered with
+    `@tool`; its schema comes from a pydantic args model and its description
+    from its docstring;
+  - tools act on a `Workspace` (host directory or sandbox file tree), which
+    confines every path, symlinks included;
+  - `RegistryToolProvider` is the seam: it offers exactly the pinned tools and
+    turns every failure into a typed result code;
+  - a ToolSet naming an unimplemented tool is refused at publish (422), at boot
+    verify and at bind;
+  - `bash` no longer passes the supervisor's environment (service tokens,
+    database URLs) to agent commands, and returns output produced before a
+    timeout kill.
+- Shipped tool sets are unchanged (same digests); a test checks that every
+  argument they pin is accepted by the implementation.
+
+### 10. Clean-up: only live code and live tests remain
+- **Stale tests removed.** 8 test folders whose shared setup imported modules
+  that no longer exist (so none of their tests ever ran), every test file that
+  could not be imported or failed throughout, and the 91 failing tests inside
+  otherwise passing files. Every passing test was kept.
+- **Docs.** Every `.md` file in the service except this log was removed; the
+  normative contracts live in `contracts/` at the repo root.
+- **githi runtime reduced to what runs** (about 4,700 lines removed): the
+  ported `compaction`, `events`, `hooks`, `messages`, `sandbox`, `session`,
+  `session_store` and `state` modules, the unused `run_loop` and its second
+  tool-calling path, and the PostgreSQL session-store branch in the runtime,
+  which could never execute (it looked for a `session_store` field that
+  `RuntimeSeams` does not have), with its raw SQL file. Compaction and recall
+  are served by the `context_memory` seam; durability by the journal and
+  Temporal.
+
+### 11. A githi session runs entirely on what it pinned
+- **Before,** githi took its prompt, tools and gateway from the pins but nothing
+  else:
+  - the pinned sandbox was created and then discarded, so every tool, `bash`
+    included, ran on the supervisor's own disk;
+  - the composition's model route was ignored;
+  - the memory profile was bound but never consulted, so conversations grew
+    without limit and pinned recall never ran;
+  - the subagent transport was bound, but the agent had no way to use it;
+  - a resumed session was rebuilt differently from a created one (no gateway
+    key, no workspace-change hook, no hydration).
+- **Now:**
+  - **Sandbox.** Tools act in the session's sandbox (`SandboxWorkspace`: files
+    and commands both). The sandbox profile's `file_effects` policy now governs
+    the model's tool calls too, not only direct invokes. Workspace changes mark
+    the workspace dirty for sync.
+  - **Model.** Every call names the pinned model route (else the manifest's
+    model), including memory's one-shot calls and the gateway key's allowed
+    models.
+  - **Memory.** Between turns, a conversation past the profile's limit is
+    compacted through the memory seam (summary plus the most recent
+    `keep_recent_tokens`, whole tool exchanges only), journalled on
+    `CompactionEnd` as the new checkpoint. Pinned recall runs on each run's
+    first model step and is shown ahead of the user's message. The profile can
+    now pin `context_window`.
+  - **Subagents.** `subagent` delegates on the transport's pinned default
+    provider (depth enforced); with `background`, when the manifest allows it,
+    the child runs as the session's durable job, and `subagent_result` reads its
+    outcome. Requests that name no provider now get the pinned default, not the
+    lab-only `memory` alias. One-shot spawns run off the event loop.
+  - **One path.** A githi turn with a model only runs step by step under the
+    workflow; the in-process path that sent no system prompt is gone.
+    Create and resume share one runtime builder.
+- Also fixed: `get_state()` on the githi and echo runtimes crashed (it passed
+  fields `AgentState` does not have).
+- `tests/integration/test_githi_pinned.py` checks each pin end to end against
+  a Temporal dev server; every built-in tool is also tested in a sandbox.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -156,10 +240,12 @@ imported, because they reference modules that no longer exist.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 353 passing** (up from 228), with no test that passed before
-  failing now. The Temporal suites (`test_githi_steps`, `test_durability`,
-  `test_session_ops`, `test_subagent_jobs`; 37 tests) were run repeatedly: one
-  intermittent failure in one of two repeat runs is under investigation.
+- **Test suite: 583 passing, 0 failing, 0 that cannot be imported** (from 228
+  passing at the start). Two tests are intermittent and are run separately:
+  `test_memory_histories_replay_deterministically` (can time out under full
+  suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
+  "database is locked" in its 100-round loop). The Temporal suites can also
+  time out once under load and pass on rerun.
 
 ---
 
@@ -179,9 +265,13 @@ imported, because they reference modules that no longer exist.
 - **Deployment.** The staging compose files and Kubernetes manifests don't
   include Temporal yet. `docker compose` itself hasn't been run in this
   environment (no Docker here).
-- **Many stale tests** in the suite (183 fail, 62 can't import) reference
-  modules or APIs that no longer exist. They predate this work and were left
-  untouched.
+- **Context window per model.** Compaction uses the memory profile's
+  `context_window`, or 200,000 tokens when the profile pins none; the gateway
+  does not report a model's real window.
+- **Background results are pulled, not pushed.** A background subagent's
+  outcome reaches the model when it calls `subagent_result`; it is not injected
+  into the next turn on its own.
+- **Two intermittent tests** (see above) need a real fix, not a retry.
 
 ---
 
@@ -195,7 +285,6 @@ the gaps list.** In order:
    durability scenarios against that stack.
 2. Unify the session error hierarchies into one (`session/core/errors.py`), and
    remove the duplicate `session/operations/subagent_ops.py`.
-3. Triage the stale tests: fix the ones that guard current behaviour, delete
-   the ones that guard removed code.
+3. Fix the two intermittent tests.
 
 After that, per the roadmap: the backend, then the frontend.

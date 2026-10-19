@@ -163,13 +163,17 @@ class SessionMemory:
             await record(session_id, run_id, "memory_context", nxt)
 
     async def prior_history(self, session_id: str) -> list[dict[str, Any]]:
-        """Earlier runs' messages, unless the audience cutoff has passed the last of them."""
+        """The conversation carried into the next run, unless the audience cutoff has passed it.
+
+        The latest checkpoint wins: a run's closing messages, or the compacted
+        conversation a later compaction replaced them with.
+        """
         events = await self._reader.read(session_id)
         through = boundary.cutoff(events)
-        last_end = next((e for e in reversed(events) if isinstance(e.payload, RunEnd)), None)
-        if last_end is None or last_end.seq <= through:
+        checkpoint = next((e for e in reversed(events) if _checkpoint(e.payload) is not None), None)
+        if checkpoint is None or checkpoint.seq <= through:
             return []
-        return list(last_end.payload.messages)
+        return list(_checkpoint(checkpoint.payload) or [])
 
     # --- recall ------------------------------------------------------------------
 
@@ -272,6 +276,15 @@ class SessionMemory:
                 idempotency_key=key,
             ),
         )
+
+
+def _checkpoint(event: object) -> list[dict[str, Any]] | None:
+    """The conversation an event fixes, if it is a checkpoint."""
+    if isinstance(event, RunEnd):
+        return list(event.messages)
+    if isinstance(event, CompactionEnd) and event.stop_reason == "ok" and event.messages is not None:
+        return list(event.messages)
+    return None
 
 
 def _retained(events: Sequence[Envelope]) -> list[Shown] | None:

@@ -1,27 +1,19 @@
-"""Catalog tools layer — tool handling and HTTP tools.
+"""Catalog-registered tools that live outside the supervisor (HTTP endpoints).
 
-This module contains:
-- http_tools.py: HTTP-based tool implementations
-- handlers.py: Tool invocation handlers
+Built-in tool implementations live in ``supervisor.tools``; this package only
+adapts remote endpoints into that registry.
 """
 
 from supervisor.catalog.tools.http_tools import (
+    HttpToolHandler,
     HttpToolProvider,
-)
-
-from supervisor.catalog.tools.handlers import (
-    BuiltinHandler,
-    BUILTIN_HANDLERS,
-    get_handler,
-    invoke_builtin,
-    register_handler,
+    register_http_tool,
+    validate_public_http_url,
 )
 
 __all__ = [
+    "HttpToolHandler",
     "HttpToolProvider",
-    "BuiltinHandler",
-    "BUILTIN_HANDLERS",
-    "get_handler",
-    "invoke_builtin",
-    "register_handler",
+    "register_http_tool",
+    "validate_public_http_url",
 ]

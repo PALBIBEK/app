@@ -77,3 +77,14 @@ async def test_githi_abort_mid_turn(tmp_path: Path) -> None:
     ]
     assert len(aborted) == 1
     await rt.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["githi", "echo"])
+async def test_get_state_reports_the_runtime_phase(name: str, tmp_path: Path) -> None:
+    rt = create_runtime(name, model="m")
+    await rt.start(None, str(tmp_path))
+    state = await rt.get_state()
+    assert (state.phase.value, state.is_busy, state.session_id != "") == ("ready", False, True)
+    await rt.stop()
+    assert (await rt.get_state()).phase.value == "stopped"

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.digests import content_digest
+from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import AgentComposition
 
@@ -19,7 +20,10 @@ def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) ->
     except Exception as exc:
         problems.append(f"{comp.name}: prompt_pack {comp.prompt_pack.id}@{comp.prompt_pack.digest}: {exc}")
     try:
-        catalog.get("tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True)
+        tool_set = catalog.get(
+            "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
+        )
+        require_implemented(tool_set)
     except Exception as exc:
         problems.append(f"{comp.name}: tool_set {comp.tool_set.id}@{comp.tool_set.digest}: {exc}")
     if comp.sandbox_profile is not None:

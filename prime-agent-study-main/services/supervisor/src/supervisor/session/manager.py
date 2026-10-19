@@ -33,7 +33,7 @@ from supervisor.catalog.providers.binder import bind_runtime_seams
 from supervisor.catalog import HarnessVersionMismatch
 from supervisor.catalog.services.resolver import resolve_composition
 from supervisor.catalog.storage import CompositionCatalog
-from supervisor.catalog import SessionPins
+from supervisor.catalog import MemoryProfile, SessionPins
 from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.harness import (
     ApprovalSpec,
@@ -55,12 +55,15 @@ from supervisor.policy.sandbox_policy import SandboxPolicy
 from supervisor.sandbox.base import Sandbox, SandboxProvider
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
+from supervisor.tools import SandboxWorkspace
 from supervisor.seams import (
     build_runtime_seams,
     CompactionPreparation,
     JobHandle,
     SubagentRequest,
+    ToolClassifier,
     ToolInvokeContext,
+    ToolProvider,
     ToolResult,
 )
 from supervisor.seams.services import (
@@ -170,6 +173,13 @@ class SessionInfo:
     is_busy: bool | None = None
     total_cost: float = 0.0
 
+
+
+def session_model(manifest: HarnessManifest, pins: SessionPins | None) -> str | None:
+    """The model a session names on every call: the composition's pinned route wins
+    over the harness manifest's default model."""
+    route = pins.model_route if pins is not None else None
+    return route or manifest.model
 
 class SessionManager:
     def __init__(
@@ -334,41 +344,19 @@ class SessionManager:
         if scope_id is not None and sandbox is not None:
             await self._workspace_svc.ensure_hydrated(ws_state, sandbox)
 
-        session_dir: str | None = None
-        if pins is not None and seams is not None:
-            ws = session_workspace(session_id)
-            materialize_harness_binds(
-                ws,
-                pins,
-                seams,
-                sandbox_profile=profile,
-                memory_profile=memory_profile,
-                session_id=session_id,
-                tenant_id=tenant_id,
-            )
-            session_dir = str(ws)
-            self._seams[session_id] = seams
-
-        seams = await self._maybe_attach_virtual_key(
-            seams,
-            session_id=session_id,
+        runtime = await self._start_runtime(
+            session_id,
+            runtime_name=runtime_name,
+            manifest=manifest,
+            pins=pins,
+            seams=seams,
+            sandbox=sandbox,
+            sandbox_profile=profile,
+            memory_profile=memory_profile,
             tenant_id=tenant_id,
             principal=principal,
-            scope_id=scope_id,
-            model=manifest.model,
             ws_state=ws_state,
         )
-
-        runtime = create_runtime(
-            runtime_name,
-            seams=seams,
-            model=manifest.model,
-            session_id=session_id,
-        )
-        set_mutate = getattr(runtime, "set_on_mutate", None)
-        if callable(set_mutate):
-            set_mutate(lambda: self._workspace_svc.mark_dirty(ws_state))
-        await runtime.start(sandbox, session_dir)
 
         snap = manifest_to_dict(manifest)
         binding = await resolve_binding(
@@ -438,6 +426,88 @@ class SessionManager:
                     "creating a scope requires grant_store for owner bootstrap"
                 )
             await self._grant_store.bootstrap_owner(principal.id, scope_id)
+
+    async def _start_runtime(
+        self,
+        session_id: str,
+        *,
+        runtime_name: str,
+        manifest: HarnessManifest,
+        pins: SessionPins | None,
+        seams: RuntimeSeams | None,
+        sandbox: Sandbox | None,
+        sandbox_profile: Any | None,
+        memory_profile: Any | None,
+        tenant_id: str,
+        principal: Principal,
+        ws_state: SessionWorkspaceState,
+    ) -> Any:
+        """Build and start a session's runtime from what it pinned (create and resume alike).
+
+        Everything the runtime uses comes from here: its bound seams (with the
+        session's gateway key), its pinned model, its sandbox, and the hook that
+        marks the workspace dirty when a tool changes it.
+        """
+        session_dir: str | None = None
+        if pins is not None and seams is not None:
+            ws = session_workspace(session_id)
+            materialize_harness_binds(
+                ws,
+                pins,
+                seams,
+                sandbox_profile=sandbox_profile,
+                memory_profile=memory_profile,
+                session_id=session_id,
+                tenant_id=tenant_id,
+            )
+            session_dir = str(ws)
+            self._seams[session_id] = seams
+        model = session_model(manifest, pins)
+        seams = await self._maybe_attach_virtual_key(
+            seams,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal=principal,
+            scope_id=ws_state.scope_id,
+            model=model,
+            ws_state=ws_state,
+        )
+        runtime = create_runtime(runtime_name, seams=seams, model=model, session_id=session_id)
+        set_mutate = getattr(runtime, "set_on_mutate", None)
+        if callable(set_mutate):
+            set_mutate(lambda: self._workspace_svc.mark_dirty(ws_state))
+        await runtime.start(sandbox, session_dir)
+        return runtime
+
+    def memory_profile(self, row: SessionRow) -> MemoryProfile | None:
+        """The memory profile a session pinned, if any."""
+        if not row.composition_pins or self._composition_catalog is None:
+            return None
+        pins = SessionPins.from_dict(dict(row.composition_pins))
+        return load_pinned_memory_profile(pins, self._composition_catalog)
+
+    def session_model(self, row: SessionRow) -> str | None:
+        """The model a session's calls name: its pinned route, else its manifest's model."""
+        pins = SessionPins.from_dict(dict(row.composition_pins)) if row.composition_pins else None
+        return session_model(self._pinned_manifest(row), pins)
+
+    def tool_denial(self, session_id: str, name: str, provider: ToolProvider | None) -> str | None:
+        """Why the pinned sandbox profile forbids calling ``name`` now, or None if it may run."""
+        tool_class = provider.tool_class(name) if isinstance(provider, ToolClassifier) else None
+        return self._sandbox_policy.check_tool_invoke(session_id, name, tool_class=tool_class)
+
+    def tool_context(self, session_id: str, tenant_id: str) -> dict[str, Any]:
+        """``ToolInvokeContext.extra`` for a session: identity, its workspace, change hook."""
+        extra: dict[str, Any] = {"session_id": session_id, "tenant_id": tenant_id}
+        runtime_workspace = getattr(self._registry.get(session_id), "workspace", None)
+        sandbox = self._sandboxes.get(session_id)
+        if runtime_workspace is not None:
+            extra["workspace"] = runtime_workspace
+        elif sandbox is not None:
+            extra["workspace"] = SandboxWorkspace(sandbox)
+        if (ws := self._workspace.get(session_id)) is not None:
+            extra["on_mutate"] = lambda: self._workspace_svc.mark_dirty(ws)
+        return extra
 
     async def _maybe_attach_virtual_key(
         self,
@@ -616,6 +686,13 @@ class SessionManager:
             seams = bind_runtime_seams(pins, self._composition_catalog)
             profile = load_pinned_sandbox_profile(pins, self._composition_catalog)
             memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
+        principal = Principal(
+            id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id
+        )
+        ws_state = self._workspace.get(session_id) or SessionWorkspaceState(
+            scope_id=row.scope_id,
+            principal=principal if row.scope_id else None,
+        )
         existing = self._sandboxes.get(session_id)
         if existing is not None:
             sandbox = existing
@@ -626,28 +703,23 @@ class SessionManager:
                 harness_version=row.harness_version,
                 sandbox_profile=profile,
             )
+            if row.scope_id is not None and sandbox is not None:
+                await self._workspace_svc.ensure_hydrated(ws_state, sandbox)
         # V-6: re-bind from stored pins; do not re-resolve floating catalog.
-        runtime = create_runtime(
-            row.runtime,
+        runtime = await self._start_runtime(
+            session_id,
+            runtime_name=row.runtime,
+            manifest=harness,
+            pins=pins,
             seams=seams,
-            model=harness.model,
-            session_id=session_id,
+            sandbox=sandbox,
+            sandbox_profile=profile,
+            memory_profile=memory_profile,
+            tenant_id=row.tenant_id,
+            principal=principal,
+            ws_state=ws_state,
         )
-        session_dir: str | None = None
-        if pins is not None and seams is not None:
-            ws = session_workspace(session_id)
-            materialize_harness_binds(
-                ws,
-                pins,
-                seams,
-                sandbox_profile=profile,
-                memory_profile=memory_profile,
-                session_id=session_id,
-                tenant_id=row.tenant_id,
-            )
-            session_dir = str(ws)
-            self._seams[session_id] = seams
-        await runtime.start(sandbox, session_dir)
+        self._workspace[session_id] = ws_state
         history = await self._reader.latest_history(session_id)
         # D13: reconstruct open-span state from journal after cold resume / restart.
         try:
@@ -1240,15 +1312,7 @@ class SessionManager:
                 f"session {session_id!r} has no composition tool provider"
             )
         call_id = tool_call_id or uuid4().hex
-        tool_class: str | None = None
-        tool_set = getattr(seams.tool_provider, "_tool_set", None)
-        if tool_set is not None:
-            td = tool_set.definitions.get(name)
-            if td is not None:
-                tool_class = td.tool_class
-        denial = self._sandbox_policy.check_tool_invoke(
-            session_id, name, tool_class=tool_class
-        )
+        denial = self.tool_denial(session_id, name, seams.tool_provider)
         run_trace = self._trace_for(session_id)
         if denial is not None:
             result = ToolResult(ok=False, error=denial, code="FILE_EFFECTS_DENIED")
@@ -1302,10 +1366,7 @@ class SessionManager:
                         f"session awaiting approval id={session_id!r} tool={name!r}"
                     )
 
-        ctx = ToolInvokeContext(
-            trace_id=call_id,
-            extra={"session_id": session_id, "tenant_id": tenant_id},
-        )
+        ctx = ToolInvokeContext(trace_id=call_id, extra=self.tool_context(session_id, tenant_id))
         begin = await self._tool_outbox.begin(
             session_id,
             tool_call_id=call_id,
@@ -1373,7 +1434,7 @@ class SessionManager:
         session_id: str,
         *,
         tenant_id: str,
-        provider: str,
+        provider: str | None,
         request: SubagentRequest,
         turn_id: str | None = None,
         trace_id: str | None = None,
@@ -1381,6 +1442,7 @@ class SessionManager:
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
+        provider = self.subagent_provider(session_id, row, provider)
         request.parent_depth = await self._trusted_parent_depth(
             session_id, request.parent_depth
         )
@@ -1397,7 +1459,7 @@ class SessionManager:
         session_id: str,
         *,
         tenant_id: str,
-        provider: str,
+        provider: str | None,
         request: SubagentRequest,
         turn_id: str | None = None,
         trace_id: str | None = None,
@@ -1405,6 +1467,7 @@ class SessionManager:
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
+        provider = self.subagent_provider(session_id, row, provider)
         request.parent_depth = await self._trusted_parent_depth(
             session_id, request.parent_depth
         )
@@ -1421,7 +1484,7 @@ class SessionManager:
         session_id: str,
         *,
         tenant_id: str,
-        provider: str,
+        provider: str | None,
         request: SubagentRequest,
         job_id: str,
         run_id: str,
@@ -1432,6 +1495,7 @@ class SessionManager:
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
+        provider = self.subagent_provider(session_id, row, provider)
         request.parent_depth = await self._trusted_parent_depth(
             session_id, request.parent_depth
         )
@@ -1457,7 +1521,7 @@ class SessionManager:
         session_id: str,
         *,
         tenant_id: str,
-        provider: str,
+        provider: str | None,
         request: SubagentRequest,
         turn_id: str | None = None,
         trace_id: str | None = None,
@@ -1465,6 +1529,7 @@ class SessionManager:
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
+        provider = self.subagent_provider(session_id, row, provider)
         request.parent_depth = await self._trusted_parent_depth(
             session_id, request.parent_depth
         )
@@ -1573,6 +1638,19 @@ class SessionManager:
             writer=self._writer,
             max_depth=getattr(manifest, "max_subagent_depth", 3),
         )
+
+    async def resolve_subagent_provider(self, session_id: str, requested: str | None) -> str:
+        return self.subagent_provider(session_id, await self._get_session_row(session_id), requested)
+
+    def subagent_provider(self, session_id: str, row: SessionRow, requested: str | None) -> str:
+        """``requested``, or the session's pinned transport default when none is named."""
+        if requested:
+            return requested
+        seams = self._seams_for_session(session_id, row) or self._fallback_seams
+        default = getattr(seams.subagent_transport, "default_provider", None)
+        if not default:
+            raise SubagentNotConfigured(f"session {session_id!r} has no subagent provider")
+        return str(default)
 
     def _seams_for_session(self, session_id: str, row: SessionRow) -> RuntimeSeams | None:
         cached = self._seams.get(session_id)

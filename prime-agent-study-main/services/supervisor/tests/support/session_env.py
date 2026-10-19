@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from supervisor.sandbox.base import (
     SandboxProvider,
     SnapshotUnsupported,
 )
+from supervisor.sandbox.providers.local_process import LocalProcessSandbox
 from supervisor.session.manager import SessionManager
 from supervisor.session.registry import SessionRegistry
 
@@ -48,38 +51,46 @@ class TrackingProvider(SandboxProvider):
 
     async def create(self, **kwargs):  # type: ignore[no-untyped-def]
         self.create_calls.append(dict(kwargs))
-        return _DummySandbox()
+        return _DummySandbox(self._base_dir)
 
     async def resume(self, snapshot_id: str) -> Sandbox:
         self.resume_calls.append(snapshot_id)
-        return _DummySandbox()
+        return _DummySandbox(self._base_dir)
 
     async def get(self, sandbox_id: str) -> Sandbox | None:
         return None
 
 
 class _DummySandbox(Sandbox):
-    def __init__(self) -> None:
+    """Tracked lifecycle (no snapshots) over a real local directory for files and commands."""
+
+    def __init__(self, base_dir: Path | None = None) -> None:
         self._info = SandboxInfo(id="dummy", provider="tracking", supports_snapshot=True)
+        root = Path(tempfile.mkdtemp(prefix="sandbox-", dir=base_dir))
+        self._local = LocalProcessSandbox(root, f"dummy-{uuid.uuid4().hex[:8]}")
 
     @property
     def info(self) -> SandboxInfo:
         return self._info
 
+    @property
+    def root(self) -> Path:
+        return self._local.root
+
     async def spawn(self, cmd, *, cwd=None, env=None) -> ProcessHandle:
         raise NotImplementedError
 
     async def exec(self, cmd, *, cwd=None, env=None, timeout=None) -> ExecResult:
-        raise NotImplementedError
+        return await self._local.exec(cmd, cwd=cwd, env=env, timeout=timeout)
 
     async def read_file(self, path: str) -> bytes:
-        raise NotImplementedError
+        return await self._local.read_file(path)
 
     async def write_file(self, path: str, data: bytes) -> None:
-        raise NotImplementedError
+        await self._local.write_file(path, data)
 
     async def exists(self, path: str) -> bool:
-        return False
+        return await self._local.exists(path)
 
     async def pause(self) -> str:
         raise SnapshotUnsupported("dummy")

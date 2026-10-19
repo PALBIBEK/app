@@ -39,7 +39,7 @@ from supervisor.seams.interfaces.subagent_transport import (
     SubagentTransport,
     SubagentTransportImpl,
 )
-from supervisor.seams.interfaces.tool_provider import ToolProvider
+from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 # Import from new locations (core/)
 from supervisor.seams.core.errors import (
@@ -104,6 +104,7 @@ __all__ = [
     "RecallBlock",
     "SubagentTransport",
     "SubagentTransportImpl",
+    "ToolClassifier",
     "ToolProvider",
     # Factory (lazy loaded)
     "build_runtime_seams",

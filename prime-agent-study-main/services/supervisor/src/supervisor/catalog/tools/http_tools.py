@@ -7,13 +7,23 @@ sandbox-direct — and re-validates SSRF at invoke time.
 
 from __future__ import annotations
 
+import asyncio
 from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ConfigDict
 
 from supervisor.seams import ToolInvokeContext
+from supervisor.tools import (
+    ToolArgs,
+    ToolClass,
+    ToolContext,
+    ToolRegistry,
+    ToolSpec,
+    default_registry,
+)
 
 # Name → endpoint for tools registered via ``register_http_tool``.
 HTTP_TOOL_REGISTRY: dict[str, str] = {}
@@ -88,6 +98,12 @@ def invoke_http_tool(
             return {"text": resp.text, "status_code": resp.status_code}
 
 
+class HttpToolArgs(ToolArgs):
+    """Any JSON object: the remote endpoint owns the schema (pinned in the ToolSet)."""
+
+    model_config = ConfigDict(extra="allow")
+
+
 class HttpToolHandler:
     """Supervisor-mediated HTTP tool — SSRF re-check + timeout on every call."""
 
@@ -113,25 +129,43 @@ class HttpToolHandler:
         del ctx
         return invoke_http_tool(self.endpoint, dict(args), timeout=self.timeout)
 
+    def spec(self, description: str) -> ToolSpec[HttpToolArgs]:
+        """This endpoint as a registry tool. Remote effects are unknown, so never re-run."""
+
+        async def call_endpoint(args: HttpToolArgs, ctx: ToolContext) -> Any:
+            return await asyncio.to_thread(self, args.model_dump())
+
+        return ToolSpec(
+            name=self.name,
+            description=description or f"HTTP tool {self.name}",
+            args_model=HttpToolArgs,
+            handler=call_endpoint,
+            tool_class=ToolClass.NON_ATOMIC,
+        )
+
 
 def register_http_tool(
     name: str,
     endpoint: str | None = None,
     *,
     parameters: dict[str, Any] | None = None,
+    description: str = "",
+    registry: ToolRegistry | None = None,
     **kwargs: Any,
 ) -> HttpToolHandler:
-    """Register a supervisor-mediated HTTP tool (SSRF re-check on every invoke)."""
-    del parameters  # schema carried by ToolSet definitions
+    """Register a supervisor-mediated HTTP tool in the tool registry.
+
+    Its schema is whatever the ToolSet pins (``parameters`` is accepted for
+    callers that pass it, and ignored). Registering a name again replaces the
+    endpoint behind it.
+    """
+    del parameters
     url = (endpoint or kwargs.get("url") or "").strip()
     if not name or not url:
         raise ValueError("register_http_tool requires name and endpoint")
     handler = HttpToolHandler(name, endpoint=url, timeout=float(kwargs.get("timeout") or 15.0))
     HTTP_TOOL_REGISTRY[name] = handler.endpoint
-
-    from supervisor.catalog.tools.handlers import register_handler
-
-    register_handler(name, handler)
+    (registry or default_registry()).register(handler.spec(description), replace=True)
     return handler
 
 

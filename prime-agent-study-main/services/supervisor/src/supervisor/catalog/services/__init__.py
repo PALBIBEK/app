@@ -4,6 +4,7 @@ Services:
 - CatalogService: Main orchestrator for publish/deprecate/resolve with audit
 - CatalogAuthz: Permission checking for catalog operations
 - CompositionResolver: Resolve compositions to session pins
+- require_implemented: a ToolSet may only pin tools the registry implements
 
 All services use Protocol interfaces for dependency injection.
 
@@ -31,9 +32,11 @@ Example:
 from supervisor.catalog.services.authz import CatalogAuthz
 from supervisor.catalog.services.catalog_service import CatalogService
 from supervisor.catalog.services.resolver import CompositionResolver
+from supervisor.catalog.services.tool_implementations import require_implemented
 
 __all__ = [
     "CatalogService",
     "CatalogAuthz",
     "CompositionResolver",
+    "require_implemented",
 ]
