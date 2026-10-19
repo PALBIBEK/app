@@ -9,16 +9,32 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# Route id → {provider, upstream_model}. ``model`` on chat requests is a route id.
+# Route id → {provider, upstream_model, context_window}. ``model`` on chat requests
+# is a route id. ``context_window`` is the upstream model's limit in tokens; the
+# supervisor compacts a conversation against it.
 DEFAULT_ROUTES: dict[str, dict[str, Any]] = {
-    "echo": {"provider": "echo", "upstream_model": "echo"},
-    "fake": {"provider": "echo", "upstream_model": "fake"},
+    "echo": {"provider": "echo", "upstream_model": "echo", "context_window": 200_000},
+    "fake": {"provider": "echo", "upstream_model": "fake", "context_window": 200_000},
     # Githi harness default route — OpenRouter Claude (keys only in gateway).
     "githi": {
         "provider": "openrouter",
         "upstream_model": "anthropic/claude-sonnet-4",
+        "context_window": 200_000,
     },
 }
+
+
+def route_view(route_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """A route as consumers see it: what it calls and how much it can hold (no secrets)."""
+    window = meta.get("context_window")
+    if window is not None and (not isinstance(window, int) or isinstance(window, bool) or window <= 0):
+        raise ValueError(f"route {route_id!r}: context_window must be a positive integer")
+    return {
+        "id": route_id,
+        "provider": meta.get("provider"),
+        "upstream_model": meta.get("upstream_model"),
+        "context_window": window,
+    }
 
 
 class Settings(BaseSettings):

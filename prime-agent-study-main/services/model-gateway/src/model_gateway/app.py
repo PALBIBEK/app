@@ -13,7 +13,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from model_gateway.config import Settings
+from model_gateway.config import Settings, route_view
 from model_gateway.factory import build_provider_registry
 from model_gateway.metering import stamp_completion_usage, usage_cost_usd
 from model_gateway.providers.base import ProviderRegistry
@@ -457,16 +457,24 @@ def list_routes(
 ) -> dict[str, Any]:
     _check_auth(request, authorization)
     routes = _settings(request).routes()
-    return {
-        "routes": [
-            {
-                "id": rid,
-                "provider": meta.get("provider"),
-                "upstream_model": meta.get("upstream_model"),
-            }
-            for rid, meta in routes.items()
-        ]
-    }
+    return {"routes": [route_view(rid, meta) for rid, meta in routes.items()]}
+
+
+@app.get("/v1/routes/{route_id}")
+def get_route(
+    route_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """One route's metadata, so a caller can size its context to the model behind it."""
+    _check_auth(request, authorization, route_id=route_id)
+    meta = _settings(request).routes().get(route_id)
+    if meta is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "ROUTE_UNKNOWN", "message": f"unknown route id: {route_id!r}"}},
+        )
+    return route_view(route_id, meta)
 
 
 @app.post("/v1/chat/completions")

@@ -78,13 +78,17 @@ Every githi model turn runs step by step under the session workflow
 | Tool set | The tools offered and run (`RegistryToolProvider`), plus platform tools |
 | Plug bindings: gateway | Every model call (`model_gateway` seam) |
 | Plug bindings: model route | The model every call names (`session_model`: route, else the manifest's model) |
-| Plug bindings: subagents | `subagent` / `subagent_result` tools on the transport's default provider |
-| Memory profile | Compaction between turns past `min(window − reserve, window × pressure)`, keeping `keep_recent_tokens`; recall on the first model step |
+| Plug bindings: subagents | `subagent` / `subagent_result` tools on the transport's default provider; finished background jobs announced at the next run (`BackgroundResults`) |
+| Memory profile | Compaction between turns past `min(window − reserve, window × pressure)`, keeping `keep_recent_tokens`; recall on the first model step. `window`: the profile's `context_window`, else the gateway's report for the session's model (`ModelCatalog`), else 200,000 |
 | Sandbox (harness + profile) | Where every tool acts (`SandboxWorkspace`: files and commands in the sandbox) and the `file_effects` policy on every tool call |
 | Harness manifest | Recovery class per tool, guards, budget, approvals, subagent depth and background |
 
 Create and resume build the runtime through one routine (`SessionManager._start_runtime`),
-so a resumed session gets exactly what it was created with.
+so a resumed session gets exactly what it was created with. Seams are bound once per
+session, after its gateway key is minted: the agent's gateway, the compaction summarizer
+and nested-session subagents all call the composition's pinned gateway with that key, and
+every session path (turns, direct tool invokes, memory and subagent operations) uses the
+runtime's own seams.
 
 ## Catalog digests
 

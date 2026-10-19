@@ -16,7 +16,8 @@ Sibling deployable: `YAL_AGENT_SERVICE/agent-platform/services/model-gateway/`.
 |---|---|---|
 | GET | `/v1/healthz` | Liveness (process only; no deps) |
 | GET | `/v1/readyz` | Readiness — see below |
-| GET | `/v1/routes` | Route catalog (no secrets) |
+| GET | `/v1/routes` | Route catalog (no secrets): `id`, `provider`, `upstream_model`, `context_window` |
+| GET | `/v1/routes/{route_id}` | One route (same fields); `ROUTE_UNKNOWN` 404. Supervisor: `ModelCatalog.context_window` |
 | POST | `/v1/chat/completions` | OpenAI-compat; `model` = **route id** |
 
 ### Readiness (`GET /v1/readyz`)

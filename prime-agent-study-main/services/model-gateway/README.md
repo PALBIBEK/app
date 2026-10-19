@@ -22,11 +22,14 @@ Default routes (when `MODEL_GATEWAY_ROUTES_JSON` unset):
 
 ```json
 {
-  "echo": {"provider": "echo", "upstream_model": "echo"},
-  "fake": {"provider": "echo", "upstream_model": "fake"},
-  "githi": {"provider": "openrouter", "upstream_model": "anthropic/claude-sonnet-4"}
+  "echo": {"provider": "echo", "upstream_model": "echo", "context_window": 200000},
+  "fake": {"provider": "echo", "upstream_model": "fake", "context_window": 200000},
+  "githi": {"provider": "openrouter", "upstream_model": "anthropic/claude-sonnet-4", "context_window": 200000}
 }
 ```
+
+`context_window` is the upstream model's limit in tokens. It is optional, but
+set it on every route: the supervisor compacts conversations against it.
 
 **Echo-only + vendor keys:** Staging compose pins an echo-only
 `MODEL_GATEWAY_ROUTES_JSON` so `/v1/readyz` is green in CI. If
@@ -72,7 +75,8 @@ Route meta may include `retries` (extra attempts on HTTP 429; default 1) and
 
 - `GET /v1/healthz` — liveness
 - `GET /v1/readyz` — routes + providers + non-echo credentials + auth (prod/staging)
-- `GET /v1/routes` — configured route ids (no secrets)
+- `GET /v1/routes` — configured routes: id, provider, upstream model, context window (no secrets)
+- `GET /v1/routes/{route_id}` — one route; a virtual key may read only the routes it allows
 - `POST /v1/chat/completions` — OpenAI-compat; `model` field = **route id** (G-2)
 - Optional header `X-YAL-Route-Id` overrides body `model`
 - Auth: when configured, missing/wrong Bearer → **401** / **503**

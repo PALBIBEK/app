@@ -73,7 +73,6 @@ from supervisor.seams.services.session_workspace import (
 )
 
 # Session Gateway
-from supervisor.seams.services.session_gateway import attach_minted_gateway
 
 # Memory Service Client
 from supervisor.seams.services.memory_service_client import (
@@ -136,7 +135,6 @@ __all__ = [
     "WorkspaceNotReadyError",
     "tree_for_sandbox",
     # Session Gateway
-    "attach_minted_gateway",
     # Memory Service Client
     "memory_service_base_url",
     "memory_service_credential",

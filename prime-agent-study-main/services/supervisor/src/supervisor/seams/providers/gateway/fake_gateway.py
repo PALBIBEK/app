@@ -10,10 +10,20 @@ from supervisor.seams.core.types import ChatMessage, Completion, StreamEvent
 class FakeModelGatewayClient:
     """Provider: returns canned assistant text (unit tests / defaults)."""
 
-    def __init__(self, *, assistant_text: str = "ok", model: str = "fake") -> None:
+    def __init__(
+        self,
+        *,
+        assistant_text: str = "ok",
+        model: str = "fake",
+        context_window: int | None = None,
+    ) -> None:
         self._text = assistant_text
         self._model = model
+        self._window = context_window
         self._closed = False
+
+    def context_window(self, model: str) -> int | None:
+        return self._window
 
     def complete(
         self,

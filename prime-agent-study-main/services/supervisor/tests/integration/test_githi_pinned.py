@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from supervisor.agent.events import (
+    BackgroundResults,
     CompactionEnd,
     JobEnd,
     MemoryRecall,
@@ -234,6 +235,29 @@ async def test_the_conversation_is_compacted_by_the_pinned_profile(
     assert any(t.startswith(SUMMARY_MARKER) for t in texts)
 
 
+@pytest.mark.parametrize(
+    ("reported", "compacted"),
+    [(2_000, True), (None, False)],
+    ids=["gateway-reports-a-small-window", "gateway-cannot-say"],
+)
+async def test_without_a_pinned_window_the_gateway_reports_it(
+    env: Env, model: Callable[..., ScriptedGateway], reported: int | None, compacted: bool
+) -> None:
+    model(window=reported)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(
+            env, state, memory={"reserve_tokens": 100, "keep_recent_tokens": 50}
+        )
+        await env.sessions.submit(sid, Message("c1", "lorem ipsum " * 900))
+        await env.wait_for(state, sid, run_ended(1))
+        await env.sessions.submit(sid, Message("c2", "and now?"))
+        events = await env.wait_for(state, sid, run_ended(2))
+
+    # ~3k tokens: past a reported 2k window, far inside the 200k default.
+    assert bool(payloads(events, CompactionEnd)) is compacted
+
+
 async def test_recall_comes_from_the_pinned_backend(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
@@ -303,3 +327,27 @@ async def test_a_background_subagent_runs_as_a_durable_job(
     assert result["ok"] and result["payload"] == json.loads(
         json.dumps({"job_id": job_id, "status": job.stop_reason, "text": job.output})
     )
+
+
+async def test_a_finished_background_subagent_is_announced_once(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(("subagent", {"prompt": "long task", "background": True}))
+    calls = recording(gateway)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start it"))
+        await env.wait_for(state, sid, run_ended())
+        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
+        gateway.calls = []
+        await env.sessions.submit(sid, Message("c2", "anything new?"))
+        await env.wait_for(state, sid, run_ended(2))
+        await env.sessions.submit(sid, Message("c3", "and now?"))
+        events = await env.wait_for(state, sid, run_ended(3))
+
+    job_id, _ = job_ids(f"{run_id_for(sid, 'c1')}:call-0-0")
+    (announced,) = payloads(events, BackgroundResults)  # once, not again on the third turn
+    assert [r["job_id"] for r in announced.results] == [job_id]
+    told = [m for m in calls[-2].messages if m.role == "system" and job_id in m.content]
+    assert told and told[0].content.startswith("Background subagents you started have finished")
