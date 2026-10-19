@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from supervisor.sandbox.security.env import DROPPED_PROXY_ENV
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DROPPED_PROXY_ENV",

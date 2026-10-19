@@ -63,7 +63,7 @@ from supervisor.seams.services import (
     WorkspaceTreeIO,
 )
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _QUEUE_MAX = 256
 
@@ -163,7 +163,7 @@ def _push_bounded(queue: asyncio.Queue[bytes | None], data: bytes) -> None:
         try:
             queue.put_nowait(data)
         except asyncio.QueueFull:
-            _log.warning("e2b callback queue full; dropped chunk")
+            logger.warning("e2b callback queue full; dropped chunk")
 
 
 class E2BWorkspaceTreeIO:
@@ -395,6 +395,7 @@ class E2BSandbox(Sandbox):
             await self.read_file(path)
             return True
         except Exception:
+            logger.debug("e2b exists check failed", exc_info=True)
             return False
 
     async def pause(self) -> str:
@@ -413,7 +414,7 @@ class E2BSandbox(Sandbox):
             try:
                 await kill()
             except Exception:
-                _log.exception("e2b destroy failed")
+                logger.exception("e2b destroy failed")
 
     async def is_alive(self) -> bool:
         alive = getattr(self._sbx, "is_alive", None)
@@ -498,6 +499,7 @@ class E2BSandbox(Sandbox):
         try:
             return await self.read_file(path)
         except Exception:
+            logger.debug("e2b layer read failed", exc_info=True)
             return None
 
     async def _write_file_bytes(self, path: str, data: bytes) -> None:
@@ -550,7 +552,7 @@ class E2BSandbox(Sandbox):
                     uptime_str = result.stdout_text.split()[0]
                     uptime_ms = int(float(uptime_str) * 1000)
             except Exception:
-                pass
+                logger.debug("e2b uptime probe failed", exc_info=True)
 
         return ComputerStatus(
             scope_id=self._scope_id or self._info.id,
@@ -705,6 +707,7 @@ class E2BProvider(SandboxProvider):
         try:
             handle = await connect(sandbox_id)
         except Exception:
+            logger.warning("reconnecting to an e2b sandbox failed", exc_info=True)
             return None
         if handle is None:
             return None

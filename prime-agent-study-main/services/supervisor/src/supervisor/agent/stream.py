@@ -11,7 +11,7 @@ from uuid import uuid4
 from supervisor.agent.events import AgentEvent, Envelope, RunEnd, RunStart, TurnEnd, TurnStart
 from supervisor.obs.trace_context import format_traceparent, new_trace_id, set_outbound_traceparent
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _SENTINEL = object()
 _QUEUE_MAX = 10_000
 
@@ -76,7 +76,7 @@ class EventStream:
         try:
             self._queue.put_nowait(env)
         except asyncio.QueueFull:
-            _log.warning("event queue full; dropping seq=%s type=%s", env.seq, type(payload).__name__)
+            logger.warning("event queue full; dropping seq=%s type=%s", env.seq, type(payload).__name__)
             return None
         return env
 

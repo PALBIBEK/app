@@ -42,7 +42,7 @@ from supervisor.models.endpoints import (
 from supervisor.models.registry import offered_in_picker
 from supervisor.models.spec import Compat, ModelSpec, Pricing, WireApi
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_MODELS = 1_000
@@ -312,7 +312,7 @@ class GatewayCatalog:
         self._retry_at = now + RETRY_S
         transient = isinstance(exc, CatalogError) and exc.transient
         if self._discovered and transient and now - self._last_success_at < STALE_S:
-            _log.warning(
+            logger.warning(
                 "gateway model discovery failed; keeping last known models, retrying in 30 seconds"
             )
             return
@@ -320,7 +320,7 @@ class GatewayCatalog:
             self._routes = {}
             self._expires_at = 0.0
             self.admitted.replace([])
-            _log.warning("gateway model discovery unavailable; retrying in 30 seconds: %s", exc)
+            logger.warning("gateway model discovery unavailable; retrying in 30 seconds: %s", exc)
 
     def _read(self, url: str) -> list[Any]:
         """GET a catalog endpoint: keyed, 5 s, no redirects, at most 2 MiB and 1000 entries."""

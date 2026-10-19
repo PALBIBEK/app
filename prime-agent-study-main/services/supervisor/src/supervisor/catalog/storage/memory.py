@@ -12,16 +12,10 @@ Reference: Refactored from store.py with Protocol compliance.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from supervisor.catalog.core.errors import (
     FloatingRef,
     InvalidDigest,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 __all__ = [
     "reject_floating_ref",

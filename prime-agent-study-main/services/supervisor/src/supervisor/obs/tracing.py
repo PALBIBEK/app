@@ -10,7 +10,7 @@ from supervisor.agent.events import Envelope
 from supervisor.obs.projector import JournalProjector, SpanSink
 from supervisor.telemetry_contract.spans import SpanRecord
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _projector: ProjectorHub | JournalProjector | None = None
 _provider: Any = None
 _shared_sink: SpanSink | None = None
@@ -24,7 +24,7 @@ class _LoggingSink:
 
     def export(self, spans: list[SpanRecord]) -> None:
         for s in spans:
-            _log.debug(
+            logger.debug(
                 "span name=%s op=%s session=%s run=%s",
                 s.name,
                 s.attributes.get("gen_ai.operation.name")
@@ -195,7 +195,7 @@ def setup_tracing(
         try:
             chosen = _build_otlp_sink(name)
         except Exception:
-            _log.exception("OTLP setup failed; using logging sink")
+            logger.exception("OTLP setup failed; using logging sink")
             chosen = _LoggingSink()
     else:
         chosen = _LoggingSink()
@@ -224,7 +224,7 @@ def force_flush_tracing(timeout_millis: int = 10000) -> bool:
     try:
         return bool(_provider.force_flush(timeout_millis=timeout_millis))
     except Exception:
-        _log.exception("tracer provider force_flush failed")
+        logger.exception("tracer provider force_flush failed")
         return False
 
 
@@ -236,7 +236,7 @@ def shutdown_tracing() -> None:
             force_flush_tracing()
             _provider.shutdown()
         except Exception:
-            _log.exception("tracer provider shutdown failed")
+            logger.exception("tracer provider shutdown failed")
         _provider = None
     _projector = None
     _shared_sink = None
@@ -278,7 +278,7 @@ def _build_otlp_sink(service_name: str) -> SpanSink:
     trace.set_tracer_provider(provider)
     _provider = provider
     tracer = trace.get_tracer("yal-supervisor")
-    _log.info("OTLP exporter configured endpoint=%s sample_ratio=%s", endpoint, sample_ratio)
+    logger.info("OTLP exporter configured endpoint=%s sample_ratio=%s", endpoint, sample_ratio)
     return OtlpBridgeSink(tracer)
 
 

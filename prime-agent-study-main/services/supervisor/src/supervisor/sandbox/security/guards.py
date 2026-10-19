@@ -201,12 +201,8 @@ def is_placeholder_image_digest(digest: str | None) -> bool:
         return False
 
     # Check for fixture patterns (all same character)
-    hex_part = match.group(1).lower()
-    if len(set(hex_part)) == 1:
-        # e.g., sha256:aaaa...aaaa or sha256:0000...0000
-        return True
-
-    return False
+    # e.g., sha256:aaaa...aaaa or sha256:0000...0000
+    return len(set(match.group(1).lower())) == 1
 
 
 # =============================================================================

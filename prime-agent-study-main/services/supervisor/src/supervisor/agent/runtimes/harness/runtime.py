@@ -21,7 +21,7 @@ from supervisor.agent.stream import EventStream
 from supervisor.harness import build_spawn_plan
 from supervisor.sandbox.base import ProcessHandle, Sandbox
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class HarnessRuntime:
@@ -184,7 +184,7 @@ class HarnessRuntime:
             chunk = await self._proc.stderr.read(65536)
             if not chunk:
                 return
-            _log.debug("harness stderr: %s", chunk[:500])
+            logger.debug("harness stderr: %s", chunk[:500])
 
     def _fail_pending(self, exc: BaseException) -> None:
         for fut in list(self._pending.values()):

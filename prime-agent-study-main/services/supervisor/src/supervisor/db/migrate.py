@@ -26,7 +26,7 @@ from supervisor.db.engine import create_all
 
 __all__ = ["LegacySchemaError", "alembic_config", "migrate"]
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 _LOCK_KEY = 0x5E5_0C1A  # pg_advisory_lock key for "supervisor schema"
@@ -71,4 +71,4 @@ async def migrate(engine: AsyncEngine) -> None:
         finally:
             await conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _LOCK_KEY})
             await conn.commit()
-    _log.info("database schema is at the latest migration")
+    logger.info("database schema is at the latest migration")

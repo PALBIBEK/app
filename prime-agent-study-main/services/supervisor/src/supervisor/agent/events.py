@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 
 
 class EventCategory(Enum):
@@ -289,16 +289,29 @@ class ErrorEvent:
 # ── Union & Envelope ───────────────────────────────────────────────────────────
 
 
-AgentEvent = Union[
-    RunStart, RunEnd, TurnStart, TurnEnd,
-    MessageEnd,
-    ToolStart, ToolEnd,
-    ApprovalRequired, ApprovalResolved,
-    SubagentStart, SubagentEnd, JobStart, JobEnd,
-    CompactionStart, CompactionEnd, MemoryRecall, MemoryInjected, MemoryContext,
-    BackgroundResults,
-    Settled, ErrorEvent,
-]
+AgentEvent = (
+    RunStart
+    | RunEnd
+    | TurnStart
+    | TurnEnd
+    | MessageEnd
+    | ToolStart
+    | ToolEnd
+    | ApprovalRequired
+    | ApprovalResolved
+    | SubagentStart
+    | SubagentEnd
+    | JobStart
+    | JobEnd
+    | CompactionStart
+    | CompactionEnd
+    | MemoryRecall
+    | MemoryInjected
+    | MemoryContext
+    | BackgroundResults
+    | Settled
+    | ErrorEvent
+)
 
 
 @dataclass(frozen=True)

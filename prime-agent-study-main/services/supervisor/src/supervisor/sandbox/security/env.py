@@ -306,7 +306,7 @@ def _parse_and_validate_url(url: str) -> str | None:
         parsed = urlparse(text)
         hostname = parsed.hostname
         return hostname.lower() if hostname else None
-    except Exception:
+    except ValueError:
         return None
 
 

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -33,6 +37,7 @@ async def readyz(request: Request, response: Response) -> dict[str, str]:
         try:
             ok = await check_db()
         except Exception:
+            logger.warning("readiness: the database check failed", exc_info=True)
             ok = False
         if not ok:
             response.status_code = 503
@@ -43,6 +48,7 @@ async def readyz(request: Request, response: Response) -> dict[str, str]:
         try:
             ok = await check_sandbox()
         except Exception:
+            logger.warning("readiness: the sandbox check failed", exc_info=True)
             ok = False
         if not ok:
             response.status_code = 503

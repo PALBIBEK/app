@@ -11,7 +11,7 @@ from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
 if TYPE_CHECKING:
     from supervisor.agent.base import AgentRuntime
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RuntimeNames:
@@ -39,7 +39,7 @@ def create_runtime(
 ) -> AgentRuntime:
     """Create an agent runtime by name. Lazy imports for fast startup."""
     seams = seams or EMPTY_SEAMS
-    _log.debug("creating runtime: name=%s model=%s provider=%s session=%s", runtime_name, model, provider, session_id)
+    logger.debug("creating runtime: name=%s model=%s provider=%s session=%s", runtime_name, model, provider, session_id)
 
     if runtime_name == RuntimeNames.ECHO:
         from supervisor.agent.runtimes.echo.runtime import EchoRuntime

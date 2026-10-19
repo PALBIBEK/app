@@ -62,6 +62,7 @@ def _read_plug_bindings(session_dir: str | Path | None) -> dict[str, str]:
         logger.warning(
             "Failed to read plug_bindings.json",
             extra={"path": str(path), "error": str(exc)},
+            exc_info=True,
         )
         return {}
 
@@ -92,6 +93,7 @@ def _read_launch_cli(session_dir: str | Path | None) -> str | None:
         logger.warning(
             "Failed to read launch.json",
             extra={"path": str(path), "error": str(exc)},
+            exc_info=True,
         )
         return None
 
@@ -114,7 +116,7 @@ def _session_vk_env(session_dir: str | None) -> dict[str, str]:
 
     try:
         token = vk_path.read_text(encoding="utf-8").strip()
-    except Exception:
+    except OSError:
         return {}
 
     bind = str(vk_path)

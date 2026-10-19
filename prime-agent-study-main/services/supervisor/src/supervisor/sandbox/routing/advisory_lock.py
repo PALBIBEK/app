@@ -14,10 +14,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    pass
+from typing import Protocol, runtime_checkable
 
 __all__ = [
     "AdvisoryLockProtocol",

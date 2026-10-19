@@ -34,7 +34,7 @@ __all__ = [
     "reap_orphans",
 ]
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -155,7 +155,7 @@ async def _process_sandbox(
 
     # No session label = orphan from before labeling was added
     if not session_id:
-        _log.info("destroying unlabeled sandbox=%s", sandbox_id[:12])
+        logger.info("destroying unlabeled sandbox=%s", sandbox_id[:12])
         await sandbox.destroy()
         stats.record_destroy(sandbox_id, "no session label")
         return
@@ -164,18 +164,19 @@ async def _process_sandbox(
     try:
         status = await lookup_session(session_id)
     except Exception as e:
-        _log.warning(
+        logger.warning(
             "error looking up session=%s for sandbox=%s: %s",
             session_id,
             sandbox_id[:12],
             e,
+            exc_info=True,
         )
         stats.record_error(sandbox_id, f"lookup failed: {e}")
         return
 
     # Decide based on status
     if status is None or status in _TERMINAL_STATES:
-        _log.info(
+        logger.info(
             "reaping orphan sandbox=%s session=%s status=%s",
             sandbox_id[:12],
             session_id,
@@ -189,27 +190,28 @@ async def _process_sandbox(
             try:
                 await reattach(session_id, sandbox)
                 stats.record_reattach(sandbox_id, session_id)
-                _log.info(
+                logger.info(
                     "reattached sandbox=%s to session=%s",
                     sandbox_id[:12],
                     session_id,
                 )
             except Exception as e:
-                _log.warning(
+                logger.warning(
                     "failed to reattach sandbox=%s: %s",
                     sandbox_id[:12],
                     e,
+                    exc_info=True,
                 )
                 stats.record_error(sandbox_id, f"reattach failed: {e}")
         else:
             stats.record_reattach(sandbox_id, session_id)
-            _log.info(
+            logger.info(
                 "sandbox=%s is active (no reattach callback)",
                 sandbox_id[:12],
             )
     else:
         # Unknown/unexpected status - skip but log
-        _log.info(
+        logger.info(
             "skipping sandbox=%s with unknown status=%s",
             sandbox_id[:12],
             status,
@@ -259,22 +261,22 @@ async def reap_orphans(
 
     # Only LocalDockerProvider supports listing
     if not isinstance(provider, LocalDockerProvider):
-        _log.debug("provider %s does not support orphan listing", provider.name)
+        logger.debug("provider %s does not support orphan listing", provider.name)
         return stats
 
     # Get all managed sandboxes
     try:
         managed = await provider.list_managed()
     except Exception as e:
-        _log.error("failed to list managed sandboxes: %s", e)
+        logger.exception("failed to list managed sandboxes")
         stats.record_error("provider", f"list_managed failed: {e}")
         return stats
 
     if not managed:
-        _log.debug("no managed sandboxes found")
+        logger.debug("no managed sandboxes found")
         return stats
 
-    _log.info("found %d managed sandboxes to process", len(managed))
+    logger.info("found %d managed sandboxes to process", len(managed))
 
     # Process with bounded concurrency using semaphore
     semaphore = asyncio.Semaphore(concurrency)
@@ -290,11 +292,7 @@ async def reap_orphans(
                     session_label=LABEL_SESSION,
                 )
             except Exception as e:
-                _log.error(
-                    "unexpected error processing sandbox=%s: %s",
-                    sandbox.info.id[:12],
-                    e,
-                )
+                logger.exception("unexpected error processing sandbox=%s", sandbox.info.id[:12])
                 stats.record_error(sandbox.info.id, str(e))
 
     # Process all sandboxes concurrently
@@ -303,7 +301,7 @@ async def reap_orphans(
         return_exceptions=True,
     )
 
-    _log.info(
+    logger.info(
         "reaping complete: reattached=%d destroyed=%d skipped=%d errors=%d",
         stats.reattached,
         stats.destroyed,

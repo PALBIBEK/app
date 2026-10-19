@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BACKUP_TIMEOUT_S",
@@ -361,7 +361,7 @@ tar -tf "{archive_path}" 2>/dev/null | wc -l || echo 0
         total_bytes = int(lines[1].strip())
         file_count = int(lines[2].strip())
 
-        _log.debug(
+        logger.debug(
             "backed up %s: %d files, %d bytes, sha256=%s...",
             area.value,
             file_count,

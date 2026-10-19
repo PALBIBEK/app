@@ -8,7 +8,7 @@ from typing import Any
 
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _local = threading.local()
 
 
@@ -75,7 +75,7 @@ class OtlpBridgeSink:
                 try:
                     validate_span(record)
                 except ValidationError:
-                    _log.warning(
+                    logger.warning(
                         "dropping invalid span name=%s session=%s run=%s",
                         record.name,
                         record.yal_session_id,
@@ -85,7 +85,7 @@ class OtlpBridgeSink:
                     continue
                 self._emit(record)
         except Exception:
-            _log.exception("OTLP bridge export failed; dropping batch")
+            logger.exception("OTLP bridge export failed; dropping batch")
 
     def _apply_attrs(self, span: Any, record: SpanRecord) -> None:
         from opentelemetry.trace import Status, StatusCode

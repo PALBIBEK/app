@@ -15,13 +15,7 @@ Reference: policy/sandbox_policy.py pattern.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from supervisor.catalog.core.types import CatalogGrant
-
-if TYPE_CHECKING:
-    pass
-
 
 __all__ = [
 ]

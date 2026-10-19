@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 # Default max items in quarantine

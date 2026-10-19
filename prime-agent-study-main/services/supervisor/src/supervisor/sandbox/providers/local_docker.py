@@ -41,7 +41,7 @@ from supervisor.seams.services import (
     WorkspaceTreeIO,
 )
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 LABEL_SESSION = "supervisor.session_id"
 LABEL_HARNESS = "supervisor.harness_version"
@@ -129,7 +129,7 @@ async def _demux_docker_socket(
                 await stderr_q.put(payload)
             # 0 = stdin echo — ignore
     except Exception:
-        _log.exception("docker demux failed")
+        logger.exception("docker demux failed")
     finally:
         await stdout_q.put(None)
         await stderr_q.put(None)
@@ -435,6 +435,7 @@ class LocalDockerSandbox(Sandbox):
         except WorkspacePathEscape:
             raise
         except Exception:
+            logger.debug("docker exists check failed", exc_info=True)
             return False
 
     async def hydrate_workspace(self, scope_id: str) -> WorkspaceSyncReport:
@@ -474,11 +475,11 @@ class LocalDockerSandbox(Sandbox):
             try:
                 self._container.kill()
             except Exception:
-                pass
+                logger.debug("killing the container failed (it may have exited)", exc_info=True)
             try:
                 self._container.remove(force=True)
             except Exception:
-                pass
+                logger.warning("removing the container failed", exc_info=True)
 
         await loop.run_in_executor(None, _rm)
 
@@ -490,6 +491,7 @@ class LocalDockerSandbox(Sandbox):
                 self._container.reload()
                 return self._container.status == "running"
             except Exception:
+                logger.debug("docker liveness check failed", exc_info=True)
                 return False
 
         return await loop.run_in_executor(None, _alive)
@@ -639,10 +641,7 @@ class LocalDockerProvider(SandboxProvider):
             except Exception as exc:
                 raise SandboxGone(f"snapshot missing: {snapshot_id!r}") from exc
 
-        try:
-            container = await loop.run_in_executor(None, _run)
-        except SandboxGone:
-            raise
+        container = await loop.run_in_executor(None, _run)
         info = SandboxInfo(
             id=container.id,
             provider=self.name,
@@ -662,6 +661,7 @@ class LocalDockerProvider(SandboxProvider):
             try:
                 return client.containers.get(sandbox_id)
             except Exception:
+                logger.debug("no container with that id", exc_info=True)
                 return None
 
         container = await loop.run_in_executor(None, _get)
@@ -696,8 +696,8 @@ class LocalDockerProvider(SandboxProvider):
 
         try:
             container = await loop.run_in_executor(None, _find)
-        except Exception:  # noqa: BLE001 — no container to adopt: start afresh
-            _log.warning("adopting the sandbox of session=%s failed", session_id, exc_info=True)
+        except Exception:  # no container to adopt: start afresh
+            logger.warning("adopting the sandbox of session=%s failed", session_id, exc_info=True)
             return None
         if container is None:
             return None

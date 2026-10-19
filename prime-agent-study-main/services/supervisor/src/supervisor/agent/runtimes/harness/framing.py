@@ -19,7 +19,8 @@ def _parse_frame(frame: bytes) -> dict[str, Any] | None:
         return None
     obj = json.loads(frame.decode("utf-8"))
     if not isinstance(obj, dict):
-        raise ValueError(f"frame root must be a JSON object, got {type(obj).__name__}")
+        # A malformed frame is bad input from the child process, not a caller bug.
+        raise ValueError(f"frame root must be a JSON object, got {type(obj).__name__}")  # noqa: TRY004
     return obj
 
 

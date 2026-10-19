@@ -31,7 +31,7 @@ __all__ = [
 ]
 
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 

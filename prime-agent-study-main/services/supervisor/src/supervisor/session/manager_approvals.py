@@ -12,7 +12,7 @@ from supervisor.agent.events import (
 )
 from supervisor.db.models import SessionRow
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 from supervisor.session.manager_base import SessionManagerBase
@@ -78,6 +78,7 @@ class ApprovalOps(SessionManagerBase):
                 else:
                     session_policies[sid] = "deny"
             except Exception:
+                logger.warning("approval timeout policy unreadable; denying", exc_info=True)
                 session_policies[sid] = "deny"
 
         expired = await self._approvals.expire_due(
@@ -230,7 +231,7 @@ class ApprovalOps(SessionManagerBase):
         try:
             await runtime.abort()
         except Exception:
-            _log.exception("abort after loop guard failed session=%s", session_id)
+            logger.exception("abort after loop guard failed session=%s", session_id)
 
     async def _policy_abort(
         self,
@@ -244,7 +245,7 @@ class ApprovalOps(SessionManagerBase):
         try:
             await runtime.abort()
         except Exception:
-            _log.exception("abort failed session=%s", session_id)
+            logger.exception("abort failed session=%s", session_id)
         # Status first: anyone reacting to the ErrorEvent must already see it closed.
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
@@ -261,5 +262,5 @@ class ApprovalOps(SessionManagerBase):
             # Stops the runtime and releases its sandbox; the session row keeps its status.
             await self._stop_runtime_keep_session(session_id)
         except Exception:
-            _log.exception("cleanup after policy abort failed session=%s", session_id)
+            logger.exception("cleanup after policy abort failed session=%s", session_id)
         self._run_traces.pop(session_id, None)

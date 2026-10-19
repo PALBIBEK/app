@@ -11,6 +11,7 @@ Configuration via environment variables:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,6 +26,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from supervisor.db.models import Base
+
+logger = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -142,6 +145,7 @@ async def check_health(engine: AsyncEngine) -> bool:
             await conn.execute(text("SELECT 1"))
         return True
     except Exception:
+        logger.warning("database ping failed", exc_info=True)
         return False
 
 

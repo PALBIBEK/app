@@ -22,7 +22,7 @@ from supervisor.agent.events import (
     Usage,
 )
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _unknown_logged: set[str] = set()
 
 
@@ -88,5 +88,5 @@ def translate(raw: dict[str, Any]) -> AgentEvent | None:
         )
     if kind not in _unknown_logged:
         _unknown_logged.add(str(kind))
-        _log.debug("unmapped harness event type=%r", kind)
+        logger.debug("unmapped harness event type=%r", kind)
     return None

@@ -31,7 +31,7 @@ from supervisor.memory.types import scope_source
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def gateway_one_shot(gateway: object, *, model: str | None = None) -> OneShot:

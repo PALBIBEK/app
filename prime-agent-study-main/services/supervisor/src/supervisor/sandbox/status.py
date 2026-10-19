@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Final
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "RESTART_TIMEOUT_S",

@@ -26,7 +26,7 @@ from supervisor.policy.rate_limit import MemoryRateLimiter
 from supervisor.sandbox.factory import create_sandbox_provider
 from supervisor.sandbox.security.guards import assert_multi_tenant_sandbox_provider
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
@@ -108,7 +108,7 @@ async def bootstrap_supervisor(
             ) from exc
         # Optional provider dep missing (docker/e2b) — keep process up for /readyz,
         # on local processes, and say so: this is a development fallback.
-        _log.warning(
+        logger.warning(
             "SANDBOX_PROVIDER=%r is unavailable (%s); falling back to local_process",
             settings.sandbox_provider,
             exc,

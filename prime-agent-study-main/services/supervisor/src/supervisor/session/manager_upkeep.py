@@ -17,7 +17,7 @@ from supervisor.session.errors import (
 )
 from supervisor.session.modes import SessionMode
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 
@@ -71,7 +71,7 @@ class UpkeepOps(ChildOps):
             try:
                 state = await runtime.get_state()
             except Exception:
-                _log.exception("reap_idle state failed session=%s", sid)
+                logger.exception("reap_idle state failed session=%s", sid)
                 continue
             if not state.settled:
                 continue
@@ -111,17 +111,17 @@ class UpkeepOps(ChildOps):
             try:
                 await sandbox.pause()
             except Exception:
-                _log.exception("reap_idle pause failed session=%s", session_id)
+                logger.exception("reap_idle pause failed session=%s", session_id)
                 try:
                     await sandbox.destroy()
                 except Exception:
-                    _log.exception("reap_idle destroy failed session=%s", session_id)
+                    logger.exception("reap_idle destroy failed session=%s", session_id)
                 self._sandboxes.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.stop()
             except Exception:
-                _log.exception("reap_idle stop failed session=%s", session_id)
+                logger.exception("reap_idle stop failed session=%s", session_id)
         self._registry.remove(session_id)
         task = self._fanout.pop(session_id, None)
         if task is not None:
@@ -144,6 +144,7 @@ class UpkeepOps(ChildOps):
                 try:
                     state = await runtime.get_state()
                 except Exception:
+                    logger.debug("drain: runtime state unavailable", exc_info=True)
                     continue
                 if not state.settled:
                     unsettled = True
@@ -162,14 +163,14 @@ class UpkeepOps(ChildOps):
                 except SnapshotUnsupported:
                     # Expected for providers without snapshots (local_process): the
                     # adopting worker starts the sandbox afresh. Not an error.
-                    _log.info("drain: %s keeps no snapshot session=%s", sandbox.info.provider, sid)
+                    logger.info("drain: %s keeps no snapshot session=%s", sandbox.info.provider, sid)
                 except Exception:
-                    _log.exception("drain pause failed session=%s", sid)
+                    logger.exception("drain pause failed session=%s", sid)
             if runtime is not None:
                 try:
                     await runtime.stop()
                 except Exception:
-                    _log.exception("drain stop failed session=%s", sid)
+                    logger.exception("drain stop failed session=%s", sid)
             self._registry.remove(sid)
             task = self._fanout.pop(sid, None)
             if task is not None:
@@ -213,7 +214,7 @@ class UpkeepOps(ChildOps):
                 if hasattr(proj, "drop_session"):
                     proj.drop_session(session_id)
         except Exception:
-            _log.exception("span session_terminal reap failed session=%s", session_id)
+            logger.exception("span session_terminal reap failed session=%s", session_id)
 
         ws_state = self._workspace.get(session_id)
         sandbox = self._sandboxes.get(session_id)
@@ -221,14 +222,14 @@ class UpkeepOps(ChildOps):
             try:
                 await self._workspace_svc.sync_if_dirty(ws_state, sandbox)
             except WorkspaceConflictError:
-                _log.exception("workspace conflict on terminate session=%s", session_id)
+                logger.exception("workspace conflict on terminate session=%s", session_id)
             except Exception:
-                _log.exception("workspace sync failed on terminate session=%s", session_id)
+                logger.exception("workspace sync failed on terminate session=%s", session_id)
         if self._vk_client is not None:
             try:
                 self._vk_client.revoke_session(session_id)
             except Exception:
-                _log.exception("virtual key revoke failed session=%s", session_id)
+                logger.exception("virtual key revoke failed session=%s", session_id)
         runtime = self._registry.remove(session_id)
         task = self._fanout.pop(session_id, None)
         if task is not None:
@@ -241,13 +242,13 @@ class UpkeepOps(ChildOps):
             try:
                 await runtime.stop()
             except Exception:
-                _log.exception("stop failed session=%s", session_id)
+                logger.exception("stop failed session=%s", session_id)
         sandbox = self._sandboxes.pop(session_id, None)
         if sandbox is not None:
             try:
                 await sandbox.destroy()
             except Exception:
-                _log.exception("sandbox destroy failed session=%s", session_id)
+                logger.exception("sandbox destroy failed session=%s", session_id)
         self._modes.pop(session_id, None)
         self._seams.pop(session_id, None)
         self._long_term.pop(session_id, None)

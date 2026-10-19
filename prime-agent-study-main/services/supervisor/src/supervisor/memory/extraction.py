@@ -17,7 +17,7 @@ from supervisor.memory.classification import SENSITIVITY_PROMPT, OneShot
 from supervisor.memory.render import bullets
 from supervisor.memory.types import Sensitivity
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _EXTRACTION_LINES: Final = (
     "You extract durable facts worth remembering about the user across FUTURE conversations.",
@@ -88,8 +88,8 @@ def transcript(turns: Sequence[Exchange]) -> str:
 async def extract_facts(one_shot: OneShot, turns: Sequence[Exchange]) -> Extracted:
     try:
         out = await one_shot(MEMORY_EXTRACTION_PROMPT, transcript(turns))
-    except Exception:  # noqa: BLE001 - a failed extraction remembers nothing, never crashes
-        _log.warning("memory extraction failed", exc_info=True)
+    except Exception:  # a failed extraction remembers nothing, never crashes
+        logger.warning("memory extraction failed", exc_info=True)
         return Extracted([], Sensitivity.UNKNOWN)
     match = _SENSITIVITY_LINE.match(out or "")
     return Extracted(parse_facts(out or ""), Sensitivity.parse(match.group(1) if match else None))

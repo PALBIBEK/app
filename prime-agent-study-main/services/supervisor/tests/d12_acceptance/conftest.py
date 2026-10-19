@@ -34,12 +34,9 @@ AI_ROOT = Path(__file__).resolve().parents[4]
 @pytest.fixture(autouse=True)
 def _fast_sse_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
     """Avoid 20s hangs when closing SSE streams."""
-    try:
-        from supervisor.api import events as events_mod
+    from supervisor.api import events as events_mod
 
-        monkeypatch.setattr(events_mod, "_HEARTBEAT_SECS", 0.05)
-    except Exception:
-        pass
+    monkeypatch.setattr(events_mod, "_HEARTBEAT_SECS", 0.05)
 
 
 def resolve_lab_provider(state: Any | None = None) -> str:

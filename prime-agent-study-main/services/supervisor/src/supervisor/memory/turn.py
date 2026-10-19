@@ -41,7 +41,7 @@ from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
 from supervisor.memory.types import UNTRACKED, Provenance, RecallContext, personal_source
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Keyed journal writes: (session_id, run_id, key, event) -> seq.
 type Record = Callable[[str, str, str, Any], Awaitable[int]]

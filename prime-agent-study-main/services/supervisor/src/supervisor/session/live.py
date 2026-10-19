@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from supervisor.agent.events import Envelope
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _DROPPED = object()
 
 
@@ -56,7 +56,7 @@ class LiveHub:
                 try:
                     sub.queue.put_nowait(_DROPPED)
                 except asyncio.QueueFull:
-                    _log.warning(
+                    logger.warning(
                         "failed to signal slow subscriber session=%s", session_id
                     )
 

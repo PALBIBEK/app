@@ -21,7 +21,7 @@ __all__ = [
 ]
 
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:

@@ -64,6 +64,6 @@ def current_outbound_traceparent() -> str | None:
                 f"00-{format(ctx.trace_id, '032x')}-"
                 f"{format(ctx.span_id, '016x')}-01"
             )
-    except Exception:
+    except ImportError:
         pass
     return None

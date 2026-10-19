@@ -59,7 +59,7 @@ from supervisor.session.modes import SessionMode, mode_for_manifest
 from supervisor.session.recovery import ResumeState
 from supervisor.session.workspaces import session_workspace
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 # Re-exported: callers import these from here.
@@ -405,6 +405,7 @@ class SessionManager(UpkeepOps):
                     state = await runtime.get_state()
                     is_busy = state.is_busy
                 except Exception:
+                    logger.debug("runtime state unavailable for session info", exc_info=True)
                     is_busy = None
             return SessionInfo(
                 session_id=row.id,
@@ -605,7 +606,7 @@ class SessionManager(UpkeepOps):
                     harness_version=harness_ver,
                 )
         except Exception:
-            _log.exception("span reconstruct on resume failed session=%s", session_id)
+            logger.exception("span reconstruct on resume failed session=%s", session_id)
         _ = history
         self._registry.put(session_id, runtime)
         self._sandboxes[session_id] = sandbox
@@ -691,7 +692,7 @@ class SessionManager(UpkeepOps):
         if adopt and session_id:
             adopted = await provider.adopt(session_id)
             if adopted is not None:
-                _log.info(
+                logger.info(
                     "resume: adopted %s sandbox %s session=%s",
                     adopted.info.provider, adopted.info.id, session_id,
                 )
@@ -777,7 +778,7 @@ class SessionManager(UpkeepOps):
                     await self._stop_runtime_keep_session(session_id)
                     return
         except Exception as exc:
-            _log.exception("fan-out failed session=%s", session_id)
+            logger.exception("fan-out failed session=%s", session_id)
             try:
                 await self._record(
                     session_id,
@@ -790,5 +791,5 @@ class SessionManager(UpkeepOps):
                     trace_id=self._trace_for(session_id, runtime),
                 )
             except Exception:
-                _log.exception("failed to write terminal event session=%s", session_id)
+                logger.exception("failed to write terminal event session=%s", session_id)
             self._registry.remove(session_id)

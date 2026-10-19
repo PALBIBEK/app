@@ -27,7 +27,7 @@ from supervisor.agent.stream import EventStream
 from supervisor.sandbox.base import Sandbox
 from supervisor.tools import HostWorkspace, SandboxWorkspace, Workspace
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class GithiRuntime:
@@ -101,7 +101,7 @@ class GithiRuntime:
             self._workspace = SandboxWorkspace(sandbox)
         elif session_dir is not None:
             self._workspace = HostWorkspace(session_dir)
-        _log.info(
+        logger.info(
             "githi runtime started session_id=%s workspace=%r model=%s",
             self._session_id,
             self._workspace,

@@ -40,7 +40,7 @@ from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams import ChatMessage, PromptBindings, ToolInvokeContext
 from supervisor.tools import Workspace
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 8
 """Model steps a single run may take before the workflow ends it."""
@@ -195,8 +195,8 @@ class AgentLoop:
             outcome = await asyncio.to_thread(
                 provider.invoke, ToolInvokeContext(trace_id=call_id, extra=extra), name, args
             )
-        except Exception as exc:  # noqa: BLE001 — a provider bug is the model's to read, not a crash
-            _log.exception("tool %s failed", name)
+        except Exception as exc:  # a provider bug is the model's to read, not a crash
+            logger.exception("tool %s failed", name)
             result = {"ok": False, "error": str(exc), "code": "TOOL_INTERNAL"}
             return ToolEnd(tool_call_id=call_id, tool_name=name, result=result, is_error=True)
         result = {

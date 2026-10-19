@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BLOB_TRANSFER_TIMEOUT_S",
@@ -343,7 +343,7 @@ class ExecBlobStaging(BlobStagingOps):
         sha256 = lines[0] if lines else ""
         size_bytes = int(lines[1]) if len(lines) > 1 else 0
 
-        _log.debug(
+        logger.debug(
             "staged blob %s to %s (%d bytes, sha256=%s...)",
             blob_id,
             dest_path,
@@ -441,7 +441,7 @@ class ExecBlobStaging(BlobStagingOps):
                 retryable=False,
             )
 
-        _log.debug(
+        logger.debug(
             "staged out %s as blob %s (%d bytes, sha256=%s...)",
             source_path,
             blob_id,

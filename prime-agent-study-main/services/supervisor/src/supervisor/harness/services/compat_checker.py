@@ -105,6 +105,7 @@ def load_supported_protocol_versions(
         logger.warning(
             "Failed to load protocol versions",
             extra={"path": str(path), "error": str(exc)},
+            exc_info=True,
         )
         return settings.default_protocol_versions
 

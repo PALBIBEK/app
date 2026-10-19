@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from supervisor.catalog.core.errors import (
+    CatalogError,
     CompositionDigestRequired,
     CompositionIncomplete,
     DigestMissing,
@@ -117,7 +118,7 @@ def resolve_composition(
                 if isinstance(art, AgentComposition) and art.status == ArtifactStatus.OFFERED:
                     comp = art
                     break
-            except Exception:
+            except CatalogError:
                 continue
         if comp is None:
             comp = catalog.get(ArtifactKind.COMPOSITION, composition_id, digests[-1])

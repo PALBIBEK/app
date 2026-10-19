@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from sqlalchemy import select
@@ -20,8 +21,10 @@ from supervisor.session.errors import (
 from supervisor.session.manager_tools import ToolOps
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
 from supervisor.session.subagent_ops import SubagentOps
-from supervisor.session.tree import ChildRow, build_session_tree
+from supervisor.session.tree import ChildRow
 from supervisor.session.workspaces import session_workspace
+
+logger = logging.getLogger(__name__)
 
 
 class ChildOps(ToolOps):
@@ -57,12 +60,8 @@ class ChildOps(ToolOps):
                 current = parent_of[current]
                 derived += 1
         except Exception:
+            logger.warning("subagent depth from the journal failed; using the claimed depth", exc_info=True)
             derived = 0
-        try:
-            envs = await self._reader.read(session_id, since=-1)
-            _ = build_session_tree(session_id, envs)
-        except Exception:
-            pass
         claimed_i = max(int(claimed or 0), 0)
         return max(derived, claimed_i)
 

@@ -28,7 +28,7 @@ from supervisor.tools import (
 
 __all__ = ["CONTROL_PLANE_KEYS", "RegistryToolProvider"]
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 CONTROL_PLANE_KEYS: Final = frozenset(
     {
@@ -106,8 +106,8 @@ class RegistryToolProvider:
             payload = _run_blocking(lambda: spec.run(_scrub(args), context))
         except ToolError as exc:
             return ToolResult(ok=False, error=str(exc), code=exc.code)
-        except Exception as exc:  # noqa: BLE001 — a tool bug must not end the agent's run
-            _log.exception("tool %s crashed", name)
+        except Exception as exc:  # a tool bug must not end the agent's run
+            logger.exception("tool %s crashed", name)
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}", code="TOOL_INTERNAL")
         return ToolResult(ok=True, payload=payload)
 

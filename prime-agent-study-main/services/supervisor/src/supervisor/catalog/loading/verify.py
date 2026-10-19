@@ -17,20 +17,20 @@ def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) ->
     problems: list[str] = []
     try:
         catalog.get("prompt_pack", comp.prompt_pack.id, comp.prompt_pack.digest, require_offered=True)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: prompt_pack {comp.prompt_pack.id}@{comp.prompt_pack.digest}: {exc}")
     try:
         tool_set = catalog.get(
             "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
         )
         require_implemented(tool_set)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: tool_set {comp.tool_set.id}@{comp.tool_set.digest}: {exc}")
     if comp.sandbox_profile is not None:
         sp = comp.sandbox_profile
         try:
             catalog.get("sandbox_profile", sp.id, sp.digest, require_offered=True)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
             problems.append(f"{comp.name}: sandbox_profile {sp.id}@{sp.digest}: {exc}")
     if comp.status != "offered":
         problems.append(f"{comp.name}: status={comp.status!r} (not offered)")
@@ -74,7 +74,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
         if digest and not digest.startswith("sha256:REPLACE"):
             try:
                 comp = catalog.get("composition", name, digest, require_offered=True)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
                 problems.append(f"{path.name}: fixture digest mismatch: {exc}")
                 continue
             problems.extend(composition_problems(catalog, comp))

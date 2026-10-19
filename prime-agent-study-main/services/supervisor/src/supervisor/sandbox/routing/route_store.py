@@ -16,12 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from supervisor.sandbox.routing.routes import SandboxRoute
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = [
     "MemoryRouteStore",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Final
 
@@ -20,6 +21,8 @@ from supervisor.seams.providers.subagent.memory_subagent import (
     LabEchoSubagentProvider,
 )
 from supervisor.seams.providers.tools.null_tools import NullToolProvider
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from supervisor.catalog import MemoryProfile
@@ -221,7 +224,7 @@ def _build_subagent_transport(
                     NestedSessionSubagentProvider(gateway),
                 )
             except Exception:
-                pass
+                logger.warning("registering the nested-session subagent provider failed", exc_info=True)
 
     return impl
 

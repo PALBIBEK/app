@@ -12,7 +12,7 @@ import httpx
 from supervisor.obs.trace_context import current_outbound_traceparent
 from supervisor.seams.core.types import ChatMessage, Completion, StreamEvent
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _map_tool_calls(raw: Any) -> list[dict[str, Any]] | None:
@@ -68,7 +68,7 @@ class HttpModelGatewayClient:
 
                 inject(headers)
             except Exception:
-                pass
+                logger.debug("trace header propagation failed", exc_info=True)
         return headers
 
     def complete(
@@ -121,7 +121,7 @@ class HttpModelGatewayClient:
         try:
             resp = self._client.get(f"{self._base}/v1/routes/{model}", headers=self._headers())
         except httpx.HTTPError:
-            _log.warning("model gateway unreachable for route %r metadata", model, exc_info=True)
+            logger.warning("model gateway unreachable for route %r metadata", model, exc_info=True)
             return None
         if resp.status_code != 200:
             return None

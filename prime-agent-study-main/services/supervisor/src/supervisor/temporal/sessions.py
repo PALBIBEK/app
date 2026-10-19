@@ -159,5 +159,5 @@ class SessionWorkflows:
     async def check_reachable(self) -> bool:
         try:
             return await self._client.service_client.check_health()
-        except Exception:  # a readiness probe reports failure, it never raises
+        except Exception:  # noqa: BLE001 - a readiness probe reports failure, it never raises
             return False

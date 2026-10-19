@@ -71,7 +71,7 @@ async def test_level1_echo_round_trip(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_level2_crash_simulation_unpaired_tool(tmp_path: Path) -> None:
     db_path = tmp_path / "crash.db"
-    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (_, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("crash-1", runtime="echo")
         await w.append("crash-1", RunStart(), turn_id=None, trace_id=None)

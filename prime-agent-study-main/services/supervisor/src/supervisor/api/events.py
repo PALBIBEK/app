@@ -18,7 +18,7 @@ from supervisor.api.wire import envelope_to_wire
 from supervisor.journal.reader import JournalReader
 from supervisor.session import LiveSubscription, SessionManager, is_dropped_sentinel
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
 
 _HEARTBEAT_SECS = 20.0
@@ -71,7 +71,7 @@ async def iter_sse(
         while True:
             if sub.dropped or _gone():
                 if sub.dropped:
-                    _log.info("dropping slow SSE client session=%s", session_id)
+                    logger.info("dropping slow SSE client session=%s", session_id)
                 return
             try:
                 item = await asyncio.wait_for(sub.queue.get(), timeout=hb)

@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "LAYERS_TIMEOUT_S",
@@ -248,6 +248,7 @@ class ExecLayers(LayerOps):
                 return None
             return data.decode("utf-8").strip()
         except Exception:
+            logger.debug("reading a layer marker failed", exc_info=True)
             return None
 
     async def materialize_ro_layers(
@@ -265,7 +266,7 @@ class ExecLayers(LayerOps):
         if not force:
             current_sha = await self.current_manifest_sha()
             if current_sha == manifest.sha256:
-                _log.debug(
+                logger.debug(
                     "layers unchanged (sha=%s...), short-circuiting",
                     manifest.sha256[:16],
                 )
@@ -290,7 +291,7 @@ class ExecLayers(LayerOps):
 
         duration_ms = int(time.time() * 1000) - start_ms
 
-        _log.debug(
+        logger.debug(
             "materialized %d layers (sha=%s...) in %dms",
             layer_count,
             manifest.sha256[:16],

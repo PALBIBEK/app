@@ -66,7 +66,7 @@ from supervisor.session.recovery import Recovery, ResumeState
 from supervisor.session.registry import SessionRegistry
 from supervisor.session.tool_outbox import ToolOutbox
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _LIVE_QUEUE_MAX = 256
 _MUTATING_TOOLS = frozenset({"write", "edit", "edit_diff"})
 
@@ -377,7 +377,7 @@ class SessionManagerBase:
                         event_key=f"{event_key}:workspace-conflict" if event_key else None,
                     )
                 except Exception:
-                    _log.exception("workspace sync after run failed session=%s", session_id)
+                    logger.exception("workspace sync after run failed session=%s", session_id)
 
     async def _workspace_conflict(
         self,
@@ -393,12 +393,12 @@ class SessionManagerBase:
         """Another session changed these files first: the scope keeps its version, the
         sandbox is refreshed from it, and the user is told which paths (F20)."""
         paths = ", ".join(conflict.conflicts)
-        _log.warning("workspace conflict session=%s paths=%s", session_id, paths)
+        logger.warning("workspace conflict session=%s paths=%s", session_id, paths)
         try:
             await self._workspace_svc.recover_cas_conflict(ws, sandbox)
             refreshed = "this session's workspace now holds the scope's current files"
         except Exception:
-            _log.exception("workspace refresh after a conflict failed session=%s", session_id)
+            logger.exception("workspace refresh after a conflict failed session=%s", session_id)
             refreshed = "refreshing this session's workspace failed; rehydrate it"
         await self._record(
             session_id,
@@ -439,7 +439,7 @@ class SessionManagerBase:
                 )
             proj.project(envelope)
         except Exception:
-            _log.exception("span projection failed session=%s", session_id)
+            logger.exception("span projection failed session=%s", session_id)
 
     async def _stop_runtime_keep_session(self, session_id: str) -> None:
         runtime = self._registry.remove(session_id)

@@ -17,10 +17,7 @@ Reference: QM's capability detection pattern (supportsProcessSessions, etc.)
 from __future__ import annotations
 
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Final
-
-if TYPE_CHECKING:
-    pass
+from typing import Final
 
 __all__ = [
     "PROVIDER_CAPABILITIES",
