@@ -156,16 +156,24 @@ check("alice adds bob as a member", r.status_code in (200, 201), (r.status_code,
 code, s = session(full, user=bob, scope=scope)
 check("bob can now start a session on the scope", code == 201, (code, s))
 
-# concurrent edits of the same file from two sessions
+# concurrent edits of the same file from two sessions (F20): no last-writer-wins
 code, a = session(full, scope=scope); code2, b = session(full, scope=scope)
+check("two sessions on one scope start", code == code2 == 201, (code, code2))
 if code == 201 and code2 == 201:
     turn(a["session_id"], '/tool write {"file_path": "shared.txt", "content": "from A"}', 1)
+    turn(a["session_id"], '/tool write {"file_path": "only-a.txt", "content": "A made this"}', 2)
     run = turn(b["session_id"], '/tool write {"file_path": "shared.txt", "content": "from B"}', 1)
     time.sleep(1)
     content = alice.get(f"/v1/scopes/{scope}/files/shared.txt").text
-    print(f"     (info) two sessions wrote shared.txt; durable copy now: {content!r}")
+    check("the session that wrote second does not overwrite the first", content == "from A", content)
+    errors = [p for p in payloads(run, "error") if p.get("error_code") == "WORKSPACE_CONFLICT"]
+    check("the losing session is told which file conflicted", errors and "shared.txt" in errors[0].get("detail", ""),
+          payloads(run, "error"))
     later = invoke(b["session_id"], "read", file_path="shared.txt")
-    print(f"     (info) session B now reads: {later.get('payload')!r}")
+    check("the losing session's workspace is refreshed from the scope", later.get("payload") == "from A", later)
+    r = alice.get(f"/v1/scopes/{scope}/files/only-a.txt")
+    check("a file created by another session since is not deleted", r.status_code == 200 and r.text == "A made this",
+          (r.status_code, r.text[:80]))
 
 # --- E. sandbox loss: worker killed --------------------------------------------------
 print("\n## E. When the worker holding the sandbox dies")

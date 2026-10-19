@@ -1911,7 +1911,9 @@ class SessionManager:
         RunEnd); then the event is published live and projected into tracing. With
         ``event_key`` the append is idempotent (retried workflow activities).
         """
-        await self._workspace_effects(session_id, payload, trace_id=trace_id)
+        await self._workspace_effects(
+            session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
+        )
         seq = await self._writer.append(
             session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
@@ -1929,7 +1931,13 @@ class SessionManager:
         return seq
 
     async def _workspace_effects(
-        self, session_id: str, payload: Any, *, trace_id: str | None
+        self,
+        session_id: str,
+        payload: Any,
+        *,
+        trace_id: str | None,
+        turn_id: str | None = None,
+        event_key: str | None = None,
     ) -> None:
         if isinstance(payload, RunStart) and trace_id:
             self._run_traces[session_id] = trace_id
@@ -1947,10 +1955,47 @@ class SessionManager:
             if ws is not None and ws.dirty and sbx is not None:
                 try:
                     await self._workspace_svc.sync_if_dirty(ws, sbx)
-                except WorkspaceConflictError:
-                    _log.exception("workspace CAS conflict session=%s", session_id)
+                except WorkspaceConflictError as conflict:
+                    await self._workspace_conflict(
+                        session_id, ws, sbx, conflict, turn_id=turn_id, trace_id=trace_id,
+                        event_key=f"{event_key}:workspace-conflict" if event_key else None,
+                    )
                 except Exception:
                     _log.exception("workspace sync after run failed session=%s", session_id)
+
+    async def _workspace_conflict(
+        self,
+        session_id: str,
+        ws: SessionWorkspaceState,
+        sandbox: Sandbox,
+        conflict: WorkspaceConflictError,
+        *,
+        turn_id: str | None,
+        trace_id: str | None,
+        event_key: str | None,
+    ) -> None:
+        """Another session changed these files first: the scope keeps its version, the
+        sandbox is refreshed from it, and the user is told which paths (F20)."""
+        paths = ", ".join(conflict.conflicts)
+        _log.warning("workspace conflict session=%s paths=%s", session_id, paths)
+        try:
+            await self._workspace_svc.recover_cas_conflict(ws, sandbox)
+            refreshed = "this session's workspace now holds the scope's current files"
+        except Exception:
+            _log.exception("workspace refresh after a conflict failed session=%s", session_id)
+            refreshed = "refreshing this session's workspace failed; rehydrate it"
+        await self._record(
+            session_id,
+            ErrorEvent(
+                error_class="WorkspaceConflict",
+                retryable=False,
+                detail=f"not saved, changed in the scope by someone else first: {paths}; {refreshed}",
+                error_code="WORKSPACE_CONFLICT",
+            ),
+            turn_id=turn_id,
+            trace_id=trace_id,
+            event_key=event_key,
+        )
 
     async def _project(self, session_id: str, envelope: Envelope) -> None:
         """Project a journalled event into tracing spans (D13); never fails the event."""

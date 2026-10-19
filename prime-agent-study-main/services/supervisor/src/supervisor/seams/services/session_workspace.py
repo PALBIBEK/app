@@ -5,6 +5,7 @@ Authz stays outside WorkspaceHydrator — callers use authorized_* helpers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from supervisor.sandbox.base import Sandbox, WorkspaceSyncUnsupported
@@ -28,6 +29,8 @@ class SessionWorkspaceState:
     virtual_key_id: str | None = None
     last_sync: WorkspaceSyncReport | None = None
     conflicts: tuple[str, ...] = field(default_factory=tuple)
+    base: Mapping[str, tuple[int, str]] | None = None
+    """What the sandbox's tree started from (the last hydrate or sync); None: unknown."""
 
 
 class WorkspaceConflictError(RuntimeError):
@@ -114,6 +117,7 @@ class SessionWorkspaceService:
             state.ready = False
             raise
         state.ready = True
+        state.base = report.base
         return report
 
     def mark_dirty(self, state: SessionWorkspaceState) -> None:
@@ -145,8 +149,10 @@ class SessionWorkspaceService:
             state.principal,
             state.scope_id,
             tree,
+            base=state.base,
         )
         state.last_sync = report
+        state.base = report.base
         if report.conflicts:
             state.conflicts = report.conflicts
             raise WorkspaceConflictError(state.scope_id, report.conflicts)

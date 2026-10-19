@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.db.models import ScopeRow, WorkspaceFileRow
 from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.providers.workspace.memory_workspace_store import normalize_workspace_path
+from supervisor.seams.providers.workspace.sync import base_of, three_way_sync
 from supervisor.seams.services.workspace_store import (
     CasConflict,
     ChecksumMismatch,
@@ -143,7 +145,9 @@ class PostgresWorkspaceStore:
                     tomb.object_key = object_key
                     tomb.size_bytes = len(data)
                     tomb.mime_type = mime_type
-                    tomb.version = 1
+                    # Versions keep counting through a delete, so a version a
+                    # session saw before can never name a different file.
+                    tomb.version = int(tomb.version) + 1
                     tomb.deleted_at = None
                     tomb.updated_at = _utcnow()
                     await db.commit()
@@ -176,7 +180,9 @@ class PostgresWorkspaceStore:
             await db.refresh(live)
             return _row_to_record(live)
 
-    async def soft_delete(self, scope_id: str, path: str) -> None:
+    async def soft_delete(
+        self, scope_id: str, path: str, *, expected_version: int | None = None
+    ) -> None:
         path = normalize_workspace_path(path)
         async with self._db() as db:
             row = await db.scalar(
@@ -186,6 +192,9 @@ class PostgresWorkspaceStore:
                     WorkspaceFileRow.deleted_at.is_(None),
                 )
             )
+            actual = 0 if row is None else int(row.version)
+            if expected_version is not None and actual != expected_version:
+                raise CasConflict(path, expected_version, actual)
             if row is None:
                 return
             row.deleted_at = _utcnow()
@@ -197,9 +206,10 @@ class PostgresWorkspaceStore:
     ) -> WorkspaceSyncReport:
         written: list[str] = []
         bytes_n = 0
+        records = await self.list_files(scope_id)
         try:
             await tree.clear()
-            for rec in await self.list_files(scope_id):
+            for rec in records:
                 data = await self.objects.get(rec.object_key)
                 actual = _sha256(data)
                 if actual != rec.content_sha256:
@@ -217,48 +227,18 @@ class PostgresWorkspaceStore:
             removed=(),
             conflicts=(),
             bytes_transferred=bytes_n,
+            base=base_of(records),
         )
 
     async def sync(
-        self, scope_id: str, tree: WorkspaceTreeIO
+        self,
+        scope_id: str,
+        tree: WorkspaceTreeIO,
+        *,
+        base: Mapping[str, tuple[int, str]] | None = None,
     ) -> WorkspaceSyncReport:
-        written: list[str] = []
-        removed: list[str] = []
-        conflicts: list[str] = []
-        bytes_n = 0
-        durable = {r.path: r for r in await self.list_files(scope_id)}
-        tree_paths = set(await tree.list_paths())
-
-        for path in sorted(tree_paths):
-            data = await tree.read_bytes(path)
-            digest = _sha256(data)
-            rec = durable.get(path)
-            if rec is None:
-                await self.commit_blob(scope_id, path, data, expected_version=0)
-                written.append(path)
-                bytes_n += len(data)
-            elif rec.content_sha256 != digest:
-                if self.before_sync_cas is not None:
-                    await self.before_sync_cas(scope_id, path)  # type: ignore[operator]
-                try:
-                    await self.commit_blob(
-                        scope_id, path, data, expected_version=rec.version
-                    )
-                    written.append(path)
-                    bytes_n += len(data)
-                except CasConflict:
-                    conflicts.append(path)
-
-        for path in sorted(set(durable) - tree_paths):
-            await self.soft_delete(scope_id, path)
-            removed.append(path)
-
-        return WorkspaceSyncReport(
-            scope_id=scope_id,
-            written=tuple(written),
-            removed=tuple(removed),
-            conflicts=tuple(conflicts),
-            bytes_transferred=bytes_n,
+        return await three_way_sync(
+            self, scope_id, tree, base, before_cas=self.before_sync_cas  # type: ignore[arg-type]
         )
 
 
