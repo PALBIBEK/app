@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -25,7 +25,7 @@ async def db_session() -> AsyncSession:
 
 @pytest.mark.asyncio
 async def test_scope_and_workspace_file_roundtrip(db_session: AsyncSession) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scope_id = uuid.uuid4().hex
     file_id = uuid.uuid4().hex
     db_session.add(
@@ -68,7 +68,7 @@ async def test_scope_and_workspace_file_roundtrip(db_session: AsyncSession) -> N
 
 @pytest.mark.asyncio
 async def test_soft_delete_marks_deleted_at(db_session: AsyncSession) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scope_id = uuid.uuid4().hex
     db_session.add(
         ScopeRow(
@@ -93,7 +93,7 @@ async def test_soft_delete_marks_deleted_at(db_session: AsyncSession) -> None:
     db_session.add(row)
     await db_session.commit()
 
-    row.deleted_at = datetime.now(timezone.utc)
+    row.deleted_at = datetime.now(UTC)
     await db_session.commit()
 
     live = (

@@ -102,6 +102,7 @@ def test_inmemory_otlp_trace_shape_shared_assertions() -> None:
 )
 def test_echo_run_reaches_jaeger() -> None:
     import httpx
+
     import supervisor.obs.tracing as tracing_mod
 
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")

@@ -40,7 +40,7 @@ def create_runtime(
     provider: str | None = None,
     session_id: str = "",
     **kwargs: Any,
-) -> "AgentRuntime":
+) -> AgentRuntime:
     """Create an agent runtime by name. Lazy imports for fast startup."""
     seams = seams or EMPTY_SEAMS
     _log.debug("creating runtime: name=%s model=%s provider=%s session=%s", runtime_name, model, provider, session_id)

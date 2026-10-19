@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from supervisor.telemetry_contract.attributes import CARDINALITY, LOW, HIGH
+from supervisor.telemetry_contract.attributes import CARDINALITY, HIGH, LOW
 from supervisor.telemetry_contract.operations import GenAIOperation, PlatformOperation
 from supervisor.telemetry_contract.run_id import resolve_run_id
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
@@ -11,8 +11,8 @@ from supervisor.telemetry_contract.validate import ValidationError, validate_spa
 
 __all__ = [
     "CARDINALITY",
-    "LOW",
     "HIGH",
+    "LOW",
     "GenAIOperation",
     "PlatformOperation",
     "SpanRecord",

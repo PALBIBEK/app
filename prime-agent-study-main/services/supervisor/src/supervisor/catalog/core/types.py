@@ -12,11 +12,9 @@ Reference: policy/types.py pattern.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from decimal import Decimal
-from enum import StrEnum, auto
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Final
-
 
 __all__ = [
     # Enums
@@ -145,7 +143,7 @@ class RecallBackend(StrEnum):
 
 def _now() -> datetime:
     """Current UTC datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)

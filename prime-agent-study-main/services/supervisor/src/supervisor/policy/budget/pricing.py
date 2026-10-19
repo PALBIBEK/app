@@ -16,8 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Final
 
-
-__all__ = ["ModelPrice", "ModelPricing", "DEFAULT_PRICING"]
+__all__ = ["DEFAULT_PRICING", "ModelPrice", "ModelPricing"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,16 +52,16 @@ class ModelPrice:
             Total cost in USD
         """
         # Convert to millions
-        input_mtok = Decimal(input_tokens) / Decimal("1000000")
-        output_mtok = Decimal(output_tokens) / Decimal("1000000")
-        cached_mtok = Decimal(cached_input_tokens) / Decimal("1000000")
+        input_mtok = Decimal(input_tokens) / Decimal(1000000)
+        output_mtok = Decimal(output_tokens) / Decimal(1000000)
+        cached_mtok = Decimal(cached_input_tokens) / Decimal(1000000)
 
         # Calculate costs
         input_cost = input_mtok * self.input_cost_per_mtok
         output_cost = output_mtok * self.output_cost_per_mtok
 
         # Cached input cost (use reduced rate or 0 if not specified)
-        cached_cost = Decimal("0")
+        cached_cost = Decimal(0)
         if cached_input_tokens > 0 and self.cached_input_cost_per_mtok is not None:
             cached_cost = cached_mtok * self.cached_input_cost_per_mtok
 
@@ -83,7 +82,7 @@ class ModelPricing:
         )
     """
 
-    __slots__ = ("_prices", "_default")
+    __slots__ = ("_default", "_prices")
 
     def __init__(
         self,

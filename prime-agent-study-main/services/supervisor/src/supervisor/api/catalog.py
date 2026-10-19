@@ -8,11 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from supervisor.api import deps
 from supervisor.api.schemas import CatalogArtifactOut
-from supervisor.catalog import CatalogError, ArtifactKind, ToolSet
-from supervisor.catalog.services import require_implemented
-from supervisor.catalog.services.publish_checks import check_publishable
-from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict, artifact_to_dict
-
+from supervisor.catalog import CatalogError, ToolSet
 from supervisor.catalog.core.errors import CatalogOwnershipRequired, NotOffered
 from supervisor.catalog.repository import (
     artifact_summary,
@@ -20,6 +16,9 @@ from supervisor.catalog.repository import (
     persist_offer,
     persisted_owner,
 )
+from supervisor.catalog.services import require_implemented
+from supervisor.catalog.services.publish_checks import check_publishable
+from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict, artifact_to_dict
 from supervisor.catalog.storage.composition import SYSTEM_OWNER
 
 router = APIRouter(prefix="/v1/catalog", tags=["catalog"])

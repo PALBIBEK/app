@@ -22,7 +22,6 @@ from tests.d4_acceptance.conftest import (
 from tests.support.session_env import make_catalog
 
 
-
 @pytest.mark.asyncio
 async def test_t1_create_with_pins_returns_201_active(supervisor_stack) -> None:
     """T1 / §5 A: create with D3-shaped body → 201 + active."""
@@ -83,7 +82,7 @@ async def test_t2_duplicate_command_id_same_body_one_send(supervisor_stack) -> N
     created = await create_session(client)
     sid = created["session_id"]
 
-    runtime = state.manager._registry.get(sid)  # noqa: SLF001
+    runtime = state.manager._registry.get(sid)
     assert runtime is not None
     send_calls = {"n": 0}
     original_send = runtime.send
@@ -129,7 +128,7 @@ async def test_t5_abort_busy_turn_yields_abort_in_journal(supervisor_stack) -> N
     created = await create_session(client)
     sid = created["session_id"]
 
-    runtime = state.manager._registry.get(sid)  # noqa: SLF001
+    runtime = state.manager._registry.get(sid)
     assert runtime is not None
     # Stretch the turn so abort can interleave.
     original_sleep = asyncio.sleep

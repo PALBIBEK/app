@@ -26,13 +26,13 @@ from typing import Final
 _log = logging.getLogger(__name__)
 
 __all__ = [
-    "EgressPolicy",
-    "ProxyEnvVars",
-    "EgressPolicyError",
     "DROPPED_PROXY_ENV",
-    "strip_proxy_env",
-    "inject_proxy_env",
+    "EgressPolicy",
+    "EgressPolicyError",
+    "ProxyEnvVars",
     "force_through_proxy_env",
+    "inject_proxy_env",
+    "strip_proxy_env",
 ]
 
 

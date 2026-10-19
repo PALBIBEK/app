@@ -6,13 +6,13 @@ in the .yal/ directory.
 
 from __future__ import annotations
 
-from supervisor.harness.materializers.session_files import (
-    materialize_harness_binds,
-)
 from supervisor.harness.materializers.plug_bindings import (
     read_launch_cli,
     read_plug_bindings,
     yal_dir,
+)
+from supervisor.harness.materializers.session_files import (
+    materialize_harness_binds,
 )
 
 __all__ = [

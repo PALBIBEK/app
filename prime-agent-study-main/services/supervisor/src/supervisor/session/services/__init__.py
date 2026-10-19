@@ -9,23 +9,23 @@ This module provides the core services for session management:
 
 from __future__ import annotations
 
-from supervisor.session.services.recovery import (
-    Recovery,
-    decide_unpaired,
-    pinned_manifest,
-)
 from supervisor.session.services.fanout import (
     LiveHub,
     LiveSubscription,
     is_dropped_sentinel,
 )
 from supervisor.session.services.lifecycle import (
-    reap_idle,
     drain_for_deploy,
+    reap_idle,
+)
+from supervisor.session.services.recovery import (
+    Recovery,
+    decide_unpaired,
+    pinned_manifest,
 )
 from supervisor.session.services.workspace import (
-    workspaces_root,
     session_workspace,
+    workspaces_root,
 )
 
 __all__ = [

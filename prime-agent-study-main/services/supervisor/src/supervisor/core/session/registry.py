@@ -39,17 +39,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Iterator
+from datetime import UTC, datetime
+from typing import Any
 
-from supervisor.core.session.models import Session, SessionStatus, SessionMode
 from supervisor.core.session.errors import (
-    SessionNotFoundError,
     SessionAlreadyExistsError,
+    SessionNotFoundError,
     SessionQuotaExceededError,
 )
+from supervisor.core.session.models import Session, SessionMode, SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class SessionEntry:
     seams: Any = None
     fanout_task: asyncio.Task[None] | None = None
     workspace_dirty: bool = False
-    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def session_id(self) -> str:
@@ -112,11 +113,11 @@ class SessionEntry:
 
     def touch(self) -> None:
         """Update last activity timestamp."""
-        self.last_activity = datetime.now(timezone.utc)
+        self.last_activity = datetime.now(UTC)
 
     def idle_seconds(self) -> float:
         """Get seconds since last activity."""
-        return (datetime.now(timezone.utc) - self.last_activity).total_seconds()
+        return (datetime.now(UTC) - self.last_activity).total_seconds()
 
 
 @dataclass

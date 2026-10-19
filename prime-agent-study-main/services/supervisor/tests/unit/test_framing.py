@@ -111,7 +111,7 @@ async def test_multibyte_char_split_across_chunks() -> None:
     # € is U+20AC → utf-8 e2 82 ac — split after first byte.
     payload = {"c": "€"}
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
-    euro = "€".encode("utf-8")
+    euro = "€".encode()
     idx = raw.index(euro)
     chunks = [raw[: idx + 1], raw[idx + 1 :]]
     assert len(euro) == 3

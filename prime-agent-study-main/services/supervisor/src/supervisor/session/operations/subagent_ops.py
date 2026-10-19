@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from supervisor.seams import SubagentTransport
 
 __all__ = [
-    "SubagentOps",
     "DEFAULT_MAX_DEPTH",
+    "SubagentOps",
 ]
 
 logger = logging.getLogger(__name__)

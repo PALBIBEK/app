@@ -15,9 +15,8 @@ Operators must allow DNS + model-gateway egress in E2B policy. See
 
 from __future__ import annotations
 
-import importlib.util
-
 import asyncio
+import importlib.util
 import logging
 from typing import Any
 
@@ -33,7 +32,6 @@ from supervisor.sandbox.base import (
     ComputerStatusUnsupported,
     ExecResult,
     ProcessHandle,
-    ROLayersUnsupported,
     Sandbox,
     SandboxGone,
     SandboxInfo,
@@ -45,6 +43,7 @@ from supervisor.sandbox.layers import (
     MaterializationResult,
     create_exec_layers,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.staging import (
     BlobStagingConfig,
     CapabilityTokenMinter,
@@ -57,11 +56,9 @@ from supervisor.sandbox.status import (
     MachineState,
     RestartResult,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.seams.providers.workspace import normalize_workspace_path
 from supervisor.seams.services import (
     WorkspaceHydrator,
-    WorkspacePathEscape,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
@@ -172,7 +169,7 @@ def _push_bounded(queue: asyncio.Queue[bytes | None], data: bytes) -> None:
 class E2BWorkspaceTreeIO:
     """WorkspaceTreeIO over an E2B sandbox ``/workspace`` (D10)."""
 
-    def __init__(self, sandbox: "E2BSandbox") -> None:
+    def __init__(self, sandbox: E2BSandbox) -> None:
         self._sb = sandbox
         self._root = (sandbox.info.workdir or "/workspace").rstrip("/") or "/workspace"
 
@@ -187,7 +184,7 @@ class E2BWorkspaceTreeIO:
         return await self._sb.read_file(self._abs(path))
 
     async def list_paths(self) -> list[str]:
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             return sorted(
@@ -205,14 +202,14 @@ class E2BWorkspaceTreeIO:
 
     async def delete_path(self, path: str) -> None:
         abs_path = self._abs(path)
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         if isinstance(files, dict):
             files.pop(abs_path, None)
             return
         await self._sb.exec(["rm", "-f", "--", abs_path], timeout=30)
 
     async def clear(self) -> None:
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             for key in list(files):

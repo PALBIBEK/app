@@ -9,8 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from supervisor.sandbox.base import Sandbox, WorkspaceSyncUnsupported
-from supervisor.seams.services.authz import AuthzService, Grant, Principal
 from supervisor.seams.services.authorized_workspace import authorized_hydrate, authorized_sync
+from supervisor.seams.services.authz import AuthzService, Grant, Principal
 from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,

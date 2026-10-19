@@ -16,24 +16,19 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from supervisor.policy.security.types import (
+    DEFAULT_QUARANTINE_RETENTION_MS,
     ContentType,
     QuarantinedContent,
     SecurityVerdict,
-    DEFAULT_QUARANTINE_RETENTION_MS,
 )
 
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-
 __all__ = [
-    "QuarantineStore",
-    "InMemoryQuarantineStore",
     "DEFAULT_MAX_QUARANTINE_SIZE",
+    "InMemoryQuarantineStore",
+    "QuarantineStore",
 ]
 
 

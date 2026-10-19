@@ -119,7 +119,7 @@ async def test_flush_enqueues_extraction_on_turn_end(svc: MemoryService):
 @pytest.mark.asyncio
 async def test_extraction_error_does_not_fail_flush(svc: MemoryService):
     class Boom:
-        def extract(self, events):  # noqa: ANN001
+        def extract(self, events):
             raise RuntimeError("llm down")
 
     broken = MemoryService(

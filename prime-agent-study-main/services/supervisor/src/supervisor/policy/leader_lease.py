@@ -28,14 +28,13 @@ from typing import Final, TypeVar
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
 __all__ = [
-    "LeaderLease",
-    "try_acquire_sweeper_lease",
-    "run_with_approval_sweeper_lease",
     "APPROVAL_SWEEPER_LOCK_KEY",
-    "STALE_SESSION_LOCK_KEY",
     "SCHEDULED_TASK_LOCK_KEY",
+    "STALE_SESSION_LOCK_KEY",
+    "LeaderLease",
+    "run_with_approval_sweeper_lease",
+    "try_acquire_sweeper_lease",
 ]
 
 
@@ -97,7 +96,7 @@ class LeaderLease:
             pass
     """
 
-    __slots__ = ("_db", "_lock_key", "_name", "_local_lock", "_timeout_s")
+    __slots__ = ("_db", "_local_lock", "_lock_key", "_name", "_timeout_s")
 
     def __init__(
         self,
@@ -184,7 +183,7 @@ class LeaderLease:
                 else:
                     _log.debug(f"{self._name}: local lock held")
                     return None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _log.debug(f"{self._name}: timeout acquiring local lock")
             return None
 

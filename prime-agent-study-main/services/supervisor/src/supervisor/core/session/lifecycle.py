@@ -40,27 +40,27 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from supervisor.core.session.models import (
-    Session,
-    SessionConfig,
-    SessionStatus,
-    SessionMode,
-)
-from supervisor.core.session.registry import SessionRegistry, SessionEntry
-from supervisor.core.session.protocols import (
-    SessionStore,
-    RuntimeProvider,
-    SandboxProvider,
-    QuotaService,
-    TracingService,
-)
 from supervisor.core.session.errors import (
     SessionError,
     SessionNotFoundError,
-    SessionTerminatedError,
     SessionQuotaExceededError,
     SessionStateError,
+    SessionTerminatedError,
 )
+from supervisor.core.session.models import (
+    Session,
+    SessionConfig,
+    SessionMode,
+    SessionStatus,
+)
+from supervisor.core.session.protocols import (
+    QuotaService,
+    RuntimeProvider,
+    SandboxProvider,
+    SessionStore,
+    TracingService,
+)
+from supervisor.core.session.registry import SessionRegistry
 
 logger = logging.getLogger(__name__)
 

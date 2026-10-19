@@ -37,12 +37,12 @@ async def test_t9_cold_resume_peer_can_message_from_shared_journal(
     await wait_for_journal(a["reader"], sid, min_events=1, require_types={"RunEnd"})
 
     # Owner process gone: drop warm registry (simulates pod death; journal remains).
-    reg = a["manager"]._registry  # noqa: SLF001
+    reg = a["manager"]._registry
     if reg.get(sid) is not None:
         reg.remove(sid)
 
     # Peer B never had the warm runtime — cold resume from shared journal.
-    assert b["manager"]._registry.get(sid) is None  # noqa: SLF001
+    assert b["manager"]._registry.get(sid) is None
 
     peer = await b["client"].post(
         f"/v1/sessions/{sid}/messages",
@@ -175,7 +175,7 @@ async def test_t10_wrong_replica_live_hub_is_process_local(
                 while True:
                     item = await sub_b.queue.get()
                     got.append(item)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
 
         staging = (

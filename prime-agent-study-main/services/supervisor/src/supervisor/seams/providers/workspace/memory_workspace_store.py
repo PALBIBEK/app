@@ -7,8 +7,8 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.providers.workspace.sync import base_of, three_way_sync
+from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.services.workspace_store import (
     CasConflict,
     ChecksumMismatch,
@@ -31,8 +31,7 @@ def _object_key(digest: str) -> str:
 
 def normalize_workspace_path(path: str) -> str:
     raw = path.strip().replace("\\", "/")
-    if raw.startswith("/"):
-        raw = raw[1:]
+    raw = raw.removeprefix("/")
     parts: list[str] = []
     for part in raw.split("/"):
         if part in ("", "."):

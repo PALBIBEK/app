@@ -18,18 +18,6 @@ from supervisor.session.core.enums import (
     mode_for_harness,
     mode_for_manifest,
 )
-from supervisor.session.core.types import (
-    BeginOutcome,
-    ChildRow,
-    JobRow,
-    RegistryMetrics,
-    ResumeDecision,
-    ResumeResult,
-    SessionInfo,
-    SessionMetrics,
-    SessionTree,
-    ToolInvokeOutcome,
-)
 from supervisor.session.core.errors import (
     MemoryNotConfigured,
     RecoveryBlocked,
@@ -46,6 +34,18 @@ from supervisor.session.core.protocols import (
     SessionManagerProtocol,
     SessionRegistryProtocol,
     SessionRowView,
+)
+from supervisor.session.core.types import (
+    BeginOutcome,
+    ChildRow,
+    JobRow,
+    RegistryMetrics,
+    ResumeDecision,
+    ResumeResult,
+    SessionInfo,
+    SessionMetrics,
+    SessionTree,
+    ToolInvokeOutcome,
 )
 
 __all__ = [

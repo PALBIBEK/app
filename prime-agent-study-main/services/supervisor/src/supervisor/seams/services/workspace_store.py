@@ -10,11 +10,11 @@ from supervisor.seams.core.errors import SeamError
 
 __all__ = [
     "CasConflict",
-    "WorkspaceFileRecord",
     "ChecksumMismatch",
     "HydrateIncomplete",
-    "WorkspacePathEscape",
     "WorkspaceBase",
+    "WorkspaceFileRecord",
+    "WorkspacePathEscape",
     "WorkspaceStore",
     "WorkspaceStoreError",
     "WorkspaceSyncReport",

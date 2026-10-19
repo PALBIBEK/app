@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from supervisor.harness.core.errors import (
-    ApprovalsNotSupported,
     HarnessError,
     HarnessNotOffered,
     IncompatibleHarness,
     InvalidDigest,
     InvalidEnvironmentValue,
-    InvalidGatewayConfig,
     ManifestError,
-    ManifestParseError,
     ManifestValidationError,
     MissingHarnessCli,
     MissingRuntimeCapability,

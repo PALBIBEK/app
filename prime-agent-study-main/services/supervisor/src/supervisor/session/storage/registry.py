@@ -14,13 +14,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import Any
 
 from supervisor.session.core.types import RegistryMetrics
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = ["SessionRegistry"]
 

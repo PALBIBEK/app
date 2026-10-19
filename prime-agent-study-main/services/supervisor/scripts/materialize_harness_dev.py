@@ -6,9 +6,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from supervisor.catalog.bootstrap import bootstrap_composition_catalog
 from supervisor.catalog.binder import bind_runtime_seams
+from supervisor.catalog.bootstrap import bootstrap_composition_catalog
 from supervisor.catalog.resolve import resolve_composition
+
 from supervisor.harness import HarnessCatalog, load_manifest, materialize_harness_binds
 
 

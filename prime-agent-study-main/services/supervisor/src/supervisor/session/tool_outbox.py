@@ -99,47 +99,46 @@ class ToolOutbox:
             # Crash mid-flight: ToolStart already journaled; re-execute once.
             return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
-        async with self._factory() as db:
-            async with db.begin():
-                again = (
-                    await db.execute(
-                        select(ToolOutboxRow)
-                        .where(ToolOutboxRow.idempotency_key == key)
-                        .with_for_update()
-                    )
-                ).scalar_one_or_none()
-                if again is not None and again.status == "done" and again.result is not None:
-                    return BeginOutcome(
-                        action="cached",
-                        tool_call_id=tool_call_id,
-                        cached=wire_to_result(again.result),
-                    )
-                if again is not None and again.status == "pending":
-                    return BeginOutcome(action="execute", tool_call_id=tool_call_id)
+        async with self._factory() as db, db.begin():
+            again = (
+                await db.execute(
+                    select(ToolOutboxRow)
+                    .where(ToolOutboxRow.idempotency_key == key)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if again is not None and again.status == "done" and again.result is not None:
+                return BeginOutcome(
+                    action="cached",
+                    tool_call_id=tool_call_id,
+                    cached=wire_to_result(again.result),
+                )
+            if again is not None and again.status == "pending":
+                return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
-                await self._writer.append_in_session(
-                    db,
-                    session_id,
-                    ToolStart(
-                        tool_call_id=tool_call_id,
-                        tool_name=tool_name,
-                        args=dict(arguments),
-                    ),
-                    turn_id=None,
-                    trace_id=trace_id,
+            await self._writer.append_in_session(
+                db,
+                session_id,
+                ToolStart(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    args=dict(arguments),
+                ),
+                turn_id=None,
+                trace_id=trace_id,
+            )
+            db.add(
+                ToolOutboxRow(
+                    id=uuid4().hex,
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                    idempotency_key=key,
+                    tool_name=tool_name,
+                    arguments=dict(arguments),
+                    status="pending",
+                    result=None,
                 )
-                db.add(
-                    ToolOutboxRow(
-                        id=uuid4().hex,
-                        session_id=session_id,
-                        tool_call_id=tool_call_id,
-                        idempotency_key=key,
-                        tool_name=tool_name,
-                        arguments=dict(arguments),
-                        status="pending",
-                        result=None,
-                    )
-                )
+            )
         return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
     async def complete(
@@ -157,45 +156,44 @@ class ToolOutbox:
         end_payload = wire["payload"] if isinstance(wire.get("payload"), dict) else {}
         is_error = bool(wire.get("is_error"))
 
-        async with self._factory() as db:
-            async with db.begin():
-                row = (
-                    await db.execute(
-                        select(ToolOutboxRow)
-                        .where(ToolOutboxRow.idempotency_key == key)
-                        .with_for_update()
-                    )
-                ).scalar_one_or_none()
-                if row is not None and row.status == "done" and row.result is not None:
-                    return wire_to_result(row.result)
-
-                await self._writer.append_in_session(
-                    db,
-                    session_id,
-                    ToolEnd(
-                        tool_call_id=tool_call_id,
-                        tool_name=tool_name,
-                        result=end_payload,
-                        is_error=is_error,
-                    ),
-                    turn_id=None,
-                    trace_id=trace_id,
+        async with self._factory() as db, db.begin():
+            row = (
+                await db.execute(
+                    select(ToolOutboxRow)
+                    .where(ToolOutboxRow.idempotency_key == key)
+                    .with_for_update()
                 )
-                if row is None:
-                    # Should not happen in normal path; still record completion.
-                    db.add(
-                        ToolOutboxRow(
-                            id=uuid4().hex,
-                            session_id=session_id,
-                            tool_call_id=tool_call_id,
-                            idempotency_key=key,
-                            tool_name=tool_name,
-                            arguments={},
-                            status="done",
-                            result=wire,
-                        )
+            ).scalar_one_or_none()
+            if row is not None and row.status == "done" and row.result is not None:
+                return wire_to_result(row.result)
+
+            await self._writer.append_in_session(
+                db,
+                session_id,
+                ToolEnd(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    result=end_payload,
+                    is_error=is_error,
+                ),
+                turn_id=None,
+                trace_id=trace_id,
+            )
+            if row is None:
+                # Should not happen in normal path; still record completion.
+                db.add(
+                    ToolOutboxRow(
+                        id=uuid4().hex,
+                        session_id=session_id,
+                        tool_call_id=tool_call_id,
+                        idempotency_key=key,
+                        tool_name=tool_name,
+                        arguments={},
+                        status="done",
+                        result=wire,
                     )
-                else:
-                    row.status = "done"
-                    row.result = wire
+                )
+            else:
+                row.status = "done"
+                row.result = wire
         return result

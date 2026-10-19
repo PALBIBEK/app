@@ -44,19 +44,19 @@ from supervisor.sandbox.base import (
     ProcessHandle,
     Sandbox,
     SandboxGone,
-    SandboxPathEscape,
     SandboxInfo,
+    SandboxPathEscape,
     SandboxProvider,
     SandboxStatus,
     SandboxTimeout,
     SnapshotUnsupported,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.status import (
     ComputerStatus,
     MachineState,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 
 if TYPE_CHECKING:
     from supervisor.seams.services import WorkspaceTreeIO
@@ -121,7 +121,7 @@ class LocalProcessSandbox(Sandbox):
     Workspace sync is supported via an optional WorkspaceHydrator.
     """
 
-    __slots__ = ("_root", "_hydrator", "_info", "_destroyed")
+    __slots__ = ("_destroyed", "_hydrator", "_info", "_root")
 
     def __init__(
         self,
@@ -201,7 +201,7 @@ class LocalProcessSandbox(Sandbox):
                 proc.communicate(),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             raise SandboxTimeout(

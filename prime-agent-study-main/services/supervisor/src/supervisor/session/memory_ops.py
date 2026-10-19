@@ -10,9 +10,7 @@ from typing import Literal
 from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
 from supervisor.journal.writer import JournalWriter
 from supervisor.seams import (
-    CompactionDecision,
     CompactionPreparation,
-    CompactionResult,
     ContextMemoryProvider,
     MemoryInvokeContext,
     RecallBlock,

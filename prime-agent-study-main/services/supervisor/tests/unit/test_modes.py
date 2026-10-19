@@ -9,10 +9,6 @@ import pytest
 from supervisor.agent.events import RunEnd
 
 
-
-
-
-
 @pytest.mark.asyncio
 async def test_stateless_removes_runtime_after_run_end(session_env) -> None:
     m = session_env["manager"]
@@ -49,7 +45,7 @@ async def test_stateless_resume_produces_same_event_types(session_env) -> None:
     for _ in range(50):
         try:
             env = await asyncio.wait_for(q.get(), timeout=1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
         if isinstance(env.payload, RunEnd):
             break

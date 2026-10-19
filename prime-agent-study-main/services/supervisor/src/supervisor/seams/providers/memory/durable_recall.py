@@ -11,12 +11,12 @@ from supervisor.seams.interfaces.context_memory import (
     MemoryInvokeContext,
     RecallBlock,
 )
+from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 from supervisor.seams.services.memory_service_client import (
     memory_service_base_url,
     recall_memory_items,
     resolve_memory_scope,
 )
-from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 
 
 class DurableRecallProvider:

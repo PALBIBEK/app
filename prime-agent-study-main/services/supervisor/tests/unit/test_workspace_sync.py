@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from supervisor.db.engine import open_db
-
 from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
 from supervisor.seams.providers.workspace.memory_workspace_store import (
     MemoryTreeIO,

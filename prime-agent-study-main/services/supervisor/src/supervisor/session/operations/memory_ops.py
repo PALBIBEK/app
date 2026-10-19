@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from supervisor.seams import ContextMemoryProvider
 
 __all__ = [
-    "MemoryOps",
     "CompactMemoryOutcome",
+    "MemoryOps",
     "RecallMemoryOutcome",
 ]
 

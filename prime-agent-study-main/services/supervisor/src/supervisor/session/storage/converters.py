@@ -17,10 +17,10 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
-    "session_info_to_dict",
-    "resume_decision_to_dict",
     "child_row_to_dict",
     "job_row_to_dict",
+    "resume_decision_to_dict",
+    "session_info_to_dict",
 ]
 
 

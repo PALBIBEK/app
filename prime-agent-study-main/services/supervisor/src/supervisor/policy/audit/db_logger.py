@@ -22,15 +22,14 @@ from sqlalchemy.exc import IntegrityError
 
 from supervisor.policy.types import AuditAction, AuditEvent
 
-
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 __all__ = [
-    "PostgresAuditLogger",
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_FLUSH_INTERVAL_MS",
+    "PostgresAuditLogger",
 ]
 
 
@@ -140,14 +139,14 @@ class PostgresAuditLogger:
     """
 
     __slots__ = (
-        "_db",
         "_batch_size",
-        "_flush_interval_ms",
         "_buffer",
-        "_seen_keys",
-        "_last_flush_ms",
-        "_table_verified",
+        "_db",
+        "_flush_interval_ms",
         "_flush_lock",
+        "_last_flush_ms",
+        "_seen_keys",
+        "_table_verified",
     )
 
     def __init__(

@@ -10,18 +10,18 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from supervisor.seams.interfaces.subagent_transport import (
-    CAP_BACKGROUND,
-    CAP_DEPTH_LIMIT,
-    CAP_FORK,
-    CAP_SPAWN,
-)
 from supervisor.seams.core.types import (
     ChatMessage,
     ChildInfo,
     JobHandle,
     SubagentRequest,
     SubagentRunResult,
+)
+from supervisor.seams.interfaces.subagent_transport import (
+    CAP_BACKGROUND,
+    CAP_DEPTH_LIMIT,
+    CAP_FORK,
+    CAP_SPAWN,
 )
 
 NESTED_SESSION_PROVIDER = "nested_session"

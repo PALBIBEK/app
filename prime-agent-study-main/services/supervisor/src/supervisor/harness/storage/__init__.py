@@ -14,6 +14,7 @@ from supervisor.harness.storage.converters import (
     budget_spec_to_dict,
     guard_spec_from_dict,
     guard_spec_to_dict,
+    load_manifest,
     manifest_from_dict,
     manifest_to_dict,
     parse_yaml,
@@ -24,7 +25,6 @@ from supervisor.harness.storage.converters import (
     tool_spec_from_dict,
     tool_spec_to_dict,
     validate_and_freeze,
-    load_manifest,
 )
 from supervisor.harness.storage.validators import (
     get_env_url,

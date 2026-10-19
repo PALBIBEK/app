@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
 
-import asyncio
-
 from supervisor.agent.events import Usage
 from tests.d4_acceptance.conftest import HEADERS_A, create_session, wait_for_journal
-
 
 
 @pytest.mark.asyncio
@@ -93,7 +91,7 @@ async def test_t11_total_cost_exposed_on_detail_after_turn(supervisor_stack) -> 
     created = await create_session(client)
     sid = created["session_id"]
 
-    runtime = state.manager._registry.get(sid)  # noqa: SLF001
+    runtime = state.manager._registry.get(sid)
     assert runtime is not None
     runtime.forced_usage = Usage(
         input_tokens=10,

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from supervisor.seams.compaction.core import Summarizer, build_summary_request
-from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.seams.core.types import ChatMessage
+from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 
 
 def build_gateway_summarizer(

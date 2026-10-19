@@ -28,11 +28,11 @@ from supervisor.sandbox.base import (
     SandboxProvider,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.status import (
     ComputerStatus,
     MachineState,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.seams.providers.workspace import normalize_workspace_path
 from supervisor.seams.services import (
     WorkspaceHydrator,
@@ -201,7 +201,7 @@ class DockerProcessHandle(ProcessHandle):
 class DockerWorkspaceTreeIO:
     """WorkspaceTreeIO over a Docker sandbox ``/workspace`` (Stage 5 / D10)."""
 
-    def __init__(self, sandbox: "LocalDockerSandbox") -> None:
+    def __init__(self, sandbox: LocalDockerSandbox) -> None:
         self._sb = sandbox
         self._root = (sandbox.info.workdir or "/workspace").rstrip("/") or "/workspace"
 
@@ -216,7 +216,7 @@ class DockerWorkspaceTreeIO:
         return await self._sb.read_file(self._abs(path))
 
     async def list_paths(self) -> list[str]:
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             return sorted(
@@ -234,14 +234,14 @@ class DockerWorkspaceTreeIO:
 
     async def delete_path(self, path: str) -> None:
         abs_path = self._abs(path)
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         if isinstance(files, dict):
             files.pop(abs_path, None)
             return
         await self._sb.exec(["rm", "-f", "--", abs_path], timeout=30)
 
     async def clear(self) -> None:
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             for key in list(files):
@@ -358,7 +358,7 @@ class LocalDockerSandbox(Sandbox):
             else:
                 try:
                     code = await asyncio.wait_for(handle.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await handle.kill()
                     raise TimeoutError(
                         f"exec timed out after {timeout}s: {cmd!r}"

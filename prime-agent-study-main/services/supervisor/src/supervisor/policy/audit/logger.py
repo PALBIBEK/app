@@ -15,14 +15,13 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from supervisor.policy.errors import AuditWriteFailed
-from supervisor.policy.types import AuditAction, AuditEvent
-
+from supervisor.policy.types import AuditEvent
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
     from supervisor.policy.audit.db_logger import PostgresAuditLogger
 
 
@@ -69,7 +68,7 @@ class InMemoryAuditLogger:
         )
     """
 
-    __slots__ = ("_events", "_max_events", "_seen_keys", "_dedup_window_ms")
+    __slots__ = ("_dedup_window_ms", "_events", "_max_events", "_seen_keys")
 
     def __init__(
         self,
@@ -214,7 +213,7 @@ class AuditLogger:
         events = await logger.query_db(since_ms=...)
     """
 
-    __slots__ = ("_db", "_memory", "_db_logger")
+    __slots__ = ("_db", "_db_logger", "_memory")
 
     def __init__(
         self,

@@ -20,15 +20,13 @@ Protocols:
 from __future__ import annotations
 
 from abc import abstractmethod
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from collections.abc import AsyncIterator
+from typing import Any, Protocol, runtime_checkable
 
 from supervisor.core.session.models import (
-    Session,
-    SessionConfig,
-    SessionStatus,
-    Turn,
     Message,
+    Session,
+    SessionStatus,
 )
 
 

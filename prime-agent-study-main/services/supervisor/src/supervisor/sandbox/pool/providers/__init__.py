@@ -28,17 +28,17 @@ Example:
 """
 
 from supervisor.sandbox.pool.providers.docker import (
-    DockerSandboxProvider,
     DockerConfig,
+    DockerSandboxProvider,
 )
 from supervisor.sandbox.pool.providers.local import (
-    LocalProcessProvider,
     LocalConfig,
+    LocalProcessProvider,
 )
 
 __all__ = [
-    "DockerSandboxProvider",
     "DockerConfig",
-    "LocalProcessProvider",
+    "DockerSandboxProvider",
     "LocalConfig",
+    "LocalProcessProvider",
 ]

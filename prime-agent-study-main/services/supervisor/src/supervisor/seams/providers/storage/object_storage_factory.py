@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
+from supervisor.seams.services.object_storage import ObjectStorage
 
 
 def create_object_storage(

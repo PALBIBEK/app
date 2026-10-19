@@ -106,49 +106,42 @@ from supervisor.sandbox.base import (
     SandboxError,
     SandboxGone,
     SandboxInfo,
+    SandboxPathEscape,
     SandboxProvider,
     SandboxStatus,
     SandboxTimeout,
-    SandboxPathEscape,
     SnapshotUnsupported,
     WorkspaceSyncUnsupported,
 )
 
 # Factory
+# Factory additions
 from supervisor.sandbox.factory import (
     ProviderName,
     UnknownProviderError,
+    create_migration_runner,
+    create_router,
     create_sandbox_provider,
+    discover_backends,
     get_default_provider_name,
     is_isolation_provider,
     resolve_provider_name,
 )
+from supervisor.sandbox.providers.local_process import (
+    LocalProcessProvider,
+    LocalProcessSandbox,
+)
 
 # Providers
-from supervisor.sandbox.providers.none import NoneSandbox, NoneProvider
-from supervisor.sandbox.providers.local_process import (
-    LocalProcessSandbox,
-    LocalProcessProvider,
-)
+from supervisor.sandbox.providers.none import NoneProvider, NoneSandbox
 
-# Security - Environment
-from supervisor.sandbox.security.env import (
-    EnvSanitizer,
-    is_allowed_gateway_inject,
-    is_denied_env_key,
-    sanitize_sandbox_env,
-)
-
-# Security - Guards
-from supervisor.sandbox.security.guards import (
-    DigestStatus,
-    ImageDigestError,
-    MultiTenantViolation,
-    SecurityCheckResult,
-    assert_multi_tenant_provider,
-    assert_multi_tenant_sandbox_provider,
-    is_placeholder_image_digest,
-    validate_image_digest,
+# Lifecycle
+from supervisor.sandbox.reaper import (
+    ReapStats,
+    SandboxReattach,
+    SessionLookup,
+    SessionStatus,
+    reap_orphans,
 )
 
 # Resolution
@@ -163,28 +156,6 @@ from supervisor.sandbox.resolve import (
     load_pinned_sandbox_profile,
     resolve_sandbox_create,
     resolve_sandbox_create_full,
-)
-
-# Lifecycle
-from supervisor.sandbox.reaper import (
-    ReapStats,
-    SandboxReattach,
-    SessionLookup,
-    SessionStatus,
-    reap_orphans,
-)
-
-# Routes
-from supervisor.sandbox.routing.routes import (
-    RouteNotFoundError,
-    RouteStore,
-    SandboxRoute,
-)
-
-# Route Stores
-from supervisor.sandbox.routing.route_store import (
-    MemoryRouteStore,
-    PostgresRouteStore,
 )
 
 # Advisory Locks
@@ -205,6 +176,12 @@ from supervisor.sandbox.routing.capabilities import (
     detect_provider_capabilities,
 )
 
+# Route Stores
+from supervisor.sandbox.routing.route_store import (
+    MemoryRouteStore,
+    PostgresRouteStore,
+)
+
 # Router
 from supervisor.sandbox.routing.router import (
     BackendUnavailableError,
@@ -215,6 +192,13 @@ from supervisor.sandbox.routing.router import (
     create_sandbox_router,
 )
 
+# Routes
+from supervisor.sandbox.routing.routes import (
+    RouteNotFoundError,
+    RouteStore,
+    SandboxRoute,
+)
+
 # Migration
 from supervisor.sandbox.routing.sandbox_migration import (
     MigrationBlockedError,
@@ -222,11 +206,24 @@ from supervisor.sandbox.routing.sandbox_migration import (
     SandboxMigrationRunner,
 )
 
-# Factory additions
-from supervisor.sandbox.factory import (
-    create_migration_runner,
-    create_router,
-    discover_backends,
+# Security - Environment
+from supervisor.sandbox.security.env import (
+    EnvSanitizer,
+    is_allowed_gateway_inject,
+    is_denied_env_key,
+    sanitize_sandbox_env,
+)
+
+# Security - Guards
+from supervisor.sandbox.security.guards import (
+    DigestStatus,
+    ImageDigestError,
+    MultiTenantViolation,
+    SecurityCheckResult,
+    assert_multi_tenant_provider,
+    assert_multi_tenant_sandbox_provider,
+    is_placeholder_image_digest,
+    validate_image_digest,
 )
 
 __all__ = [

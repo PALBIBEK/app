@@ -8,7 +8,7 @@ published through the API survive a restart.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, TypedDict
 
 from sqlalchemy import select, tuple_
@@ -38,7 +38,7 @@ _HYDRATE_ORDER: dict[str, int] = {
 }
 
 
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 def _kind_str(kind: ArtifactKind | str) -> str:
@@ -120,7 +120,7 @@ async def persist_deprecate(
             return
         row.status = ArtifactStatus.DEPRECATED.value
         row.deprecated_by = deprecated_by
-        row.deprecated_at = datetime.now(timezone.utc)
+        row.deprecated_at = datetime.now(UTC)
 
 
 async def hydrate_composition_catalog(

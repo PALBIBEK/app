@@ -12,15 +12,13 @@ from supervisor.catalog.loading.bootstrap import (
     default_catalog_dir,
     resolve_catalog_dir,
 )
-
 from supervisor.catalog.loading.loader import load_composition_catalog
-
 from supervisor.catalog.loading.verify import (
     composition_problems,
-    verify_harness_catalog,
-    verify_composition_catalog,
-    list_catalog_problems,
     dump_composition_catalog,
+    list_catalog_problems,
+    verify_composition_catalog,
+    verify_harness_catalog,
 )
 
 __all__ = [

@@ -20,22 +20,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from supervisor.sandbox.base import Sandbox, SandboxProvider
 
-if TYPE_CHECKING:
-    from supervisor.sandbox.providers.local_docker import LocalDockerProvider
-
 __all__ = [
-    "reap_orphans",
     "ReapStats",
-    "SessionStatus",
-    "SessionLookup",
     "SandboxReattach",
+    "SessionLookup",
+    "SessionStatus",
+    "reap_orphans",
 ]
 
 _log = logging.getLogger(__name__)

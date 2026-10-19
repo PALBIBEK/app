@@ -56,33 +56,37 @@ Example:
 from __future__ import annotations
 
 # =============================================================================
+# Config
+# =============================================================================
+from supervisor.harness.config import (
+    HarnessSettings,
+    clear_settings_cache,
+    get_settings,
+)
+
+# =============================================================================
+# Digests
+# =============================================================================
+from supervisor.harness.core.digests import (
+    DIGEST_PATTERN,
+    assert_digest,
+    canonical_json_bytes,
+    content_digest,
+    validate_digest_format,
+    verify_digest,
+)
+
+# =============================================================================
 # Enums
 # =============================================================================
 from supervisor.harness.core.enums import (
+    RECOVERY_ACTION_ALIASES,
     ApprovalOnTimeout,
     GuardBehavior,
     HarnessStatus,
     RecoveryAction,
     RuntimeMode,
     ToolClass,
-    RECOVERY_ACTION_ALIASES,
-)
-
-# =============================================================================
-# Types
-# =============================================================================
-from supervisor.harness.core.types import (
-    ApprovalSpec,
-    BudgetSpec,
-    GuardSpec,
-    HarnessManifest,
-    RecoveryPolicy,
-    RuntimeCapabilities,
-    SessionFilesPaths,
-    SpawnPlan,
-    SubagentsSpec,
-    ToolSpec,
-    default_recovery_policy,
 )
 
 # =============================================================================
@@ -121,15 +125,42 @@ from supervisor.harness.core.protocols import (
 )
 
 # =============================================================================
-# Digests
+# Types
 # =============================================================================
-from supervisor.harness.core.digests import (
-    DIGEST_PATTERN,
-    assert_digest,
-    canonical_json_bytes,
-    content_digest,
-    validate_digest_format,
-    verify_digest,
+from supervisor.harness.core.types import (
+    ApprovalSpec,
+    BudgetSpec,
+    GuardSpec,
+    HarnessManifest,
+    RecoveryPolicy,
+    RuntimeCapabilities,
+    SessionFilesPaths,
+    SpawnPlan,
+    SubagentsSpec,
+    ToolSpec,
+    default_recovery_policy,
+)
+
+# =============================================================================
+# Materializers
+# =============================================================================
+from supervisor.harness.materializers import (
+    materialize_harness_binds,
+    read_launch_cli,
+    read_plug_bindings,
+    yal_dir,
+)
+
+# =============================================================================
+# Services
+# =============================================================================
+from supervisor.harness.services import (
+    CompatibilityChecker,
+    HarnessCatalog,
+    HarnessResolver,
+    SpawnPlanner,
+    build_spawn_plan,
+    load_supported_protocol_versions,
 )
 
 # =============================================================================
@@ -163,37 +194,6 @@ from supervisor.harness.storage.validators import (
     sanitize_env_value,
     validate_path_safe,
     validate_session_dir,
-)
-
-# =============================================================================
-# Config
-# =============================================================================
-from supervisor.harness.config import (
-    HarnessSettings,
-    clear_settings_cache,
-    get_settings,
-)
-
-# =============================================================================
-# Services
-# =============================================================================
-from supervisor.harness.services import (
-    CompatibilityChecker,
-    HarnessCatalog,
-    HarnessResolver,
-    SpawnPlanner,
-    build_spawn_plan,
-    load_supported_protocol_versions,
-)
-
-# =============================================================================
-# Materializers
-# =============================================================================
-from supervisor.harness.materializers import (
-    materialize_harness_binds,
-    read_launch_cli,
-    read_plug_bindings,
-    yal_dir,
 )
 
 __all__ = [

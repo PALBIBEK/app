@@ -16,18 +16,14 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final
+from datetime import UTC, datetime
+from typing import Any, Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.policy.errors import ApprovalRecoveryFailed
 from supervisor.policy.types import ApprovalContext
-
-if TYPE_CHECKING:
-    pass
-
 
 __all__ = [
     "ApprovalRecovery",
@@ -280,8 +276,8 @@ class PostgresApprovalRecovery:
         """
         await self._ensure_table()
 
-        expires_at = datetime.now(timezone.utc).timestamp() + expires_in_s
-        expires_dt = datetime.fromtimestamp(expires_at, timezone.utc)
+        expires_at = datetime.now(UTC).timestamp() + expires_in_s
+        expires_dt = datetime.fromtimestamp(expires_at, UTC)
 
         async with self._db() as db:
             try:

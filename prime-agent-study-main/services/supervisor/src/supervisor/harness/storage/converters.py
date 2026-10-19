@@ -15,12 +15,12 @@ import yaml
 
 from supervisor.harness.core.digests import assert_digest
 from supervisor.harness.core.enums import (
+    RECOVERY_ACTION_ALIASES,
     ApprovalOnTimeout,
     GuardBehavior,
     RecoveryAction,
     RuntimeMode,
     ToolClass,
-    RECOVERY_ACTION_ALIASES,
 )
 from supervisor.harness.core.errors import (
     ManifestParseError,

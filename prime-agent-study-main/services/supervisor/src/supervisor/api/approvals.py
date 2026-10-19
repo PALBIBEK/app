@@ -6,13 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from supervisor.api import deps
+from supervisor.api.workflow_errors import to_http
 from supervisor.policy.errors import (
     ApprovalError,
     ApprovalNotFound,
     InvalidApprovalChoice,
 )
 from supervisor.session import SessionNotFound
-from supervisor.api.workflow_errors import to_http
 from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
 
 router = APIRouter(tags=["approvals"])

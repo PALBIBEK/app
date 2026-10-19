@@ -27,13 +27,13 @@ from typing import Final
 from urllib.parse import urlparse
 
 __all__ = [
-    "is_denied_env_key",
+    "DROPPED_PROXY_ENV",
+    "EnvSanitizer",
+    "inject_proxy_env",
     "is_allowed_gateway_inject",
+    "is_denied_env_key",
     "sanitize_sandbox_env",
     "strip_proxy_env",
-    "inject_proxy_env",
-    "EnvSanitizer",
-    "DROPPED_PROXY_ENV",
 ]
 
 
@@ -529,7 +529,7 @@ class EnvSanitizer:
         >>> env = sanitizer.sanitize({"CUSTOM_SECRET": "x", "CUSTOM_SAFE_VAR": "y"})
     """
 
-    __slots__ = ("_denied_exact", "_allowed_passthrough", "_strip_proxy")
+    __slots__ = ("_allowed_passthrough", "_denied_exact", "_strip_proxy")
 
     def __init__(
         self,
@@ -583,9 +583,7 @@ class EnvSanitizer:
 
         if extra:
             for key, value in extra.items():
-                if is_allowed_gateway_inject(key, value):
-                    result[key] = value
-                elif not self.is_denied(key):
+                if is_allowed_gateway_inject(key, value) or not self.is_denied(key):
                     result[key] = value
 
         # Strip proxy vars if requested

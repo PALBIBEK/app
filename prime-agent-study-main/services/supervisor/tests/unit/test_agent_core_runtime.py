@@ -11,7 +11,6 @@ from supervisor.agent.seams import RuntimeSeams
 from supervisor.harness import load_supported_protocol_versions
 from supervisor.harness.services.compat_checker import capabilities_for
 
-
 # --- U3 / U9 / N2: factory loud fail + known names ---
 
 

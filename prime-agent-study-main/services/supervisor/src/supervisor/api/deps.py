@@ -29,7 +29,6 @@ from supervisor.seams.services import (
 )
 from supervisor.session import SessionManager
 
-
 if TYPE_CHECKING:
     from supervisor.temporal.sessions import SessionWorkflows
 
@@ -243,7 +242,7 @@ def get_composition_catalog(request: Request):
 
 
 def get_session_factory(request: Request) -> async_sessionmaker:
-    return _state(request).manager._db  # noqa: SLF001
+    return _state(request).manager._db
 
 
 def get_reader(request: Request) -> JournalReader:

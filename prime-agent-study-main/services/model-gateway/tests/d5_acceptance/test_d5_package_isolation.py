@@ -32,7 +32,7 @@ def test_t12_no_supervisor_imports_in_gateway_package() -> None:
 
 def test_t12_gateway_package_importable_alone() -> None:
     """T12: `import model_gateway` works without supervisor on sys.path."""
-    import model_gateway  # noqa: F401
-    import model_gateway.app  # noqa: F401
-    import model_gateway.config  # noqa: F401
+    import model_gateway
+    import model_gateway.app
+    import model_gateway.config
     import model_gateway.virtual_keys  # noqa: F401

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
-from decimal import Decimal
-import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -30,16 +29,15 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.factory import create_runtime
 from supervisor.agent.seams import RuntimeSeams
+from supervisor.catalog import HarnessVersionMismatch, MemoryProfile, SessionPins
+from supervisor.catalog.core.types import FileEffects
 from supervisor.catalog.providers.binder import bind_runtime_seams
-from supervisor.catalog import HarnessVersionMismatch
+from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
+from supervisor.catalog.repository import sync_composition
 from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
 from supervisor.catalog.storage import CompositionCatalog
-from supervisor.catalog import MemoryProfile, SessionPins
-from supervisor.catalog.repository import sync_composition
-from supervisor.catalog.core.types import FileEffects
 from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.harness import (
-    ApprovalSpec,
     GuardSpec,
     HarnessCatalog,
     HarnessManifest,
@@ -47,23 +45,24 @@ from supervisor.harness import (
     manifest_to_dict,
     materialize_harness_binds,
 )
-from supervisor.harness.services.compat_checker import capabilities_for, check
 from supervisor.harness.core.errors import UnknownHarness
 from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
+from supervisor.harness.services.compat_checker import capabilities_for, check
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
+from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
+from supervisor.memory.platform import MemoryPlatform
+from supervisor.models import model_router
+from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.policy.approvals import ApprovalBroker
 from supervisor.policy.budget import BudgetExceeded, BudgetTracker
 from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard, call_hash
-from supervisor.policy.quotas import QuotaExceeded, TenantQuotaEnforcer
+from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.policy.sandbox_policy import ISOLATING_PROVIDERS, SandboxPolicy
 from supervisor.sandbox.base import Sandbox, SandboxProvider, SnapshotUnsupported
-from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
-from supervisor.tools import SandboxWorkspace
 from supervisor.seams import (
-    build_runtime_seams,
     CompactionPreparation,
     JobHandle,
     ModelGatewayClient,
@@ -72,31 +71,29 @@ from supervisor.seams import (
     ToolInvokeContext,
     ToolProvider,
     ToolResult,
+    build_runtime_seams,
 )
 from supervisor.seams.services import (
-    resolve_memory_scope,
     AuthzService,
     GrantStore,
     Principal,
     SessionWorkspaceService,
     SessionWorkspaceState,
-    WorkspaceConflictError,
     VirtualKeyClient,
+    WorkspaceConflictError,
+    resolve_memory_scope,
 )
-from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
-from supervisor.memory.platform import MemoryPlatform
-from supervisor.models import model_router
-from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.session.access import session_visibility, visible_to
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.memory_ops import CompactMemoryOutcome, MemoryOps, RecallMemoryOutcome
-from supervisor.session.subagent_ops import SubagentOps
-from supervisor.session.tool_outbox import ToolOutbox
-from supervisor.session.tree import ChildRow, build_session_tree
 from supervisor.session.modes import SessionMode, mode_for_manifest
 from supervisor.session.recovery import Recovery, ResumeState
 from supervisor.session.registry import SessionRegistry
+from supervisor.session.subagent_ops import SubagentOps
+from supervisor.session.tool_outbox import ToolOutbox
+from supervisor.session.tree import ChildRow, build_session_tree
 from supervisor.session.workspaces import session_workspace
+from supervisor.tools import SandboxWorkspace
 
 _log = logging.getLogger(__name__)
 _LIVE_QUEUE_MAX = 256
@@ -1040,7 +1037,7 @@ class SessionManager:
         """Pause sticky or terminate stateless sessions idle longer than threshold."""
         if max_idle_seconds <= 0:
             return []
-        threshold = datetime.now(timezone.utc) - timedelta(seconds=max_idle_seconds)
+        threshold = datetime.now(UTC) - timedelta(seconds=max_idle_seconds)
         reaped: list[str] = []
         for sid in list(self._registry.all()):
             runtime = self._registry.get(sid)
@@ -1064,7 +1061,7 @@ class SessionManager:
         if since is None:
             return False
         if since.tzinfo is None:
-            since = since.replace(tzinfo=timezone.utc)
+            since = since.replace(tzinfo=UTC)
         return since <= threshold
 
     async def _session_last_activity(self, session_id: str) -> datetime | None:

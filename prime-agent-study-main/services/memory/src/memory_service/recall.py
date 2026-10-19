@@ -8,11 +8,10 @@ import time
 
 from memory_service.bank import MemoryBank, _row_to_item
 from memory_service.embed import Embedder, HashingEmbedder, cosine
-from memory_service.models import MemoryItemRow
 from memory_service.tier2_types import MemoryItem, RecallResult, TokenBudget, estimate_tokens
 from memory_service.types import Scope
 
-_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.I)
+_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.IGNORECASE)
 
 
 def _tokens(text: str) -> set[str]:

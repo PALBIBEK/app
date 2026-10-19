@@ -12,7 +12,7 @@ Reference: QM's quota enforcement pattern.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,17 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.db.models import SessionIndexRow, SessionRow
 from supervisor.policy.errors import (
     CostQuotaExceeded,
-    QuotaExceeded,
     SandboxQuotaExceeded,
     SessionQuotaExceeded,
 )
-from supervisor.policy.types import QuotaLimits, QuotaState
 from supervisor.policy.quotas.limits import DEFAULT_QUOTA_LIMITS
-
-
-if TYPE_CHECKING:
-    pass
-
+from supervisor.policy.types import QuotaLimits, QuotaState
 
 __all__ = ["QuotaEnforcer"]
 

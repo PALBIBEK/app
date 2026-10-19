@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from supervisor.harness.config import get_settings, HarnessSettings
+from supervisor.harness.config import HarnessSettings, get_settings
 from supervisor.harness.core.errors import (
     InvalidGatewayConfig,
     MissingHarnessCli,

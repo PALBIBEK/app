@@ -7,10 +7,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from memory_service.bank import MemoryBank
 from memory_service.buffer import WriteBehindBuffer
 from memory_service.cost import CachingEmbedder, flush_batch_is_barren
 from memory_service.db import init_db, make_engine, make_session_factory
-from memory_service.bank import MemoryBank
 from memory_service.embed import Embedder
 from memory_service.erase import EraseService
 from memory_service.extract import ExtractionQueue, Extractor
@@ -160,8 +160,8 @@ class MemoryService:
             ]
             buf.drain()
             for ev in renumbered:
-                buf._pending.append(ev)  # noqa: SLF001
-            buf._next_seq = expected + len(renumbered)  # noqa: SLF001
+                buf._pending.append(ev)
+            buf._next_seq = expected + len(renumbered)
         batch = list(buf.peek())
         if not batch:
             return row.last_seq
@@ -419,11 +419,11 @@ class MemoryService:
 
 # Re-export errors for callers
 __all__ = [
+    "FORMAT_VERSION",
+    "FormatUnsupported",
     "MemoryService",
     "SeqConflict",
-    "SessionNotFound",
     "SessionCorrupt",
-    "FormatUnsupported",
+    "SessionNotFound",
     "StaleFence",
-    "FORMAT_VERSION",
 ]

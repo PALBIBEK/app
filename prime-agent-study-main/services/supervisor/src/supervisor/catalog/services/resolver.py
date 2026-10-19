@@ -23,13 +23,13 @@ from supervisor.catalog.core.errors import (
     DigestMissing,
     NotOffered,
 )
-from supervisor.catalog.storage.memory import reject_floating_ref
 from supervisor.catalog.core.types import (
     AgentComposition,
     ArtifactKind,
     ArtifactStatus,
     SessionPins,
 )
+from supervisor.catalog.storage.memory import reject_floating_ref
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.protocols import ArtifactStoreProtocol

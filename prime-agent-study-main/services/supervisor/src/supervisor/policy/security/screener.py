@@ -16,31 +16,28 @@ Reference: QM's security-screener.ts pattern.
 from __future__ import annotations
 
 import logging
-import uuid
 from decimal import Decimal
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
+from supervisor.policy.security.classifiers import (
+    HeuristicClassifier,
+    LLMClassifier,
+    RegexClassifier,
+)
 from supervisor.policy.security.types import (
-    ClassifierType,
+    DEFAULT_THREAT_THRESHOLD,
     ContentType,
     SecurityVerdict,
     ThreatLevel,
-    DEFAULT_THREAT_THRESHOLD,
 )
-from supervisor.policy.security.classifiers import (
-    RegexClassifier,
-    HeuristicClassifier,
-    LLMClassifier,
-)
-
 
 if TYPE_CHECKING:
     from supervisor.policy.security.quarantine import QuarantineStore
 
 
 __all__ = [
-    "SecurityScreener",
     "DEFAULT_THREAT_THRESHOLD",
+    "SecurityScreener",
 ]
 
 
@@ -70,14 +67,14 @@ class SecurityScreener:
     """
 
     __slots__ = (
-        "_regex",
+        "_enable_heuristic",
+        "_enable_llm",
         "_heuristic",
         "_llm",
         "_quarantine",
+        "_regex",
         "_shadow_mode",
         "_threat_threshold",
-        "_enable_heuristic",
-        "_enable_llm",
     )
 
     def __init__(

@@ -14,9 +14,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
-from enum import StrEnum, auto
-from typing import Any, Final
-
+from enum import StrEnum
+from typing import Final
 
 __all__ = [
     # Enums

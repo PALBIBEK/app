@@ -26,7 +26,7 @@ class RuntimeSeams:
     prompt_assembler: PromptAssembler | None = None
     subagent_transport: SubagentTransport | None = None
     model_gateway: ModelGatewayClient | None = None
-    context_memory: "ContextMemoryProvider | None" = None
+    context_memory: ContextMemoryProvider | None = None
 
     def has(self, seam_name: str) -> bool:
         return getattr(self, seam_name) is not None

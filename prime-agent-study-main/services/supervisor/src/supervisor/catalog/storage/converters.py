@@ -23,29 +23,28 @@ from typing import Any
 from supervisor.catalog.core.digests import content_digest, is_unset_digest
 from supervisor.catalog.core.errors import DigestMismatch
 from supervisor.catalog.core.types import (
-    # Enums
-    ArtifactKind,
-    ArtifactStatus,
-    SandboxProviderName,
-    FileEffects,
-    ApprovalDefault,
-    RecallBackend,
-    # Dataclasses
-    ArtifactMetadata,
-    PromptSection,
-    PromptPack,
-    ToolDefinition,
-    ToolSet,
-    DigestRef,
-    PlugBindings,
     AgentComposition,
-    SandboxProfile,
-    MemoryProfile,
-    SessionPins,
+    ApprovalDefault,
     # Type alias
     Artifact,
+    # Enums
+    ArtifactKind,
+    # Dataclasses
+    ArtifactMetadata,
+    ArtifactStatus,
+    DigestRef,
+    FileEffects,
+    MemoryProfile,
+    PlugBindings,
+    PromptPack,
+    PromptSection,
+    RecallBackend,
+    SandboxProfile,
+    SandboxProviderName,
+    SessionPins,
+    ToolDefinition,
+    ToolSet,
 )
-
 
 __all__ = [
     # From dict converters

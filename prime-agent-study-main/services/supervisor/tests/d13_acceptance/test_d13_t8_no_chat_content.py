@@ -10,8 +10,8 @@ from tests.d13_acceptance.conftest import (
     create_session,
     new_command_id,
     span_attr_blob,
-    wait_for_journal,
     w3c_traceparent,
+    wait_for_journal,
 )
 
 TRACE_ID = "e1b2c3d4e5f60718293a4b5c6d7e8f95"

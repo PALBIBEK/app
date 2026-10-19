@@ -18,7 +18,6 @@ Thread Safety:
 
 from __future__ import annotations
 
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -880,7 +879,6 @@ class SandboxProvider(ABC):
 
         Called during graceful shutdown. Default: no-op.
         """
-        pass
 
     async def health_check(self) -> bool:
         """Check if provider is healthy (can create sandboxes).

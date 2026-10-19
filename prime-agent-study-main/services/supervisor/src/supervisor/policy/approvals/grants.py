@@ -13,14 +13,9 @@ from __future__ import annotations
 import fnmatch
 import re
 import time
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from supervisor.policy.types import ApprovalGrant, ApprovalScope
-
-if TYPE_CHECKING:
-    pass
-
 
 __all__ = ["ApprovalGrantStore"]
 
@@ -63,7 +58,7 @@ class ApprovalGrantStore:
             ...
     """
 
-    __slots__ = ("_grants", "_session_grants", "_always_grants")
+    __slots__ = ("_always_grants", "_grants", "_session_grants")
 
     def __init__(self) -> None:
         # All grants by ID

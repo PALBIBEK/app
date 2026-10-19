@@ -42,13 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.sandbox.pool.provider import (
-    SandboxProvider,
-    SandboxHandle,
-    SandboxConfig,
-    SandboxStatus,
     ExecutionResult,
     GrepMatch,
     ProvisionError,
+    SandboxConfig,
+    SandboxHandle,
+    SandboxStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,7 +112,7 @@ class LocalExecutor:
                 duration_seconds=duration,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Kill process on timeout
             try:
                 proc.kill()

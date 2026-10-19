@@ -35,8 +35,8 @@ from supervisor.catalog.services.resolver import CompositionResolver
 from supervisor.catalog.services.tool_implementations import require_implemented
 
 __all__ = [
-    "CatalogService",
     "CatalogAuthz",
+    "CatalogService",
     "CompositionResolver",
     "require_implemented",
 ]

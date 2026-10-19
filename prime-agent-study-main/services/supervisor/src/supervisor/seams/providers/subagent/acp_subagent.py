@@ -7,16 +7,16 @@ from typing import Any
 
 import httpx
 
-from supervisor.seams.interfaces.subagent_transport import (
-    CAP_BACKGROUND,
-    CAP_FORK,
-    CAP_SPAWN,
-)
 from supervisor.seams.core.types import (
     ChildInfo,
     JobHandle,
     SubagentRequest,
     SubagentRunResult,
+)
+from supervisor.seams.interfaces.subagent_transport import (
+    CAP_BACKGROUND,
+    CAP_FORK,
+    CAP_SPAWN,
 )
 
 

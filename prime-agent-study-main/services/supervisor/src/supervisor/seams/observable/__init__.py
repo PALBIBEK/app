@@ -50,26 +50,26 @@ Usage:
     ```
 """
 
-from supervisor.seams.observable.tracing import (
-    traced,
-    span_attributes,
-    get_tracer,
-    get_current_span,
-    inject_context,
-    extract_context,
-)
 from supervisor.seams.observable.metrics import (
-    metered,
     counter,
-    histogram,
     gauge,
     get_meter,
+    histogram,
+    metered,
+)
+from supervisor.seams.observable.tracing import (
+    extract_context,
+    get_current_span,
+    get_tracer,
+    inject_context,
+    span_attributes,
+    traced,
 )
 from supervisor.seams.observable.wrappers import (
-    TracedToolProvider,
-    TracedModelGateway,
     ResilientModelGateway,
     ResilientToolProvider,
+    TracedModelGateway,
+    TracedToolProvider,
 )
 
 __all__ = [

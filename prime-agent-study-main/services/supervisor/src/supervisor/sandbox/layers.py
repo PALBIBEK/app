@@ -24,10 +24,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Final
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
@@ -35,13 +35,13 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 __all__ = [
+    "LAYERS_TIMEOUT_S",
+    "MANIFEST_FILENAME",
     "LayerManifest",
-    "MaterializationResult",
     "LayerMaterializationError",
     "LayerOps",
+    "MaterializationResult",
     "create_exec_layers",
-    "MANIFEST_FILENAME",
-    "LAYERS_TIMEOUT_S",
 ]
 
 
@@ -238,7 +238,7 @@ class ExecLayers(LayerOps):
     - Single atomic tar extraction
     """
 
-    __slots__ = ("_exec_fn", "_read_fn", "_write_fn", "_config")
+    __slots__ = ("_config", "_exec_fn", "_read_fn", "_write_fn")
 
     def __init__(
         self,

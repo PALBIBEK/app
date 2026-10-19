@@ -12,7 +12,6 @@ from memory_service.service import MemoryService
 from memory_service.tier2_types import NewMemoryItem
 from memory_service.types import Scope
 
-
 SCOPE = {"tenant": "t-loop", "subject": "agent:custom-loop", "namespace": "facts"}
 
 

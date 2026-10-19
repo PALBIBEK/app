@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 __all__ = [
-    "AdvisoryLockProtocol",
     "AdvisoryLock",
+    "AdvisoryLockProtocol",
     "MemoryAdvisoryLock",
 ]
 
@@ -184,7 +185,7 @@ class MemoryAdvisoryLock:
         ...     await do_work()
     """
 
-    __slots__ = ("_locks", "_condition")
+    __slots__ = ("_condition", "_locks")
 
     def __init__(self) -> None:
         """Initialize empty lock set."""

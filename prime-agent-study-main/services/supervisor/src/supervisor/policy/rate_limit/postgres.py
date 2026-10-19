@@ -13,18 +13,11 @@ Reference: QM's distributed rate limiting pattern.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.policy.errors import RateLimitExceeded
-from supervisor.policy.types import RateDecision, RateDecisionStatus, DEFAULT_RATE_WINDOW_MS
-
-
-if TYPE_CHECKING:
-    pass
-
+from supervisor.policy.types import DEFAULT_RATE_WINDOW_MS, RateDecision, RateDecisionStatus
 
 __all__ = ["PostgresRateLimiter"]
 
@@ -56,7 +49,7 @@ class PostgresRateLimiter:
             raise RateLimitExceeded(...)
     """
 
-    __slots__ = ("_db", "_max", "_window_ms", "_table_name", "_initialized")
+    __slots__ = ("_db", "_initialized", "_max", "_table_name", "_window_ms")
 
     def __init__(
         self,

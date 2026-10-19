@@ -13,7 +13,6 @@ from supervisor.db.engine import open_db
 from supervisor.harness import (
     HarnessCatalog,
     HarnessManifest,
-    RecoveryAction,
     RecoveryPolicy,
     ToolClass,
     ToolSpec,

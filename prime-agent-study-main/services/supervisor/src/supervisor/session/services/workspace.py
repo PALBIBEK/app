@@ -12,8 +12,8 @@ from pathlib import Path
 from supervisor.session.config.settings import get_settings
 
 __all__ = [
-    "workspaces_root",
     "session_workspace",
+    "workspaces_root",
 ]
 
 logger = logging.getLogger(__name__)

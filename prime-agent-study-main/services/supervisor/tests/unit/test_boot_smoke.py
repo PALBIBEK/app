@@ -69,6 +69,6 @@ def test_shipped_catalog_and_harness_versions_load(booted_app: TestClient) -> No
     assert resp.status_code == 200, resp.text
     assert resp.json(), "shipped compositions should load from harness/compositions"
 
-    harness_catalog = booted_app.app.state.supervisor.manager._catalog  # noqa: SLF001
+    harness_catalog = booted_app.app.state.supervisor.manager._catalog
     versions = booted_app.portal.call(harness_catalog.list_available)
     assert versions, "harness versions from harness/versions should be registered"

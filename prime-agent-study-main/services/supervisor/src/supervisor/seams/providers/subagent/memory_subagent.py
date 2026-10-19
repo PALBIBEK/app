@@ -7,17 +7,17 @@ lab echo is explicitly allowed (local/tests). Never conflate with
 
 from __future__ import annotations
 
-from supervisor.seams.interfaces.subagent_transport import (
-    CAP_BACKGROUND,
-    CAP_DEPTH_LIMIT,
-    CAP_FORK,
-    CAP_SPAWN,
-)
 from supervisor.seams.core.types import (
     ChildInfo,
     JobHandle,
     SubagentRequest,
     SubagentRunResult,
+)
+from supervisor.seams.interfaces.subagent_transport import (
+    CAP_BACKGROUND,
+    CAP_DEPTH_LIMIT,
+    CAP_FORK,
+    CAP_SPAWN,
 )
 
 # Canonical lab-only provider id (D12).

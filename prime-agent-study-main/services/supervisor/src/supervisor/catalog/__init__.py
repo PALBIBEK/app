@@ -50,63 +50,31 @@ Example:
 from __future__ import annotations
 
 # =============================================================================
-# Types
-# =============================================================================
-from supervisor.catalog.core.types import (
-    # Enums
-    ArtifactKind,
-    ArtifactStatus,
-    SandboxProviderName,
-    FileEffects,
-    ApprovalDefault,
-    RecallBackend,
-    CatalogGrant,
-    CatalogAction,
-    # Metadata
-    ArtifactMetadata,
-    ArtifactUsageRecord,
-    ArtifactUsageStats,
-    # Artifact types
-    PromptSection,
-    PromptPack,
-    ToolDefinition,
-    ToolSet,
-    DigestRef,
-    PlugBindings,
-    AgentComposition,
-    SandboxProfile,
-    MemoryProfile,
-    SessionPins,
-    # Type alias
-    Artifact,
-)
-
-# =============================================================================
 # Errors
 # =============================================================================
 from supervisor.catalog.core.errors import (
+    CatalogConnectionError,
     # Base
     CatalogError,
+    CatalogOwnershipRequired,
+    # Permission
+    CatalogPermissionDenied,
+    # Storage
+    CatalogStorageError,
+    CompositionDigestRequired,
+    # Composition
+    CompositionIncomplete,
     # Integrity
     DigestMismatch,
     DigestMissing,
+    FloatingRef,
+    HarnessVersionMismatch,
+    ImmutableArtifact,
+    # Validation
+    InvalidArtifact,
     InvalidDigest,
     # Status
     NotOffered,
-    ImmutableArtifact,
-    FloatingRef,
-    # Composition
-    CompositionIncomplete,
-    CompositionDigestRequired,
-    HarnessVersionMismatch,
-    # Permission
-    CatalogPermissionDenied,
-    CatalogOwnershipRequired,
-    # Storage
-    CatalogStorageError,
-    CatalogConnectionError,
-    # Validation
-    InvalidArtifact,
 )
 
 # =============================================================================
@@ -114,41 +82,53 @@ from supervisor.catalog.core.errors import (
 # =============================================================================
 from supervisor.catalog.core.protocols import (
     ArtifactStoreProtocol,
-    UsageStoreProtocol,
+    CatalogAnalyticsProtocol,
+    CatalogAuthzProtocol,
     CatalogServiceProtocol,
     CompositionResolverProtocol,
     RuntimeBinderProtocol,
-    CatalogAuthzProtocol,
-    CatalogAnalyticsProtocol,
+    UsageStoreProtocol,
 )
 
 # =============================================================================
-# Converters
+# Types
 # =============================================================================
-from supervisor.catalog.storage.converters import (
-    # From dict
-    prompt_pack_from_dict,
-    tool_set_from_dict,
-    composition_from_dict,
-    sandbox_profile_from_dict,
-    memory_profile_from_dict,
-    session_pins_from_dict,
-    metadata_from_dict,
-    artifact_from_dict,
-    # To dict
-    prompt_pack_to_dict,
-    tool_set_to_dict,
-    composition_to_dict,
-    sandbox_profile_to_dict,
-    memory_profile_to_dict,
-    session_pins_to_dict,
-    metadata_to_dict,
-    artifact_to_dict,
-    # Helpers
-    kind_of,
-    with_digest,
-    with_status,
-    with_metadata,
+from supervisor.catalog.core.types import (
+    AgentComposition,
+    ApprovalDefault,
+    # Type alias
+    Artifact,
+    # Enums
+    ArtifactKind,
+    # Metadata
+    ArtifactMetadata,
+    ArtifactStatus,
+    ArtifactUsageRecord,
+    ArtifactUsageStats,
+    CatalogAction,
+    CatalogGrant,
+    DigestRef,
+    FileEffects,
+    MemoryProfile,
+    PlugBindings,
+    PromptPack,
+    # Artifact types
+    PromptSection,
+    RecallBackend,
+    SandboxProfile,
+    SandboxProviderName,
+    SessionPins,
+    ToolDefinition,
+    ToolSet,
+)
+
+# =============================================================================
+# Services
+# =============================================================================
+from supervisor.catalog.services import (
+    CatalogAuthz,
+    CatalogService,
+    CompositionResolver,
 )
 
 # =============================================================================
@@ -164,14 +144,33 @@ from supervisor.catalog.storage import (
 )
 
 # =============================================================================
-# Services
+# Converters
 # =============================================================================
-from supervisor.catalog.services import (
-    CatalogService,
-    CatalogAuthz,
-    CompositionResolver,
+from supervisor.catalog.storage.converters import (
+    artifact_from_dict,
+    artifact_to_dict,
+    composition_from_dict,
+    composition_to_dict,
+    # Helpers
+    kind_of,
+    memory_profile_from_dict,
+    memory_profile_to_dict,
+    metadata_from_dict,
+    metadata_to_dict,
+    # From dict
+    prompt_pack_from_dict,
+    # To dict
+    prompt_pack_to_dict,
+    sandbox_profile_from_dict,
+    sandbox_profile_to_dict,
+    session_pins_from_dict,
+    session_pins_to_dict,
+    tool_set_from_dict,
+    tool_set_to_dict,
+    with_digest,
+    with_metadata,
+    with_status,
 )
-
 
 __all__ = [
     # Types - Enums

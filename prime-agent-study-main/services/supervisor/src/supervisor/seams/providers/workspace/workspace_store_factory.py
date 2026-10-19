@@ -6,10 +6,10 @@ import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
-from supervisor.seams.providers.workspace.memory_workspace_store import MemoryWorkspaceStore
 from supervisor.seams.providers.storage.object_storage_factory import create_object_storage
+from supervisor.seams.providers.workspace.memory_workspace_store import MemoryWorkspaceStore
+from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.services.workspace_hydrator import (
     StoreWorkspaceHydrator,
     WorkspaceHydrator,

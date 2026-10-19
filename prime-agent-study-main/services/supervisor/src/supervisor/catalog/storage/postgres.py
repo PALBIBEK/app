@@ -12,23 +12,13 @@ Reference: policy/approvals.py PostgresApprovalRecovery pattern.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from sqlalchemy import and_, desc, func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.catalog.storage.converters import (
-    artifact_from_dict,
-    artifact_to_dict,
-    kind_of,
-    metadata_from_dict,
-    with_digest,
-    with_metadata,
-    with_status,
-)
 from supervisor.catalog.core.digests import content_digest
 from supervisor.catalog.core.errors import (
     CatalogStorageError,
@@ -37,7 +27,6 @@ from supervisor.catalog.core.errors import (
     ImmutableArtifact,
     NotOffered,
 )
-from supervisor.catalog.storage.memory import reject_floating_ref
 from supervisor.catalog.core.types import (
     ArtifactKind,
     ArtifactMetadata,
@@ -45,6 +34,15 @@ from supervisor.catalog.core.types import (
     ArtifactUsageRecord,
     ArtifactUsageStats,
 )
+from supervisor.catalog.storage.converters import (
+    artifact_from_dict,
+    artifact_to_dict,
+    kind_of,
+    metadata_from_dict,
+    with_digest,
+    with_metadata,
+)
+from supervisor.catalog.storage.memory import reject_floating_ref
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
@@ -102,7 +100,7 @@ class PostgresArtifactStore:
         body = artifact.body_for_digest()
         digest = content_digest(body)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         try:
             async with self._session_factory() as db:
@@ -253,7 +251,7 @@ class PostgresArtifactStore:
         """
         from supervisor.db.models import CatalogArtifactRow
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         try:
             async with self._session_factory() as db:
@@ -550,7 +548,7 @@ class PostgresUsageStore:
         except ImportError:
             return
 
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
         try:
             async with self._session_factory() as db:
@@ -646,7 +644,7 @@ class PostgresUsageStore:
                 result = await db.execute(stmt)
                 last_ms = result.scalar()
                 last_used_at = (
-                    datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc)
+                    datetime.fromtimestamp(last_ms / 1000, tz=UTC)
                     if last_ms
                     else None
                 )
@@ -793,7 +791,7 @@ class PostgresUsageStore:
                 rows = result.all()
 
                 since_dt = (
-                    datetime.fromtimestamp(since_ms / 1000, tz=timezone.utc)
+                    datetime.fromtimestamp(since_ms / 1000, tz=UTC)
                     if since_ms
                     else None
                 )

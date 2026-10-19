@@ -13,11 +13,10 @@ Reference: FastAPI best practices, Pydantic v2 patterns.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from enum import StrEnum, auto
+from enum import StrEnum
 from typing import Any, Final, Literal
-
 
 __all__ = [
     # Enums

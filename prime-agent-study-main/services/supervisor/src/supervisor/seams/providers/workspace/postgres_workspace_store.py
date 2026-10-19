@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import ScopeRow, WorkspaceFileRow
-from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.providers.workspace.memory_workspace_store import normalize_workspace_path
 from supervisor.seams.providers.workspace.sync import base_of, three_way_sync
+from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.services.workspace_store import (
     CasConflict,
     ChecksumMismatch,
@@ -34,7 +34,7 @@ def _object_key(digest: str) -> str:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _row_to_record(row: WorkspaceFileRow) -> WorkspaceFileRecord:

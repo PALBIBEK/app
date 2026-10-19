@@ -19,7 +19,6 @@ Reference:
 from __future__ import annotations
 
 import logging
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum, auto
@@ -28,12 +27,12 @@ from typing import Final
 _log = logging.getLogger(__name__)
 
 __all__ = [
-    "MachineState",
-    "ComputerStatus",
-    "RestartResult",
-    "ComputerStatusError",
-    "STATUS_PROBE_TIMEOUT_S",
     "RESTART_TIMEOUT_S",
+    "STATUS_PROBE_TIMEOUT_S",
+    "ComputerStatus",
+    "ComputerStatusError",
+    "MachineState",
+    "RestartResult",
 ]
 
 

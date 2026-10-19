@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
+from supervisor.memory.binding import long_term_agent
 from supervisor.seams import CompactionPreparation, MemoryInvokeContext, ModelCatalog
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
     extract_previous_summary,
     whole_exchanges,
 )
-from supervisor.memory.binding import long_term_agent
 from supervisor.session.workspaces import session_workspace
 
 if TYPE_CHECKING:

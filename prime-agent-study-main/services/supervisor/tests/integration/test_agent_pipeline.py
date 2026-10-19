@@ -126,7 +126,7 @@ async def test_session_pins_exact_digests_from_composition(pipeline: Pipeline) -
         composition_digest=digest,
     )
 
-    row = await pipeline.manager._get_session_row(sid)  # noqa: SLF001
+    row = await pipeline.manager._get_session_row(sid)
     pins = SessionPins.from_dict(row.composition_pins)
     comp = pipeline.compositions.get("composition", COMPOSITION, digest)
     assert pins.composition_digest == digest
@@ -139,14 +139,14 @@ async def test_session_pins_exact_digests_from_composition(pipeline: Pipeline) -
     assert pins.to_dict() == SessionPins.from_dict(pins.to_dict()).to_dict()  # lossless
     assert pipeline.sandboxes.create_calls[-1]["image"] == MOCK_IMAGE
     # The agent persists history under this id; it must be the supervisor's, or resume loses it.
-    assert pipeline.manager._registry.get(sid).session_id == sid  # noqa: SLF001
+    assert pipeline.manager._registry.get(sid).session_id == sid
 
 
 async def test_id_only_create_pins_the_latest_offered_digest(pipeline: Pipeline) -> None:
     sid = await pipeline.manager.create(
         tenant_id="t1", harness_version=HARNESS, composition_id=COMPOSITION
     )
-    row = await pipeline.manager._get_session_row(sid)  # noqa: SLF001
+    row = await pipeline.manager._get_session_row(sid)
     assert row.composition_pins["composition_digest"] == pipeline.digest_of(COMPOSITION)
 
 
@@ -245,13 +245,13 @@ async def _create(client: AsyncClient, digest: str) -> str:
 
 
 def _assert_user_seams(pipeline: Pipeline, session_id: str) -> None:
-    runtime = pipeline.manager._registry.get(session_id)  # noqa: SLF001
+    runtime = pipeline.manager._registry.get(session_id)
     seams = runtime.seams
     assert type(runtime).__name__ == "GithiRuntime"  # from the manifest, not an API default
     assert "You are MY analyst." in seams.prompt_assembler.assemble(PromptBindings()).text
     assert [t.name for t in seams.tool_provider.list_tools()] == ["edit", "read"]
-    assert seams.model_gateway._base == "http://gateway:8090"  # noqa: SLF001
-    assert seams.subagent_transport._provider("acp") is not None  # noqa: SLF001
+    assert seams.model_gateway._base == "http://gateway:8090"
+    assert seams.subagent_transport._provider("acp") is not None
     assert seams.context_memory is not None
 
 

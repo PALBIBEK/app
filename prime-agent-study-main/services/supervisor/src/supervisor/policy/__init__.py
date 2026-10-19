@@ -40,93 +40,6 @@ Example:
 # =============================================================================
 # Types
 # =============================================================================
-from supervisor.policy.types import (
-    # Enums
-    ApprovalStatus,
-    ApprovalScope,
-    GuardAction,
-    GuardDetector,
-    StallSignal,
-    FileEffects,
-    ApprovalDefault,
-    CommandAction,
-    CommandPolicyMode,
-    AuditAction,
-    RateDecisionStatus,
-    # Dataclasses
-    BudgetSpec,
-    BudgetState,
-    GuardConfig,
-    GuardVerdict,
-    Approval,
-    ApprovalGrant,
-    ApprovalContext,
-    CommandRule,
-    CommandDecision,
-    RateDecision,
-    AuditEvent,
-    QuotaLimits,
-    QuotaState,
-    StallState,
-    # Constants
-    ALLOW_CHOICES,
-    DEFAULT_APPROVAL_TIMEOUT_S,
-    DEFAULT_RATE_WINDOW_MS,
-    DEFAULT_STALL_ITERATIONS,
-)
-
-# =============================================================================
-# Errors
-# =============================================================================
-from supervisor.policy.errors import (
-    # Base
-    PolicyError,
-    # Budget
-    BudgetExceeded,
-    BudgetCostExceeded,
-    BudgetTokensExceeded,
-    # Quota
-    QuotaExceeded,
-    SessionQuotaExceeded,
-    SandboxQuotaExceeded,
-    CostQuotaExceeded,
-    # Approval
-    ApprovalError,
-    ApprovalNotFound,
-    ApprovalAlreadyResponded,
-    ApprovalTimedOut,
-    InvalidApprovalChoice,
-    ApprovalRecoveryFailed,
-    # Command
-    CommandDenied,
-    CommandRequiresApproval,
-    # Rate Limiting
-    RateLimitExceeded,
-    # Guard
-    GuardTripped,
-    LoopDetected,
-    StallDetected,
-    # Audit
-    AuditWriteFailed,
-)
-
-# =============================================================================
-# Protocols
-# =============================================================================
-from supervisor.policy.protocols import (
-    BudgetTrackerProtocol,
-    CostEstimatorProtocol,
-    ApprovalBrokerProtocol,
-    ApprovalGrantStoreProtocol,
-    ApprovalRecoveryProtocol,
-    LoopGuardProtocol,
-    StallGuardProtocol,
-    RateLimiterProtocol,
-    QuotaEnforcerProtocol,
-    CommandPolicyProtocol,
-    AuditLoggerProtocol,
-)
-
 # =============================================================================
 # Approvals
 # =============================================================================
@@ -139,28 +52,124 @@ from supervisor.policy.approvals import (
 )
 
 # =============================================================================
+# Audit
+# =============================================================================
+from supervisor.policy.audit import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_FLUSH_INTERVAL_MS,
+    AuditLogger,
+    InMemoryAuditLogger,
+    PostgresAuditLogger,
+    create_event,
+    format_event,
+)
+
+# =============================================================================
 # Budget
 # =============================================================================
 from supervisor.policy.budget import (
     BudgetTracker,
     CostEstimator,
-    ModelPricing,
     ModelPrice,
+    ModelPricing,
+)
+
+# =============================================================================
+# Command Policy
+# =============================================================================
+from supervisor.policy.command import (
+    DEFAULT_FLOOR_RULES,
+    CommandPolicy,
+    CommandScanner,
+    create_rule,
+)
+
+# =============================================================================
+# Errors
+# =============================================================================
+from supervisor.policy.errors import (
+    ApprovalAlreadyResponded,
+    # Approval
+    ApprovalError,
+    ApprovalNotFound,
+    ApprovalRecoveryFailed,
+    ApprovalTimedOut,
+    # Audit
+    AuditWriteFailed,
+    BudgetCostExceeded,
+    # Budget
+    BudgetExceeded,
+    BudgetTokensExceeded,
+    # Command
+    CommandDenied,
+    CommandRequiresApproval,
+    CostQuotaExceeded,
+    # Guard
+    GuardTripped,
+    InvalidApprovalChoice,
+    LoopDetected,
+    # Base
+    PolicyError,
+    # Quota
+    QuotaExceeded,
+    # Rate Limiting
+    RateLimitExceeded,
+    SandboxQuotaExceeded,
+    SessionQuotaExceeded,
+    StallDetected,
 )
 
 # =============================================================================
 # Guards
 # =============================================================================
 from supervisor.policy.guards import (
-    LoopGuard,
-    StallGuard,
-    EnhancedStallGuard,
-    DEFAULT_RUN_STALL_BUDGET_MS,
-    DEFAULT_STALL_ROUND_LIMIT,
     DEFAULT_HEARTBEAT_INTERVAL_MS,
     DEFAULT_QUIET_THRESHOLD_MS,
+    DEFAULT_RUN_STALL_BUDGET_MS,
+    DEFAULT_STALL_ROUND_LIMIT,
+    EnhancedStallGuard,
+    LoopGuard,
+    StallGuard,
     call_hash,
     canonicalize_args,
+)
+
+# =============================================================================
+# Leader Lease
+# =============================================================================
+from supervisor.policy.leader_lease import (
+    APPROVAL_SWEEPER_LOCK_KEY,
+    SCHEDULED_TASK_LOCK_KEY,
+    STALE_SESSION_LOCK_KEY,
+    LeaderLease,
+    run_with_approval_sweeper_lease,
+    try_acquire_sweeper_lease,
+)
+
+# =============================================================================
+# Protocols
+# =============================================================================
+from supervisor.policy.protocols import (
+    ApprovalBrokerProtocol,
+    ApprovalGrantStoreProtocol,
+    ApprovalRecoveryProtocol,
+    AuditLoggerProtocol,
+    BudgetTrackerProtocol,
+    CommandPolicyProtocol,
+    CostEstimatorProtocol,
+    LoopGuardProtocol,
+    QuotaEnforcerProtocol,
+    RateLimiterProtocol,
+    StallGuardProtocol,
+)
+
+# =============================================================================
+# Quotas
+# =============================================================================
+from supervisor.policy.quotas import (
+    DEFAULT_QUOTA_LIMITS,
+    QuotaEnforcer,
+    parse_quota_limits,
 )
 
 # =============================================================================
@@ -172,86 +181,75 @@ from supervisor.policy.rate_limit import (
 )
 
 # =============================================================================
-# Quotas
-# =============================================================================
-from supervisor.policy.quotas import (
-    QuotaEnforcer,
-    DEFAULT_QUOTA_LIMITS,
-    parse_quota_limits,
-)
-
-# =============================================================================
-# Command Policy
-# =============================================================================
-from supervisor.policy.command import (
-    CommandPolicy,
-    CommandScanner,
-    DEFAULT_FLOOR_RULES,
-    create_rule,
-)
-
-# =============================================================================
-# Audit
-# =============================================================================
-from supervisor.policy.audit import (
-    AuditLogger,
-    InMemoryAuditLogger,
-    PostgresAuditLogger,
-    DEFAULT_BATCH_SIZE,
-    DEFAULT_FLUSH_INTERVAL_MS,
-    create_event,
-    format_event,
-)
-
-# =============================================================================
 # Sandbox Policy
 # =============================================================================
 from supervisor.policy.sandbox_policy import (
+    TOOL_CLASSES,
     SandboxPolicy,
     SandboxPolicyConfig,
     ToolClass,
-    TOOL_CLASSES,
-)
-
-# =============================================================================
-# Leader Lease
-# =============================================================================
-from supervisor.policy.leader_lease import (
-    LeaderLease,
-    try_acquire_sweeper_lease,
-    run_with_approval_sweeper_lease,
-    APPROVAL_SWEEPER_LOCK_KEY,
-    STALE_SESSION_LOCK_KEY,
-    SCHEDULED_TASK_LOCK_KEY,
 )
 
 # =============================================================================
 # Security Screening
 # =============================================================================
 from supervisor.policy.security import (
-    # Main screener
-    SecurityScreener,
-    # Classifiers
-    RegexClassifier,
-    HeuristicClassifier,
-    # Quarantine
-    QuarantineStore,
-    InMemoryQuarantineStore,
-    # Types
-    ThreatLevel,
-    ClassifierType,
-    ContentType,
-    SecurityVerdict,
-    QuarantinedContent,
-    PatternMatch,
+    DANGEROUS_PATTERNS,
+    DEFAULT_MAX_QUARANTINE_SIZE,
+    DEFAULT_QUARANTINE_RETENTION_MS,
     # Constants
     DEFAULT_THREAT_THRESHOLD,
-    DEFAULT_QUARANTINE_RETENTION_MS,
-    DEFAULT_MAX_QUARANTINE_SIZE,
-    DANGEROUS_PATTERNS,
     SUSPICIOUS_PATTERNS,
+    ClassifierType,
+    ContentType,
+    HeuristicClassifier,
+    InMemoryQuarantineStore,
+    PatternMatch,
+    QuarantinedContent,
+    # Quarantine
+    QuarantineStore,
+    # Classifiers
+    RegexClassifier,
+    # Main screener
+    SecurityScreener,
+    SecurityVerdict,
+    # Types
+    ThreatLevel,
 )
-
+from supervisor.policy.types import (
+    # Constants
+    ALLOW_CHOICES,
+    DEFAULT_APPROVAL_TIMEOUT_S,
+    DEFAULT_RATE_WINDOW_MS,
+    DEFAULT_STALL_ITERATIONS,
+    Approval,
+    ApprovalContext,
+    ApprovalDefault,
+    ApprovalGrant,
+    ApprovalScope,
+    # Enums
+    ApprovalStatus,
+    AuditAction,
+    AuditEvent,
+    # Dataclasses
+    BudgetSpec,
+    BudgetState,
+    CommandAction,
+    CommandDecision,
+    CommandPolicyMode,
+    CommandRule,
+    FileEffects,
+    GuardAction,
+    GuardConfig,
+    GuardDetector,
+    GuardVerdict,
+    QuotaLimits,
+    QuotaState,
+    RateDecision,
+    RateDecisionStatus,
+    StallSignal,
+    StallState,
+)
 
 __all__ = [
     # Types - Enums

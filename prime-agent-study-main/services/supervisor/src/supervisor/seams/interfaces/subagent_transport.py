@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
-from supervisor.seams.core.errors import BadArgs, ProviderConflict, ProviderMissing, UnsupportedCapability
+from supervisor.seams.core.errors import (
+    BadArgs,
+    ProviderConflict,
+    ProviderMissing,
+    UnsupportedCapability,
+)
 from supervisor.seams.core.types import (
     ChildHandle,
     ChildInfo,

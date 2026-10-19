@@ -7,10 +7,10 @@ import os
 import re
 from pathlib import Path
 
-from supervisor.catalog.loading.loader import load_composition_catalog
-from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import AgentComposition
+from supervisor.catalog.loading.loader import load_composition_catalog
 from supervisor.catalog.loading.verify import verify_composition_catalog
+from supervisor.catalog.storage import CompositionCatalog
 
 _log = logging.getLogger(__name__)
 

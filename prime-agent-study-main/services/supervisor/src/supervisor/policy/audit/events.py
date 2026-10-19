@@ -11,11 +11,10 @@ from uuid import uuid4
 
 from supervisor.policy.types import AuditAction, AuditEvent
 
-
 __all__ = [
     "create_event",
-    "format_event",
     "event_to_dict",
+    "format_event",
 ]
 
 

@@ -9,19 +9,18 @@ Reference: Original bind_files.py refactored with settings and security.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from supervisor.harness.config import get_settings, HarnessSettings
+from supervisor.harness.config import HarnessSettings, get_settings
 from supervisor.harness.core.types import SessionFilesPaths
 from supervisor.harness.storage.validators import validate_session_dir
 
 if TYPE_CHECKING:
     from supervisor.agent.seams import RuntimeSeams
     from supervisor.catalog.core.types import MemoryProfile, SandboxProfile, SessionPins
-    from supervisor.seams import PromptBindings
 
 __all__ = [
     "materialize_harness_binds",

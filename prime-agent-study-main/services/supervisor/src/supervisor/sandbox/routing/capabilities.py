@@ -23,11 +23,11 @@ if TYPE_CHECKING:
     from supervisor.sandbox.base import Sandbox, SandboxProvider
 
 __all__ = [
+    "PROVIDER_CAPABILITIES",
     "SandboxCapability",
+    "capabilities_lost_moving_to",
     "detect_capabilities",
     "detect_provider_capabilities",
-    "capabilities_lost_moving_to",
-    "PROVIDER_CAPABILITIES",
 ]
 
 

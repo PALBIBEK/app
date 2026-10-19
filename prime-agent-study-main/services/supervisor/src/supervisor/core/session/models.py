@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -160,7 +160,7 @@ class SessionMetrics:
             total_tokens=self.total_tokens + tokens_used,
             tool_calls_count=self.tool_calls_count + tool_calls,
             total_duration_seconds=self.total_duration_seconds + duration_seconds,
-            last_activity_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(UTC),
         )
 
     def is_within_limits(self, config: SessionConfig) -> bool:
@@ -199,8 +199,8 @@ class Session:
     status: SessionStatus = SessionStatus.CREATING
     mode: SessionMode = SessionMode.STICKY
     metrics: SessionMetrics = field(default_factory=SessionMetrics)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     trace_id: str | None = None
     scope_id: str | None = None
     error: str | None = None
@@ -253,7 +253,7 @@ class Session:
             self,
             status=status,
             error=error,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
 
     def with_turn_completed(
@@ -272,7 +272,7 @@ class Session:
                 messages_added=messages_added,
                 duration_seconds=duration_seconds,
             ),
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
 
     def with_trace_id(self, trace_id: str) -> Session:
@@ -388,7 +388,7 @@ class Turn:
     tool_calls: tuple[dict[str, Any], ...] = ()
     tokens_used: int = 0
     status: str = "processing"
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     error: str | None = None
 
@@ -420,7 +420,7 @@ class Turn:
             tool_calls=tuple(tool_calls or []),
             tokens_used=tokens_used,
             status="completed",
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(UTC),
         )
 
     def with_error(self, error: str) -> Turn:
@@ -429,7 +429,7 @@ class Turn:
             self,
             status="failed",
             error=error,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(UTC),
         )
 
     @property
@@ -437,7 +437,7 @@ class Turn:
         """Calculate turn duration."""
         if self.completed_at:
             return (self.completed_at - self.started_at).total_seconds()
-        return (datetime.now(timezone.utc) - self.started_at).total_seconds()
+        return (datetime.now(UTC) - self.started_at).total_seconds()
 
 
 @dataclass(frozen=True)

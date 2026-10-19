@@ -7,6 +7,7 @@ This package provides defense-in-depth security:
 All guards are called in router.create() before sandbox creation.
 """
 
+from supervisor.sandbox.resolve import PlaceholderImageError
 from supervisor.sandbox.security.env import (
     EnvSanitizer,
     is_allowed_gateway_inject,
@@ -23,7 +24,6 @@ from supervisor.sandbox.security.guards import (
     is_placeholder_image_digest,
     validate_image_digest,
 )
-from supervisor.sandbox.resolve import PlaceholderImageError
 
 __all__ = [
     # Environment

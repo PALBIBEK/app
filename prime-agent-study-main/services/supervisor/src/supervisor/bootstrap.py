@@ -11,16 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.app import SupervisorState, build_supervisor
 from supervisor.catalog.loading.bootstrap import (
-    agent_platform_root,
     bootstrap_composition_catalog,
-    resolve_catalog_dir,
 )
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.config import Settings
 from supervisor.db.engine import make_engine, session_factory
 from supervisor.db.migrate import migrate
-from supervisor.harness.repository import hydrate_harness_catalog
 from supervisor.harness import HarnessCatalog, load_manifest
+from supervisor.harness.repository import hydrate_harness_catalog
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
 from supervisor.policy.quotas import TenantQuotaEnforcer, TenantQuotaLimits

@@ -46,16 +46,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 from supervisor.sandbox.pool.provider import (
-    SandboxProvider,
-    SandboxHandle,
-    SandboxConfig,
-    SandboxStatus,
     ProvisionError,
+    SandboxConfig,
+    SandboxHandle,
+    SandboxProvider,
+    SandboxStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -347,7 +348,7 @@ class SandboxPool:
                             self._available.get(),
                             timeout=self.config.acquire_timeout,
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         self._metrics.acquires_timeout += 1
                         raise PoolExhaustedError(
                             self.config.max_total,

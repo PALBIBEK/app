@@ -9,10 +9,8 @@ Provides efficient pattern matching against command strings:
 from __future__ import annotations
 
 import re
-from typing import Final
 
 from supervisor.policy.types import CommandAction, CommandDecision, CommandRule
-
 
 __all__ = ["CommandScanner"]
 
@@ -33,7 +31,7 @@ class CommandScanner:
             raise CommandDenied(...)
     """
 
-    __slots__ = ("_rules", "_compiled")
+    __slots__ = ("_compiled", "_rules")
 
     def __init__(self, rules: list[CommandRule]) -> None:
         """Initialize scanner with rules.

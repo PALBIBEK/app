@@ -19,7 +19,7 @@ _QUEUE_MAX = 10_000
 class EventStream:
     """Wraps AgentEvent payloads into Envelopes with contiguous seq, turn_id, trace_id."""
 
-    __slots__ = ("session_id", "_seq", "_turn_id", "_trace_id", "_seeded_trace_id", "_queue", "_closed")
+    __slots__ = ("_closed", "_queue", "_seeded_trace_id", "_seq", "_trace_id", "_turn_id", "session_id")
 
     def __init__(self, *, session_id: str = "", queue_max: int = _QUEUE_MAX) -> None:
         self.session_id = session_id

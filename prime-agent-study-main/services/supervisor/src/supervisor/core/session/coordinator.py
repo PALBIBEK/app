@@ -46,21 +46,20 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from supervisor.core.session.errors import (
+    SessionNotFoundError,
+    SessionStateError,
+)
+from supervisor.core.session.executor import TurnExecutor, TurnResult
+from supervisor.core.session.lifecycle import SessionLifecycle
 from supervisor.core.session.models import (
     Session,
     SessionConfig,
     SessionMode,
     SessionStatus,
 )
-from supervisor.core.session.registry import SessionRegistry, SessionEntry
-from supervisor.core.session.lifecycle import SessionLifecycle, CreateResult
-from supervisor.core.session.executor import TurnExecutor, TurnResult
 from supervisor.core.session.protocols import SessionStore, TracingService
-from supervisor.core.session.errors import (
-    SessionError,
-    SessionNotFoundError,
-    SessionStateError,
-)
+from supervisor.core.session.registry import SessionEntry, SessionRegistry
 
 logger = logging.getLogger(__name__)
 

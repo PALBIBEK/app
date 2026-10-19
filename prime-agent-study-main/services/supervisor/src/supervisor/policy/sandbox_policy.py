@@ -11,25 +11,24 @@ Reference: QM's sandbox policy pattern.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from supervisor.policy.types import (
+    ALLOW_CHOICES,
     ApprovalDefault,
     FileEffects,
-    ALLOW_CHOICES,
 )
-
 
 if TYPE_CHECKING:
     from supervisor.policy.command import CommandPolicy
 
 
 __all__ = [
+    "TOOL_CLASSES",
     "SandboxPolicy",
     "SandboxPolicyConfig",
     "ToolClass",
-    "TOOL_CLASSES",
 ]
 
 
@@ -133,7 +132,7 @@ class SandboxPolicy:
             raise PermissionDenied(denial)
     """
 
-    __slots__ = ("_configs", "_tool_classes", "_command_policy")
+    __slots__ = ("_command_policy", "_configs", "_tool_classes")
 
     def __init__(
         self,

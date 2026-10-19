@@ -14,11 +14,11 @@ from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.events import Envelope, RunEnd
 from supervisor.agent.runtimes.harness import commands
 from supervisor.agent.runtimes.harness.framing import read_frames
-from supervisor.harness import build_spawn_plan
 from supervisor.agent.runtimes.harness.state import from_get_state
 from supervisor.agent.runtimes.harness.translate import translate
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.agent.stream import EventStream
+from supervisor.harness import build_spawn_plan
 from supervisor.sandbox.base import ProcessHandle, Sandbox
 
 _log = logging.getLogger(__name__)

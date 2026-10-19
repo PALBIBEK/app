@@ -14,7 +14,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from supervisor.policy.budget.pricing import DEFAULT_PRICING, ModelPricing
-from supervisor.policy.types import BudgetState
 
 if TYPE_CHECKING:
     from supervisor.policy.budget.tracker import BudgetTracker
@@ -56,7 +55,7 @@ class CostEstimator:
             raise BudgetExceeded("Estimated cost would exceed budget")
     """
 
-    __slots__ = ("_tracker", "_pricing")
+    __slots__ = ("_pricing", "_tracker")
 
     def __init__(
         self,
@@ -99,7 +98,7 @@ class CostEstimator:
         session_id: str,
         estimated_cost: Decimal,
         *,
-        margin: Decimal = Decimal("0"),
+        margin: Decimal = Decimal(0),
     ) -> bool:
         """Check if estimated cost would exceed budget.
 
@@ -140,7 +139,7 @@ class CostEstimator:
             return None
 
         remaining = state.max_cost_usd - state.total_cost_usd
-        return max(Decimal("0"), remaining)
+        return max(Decimal(0), remaining)
 
     async def estimate_with_check(
         self,

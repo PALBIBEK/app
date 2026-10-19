@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from supervisor.sandbox.base import Sandbox, SandboxProvider
 from supervisor.sandbox.routing.capabilities import (
@@ -36,9 +37,9 @@ if TYPE_CHECKING:
     from supervisor.sandbox.routing.advisory_lock import AdvisoryLockProtocol
 
 __all__ = [
-    "SandboxMigrationRunner",
-    "MigrationResult",
     "MigrationBlockedError",
+    "MigrationResult",
+    "SandboxMigrationRunner",
 ]
 
 
@@ -110,11 +111,11 @@ class SandboxMigrationRunner:
 
     __slots__ = (
         "_backends",
-        "_routes",
         "_default",
-        "_lock",
-        "_settle_ms",
         "_has_live_work",
+        "_lock",
+        "_routes",
+        "_settle_ms",
     )
 
     def __init__(
@@ -244,7 +245,7 @@ class SandboxMigrationRunner:
                 image_digest=route.image_digest if route else None,
                 priority=route.priority if route else 0,
                 pinned=route.pinned if route else False,
-                migrated_at=datetime.now(timezone.utc),
+                migrated_at=datetime.now(UTC),
                 migrated_from=from_backend,
                 migration_sha=migration_sha,
                 capabilities_lost=lost,

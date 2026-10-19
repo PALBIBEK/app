@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from supervisor.api import deps
@@ -50,7 +50,7 @@ class PutFileMeta(BaseModel):
 
 
 def _workspace_store(request: Request) -> WorkspaceStore:
-    store = getattr(deps._state(request), "workspace_store", None)  # noqa: SLF001
+    store = getattr(deps._state(request), "workspace_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="workspace store not configured")
     return store

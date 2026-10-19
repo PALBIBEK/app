@@ -18,11 +18,9 @@ Reference: policy/approvals.py ApprovalBroker pattern.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from supervisor.catalog.storage.converters import kind_of
-from supervisor.catalog.core.errors import CatalogPermissionDenied
 from supervisor.catalog.core.types import (
     ArtifactKind,
     ArtifactStatus,
@@ -32,6 +30,7 @@ from supervisor.catalog.core.types import (
     CatalogGrant,
     SessionPins,
 )
+from supervisor.catalog.storage.converters import kind_of
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.protocols import (
@@ -315,7 +314,7 @@ class CatalogService:
         )
 
         # Record usage
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
         await self._usage_store.record_usage(
             ArtifactUsageRecord(
                 artifact_kind=ArtifactKind.COMPOSITION,
@@ -353,7 +352,7 @@ class CatalogService:
             session_id: Session ID
             pins: Session pins
         """
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
         # Record composition usage
         await self._usage_store.record_usage(
@@ -525,7 +524,7 @@ class CatalogService:
             return
 
         try:
-            from supervisor.policy import AuditEvent, AuditAction
+            from supervisor.policy import AuditAction, AuditEvent
 
             event = AuditEvent(
                 action=AuditAction.CATALOG_ACTION,

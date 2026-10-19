@@ -23,24 +23,6 @@ from __future__ import annotations
 
 from typing import Any
 
-# Import from new locations (interfaces/)
-from supervisor.seams.interfaces.context_memory import (
-    CompactionDecision,
-    CompactionPreparation,
-    CompactionResult,
-    ContextMemoryProvider,
-    MemoryInvokeContext,
-    RecallBlock,
-)
-from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
-from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
-from supervisor.seams.interfaces.subagent_transport import (
-    NamedProviderRegistry,
-    SubagentTransport,
-    SubagentTransportImpl,
-)
-from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
-
 # Import from new locations (core/)
 from supervisor.seams.core.errors import (
     BadArgs,
@@ -67,6 +49,24 @@ from supervisor.seams.core.types import (
     ToolInvokeContext,
     ToolResult,
 )
+
+# Import from new locations (interfaces/)
+from supervisor.seams.interfaces.context_memory import (
+    CompactionDecision,
+    CompactionPreparation,
+    CompactionResult,
+    ContextMemoryProvider,
+    MemoryInvokeContext,
+    RecallBlock,
+)
+from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
+from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
+from supervisor.seams.interfaces.subagent_transport import (
+    NamedProviderRegistry,
+    SubagentTransport,
+    SubagentTransportImpl,
+)
+from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 __all__ = [
     # Types (from core/)

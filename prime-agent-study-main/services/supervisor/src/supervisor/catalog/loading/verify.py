@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.digests import content_digest
+from supervisor.catalog.core.types import AgentComposition
 from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog
-from supervisor.catalog.core.types import AgentComposition
 
 
 def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) -> list[str]:
@@ -82,7 +82,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
             # No pinned composition digest in fixture — find offered row by name.
             offered = [
                 art
-                for (kind, art_name, _), art in catalog._by_key.items()  # noqa: SLF001
+                for (kind, art_name, _), art in catalog._by_key.items()
                 if kind == "composition" and art_name == name and art.status == "offered"
             ]
             if not offered:
@@ -114,7 +114,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
 def list_catalog_problems(catalog: CompositionCatalog) -> list[str]:
     """List problems for all offered compositions in memory."""
     problems: list[str] = []
-    for (kind, _name, _digest), art in catalog._by_key.items():  # noqa: SLF001
+    for (kind, _name, _digest), art in catalog._by_key.items():
         if kind != "composition" or not isinstance(art, AgentComposition):
             continue
         if art.status != "offered":
@@ -126,7 +126,7 @@ def list_catalog_problems(catalog: CompositionCatalog) -> list[str]:
 def dump_composition_catalog(catalog: CompositionCatalog) -> dict[str, Any]:
     """Canonical dump of offered artifacts (for CLI / startup audit)."""
     rows: list[dict[str, Any]] = []
-    for (kind, name, digest), art in sorted(catalog._by_key.items()):  # noqa: SLF001
+    for (kind, name, digest), art in sorted(catalog._by_key.items()):
         body = art.body_for_digest()
         actual = content_digest(body)
         rows.append(

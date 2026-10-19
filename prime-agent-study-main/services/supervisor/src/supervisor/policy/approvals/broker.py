@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -45,7 +45,7 @@ def _utc_now_ms() -> int:
 def _datetime_to_ms(dt: datetime) -> int:
     """Convert datetime to milliseconds since epoch."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp() * 1000)
 
 
@@ -77,7 +77,7 @@ class ApprovalBroker:
         approval = await broker.respond(approval_id, "yes")
     """
 
-    __slots__ = ("_db", "_waiters", "_audit")
+    __slots__ = ("_audit", "_db", "_waiters")
 
     def __init__(
         self,
@@ -114,7 +114,7 @@ class ApprovalBroker:
             approval_id for tracking
         """
         approval_id = uuid4().hex
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         row = ApprovalRow(
             approval_id=approval_id,
@@ -188,7 +188,7 @@ class ApprovalBroker:
             )
             row.choice = choice
             row.responded_by = responded_by
-            row.responded_at = datetime.now(timezone.utc)
+            row.responded_at = datetime.now(UTC)
 
             await db.commit()
             await db.refresh(row)
@@ -310,7 +310,7 @@ class ApprovalBroker:
 
                 row.status = ApprovalStatus.TIMED_OUT.value
                 row.choice = choice
-                row.responded_at = datetime.now(timezone.utc)
+                row.responded_at = datetime.now(UTC)
                 expired.append(self._to_approval(row))
 
             await db.commit()
@@ -330,7 +330,7 @@ class ApprovalBroker:
             if row.status == ApprovalStatus.PENDING.value:
                 row.status = ApprovalStatus.TIMED_OUT.value
                 row.choice = choice
-                row.responded_at = datetime.now(timezone.utc)
+                row.responded_at = datetime.now(UTC)
                 await db.commit()
             return self._to_approval(row)
 
@@ -362,7 +362,7 @@ class ApprovalBroker:
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout_s)
             return await self.get(approval_id)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         finally:
             self._waiters.pop(approval_id, None)

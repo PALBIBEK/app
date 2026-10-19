@@ -41,33 +41,32 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from datetime import UTC, datetime
+from typing import Any
 
+from supervisor.core.session.errors import (
+    SessionBusyError,
+    SessionNotFoundError,
+    SessionQuotaExceededError,
+    SessionStateError,
+    SessionTerminatedError,
+    SessionTimeoutError,
+)
 from supervisor.core.session.models import (
     Session,
     SessionStatus,
     Turn,
-    Message,
 )
-from supervisor.core.session.registry import SessionRegistry
 from supervisor.core.session.protocols import (
-    SessionStore,
-    MessageStore,
     EventSink,
+    MessageStore,
     QuotaService,
+    SessionStore,
     TracingService,
 )
-from supervisor.core.session.errors import (
-    SessionError,
-    SessionNotFoundError,
-    SessionTerminatedError,
-    SessionBusyError,
-    SessionQuotaExceededError,
-    SessionTimeoutError,
-    SessionStateError,
-)
+from supervisor.core.session.registry import SessionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,7 @@ class ExecutionContext:
     turn_id: str
     command_id: str
     trace_id: str | None
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Execution state
     aborted: bool = False
@@ -434,7 +433,7 @@ class TurnExecutor:
                 result.duration_seconds = duration
                 return result
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise SessionTimeoutError(
                     session_id=session_id,
                     operation="turn",
@@ -546,7 +545,7 @@ class TurnExecutor:
                 approval_id=approval_id,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return TurnResult(
                 turn_id=ctx.turn_id,
                 session_id=ctx.session_id,

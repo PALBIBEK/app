@@ -230,7 +230,7 @@ async def test_sse_heartbeat_comment_on_idle(supervisor_stack) -> None:
 
     try:
         await asyncio.wait_for(_one_heartbeat(), timeout=2.0)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         pass
     assert any("ping" in c for c in chunks)
 

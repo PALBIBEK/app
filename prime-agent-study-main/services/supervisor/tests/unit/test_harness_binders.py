@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 
-
 def _sample_pack_and_tools():
     from supervisor.catalog.digests import content_digest
     from supervisor.catalog.types import (

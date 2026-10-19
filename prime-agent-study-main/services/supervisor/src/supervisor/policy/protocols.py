@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         CommandDecision,
         GuardConfig,
         GuardVerdict,
-        QuotaLimits,
         QuotaState,
         RateDecision,
         StallState,
@@ -41,17 +40,17 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "BudgetTrackerProtocol",
-    "CostEstimatorProtocol",
     "ApprovalBrokerProtocol",
     "ApprovalGrantStoreProtocol",
     "ApprovalRecoveryProtocol",
-    "LoopGuardProtocol",
-    "StallGuardProtocol",
-    "RateLimiterProtocol",
-    "QuotaEnforcerProtocol",
-    "CommandPolicyProtocol",
     "AuditLoggerProtocol",
+    "BudgetTrackerProtocol",
+    "CommandPolicyProtocol",
+    "CostEstimatorProtocol",
+    "LoopGuardProtocol",
+    "QuotaEnforcerProtocol",
+    "RateLimiterProtocol",
+    "StallGuardProtocol",
 ]
 
 

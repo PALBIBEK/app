@@ -21,7 +21,7 @@ class MetricsRegistry:
 
     async def snapshot(self, manager: SessionManager) -> dict[str, Any]:
         tenants: dict[str, dict[str, float | int]] = {}
-        async with manager._db() as db:  # noqa: SLF001
+        async with manager._db() as db:
             rows = (
                 await db.execute(
                     select(
@@ -43,7 +43,7 @@ class MetricsRegistry:
                 "total_cost": float(cost or 0.0),
                 "requests": self._request_counts.get(str(tenant_id), 0),
             }
-        live_sandboxes = sum(1 for s in manager._sandboxes.values() if s is not None)  # noqa: SLF001
+        live_sandboxes = sum(1 for s in manager._sandboxes.values() if s is not None)
         return {
             "live_sandboxes": live_sandboxes,
             "tenants": tenants,

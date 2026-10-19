@@ -94,7 +94,7 @@ async def test_stream_from_scratch_seq_order(env) -> None:
     sid = await _seed_echo_turn(env)
     stop = (await env.manager.snapshot_events(sid))[-1][0]
     events, _ = await _collect(env, sid, max_events=stop + 1)
-    assert [e["seq"] for e in events] == list(range(0, stop + 1))
+    assert [e["seq"] for e in events] == list(range(stop + 1))
 
 
 @pytest.mark.asyncio
@@ -146,7 +146,7 @@ async def _reconnect_once(iteration: int) -> None:
                 state, sid, cursor=4, max_events=stop - 4
             )
             combined = [e["seq"] for e in first] + [e["seq"] for e in rest]
-            assert combined == list(range(0, stop + 1)), (
+            assert combined == list(range(stop + 1)), (
                 f"iter={iteration} combined={combined}"
             )
             assert len(combined) == len(set(combined))
@@ -183,7 +183,7 @@ async def test_handover_race_subscribe_before_replay(env) -> None:
     env.reader.read = slow_read  # type: ignore[method-assign]
     events, _ = await _collect(env, sid, max_events=10)
     seqs = [e["seq"] for e in events]
-    assert seqs == list(range(0, 10))
+    assert seqs == list(range(10))
     assert len(seqs) == len(set(seqs))
 
 
@@ -197,7 +197,7 @@ async def test_two_concurrent_streams(env) -> None:
         return [e["seq"] for e in events]
 
     a, b = await asyncio.gather(one(), one())
-    assert a == b == list(range(0, stop + 1))
+    assert a == b == list(range(stop + 1))
 
 
 @pytest.mark.asyncio

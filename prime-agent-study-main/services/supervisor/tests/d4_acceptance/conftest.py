@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from supervisor.app import build_supervisor
 from supervisor.api import events as events_mod
+from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from tests.support.session_env import make_catalog

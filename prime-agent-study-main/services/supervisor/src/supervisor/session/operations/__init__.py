@@ -10,22 +10,22 @@ with the journal event system:
 
 from __future__ import annotations
 
-from supervisor.session.operations.subagent_ops import (
-    SubagentOps,
-    DEFAULT_MAX_DEPTH,
+from supervisor.session.operations.compaction_state import (
+    unpaired_compaction_starts,
 )
 from supervisor.session.operations.memory_ops import (
-    MemoryOps,
     CompactMemoryOutcome,
+    MemoryOps,
     RecallMemoryOutcome,
+)
+from supervisor.session.operations.subagent_ops import (
+    DEFAULT_MAX_DEPTH,
+    SubagentOps,
 )
 from supervisor.session.operations.tree import (
     SessionTree,
     build_session_tree,
     unpaired_subagent_starts,
-)
-from supervisor.session.operations.compaction_state import (
-    unpaired_compaction_starts,
 )
 
 __all__ = [

@@ -10,7 +10,6 @@ Reference: QM's security-screener.ts pattern.
 
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from collections import Counter
@@ -20,18 +19,16 @@ from typing import Final
 
 from supervisor.policy.security.types import (
     ClassifierType,
-    ContentType,
     PatternMatch,
     SecurityVerdict,
     ThreatLevel,
 )
 
-
 __all__ = [
-    "RegexClassifier",
-    "HeuristicClassifier",
     "DANGEROUS_PATTERNS",
     "SUSPICIOUS_PATTERNS",
+    "HeuristicClassifier",
+    "RegexClassifier",
 ]
 
 
@@ -57,37 +54,37 @@ def _compile_pattern(pattern: str, flags: int = 0) -> re.Pattern[str]:
 DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
     # Destructive file operations
     PatternDef(
-        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+/", re.I),
+        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+/", re.IGNORECASE),
         "destructive",
         ThreatLevel.CRITICAL,
         "Recursive delete from root",
     ),
     PatternDef(
-        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+~", re.I),
+        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+~", re.IGNORECASE),
         "destructive",
         ThreatLevel.CRITICAL,
         "Recursive delete from home",
     ),
     PatternDef(
-        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+\.\.", re.I),
+        _compile_pattern(r"rm\s+(-rf?|--recursive)\s+\.\.", re.IGNORECASE),
         "destructive",
         ThreatLevel.HIGH,
         "Recursive delete parent directory",
     ),
     PatternDef(
-        _compile_pattern(r":(){ :\|:& };:", re.I),
+        _compile_pattern(r":(){ :\|:& };:", re.IGNORECASE),
         "destructive",
         ThreatLevel.CRITICAL,
         "Fork bomb",
     ),
     PatternDef(
-        _compile_pattern(r"mkfs\s+", re.I),
+        _compile_pattern(r"mkfs\s+", re.IGNORECASE),
         "destructive",
         ThreatLevel.CRITICAL,
         "Filesystem format",
     ),
     PatternDef(
-        _compile_pattern(r"dd\s+.*of=/dev/", re.I),
+        _compile_pattern(r"dd\s+.*of=/dev/", re.IGNORECASE),
         "destructive",
         ThreatLevel.CRITICAL,
         "Direct disk write",
@@ -95,13 +92,13 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # Dangerous git operations
     PatternDef(
-        _compile_pattern(r"git\s+push\s+.*(-f|--force)", re.I),
+        _compile_pattern(r"git\s+push\s+.*(-f|--force)", re.IGNORECASE),
         "git_danger",
         ThreatLevel.HIGH,
         "Force push",
     ),
     PatternDef(
-        _compile_pattern(r"git\s+reset\s+--hard", re.I),
+        _compile_pattern(r"git\s+reset\s+--hard", re.IGNORECASE),
         "git_danger",
         ThreatLevel.MEDIUM,
         "Hard reset",
@@ -109,19 +106,19 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # SQL injection / destructive SQL
     PatternDef(
-        _compile_pattern(r"DROP\s+(TABLE|DATABASE|INDEX|VIEW)", re.I),
+        _compile_pattern(r"DROP\s+(TABLE|DATABASE|INDEX|VIEW)", re.IGNORECASE),
         "sql_danger",
         ThreatLevel.CRITICAL,
         "Destructive SQL DROP",
     ),
     PatternDef(
-        _compile_pattern(r"TRUNCATE\s+TABLE", re.I),
+        _compile_pattern(r"TRUNCATE\s+TABLE", re.IGNORECASE),
         "sql_danger",
         ThreatLevel.HIGH,
         "Destructive SQL TRUNCATE",
     ),
     PatternDef(
-        _compile_pattern(r"DELETE\s+FROM\s+\w+\s*(?:WHERE\s+1\s*=\s*1|;|$)", re.I),
+        _compile_pattern(r"DELETE\s+FROM\s+\w+\s*(?:WHERE\s+1\s*=\s*1|;|$)", re.IGNORECASE),
         "sql_danger",
         ThreatLevel.HIGH,
         "Unbounded DELETE",
@@ -129,25 +126,25 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # Remote code execution
     PatternDef(
-        _compile_pattern(r"curl.*\|\s*(bash|sh|python|perl|ruby)", re.I),
+        _compile_pattern(r"curl.*\|\s*(bash|sh|python|perl|ruby)", re.IGNORECASE),
         "rce",
         ThreatLevel.CRITICAL,
         "Pipe to shell",
     ),
     PatternDef(
-        _compile_pattern(r"wget.*\|\s*(bash|sh|python|perl|ruby)", re.I),
+        _compile_pattern(r"wget.*\|\s*(bash|sh|python|perl|ruby)", re.IGNORECASE),
         "rce",
         ThreatLevel.CRITICAL,
         "Pipe to shell",
     ),
     PatternDef(
-        _compile_pattern(r"eval\s*\([^)]*\$", re.I),
+        _compile_pattern(r"eval\s*\([^)]*\$", re.IGNORECASE),
         "rce",
         ThreatLevel.HIGH,
         "Dynamic eval with variable",
     ),
     PatternDef(
-        _compile_pattern(r"exec\s*\([^)]*\$", re.I),
+        _compile_pattern(r"exec\s*\([^)]*\$", re.IGNORECASE),
         "rce",
         ThreatLevel.HIGH,
         "Dynamic exec with variable",
@@ -155,25 +152,25 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # Python dangerous patterns
     PatternDef(
-        _compile_pattern(r"__import__\s*\(\s*['\"]os['\"]", re.I),
+        _compile_pattern(r"__import__\s*\(\s*['\"]os['\"]", re.IGNORECASE),
         "python_danger",
         ThreatLevel.HIGH,
         "Dynamic os import",
     ),
     PatternDef(
-        _compile_pattern(r"__import__\s*\(\s*['\"]subprocess['\"]", re.I),
+        _compile_pattern(r"__import__\s*\(\s*['\"]subprocess['\"]", re.IGNORECASE),
         "python_danger",
         ThreatLevel.HIGH,
         "Dynamic subprocess import",
     ),
     PatternDef(
-        _compile_pattern(r"os\.system\s*\(", re.I),
+        _compile_pattern(r"os\.system\s*\(", re.IGNORECASE),
         "python_danger",
         ThreatLevel.MEDIUM,
         "os.system call",
     ),
     PatternDef(
-        _compile_pattern(r"subprocess\.(call|run|Popen)\s*\(\s*['\"]", re.I),
+        _compile_pattern(r"subprocess\.(call|run|Popen)\s*\(\s*['\"]", re.IGNORECASE),
         "python_danger",
         ThreatLevel.MEDIUM,
         "subprocess shell call",
@@ -181,13 +178,13 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # Data exfiltration
     PatternDef(
-        _compile_pattern(r"curl.*-d.*@", re.I),
+        _compile_pattern(r"curl.*-d.*@", re.IGNORECASE),
         "exfiltration",
         ThreatLevel.HIGH,
         "Curl file upload",
     ),
     PatternDef(
-        _compile_pattern(r"scp\s+.*@.*:", re.I),
+        _compile_pattern(r"scp\s+.*@.*:", re.IGNORECASE),
         "exfiltration",
         ThreatLevel.MEDIUM,
         "SCP to remote",
@@ -197,20 +194,20 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
     PatternDef(
         _compile_pattern(
             r"(password|passwd|secret|api_key|apikey|token|auth)\s*[=:]\s*['\"][^'\"]{8,}['\"]",
-            re.I,
+            re.IGNORECASE,
         ),
         "credential",
         ThreatLevel.HIGH,
         "Hardcoded credential",
     ),
     PatternDef(
-        _compile_pattern(r"AWS_SECRET_ACCESS_KEY\s*=", re.I),
+        _compile_pattern(r"AWS_SECRET_ACCESS_KEY\s*=", re.IGNORECASE),
         "credential",
         ThreatLevel.CRITICAL,
         "AWS secret key",
     ),
     PatternDef(
-        _compile_pattern(r"GITHUB_TOKEN\s*=", re.I),
+        _compile_pattern(r"GITHUB_TOKEN\s*=", re.IGNORECASE),
         "credential",
         ThreatLevel.HIGH,
         "GitHub token",
@@ -218,13 +215,13 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 
     # Network attacks
     PatternDef(
-        _compile_pattern(r"nc\s+-e\s+/bin/(ba)?sh", re.I),
+        _compile_pattern(r"nc\s+-e\s+/bin/(ba)?sh", re.IGNORECASE),
         "network_attack",
         ThreatLevel.CRITICAL,
         "Netcat reverse shell",
     ),
     PatternDef(
-        _compile_pattern(r"nmap\s+", re.I),
+        _compile_pattern(r"nmap\s+", re.IGNORECASE),
         "network_attack",
         ThreatLevel.MEDIUM,
         "Network scanning",
@@ -235,31 +232,31 @@ DANGEROUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
 # Suspicious patterns - should warn/review
 SUSPICIOUS_PATTERNS: Final[tuple[PatternDef, ...]] = (
     PatternDef(
-        _compile_pattern(r"chmod\s+777", re.I),
+        _compile_pattern(r"chmod\s+777", re.IGNORECASE),
         "permission",
         ThreatLevel.LOW,
         "World-writable permission",
     ),
     PatternDef(
-        _compile_pattern(r"sudo\s+", re.I),
+        _compile_pattern(r"sudo\s+", re.IGNORECASE),
         "privilege",
         ThreatLevel.LOW,
         "Sudo usage",
     ),
     PatternDef(
-        _compile_pattern(r"ssh\s+-o\s+StrictHostKeyChecking=no", re.I),
+        _compile_pattern(r"ssh\s+-o\s+StrictHostKeyChecking=no", re.IGNORECASE),
         "network",
         ThreatLevel.MEDIUM,
         "Disabled SSH host key checking",
     ),
     PatternDef(
-        _compile_pattern(r"--insecure|--no-check-certificate", re.I),
+        _compile_pattern(r"--insecure|--no-check-certificate", re.IGNORECASE),
         "network",
         ThreatLevel.MEDIUM,
         "Disabled SSL verification",
     ),
     PatternDef(
-        _compile_pattern(r"base64\s+-d", re.I),
+        _compile_pattern(r"base64\s+-d", re.IGNORECASE),
         "obfuscation",
         ThreatLevel.LOW,
         "Base64 decode",
@@ -283,7 +280,7 @@ class RegexClassifier:
             print(f"Blocked: {verdict.reason}")
     """
 
-    __slots__ = ("_dangerous", "_suspicious", "_include_suspicious")
+    __slots__ = ("_dangerous", "_include_suspicious", "_suspicious")
 
     def __init__(
         self,
@@ -409,8 +406,8 @@ class HeuristicClassifier:
 
     __slots__ = (
         "_entropy_threshold",
-        "_min_length_for_entropy",
         "_max_line_length",
+        "_min_length_for_entropy",
     )
 
     def __init__(

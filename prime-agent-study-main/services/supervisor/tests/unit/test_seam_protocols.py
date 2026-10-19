@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 
-
 def _supervisor_src() -> Path:
     return Path(__file__).resolve().parents[2] / "src" / "supervisor"
 

@@ -28,7 +28,7 @@ from supervisor.config import TemporalSettings
 from supervisor.db.engine import open_db
 from supervisor.temporal.client import connect
 from supervisor.temporal.contracts import CreateSession, Message, Phase, Timing, workflow_id
-from supervisor.temporal.sessions import SessionCommandError, SessionWorkflows
+from supervisor.temporal.sessions import SessionWorkflows
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.platform import boot_platform

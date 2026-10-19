@@ -14,7 +14,6 @@ from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from tests.support.session_env import make_catalog
 
-
 HEADERS = {"X-Tenant-Id": "t1"}
 
 

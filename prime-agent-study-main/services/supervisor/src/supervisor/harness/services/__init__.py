@@ -9,13 +9,13 @@ This module provides the main service classes:
 
 from __future__ import annotations
 
-from supervisor.harness.services.resolver import (
-    HarnessCatalog,
-    HarnessResolver,
-)
 from supervisor.harness.services.compat_checker import (
     CompatibilityChecker,
     load_supported_protocol_versions,
+)
+from supervisor.harness.services.resolver import (
+    HarnessCatalog,
+    HarnessResolver,
 )
 from supervisor.harness.services.spawn_planner import (
     SpawnPlanner,

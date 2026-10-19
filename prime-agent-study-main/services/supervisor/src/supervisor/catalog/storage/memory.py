@@ -13,10 +13,9 @@ Reference: Refactored from store.py with Protocol compliance.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from supervisor.catalog.storage.converters import kind_of, with_digest, with_metadata, with_status
 from supervisor.catalog.core.digests import content_digest
 from supervisor.catalog.core.errors import (
     DigestMismatch,
@@ -33,6 +32,7 @@ from supervisor.catalog.core.types import (
     ArtifactUsageRecord,
     ArtifactUsageStats,
 )
+from supervisor.catalog.storage.converters import kind_of, with_digest, with_metadata, with_status
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
@@ -148,7 +148,7 @@ class InMemoryArtifactStore:
             return existing
 
         # Create metadata
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         metadata = ArtifactMetadata(
             created_by=created_by,
             created_at=now,
@@ -242,7 +242,7 @@ class InMemoryArtifactStore:
         # Update status and metadata
         deprecated = with_status(art, ArtifactStatus.DEPRECATED)
         if art.metadata:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             new_metadata = ArtifactMetadata(
                 created_by=art.metadata.created_by,
                 created_at=art.metadata.created_at,
@@ -426,7 +426,7 @@ class InMemoryUsageStore:
             principal_id: Who triggered the error
             session_id: Session context
         """
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
         self._error_records.append(
             (kind, artifact_id, digest, error_code, now_ms, principal_id, session_id)
         )
@@ -480,7 +480,7 @@ class InMemoryUsageStore:
 
             # Track latest usage
             record_time = datetime.fromtimestamp(
-                record.timestamp_ms / 1000, tz=timezone.utc
+                record.timestamp_ms / 1000, tz=UTC
             )
             if last_used_at is None or record_time > last_used_at:
                 last_used_at = record_time
@@ -582,7 +582,7 @@ class InMemoryUsageStore:
         # Get stats for top items
         results: list[ArtifactUsageStats] = []
         since_dt = (
-            datetime.fromtimestamp(since_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(since_ms / 1000, tz=UTC)
             if since_ms
             else None
         )

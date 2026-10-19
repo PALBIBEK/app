@@ -239,7 +239,7 @@ def summarize_span(
         return COMPACTION_NOTICE
     try:
         summary = summarizer(messages, previous_summary)
-    except Exception:  # noqa: BLE001 — summarizer failure must not fail the run
+    except Exception:
         # The run goes on, but the dropped span is lost rather than summarised, so say why.
         logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
         return COMPACTION_NOTICE

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from supervisor.agent.seams import RuntimeSeams
-from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
+from supervisor.catalog.core.types import AgentComposition, PromptPack, SessionPins, ToolSet
 from supervisor.catalog.providers.catalog_prompt import CatalogPromptAssembler
 from supervisor.catalog.providers.catalog_tools import bind_tool_set
+from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.catalog.storage import CompositionCatalog
-from supervisor.catalog.core.types import AgentComposition, PromptPack, SessionPins, ToolSet
 from supervisor.seams import build_runtime_seams
 from supervisor.seams.core.factory import build_context_memory_from_profile
 

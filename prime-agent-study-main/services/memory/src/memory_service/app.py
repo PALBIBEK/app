@@ -17,6 +17,7 @@ from memory_service.auth import (
 )
 from memory_service.rate_limit import TokenBucketLimiter, is_mutating_method, rate_limit_key
 from memory_service.service import MemoryService
+from memory_service.tenant import TenantMismatch, TenantRequired
 from memory_service.types import (
     FormatUnsupported,
     LeaseHeld,
@@ -27,7 +28,6 @@ from memory_service.types import (
     SessionNotFound,
     StaleFence,
 )
-from memory_service.tenant import TenantMismatch, TenantRequired
 
 
 class ScopeIn(BaseModel):

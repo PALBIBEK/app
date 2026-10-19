@@ -17,11 +17,8 @@ Reference: QM's loop detection pattern.
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
 
-from supervisor.policy.guards.detectors import call_hash
 from supervisor.policy.types import GuardAction, GuardConfig, GuardDetector, GuardVerdict
-
 
 __all__ = ["LoopGuard"]
 
@@ -58,7 +55,7 @@ class LoopGuard:
                 logger.warning(verdict.detail)
     """
 
-    __slots__ = ("_config", "_session_configs", "_hashes", "_stall_count")
+    __slots__ = ("_config", "_hashes", "_session_configs", "_stall_count")
 
     def __init__(
         self,

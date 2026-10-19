@@ -8,18 +8,18 @@ from typing import TYPE_CHECKING, Any, Final
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
+from supervisor.seams.interfaces.subagent_transport import SubagentTransport, SubagentTransportImpl
+from supervisor.seams.interfaces.tool_provider import ToolProvider
 from supervisor.seams.providers.gateway.fake_gateway import FakeModelGatewayClient
 from supervisor.seams.providers.gateway.http_gateway import HttpModelGatewayClient
+from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
+from supervisor.seams.providers.prompt.static_prompt import StaticPromptAssembler
 from supervisor.seams.providers.subagent.memory_subagent import (
     LAB_ECHO_PROVIDER,
     LEGACY_MEMORY_ALIAS,
     LabEchoSubagentProvider,
 )
-from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 from supervisor.seams.providers.tools.null_tools import NullToolProvider
-from supervisor.seams.providers.prompt.static_prompt import StaticPromptAssembler
-from supervisor.seams.interfaces.subagent_transport import SubagentTransport, SubagentTransportImpl
-from supervisor.seams.interfaces.tool_provider import ToolProvider
 
 if TYPE_CHECKING:
     from supervisor.catalog import MemoryProfile
@@ -57,9 +57,9 @@ def lab_echo_allowed(*, explicit: bool | None = None) -> bool:
 
 
 def build_context_memory_from_profile(
-    profile: "MemoryProfile | None",
+    profile: MemoryProfile | None,
     gateway: ModelGatewayClient,
-) -> "ContextMemoryProvider":
+) -> ContextMemoryProvider:
     """Map pinned ``MemoryProfile`` → ContextMemoryProvider (binder / factory only).
 
     No profile → ``NullContextMemoryProvider``. Compaction and/or recall overlays
@@ -215,7 +215,9 @@ def _build_subagent_transport(
         # ACP primary — still register nested as optional alternate when not lab.
         if not register_lab_echo:
             try:
-                from supervisor.seams.providers.subagent.nested_session import NestedSessionSubagentProvider
+                from supervisor.seams.providers.subagent.nested_session import (
+                    NestedSessionSubagentProvider,
+                )
                 impl.register_provider(
                     NESTED_SESSION_PROVIDER,
                     NestedSessionSubagentProvider(gateway),
@@ -232,7 +234,7 @@ def build_runtime_seams(
     prompt_assembler: PromptAssembler | None = None,
     subagent_transport: SubagentTransport | None = None,
     model_gateway: ModelGatewayClient | None = None,
-    context_memory: "ContextMemoryProvider | None" = None,
+    context_memory: ContextMemoryProvider | None = None,
     gateway_base_url: str | None = None,
     gateway_token: str | None = None,
     session_id: str | None = None,

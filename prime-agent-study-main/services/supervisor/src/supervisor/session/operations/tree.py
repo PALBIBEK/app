@@ -27,9 +27,9 @@ if TYPE_CHECKING:
     from supervisor.agent.events import Envelope
 
 __all__ = [
-    "SessionTree",
     "ChildRow",
     "JobRow",
+    "SessionTree",
     "build_session_tree",
     "unpaired_subagent_starts",
 ]

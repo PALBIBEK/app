@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from supervisor.sandbox.routing.routes import RouteNotFoundError, SandboxRoute
+from supervisor.sandbox.routing.routes import SandboxRoute
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,7 +32,7 @@ __all__ = [
 
 def _utcnow() -> datetime:
     """Return current UTC time with timezone info."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -116,7 +116,7 @@ class PostgresRouteStore:
 
     CACHE_TTL_SECONDS: ClassVar[float] = 15.0
 
-    __slots__ = ("_db", "_cache", "_version")
+    __slots__ = ("_cache", "_db", "_version")
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Initialize with SQLAlchemy async session factory.
@@ -171,6 +171,7 @@ class PostgresRouteStore:
             return route
 
         from sqlalchemy import select
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:
@@ -187,6 +188,7 @@ class PostgresRouteStore:
     async def put(self, route: SandboxRoute) -> None:
         """Create or replace route (upsert)."""
         from sqlalchemy import select
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:
@@ -233,6 +235,7 @@ class PostgresRouteStore:
     ) -> SandboxRoute | None:
         """Partial update of existing route."""
         from sqlalchemy import select
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:
@@ -258,6 +261,7 @@ class PostgresRouteStore:
     async def delete(self, scope_id: str) -> bool:
         """Delete route."""
         from sqlalchemy import delete
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:
@@ -276,6 +280,7 @@ class PostgresRouteStore:
     async def list_all(self) -> list[SandboxRoute]:
         """List all routes."""
         from sqlalchemy import select
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:
@@ -286,6 +291,7 @@ class PostgresRouteStore:
     async def list_by_backend(self, backend: str) -> list[SandboxRoute]:
         """List routes using specific backend."""
         from sqlalchemy import select
+
         from supervisor.db.models import SandboxRouteRow
 
         async with self._db() as db:

@@ -12,7 +12,7 @@ from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanRecord
 
 _log = logging.getLogger(__name__)
-_projector: "ProjectorHub | JournalProjector | None" = None
+_projector: ProjectorHub | JournalProjector | None = None
 _provider: Any = None
 _shared_sink: SpanSink | None = None
 _default_tenant: str = "default"

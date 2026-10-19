@@ -39,20 +39,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from supervisor.sandbox.pool.provider import (
-    SandboxProvider,
-    SandboxHandle,
-    SandboxConfig,
-    SandboxStatus,
     ExecutionResult,
     GrepMatch,
     ProvisionError,
-    TeardownError,
+    SandboxConfig,
+    SandboxHandle,
+    SandboxStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,7 +161,7 @@ class DockerExecutor:
                 duration_seconds=duration,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return ExecutionResult(
                 exit_code=-1,
                 stdout="",
@@ -180,7 +177,7 @@ class DockerExecutor:
                 raise FileNotFoundError(path)
             if "Permission denied" in result.stderr:
                 raise PermissionError(path)
-            raise IOError(result.stderr)
+            raise OSError(result.stderr)
         return result.stdout
 
     async def write_file(self, path: str, content: str) -> None:
@@ -195,7 +192,7 @@ class DockerExecutor:
         if result.exit_code != 0:
             if "Permission denied" in result.stderr:
                 raise PermissionError(path)
-            raise IOError(result.stderr)
+            raise OSError(result.stderr)
 
     async def list_directory(self, path: str) -> list[str]:
         """List directory contents."""
@@ -205,7 +202,7 @@ class DockerExecutor:
                 raise FileNotFoundError(path)
             if "Not a directory" in result.stderr:
                 raise NotADirectoryError(path)
-            raise IOError(result.stderr)
+            raise OSError(result.stderr)
         return [line for line in result.stdout.strip().split("\n") if line]
 
     async def grep(
@@ -375,7 +372,7 @@ class DockerSandboxProvider:
             logger.info(f"Provisioned Docker sandbox: {container_id}")
             return handle
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise ProvisionError(
                 f"Container start timed out after {self.config.start_timeout}s",
                 self.name,

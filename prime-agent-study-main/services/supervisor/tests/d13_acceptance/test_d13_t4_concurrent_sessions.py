@@ -12,8 +12,8 @@ from tests.d13_acceptance.conftest import (
     HEADERS,
     create_session,
     new_command_id,
-    wait_for_journal,
     w3c_traceparent,
+    wait_for_journal,
 )
 
 TRACE_A = "d1b2c3d4e5f60718293a4b5c6d7e8f93"

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.errors import DigestMissing
+from supervisor.catalog.core.types import AgentComposition, ArtifactKind, DigestRef, PlugBindings
 from supervisor.catalog.storage import (
     CompositionCatalog,
     memory_profile_from_dict,
@@ -14,7 +15,6 @@ from supervisor.catalog.storage import (
     sandbox_profile_from_dict,
     tool_set_from_dict,
 )
-from supervisor.catalog.core.types import AgentComposition, ArtifactKind, DigestRef, PlugBindings
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -110,7 +110,7 @@ def _resolve_ref(
 ):
     if not _is_placeholder_digest(digest):
         return catalog.get(kind, artifact_id, digest)
-    digests = catalog._by_name.get((kind, artifact_id), [])  # noqa: SLF001
+    digests = catalog._by_name.get((kind, artifact_id), [])
     if not digests:
         raise DigestMissing(f"unknown {kind} id={artifact_id!r} (no offered digest)")
     return catalog.get(kind, artifact_id, digests[-1])

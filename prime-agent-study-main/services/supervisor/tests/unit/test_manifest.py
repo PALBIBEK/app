@@ -11,7 +11,6 @@ from supervisor.harness import (
     validate_and_freeze,
 )
 
-
 VALID = """
 harness_version: coding-v1
 protocol_version: 1

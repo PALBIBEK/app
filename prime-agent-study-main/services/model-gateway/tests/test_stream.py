@@ -55,12 +55,12 @@ def openai_stream_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
     transport = httpx.MockTransport(_stream_handler)
     with TestClient(app) as c:
-        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(
             api_key="sk-test",
             base_url="https://api.openai.com/v1",
             transport=transport,
         )
-        c.app.state.registry._by_name["openrouter"] = OpenRouterChatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openrouter"] = OpenRouterChatProvider(
             api_key="or-test",
             transport=transport,
         )

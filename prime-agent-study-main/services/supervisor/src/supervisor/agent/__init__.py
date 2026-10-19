@@ -6,13 +6,13 @@ session/journal/api stay provider-type-free.
 
 from supervisor.agent.base import AgentPhase, AgentRuntime, AgentRuntimeBase, AgentState, SendMode
 from supervisor.agent.capabilities import (
+    FULL_CAPABILITIES,
+    MINIMAL_CAPABILITIES,
+    STANDARD_CAPABILITIES,
     Cap,
     Capabilities,
     CapabilityNames,
     CapabilityRequirement,
-    FULL_CAPABILITIES,
-    MINIMAL_CAPABILITIES,
-    STANDARD_CAPABILITIES,
     require,
     require_capability,
 )
@@ -36,6 +36,7 @@ from supervisor.agent.errors import (
     ToolNotFoundError,
 )
 from supervisor.agent.events import (
+    ZERO_USAGE,
     AgentEvent,
     ApprovalRequired,
     ApprovalResolved,
@@ -60,12 +61,16 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
     Usage,
-    ZERO_USAGE,
     is_error_event,
     is_lifecycle_event,
     is_terminal_event,
 )
-from supervisor.agent.factory import RuntimeNames, create_runtime, is_valid_runtime, known_runtime_names
+from supervisor.agent.factory import (
+    RuntimeNames,
+    create_runtime,
+    is_valid_runtime,
+    known_runtime_names,
+)
 from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
 from supervisor.agent.stream import EventStream
 

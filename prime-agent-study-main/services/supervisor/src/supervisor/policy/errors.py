@@ -15,12 +15,11 @@ Design principles:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from supervisor.policy.types import BudgetState, QuotaLimits
+    from supervisor.policy.types import BudgetState
 
 
 __all__ = [
@@ -168,7 +167,7 @@ class BudgetTokensExceeded(BudgetExceeded):
         session_id: str,
         current_tokens: int,
         limit_tokens: int,
-        current_cost: Decimal = Decimal("0"),
+        current_cost: Decimal = Decimal(0),
     ) -> None:
         super().__init__(
             f"max_tokens_per_turn exceeded: tokens={current_tokens} limit={limit_tokens}",

@@ -14,12 +14,11 @@ import hashlib
 import json
 from typing import Any
 
-
 __all__ = [
-    "canonicalize_args",
-    "call_hash",
-    "normalize_string",
     "args_similar",
+    "call_hash",
+    "canonicalize_args",
+    "normalize_string",
 ]
 
 

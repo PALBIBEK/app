@@ -75,7 +75,7 @@ async def iter_sse(
                 return
             try:
                 item = await asyncio.wait_for(sub.queue.get(), timeout=hb)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield _sse_comment("ping")
                 continue
             if is_dropped_sentinel(item):

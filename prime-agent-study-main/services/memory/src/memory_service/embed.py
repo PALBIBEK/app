@@ -7,7 +7,7 @@ import math
 import re
 from typing import Protocol, runtime_checkable
 
-_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.I)
+_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.IGNORECASE)
 
 EMBED_DIM = 64
 

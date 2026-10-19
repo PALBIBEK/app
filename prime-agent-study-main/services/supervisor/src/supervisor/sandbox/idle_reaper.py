@@ -24,29 +24,26 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from supervisor.sandbox.backup import BackupResult
+from typing import Final, Protocol, runtime_checkable
 
 _log = logging.getLogger(__name__)
 
 __all__ = [
-    "IdleReapMode",
-    "IdleThresholds",
-    "ScopeActivity",
-    "ReapDecision",
-    "ReapStats",
-    "IdleReapError",
-    "ActivityStore",
-    "IdleReaper",
-    "create_idle_reaper",
-    "SOFT_IDLE_PRODUCTION_MS",
+    "HARD_IDLE_DEVELOPMENT_MS",
     "HARD_IDLE_PRODUCTION_MS",
     "SOFT_IDLE_DEVELOPMENT_MS",
-    "HARD_IDLE_DEVELOPMENT_MS",
+    "SOFT_IDLE_PRODUCTION_MS",
+    "ActivityStore",
+    "IdleReapError",
+    "IdleReapMode",
+    "IdleReaper",
+    "IdleThresholds",
+    "ReapDecision",
+    "ReapStats",
+    "ScopeActivity",
+    "create_idle_reaper",
 ]
 
 
@@ -489,10 +486,10 @@ class ConfigurableIdleReaper(IdleReaper):
     """
 
     __slots__ = (
-        "_config",
         "_activity_store",
-        "_terminator",
+        "_config",
         "_snapshot_creator",
+        "_terminator",
         "_warning_callback",
     )
 

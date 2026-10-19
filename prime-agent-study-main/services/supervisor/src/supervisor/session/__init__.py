@@ -31,6 +31,14 @@ Example:
 from __future__ import annotations
 
 # =============================================================================
+# Config
+# =============================================================================
+from supervisor.session.config.settings import (
+    SessionSettings,
+    get_settings,
+)
+
+# =============================================================================
 # Enums
 # =============================================================================
 from supervisor.session.core.enums import (
@@ -41,22 +49,6 @@ from supervisor.session.core.enums import (
     SessionStatus,
     mode_for_harness,
     mode_for_manifest,
-)
-
-# =============================================================================
-# Types
-# =============================================================================
-from supervisor.session.core.types import (
-    BeginOutcome,
-    ChildRow,
-    JobRow,
-    RegistryMetrics,
-    ResumeDecision,
-    ResumeResult,
-    SessionInfo,
-    SessionMetrics,
-    SessionTree,
-    ToolInvokeOutcome,
 )
 
 # =============================================================================
@@ -85,28 +77,53 @@ from supervisor.session.core.protocols import (
 )
 
 # =============================================================================
-# Storage
+# Types
 # =============================================================================
-from supervisor.session.storage.registry import SessionRegistry
-from supervisor.session.storage.outbox import (
-    ToolOutbox,
-    idempotency_key,
-    result_to_wire,
-    wire_to_result,
-)
-from supervisor.session.storage.converters import (
-    session_info_to_dict,
-    resume_decision_to_dict,
-    child_row_to_dict,
-    job_row_to_dict,
+from supervisor.session.core.types import (
+    BeginOutcome,
+    ChildRow,
+    JobRow,
+    RegistryMetrics,
+    ResumeDecision,
+    ResumeResult,
+    SessionInfo,
+    SessionMetrics,
+    SessionTree,
+    ToolInvokeOutcome,
 )
 
 # =============================================================================
-# Config
+# Manager (main facade)
 # =============================================================================
-from supervisor.session.config.settings import (
-    SessionSettings,
-    get_settings,
+from supervisor.session.manager import SessionManager
+from supervisor.session.operations.compaction_state import (
+    unpaired_compaction_starts,
+)
+from supervisor.session.operations.memory_ops import (
+    CompactMemoryOutcome,
+    MemoryOps,
+    RecallMemoryOutcome,
+)
+
+# =============================================================================
+# Operations
+# =============================================================================
+from supervisor.session.operations.subagent_ops import (
+    DEFAULT_MAX_DEPTH,
+    SubagentOps,
+)
+from supervisor.session.operations.tree import (
+    build_session_tree,
+    unpaired_subagent_starts,
+)
+from supervisor.session.services.fanout import (
+    LiveHub,
+    LiveSubscription,
+    is_dropped_sentinel,
+)
+from supervisor.session.services.lifecycle import (
+    drain_for_deploy,
+    reap_idle,
 )
 
 # =============================================================================
@@ -117,44 +134,27 @@ from supervisor.session.services.recovery import (
     decide_unpaired,
     pinned_manifest,
 )
-from supervisor.session.services.fanout import (
-    LiveHub,
-    LiveSubscription,
-    is_dropped_sentinel,
-)
-from supervisor.session.services.lifecycle import (
-    reap_idle,
-    drain_for_deploy,
-)
 from supervisor.session.services.workspace import (
-    workspaces_root,
     session_workspace,
+    workspaces_root,
+)
+from supervisor.session.storage.converters import (
+    child_row_to_dict,
+    job_row_to_dict,
+    resume_decision_to_dict,
+    session_info_to_dict,
+)
+from supervisor.session.storage.outbox import (
+    ToolOutbox,
+    idempotency_key,
+    result_to_wire,
+    wire_to_result,
 )
 
 # =============================================================================
-# Operations
+# Storage
 # =============================================================================
-from supervisor.session.operations.subagent_ops import (
-    SubagentOps,
-    DEFAULT_MAX_DEPTH,
-)
-from supervisor.session.operations.memory_ops import (
-    MemoryOps,
-    CompactMemoryOutcome,
-    RecallMemoryOutcome,
-)
-from supervisor.session.operations.tree import (
-    build_session_tree,
-    unpaired_subagent_starts,
-)
-from supervisor.session.operations.compaction_state import (
-    unpaired_compaction_starts,
-)
-
-# =============================================================================
-# Manager (main facade)
-# =============================================================================
-from supervisor.session.manager import SessionManager
+from supervisor.session.storage.registry import SessionRegistry
 
 __all__ = [
     # Manager

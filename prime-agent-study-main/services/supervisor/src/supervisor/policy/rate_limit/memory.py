@@ -17,11 +17,8 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
-from typing import Final
 
-from supervisor.policy.errors import RateLimitExceeded
-from supervisor.policy.types import RateDecision, RateDecisionStatus, DEFAULT_RATE_WINDOW_MS
-
+from supervisor.policy.types import DEFAULT_RATE_WINDOW_MS, RateDecision, RateDecisionStatus
 
 __all__ = ["MemoryRateLimiter"]
 

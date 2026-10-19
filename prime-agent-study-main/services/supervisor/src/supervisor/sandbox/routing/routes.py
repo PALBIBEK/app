@@ -16,13 +16,13 @@ Reference: QM's sandbox-routing.ts pattern with 15-second caching.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
-    "SandboxRoute",
-    "RouteStore",
     "RouteNotFoundError",
+    "RouteStore",
+    "SandboxRoute",
 ]
 
 
@@ -36,7 +36,7 @@ class RouteNotFoundError(KeyError):
 
 def _utcnow() -> datetime:
     """Return current UTC time with timezone info."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)

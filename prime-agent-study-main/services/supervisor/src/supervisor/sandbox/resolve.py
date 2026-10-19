@@ -32,20 +32,20 @@ from supervisor.sandbox.security.guards import (
 )
 
 if TYPE_CHECKING:
-    from supervisor.catalog.storage import CompositionCatalog
     from supervisor.catalog import SandboxProfile, SessionPins
+    from supervisor.catalog.storage import CompositionCatalog
     from supervisor.harness import HarnessManifest
     from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 
 __all__ = [
-    "load_pinned_sandbox_profile",
-    "assert_sandbox_profile_compatible",
-    "resolve_sandbox_create",
-    "SandboxResolution",
-    "ResolutionError",
     "IncompatibleProfile",
     "MissingImageDigest",
     "PlaceholderImageError",
+    "ResolutionError",
+    "SandboxResolution",
+    "assert_sandbox_profile_compatible",
+    "load_pinned_sandbox_profile",
+    "resolve_sandbox_create",
 ]
 
 

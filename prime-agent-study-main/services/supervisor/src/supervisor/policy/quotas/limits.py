@@ -11,11 +11,10 @@ from typing import Any, Final
 
 from supervisor.policy.types import QuotaLimits
 
-
 __all__ = [
     "DEFAULT_QUOTA_LIMITS",
-    "parse_quota_limits",
     "limits_from_env",
+    "parse_quota_limits",
 ]
 
 

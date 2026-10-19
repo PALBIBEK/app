@@ -28,7 +28,6 @@ from supervisor.temporal.contracts import (
     Activity,
     Message,
     Phase,
-    workflow_id,
 )
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.worker import session_worker

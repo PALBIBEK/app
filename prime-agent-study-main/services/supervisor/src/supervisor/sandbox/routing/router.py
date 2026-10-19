@@ -16,32 +16,30 @@ Reference: QM's sandbox-routing.ts pattern.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from supervisor.sandbox.base import Sandbox, SandboxProvider
+from supervisor.sandbox.resolve import PlaceholderImageError
 from supervisor.sandbox.routing.capabilities import (
     PROVIDER_CAPABILITIES,
     SandboxCapability,
     aggregate_capabilities,
 )
+from supervisor.sandbox.routing.routes import RouteStore, SandboxRoute
 from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.security.guards import (
     assert_multi_tenant_provider,
     is_placeholder_image_digest,
 )
-from supervisor.sandbox.resolve import PlaceholderImageError
-from supervisor.sandbox.routing.routes import RouteStore, SandboxRoute
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = [
+    "BackendUnavailableError",
+    "CapabilityUnsupportedError",
+    "RouterError",
     "SandboxRouter",
     "SandboxRouterImpl",
     "create_sandbox_router",
-    "RouterError",
-    "BackendUnavailableError",
-    "CapabilityUnsupportedError",
 ]
 
 
@@ -162,12 +160,12 @@ class SandboxRouterImpl:
 
     __slots__ = (
         "_backends",
-        "_routes",
+        "_capabilities",
         "_default_backend",
-        "_strict",
         "_on_error",
         "_reported_gaps",
-        "_capabilities",
+        "_routes",
+        "_strict",
     )
 
     def __init__(

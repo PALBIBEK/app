@@ -1,5 +1,13 @@
 """Core types, errors, and factory for seams."""
 
+from supervisor.seams.core.errors import (
+    BadArgs,
+    DepthExceeded,
+    ProviderConflict,
+    ProviderMissing,
+    SeamError,
+    UnsupportedCapability,
+)
 from supervisor.seams.core.types import (
     AssembledPrompt,
     ChatMessage,
@@ -16,14 +24,6 @@ from supervisor.seams.core.types import (
     ToolDescriptor,
     ToolInvokeContext,
     ToolResult,
-)
-from supervisor.seams.core.errors import (
-    BadArgs,
-    DepthExceeded,
-    ProviderConflict,
-    ProviderMissing,
-    SeamError,
-    UnsupportedCapability,
 )
 
 __all__ = [
