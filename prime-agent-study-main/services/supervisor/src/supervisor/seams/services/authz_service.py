@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from supervisor.seams.services.authz import (
-    AuthzService,
     Grant,
     GrantDenied,
     GrantStore,
@@ -13,7 +12,6 @@ from supervisor.seams.services.authz import (
 
 __all__ = [
     "StoreAuthzService",
-    "as_authz_service",
 ]
 
 
@@ -52,5 +50,3 @@ class StoreAuthzService:
         return principal
 
 
-def as_authz_service(store: GrantStore) -> AuthzService:
-    return StoreAuthzService(store)

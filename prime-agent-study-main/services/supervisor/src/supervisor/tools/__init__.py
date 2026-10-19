@@ -32,7 +32,6 @@ from supervisor.tools.workspace import (
     SandboxWorkspace,
     TreeWorkspace,
     Workspace,
-    workspace_for,
 )
 
 __all__ = [
@@ -61,5 +60,4 @@ __all__ = [
     "json_schema",
     "path_field",
     "tool",
-    "workspace_for",
 ]

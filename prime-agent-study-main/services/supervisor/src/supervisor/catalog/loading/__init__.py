@@ -25,14 +25,14 @@ __all__ = [
     # Bootstrap
     "agent_platform_root",
     "bootstrap_composition_catalog",
-    "default_catalog_dir",
-    "resolve_catalog_dir",
-    # Loader
-    "load_composition_catalog",
     # Verify
     "composition_problems",
-    "verify_harness_catalog",
-    "verify_composition_catalog",
-    "list_catalog_problems",
+    "default_catalog_dir",
     "dump_composition_catalog",
+    "list_catalog_problems",
+    # Loader
+    "load_composition_catalog",
+    "resolve_catalog_dir",
+    "verify_composition_catalog",
+    "verify_harness_catalog",
 ]

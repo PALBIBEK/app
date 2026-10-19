@@ -15,28 +15,17 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
-    # Base
     "CatalogError",
-    # Integrity
+    "CatalogOwnershipRequired",
+    "CompositionDigestRequired",
+    "CompositionIncomplete",
     "DigestMismatch",
     "DigestMissing",
-    # Status
-    "NotOffered",
-    "ImmutableArtifact",
     "FloatingRef",
-    # Composition
-    "CompositionIncomplete",
-    "CompositionDigestRequired",
     "HarnessVersionMismatch",
-    # Permission
-    "CatalogPermissionDenied",
-    "CatalogOwnershipRequired",
-    # Storage
-    "CatalogStorageError",
-    "CatalogConnectionError",
-    # Validation
     "InvalidArtifact",
     "InvalidDigest",
+    "NotOffered",
 ]
 
 
@@ -176,36 +165,6 @@ class NotOffered(CatalogError):
         self.status = status
 
 
-class ImmutableArtifact(CatalogError):
-    """Attempted in-place mutation of an offered artifact body.
-
-    Offered artifacts are immutable. To change, publish a new version
-    which will get a new digest.
-    """
-
-    error_code = "IMMUTABLE_ARTIFACT"
-
-    def __init__(
-        self,
-        *,
-        kind: str,
-        artifact_id: str,
-        digest: str,
-    ) -> None:
-        super().__init__(
-            f"cannot mutate offered {kind} {artifact_id!r}@{digest}; "
-            "publish a new version instead",
-            detail={
-                "kind": kind,
-                "artifact_id": artifact_id,
-                "digest": digest,
-            },
-        )
-        self.kind = kind
-        self.artifact_id = artifact_id
-        self.digest = digest
-
-
 class FloatingRef(CatalogError):
     """Refused floating mutable tag (e.g. 'latest') without digest.
 
@@ -294,40 +253,6 @@ class HarnessVersionMismatch(CatalogError):
 # Permission Errors
 # =============================================================================
 
-class CatalogPermissionDenied(CatalogError):
-    """Principal lacks required grant for catalog operation.
-
-    Check required grants and ensure principal has access.
-    """
-
-    error_code = "CATALOG_PERMISSION_DENIED"
-
-    def __init__(
-        self,
-        *,
-        principal_id: str,
-        required_grant: str,
-        artifact_kind: str | None = None,
-        artifact_id: str | None = None,
-    ) -> None:
-        msg = f"permission denied: {principal_id!r} lacks grant {required_grant!r}"
-        if artifact_id:
-            msg += f" for {artifact_kind}:{artifact_id}"
-        super().__init__(
-            msg,
-            detail={
-                "principal_id": principal_id,
-                "required_grant": required_grant,
-                "artifact_kind": artifact_kind,
-                "artifact_id": artifact_id,
-            },
-        )
-        self.principal_id = principal_id
-        self.required_grant = required_grant
-        self.artifact_kind = artifact_kind
-        self.artifact_id = artifact_id
-
-
 class CatalogOwnershipRequired(CatalogError):
     """Operation requires artifact ownership.
 
@@ -363,55 +288,6 @@ class CatalogOwnershipRequired(CatalogError):
 # =============================================================================
 # Storage Errors
 # =============================================================================
-
-class CatalogStorageError(CatalogError):
-    """Database or storage operation failed.
-
-    May be transient - consider retry.
-    """
-
-    error_code = "CATALOG_STORAGE_ERROR"
-    retryable = True
-
-    def __init__(
-        self,
-        operation: str,
-        reason: str,
-        *,
-        artifact_kind: str | None = None,
-        artifact_id: str | None = None,
-    ) -> None:
-        msg = f"storage error during {operation}: {reason}"
-        super().__init__(
-            msg,
-            detail={
-                "operation": operation,
-                "reason": reason,
-                "artifact_kind": artifact_kind,
-                "artifact_id": artifact_id,
-            },
-        )
-        self.operation = operation
-        self.reason = reason
-
-
-class CatalogConnectionError(CatalogError):
-    """Failed to connect to storage backend.
-
-    Transient error - retry with backoff.
-    """
-
-    error_code = "CATALOG_CONNECTION_ERROR"
-    retryable = True
-
-    def __init__(self, backend: str, reason: str) -> None:
-        super().__init__(
-            f"failed to connect to {backend}: {reason}",
-            detail={"backend": backend, "reason": reason},
-        )
-        self.backend = backend
-        self.reason = reason
-
 
 # =============================================================================
 # Validation Errors

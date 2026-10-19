@@ -63,42 +63,42 @@ from supervisor.seams.providers.workspace import (
 )
 
 __all__ = [
-    # Tools
-    "NullToolProvider",
-    "McpToolProvider",
+    "LAB_ECHO_PROVIDER",
+    "LEGACY_MEMORY_ALIAS",
+    "AcpSubagentProvider",
+    "BasicCompactionProvider",
+    "CompositeContextMemoryProvider",
     "CompositeToolProvider",
+    "DurableRecallProvider",
     # Gateway
     "FakeModelGatewayClient",
     "HttpModelGatewayClient",
     "HttpVirtualKeyClient",
-    "maybe_virtual_key_client",
-    # Prompt
-    "StaticPromptAssembler",
     # Subagent
     "LabEchoSubagentProvider",
-    "LAB_ECHO_PROVIDER",
-    "LEGACY_MEMORY_ALIAS",
-    "AcpSubagentProvider",
-    "NestedSessionSubagentProvider",
-    # Memory
-    "NullContextMemoryProvider",
-    "BasicCompactionProvider",
     "MarkdownRecallProvider",
     "McpSemanticRecallProvider",
-    "DurableRecallProvider",
-    "CompositeContextMemoryProvider",
+    "McpToolProvider",
+    # Authz
+    "MemoryGrantStore",
+    # Storage
+    "MemoryObjectStorage",
     # Workspace
     "MemoryTreeIO",
     "MemoryWorkspaceStore",
-    "create_workspace_store",
-    "create_workspace_hydrator",
-    "create_object_storage_for_workspace",
-    # Storage
-    "MemoryObjectStorage",
+    "NestedSessionSubagentProvider",
+    # Memory
+    "NullContextMemoryProvider",
+    # Tools
+    "NullToolProvider",
     "S3ObjectStorage",
-    "create_object_storage",
-    # Authz
-    "MemoryGrantStore",
-    "create_grant_store",
+    # Prompt
+    "StaticPromptAssembler",
     "create_authz_service",
+    "create_grant_store",
+    "create_object_storage",
+    "create_object_storage_for_workspace",
+    "create_workspace_hydrator",
+    "create_workspace_store",
+    "maybe_virtual_key_client",
 ]

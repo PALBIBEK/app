@@ -17,36 +17,28 @@ from enum import StrEnum
 from typing import Any, Final
 
 __all__ = [
-    # Enums
-    "ArtifactKind",
-    "ArtifactStatus",
-    "CatalogAction",
-    "CatalogGrant",
-    "SandboxProviderName",
-    "FileEffects",
-    "ApprovalDefault",
-    "RecallBackend",
-    # Base types
-    "ArtifactMetadata",
-    "DigestRef",
-    # Artifacts
-    "PromptSection",
-    "PromptPack",
-    "ToolDefinition",
-    "ToolSet",
-    "SandboxProfile",
-    "MemoryProfile",
-    "PlugBindings",
+    "DEFAULT_PROTOCOL_VERSION",
     "AgentComposition",
-    # Session types
-    "SessionPins",
-    # Usage analytics
+    "ApprovalDefault",
+    "Artifact",
+    "ArtifactKind",
+    "ArtifactMetadata",
+    "ArtifactStatus",
     "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    # Union type
-    "Artifact",
-    # Constants
-    "DEFAULT_PROTOCOL_VERSION",
+    "CatalogGrant",
+    "DigestRef",
+    "FileEffects",
+    "MemoryProfile",
+    "PlugBindings",
+    "PromptPack",
+    "PromptSection",
+    "RecallBackend",
+    "SandboxProfile",
+    "SandboxProviderName",
+    "SessionPins",
+    "ToolDefinition",
+    "ToolSet",
 ]
 
 
@@ -77,18 +69,6 @@ class ArtifactStatus(StrEnum):
     DRAFT = "draft"
     OFFERED = "offered"
     DEPRECATED = "deprecated"
-
-
-class CatalogAction(StrEnum):
-    """Actions logged to audit trail."""
-
-    ARTIFACT_PUBLISHED = "artifact_published"
-    ARTIFACT_DEPRECATED = "artifact_deprecated"
-    ARTIFACT_RESOLVED = "artifact_resolved"
-    COMPOSITION_BOUND = "composition_bound"
-    SESSION_STARTED = "session_started"
-    PERMISSION_DENIED = "permission_denied"
-    ARTIFACT_ACCESSED = "artifact_accessed"
 
 
 class CatalogGrant(StrEnum):

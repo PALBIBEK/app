@@ -95,18 +95,22 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
                 # Fixture child digests must match offered children when present.
                 pp = raw.get("prompt_pack") or {}
                 ts = raw.get("tool_set") or {}
-                if pp.get("digest") and not str(pp["digest"]).startswith("sha256:REPLACE"):
-                    if pp["digest"] != comp.prompt_pack.digest:
-                        problems.append(
-                            f"{path.name}: prompt_pack digest fixture {pp['digest']!r} "
-                            f"!= offered {comp.prompt_pack.digest!r}"
-                        )
-                if ts.get("digest") and not str(ts["digest"]).startswith("sha256:REPLACE"):
-                    if ts["digest"] != comp.tool_set.digest:
-                        problems.append(
-                            f"{path.name}: tool_set digest fixture {ts['digest']!r} "
-                            f"!= offered {comp.tool_set.digest!r}"
-                        )
+                if (
+                    pp.get("digest") and not str(pp["digest"]).startswith("sha256:REPLACE")
+                    and pp["digest"] != comp.prompt_pack.digest
+                ):
+                    problems.append(
+                        f"{path.name}: prompt_pack digest fixture {pp['digest']!r} "
+                        f"!= offered {comp.prompt_pack.digest!r}"
+                    )
+                if (
+                    ts.get("digest") and not str(ts["digest"]).startswith("sha256:REPLACE")
+                    and ts["digest"] != comp.tool_set.digest
+                ):
+                    problems.append(
+                        f"{path.name}: tool_set digest fixture {ts['digest']!r} "
+                        f"!= offered {comp.tool_set.digest!r}"
+                    )
 
     return problems
 

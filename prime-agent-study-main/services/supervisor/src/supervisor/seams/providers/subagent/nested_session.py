@@ -98,7 +98,7 @@ class NestedSessionSubagentProvider:
         self.started = True
         cid = self._child_id(request, "nested")
         jid = f"job-{uuid.uuid4().hex[:10]}"
-        text = self._complete(request)
+        self._complete(request)
         self._children[cid] = ChildInfo(
             id=cid, status="done", description=request.description
         )

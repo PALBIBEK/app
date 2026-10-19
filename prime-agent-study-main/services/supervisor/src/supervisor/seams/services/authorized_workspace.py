@@ -13,7 +13,6 @@ from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 from supervisor.seams.services.workspace_store import WorkspaceSyncReport, WorkspaceTreeIO
 
 __all__ = [
-    "authorized_exec",
     "authorized_hydrate",
     "authorized_sync",
 ]
@@ -43,10 +42,3 @@ async def authorized_sync(
     return await hydrator.sync(scope_id, tree, base=base)
 
 
-async def authorized_exec(
-    authz: AuthzService,
-    principal: Principal,
-    scope_id: str,
-) -> Principal:
-    """Gate sandbox create / exec behind ``sandbox:exec``."""
-    return await authz.require(principal, scope_id, Grant.SANDBOX_EXEC)

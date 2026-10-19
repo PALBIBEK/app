@@ -8,10 +8,7 @@ Components:
 
 from supervisor.policy.errors import QuotaExceeded
 from supervisor.policy.quotas.enforcer import QuotaEnforcer
-from supervisor.policy.quotas.limits import (
-    DEFAULT_QUOTA_LIMITS,
-    parse_quota_limits,
-)
+from supervisor.policy.quotas.limits import DEFAULT_QUOTA_LIMITS
 from supervisor.policy.types import QuotaLimits
 
 # Alias for backwards compatibility
@@ -25,5 +22,4 @@ __all__ = [
     "QuotaLimits",
     "TenantQuotaEnforcer",
     "TenantQuotaLimits",
-    "parse_quota_limits",
 ]

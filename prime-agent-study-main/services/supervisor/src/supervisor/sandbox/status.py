@@ -19,7 +19,6 @@ Reference:
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Final
@@ -30,7 +29,6 @@ __all__ = [
     "RESTART_TIMEOUT_S",
     "STATUS_PROBE_TIMEOUT_S",
     "ComputerStatus",
-    "ComputerStatusError",
     "MachineState",
     "RestartResult",
 ]
@@ -63,27 +61,6 @@ class MachineState(StrEnum):
 # =============================================================================
 # Errors
 # =============================================================================
-
-
-class ComputerStatusError(Exception):
-    """Failed to get computer status or perform restart.
-
-    Attributes:
-        message: Error description.
-        scope_id: Scope identifier, if known.
-        retryable: Whether the operation can be retried.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        scope_id: str | None = None,
-        retryable: bool = True,
-    ) -> None:
-        super().__init__(message)
-        self.scope_id = scope_id
-        self.retryable = retryable
 
 
 # =============================================================================
@@ -143,54 +120,3 @@ class RestartResult:
 # =============================================================================
 
 
-class ComputerStatusOps(ABC):
-    """Abstract base for computer status operations.
-
-    Implementations check sandbox health and perform restarts.
-    """
-
-    __slots__ = ()
-
-    @abstractmethod
-    async def computer_status(
-        self,
-        scope_id: str,
-        *,
-        probe_timeout: float | None = None,
-    ) -> ComputerStatus:
-        """Get status of a sandbox computer.
-
-        Performs health check via guest probe.
-
-        Args:
-            scope_id: Scope identifier.
-            probe_timeout: Timeout for guest probe in seconds.
-
-        Returns:
-            ComputerStatus with machine state and responsiveness.
-
-        Raises:
-            ComputerStatusError: If status check fails.
-        """
-        ...
-
-    @abstractmethod
-    async def restart_computer(
-        self,
-        scope_id: str,
-        *,
-        timeout: float | None = None,
-    ) -> RestartResult:
-        """Restart a sandbox computer.
-
-        Args:
-            scope_id: Scope to restart.
-            timeout: Maximum wait time for restart in seconds.
-
-        Returns:
-            RestartResult with timing details.
-
-        Raises:
-            ComputerStatusError: If restart fails.
-        """
-        ...

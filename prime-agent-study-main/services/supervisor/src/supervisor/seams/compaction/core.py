@@ -95,10 +95,6 @@ def _tool_calls(msg: dict[str, Any]) -> list[dict[str, Any]]:
     return calls if isinstance(calls, list) else []
 
 
-def _tool_call_ids(msg: dict[str, Any]) -> set[str]:
-    return {str(c.get("id")) for c in _tool_calls(msg) if c.get("id")}
-
-
 def _is_system(msg: dict[str, Any]) -> bool:
     return _role(msg) == "system"
 

@@ -19,7 +19,6 @@ from supervisor.seams.services.workspace_store import (
     ChecksumMismatch,
     HydrateIncomplete,
     WorkspaceFileRecord,
-    WorkspaceStore,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
@@ -242,5 +241,3 @@ class PostgresWorkspaceStore:
         )
 
 
-def as_workspace_store(store: PostgresWorkspaceStore) -> WorkspaceStore:
-    return store

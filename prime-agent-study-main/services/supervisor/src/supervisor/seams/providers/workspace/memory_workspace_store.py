@@ -15,7 +15,6 @@ from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
     WorkspaceFileRecord,
     WorkspacePathEscape,
-    WorkspaceStore,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
@@ -212,10 +211,6 @@ class MemoryWorkspaceStore:
         return await three_way_sync(
             self, scope_id, tree, base, before_cas=self.before_sync_cas  # type: ignore[arg-type]
         )
-
-
-def as_workspace_store(store: MemoryWorkspaceStore) -> WorkspaceStore:
-    return store
 
 
 def as_tree_io(tree: MemoryTreeIO) -> WorkspaceTreeIO:

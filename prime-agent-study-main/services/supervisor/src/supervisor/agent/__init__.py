@@ -4,7 +4,7 @@ Factory (create_runtime) is the sole concrete-name map;
 session/journal/api stay provider-type-free.
 """
 
-from supervisor.agent.base import AgentPhase, AgentRuntime, AgentRuntimeBase, AgentState, SendMode
+from supervisor.agent.base import AgentPhase, AgentRuntime, AgentState
 from supervisor.agent.capabilities import (
     FULL_CAPABILITIES,
     MINIMAL_CAPABILITIES,
@@ -14,7 +14,6 @@ from supervisor.agent.capabilities import (
     CapabilityNames,
     CapabilityRequirement,
     require,
-    require_capability,
 )
 from supervisor.agent.errors import (
     AgentAbortedError,
@@ -61,91 +60,69 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
     Usage,
-    is_error_event,
-    is_lifecycle_event,
-    is_terminal_event,
 )
-from supervisor.agent.factory import (
-    RuntimeNames,
-    create_runtime,
-    is_valid_runtime,
-    known_runtime_names,
-)
+from supervisor.agent.factory import RuntimeNames, create_runtime, known_runtime_names
 from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
 from supervisor.agent.stream import EventStream
 
 __all__ = [
-    # Base
-    "AgentPhase",
-    "AgentRuntime",
-    "AgentRuntimeBase",
-    "AgentState",
-    "SendMode",
-    # Capabilities
-    "Cap",
-    "Capabilities",
-    "CapabilityNames",
-    "CapabilityRequirement",
+    "EMPTY_SEAMS",
     "FULL_CAPABILITIES",
     "MINIMAL_CAPABILITIES",
     "STANDARD_CAPABILITIES",
-    "require",
-    "require_capability",
-    # Errors
+    "ZERO_USAGE",
     "AgentAbortedError",
     "AgentBusyError",
     "AgentError",
+    "AgentEvent",
     "AgentNotReadyError",
+    "AgentPhase",
+    "AgentRuntime",
+    "AgentState",
     "AgentTimeoutError",
     "ApprovalError",
-    "ApprovalTimeoutError",
-    "CapabilityError",
-    "CompactionError",
-    "ContextOverflowError",
-    "LoopLimitError",
-    "ModelCallError",
-    "ModelOverloadedError",
-    "ProtocolError",
-    "SandboxError",
-    "ToolExecutionError",
-    "ToolNotFoundError",
-    # Events
-    "AgentEvent",
     "ApprovalRequired",
     "ApprovalResolved",
+    "ApprovalTimeoutError",
     "BackgroundResults",
+    "Cap",
+    "Capabilities",
+    "CapabilityError",
+    "CapabilityNames",
+    "CapabilityRequirement",
     "CompactionEnd",
+    "CompactionError",
     "CompactionStart",
+    "ContextOverflowError",
     "Envelope",
     "ErrorEvent",
     "EventCategory",
+    "EventStream",
     "JobEnd",
     "JobStart",
+    "LoopLimitError",
     "MemoryRecall",
     "MessageEnd",
+    "ModelCallError",
+    "ModelOverloadedError",
+    "ProtocolError",
     "RunEnd",
     "RunStart",
+    "RuntimeNames",
+    "RuntimeSeams",
+    "SandboxError",
     "Settled",
     "StopReason",
     "SubagentEnd",
     "SubagentStart",
     "ToolEnd",
+    "ToolExecutionError",
+    "ToolNotFoundError",
     "ToolStart",
     "TurnEnd",
     "TurnStart",
     "Usage",
-    "ZERO_USAGE",
-    "is_error_event",
-    "is_lifecycle_event",
-    "is_terminal_event",
-    # Factory
-    "RuntimeNames",
     "create_runtime",
-    "is_valid_runtime",
     "known_runtime_names",
-    # Seams
-    "EMPTY_SEAMS",
-    "RuntimeSeams",
-    # Stream
-    "EventStream",
+    "require",
 ]

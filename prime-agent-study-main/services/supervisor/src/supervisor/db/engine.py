@@ -145,21 +145,6 @@ async def check_health(engine: AsyncEngine) -> bool:
         return False
 
 
-async def get_pool_status(engine: AsyncEngine) -> dict[str, int]:
-    """Get current connection pool status.
-
-    Returns:
-        Dict with pool metrics (size, checked_in, checked_out, overflow).
-    """
-    pool = engine.pool
-    return {
-        "size": pool.size(),
-        "checked_in": pool.checkedin(),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-    }
-
-
 @asynccontextmanager
 async def open_db(
     url: str | None = None,

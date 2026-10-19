@@ -38,7 +38,6 @@ __all__ = [
     "LAYERS_TIMEOUT_S",
     "MANIFEST_FILENAME",
     "LayerManifest",
-    "LayerMaterializationError",
     "LayerOps",
     "MaterializationResult",
     "create_exec_layers",
@@ -57,27 +56,6 @@ LAYERS_TIMEOUT_S: Final[float] = 120.0
 # =============================================================================
 # Errors
 # =============================================================================
-
-
-class LayerMaterializationError(Exception):
-    """Read-only layer materialization failed.
-
-    Attributes:
-        message: Error description.
-        manifest_sha: SHA256 of the manifest being materialized.
-        retryable: Whether the operation can be retried.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        manifest_sha: str | None = None,
-        retryable: bool = True,
-    ) -> None:
-        super().__init__(message)
-        self.manifest_sha = manifest_sha
-        self.retryable = retryable
 
 
 # =============================================================================
@@ -301,7 +279,6 @@ class ExecLayers(LayerOps):
         # Build tar with all layer files
         # In a real implementation, this would fetch blobs and create tar
         # For now, we create a manifest-only approach
-        tar_path = f"{self._config.workspace_dir}/{self._config.tar_filename}"
         manifest_path = f"{self._config.workspace_dir}/{self._config.manifest_filename}"
 
         # Write manifest

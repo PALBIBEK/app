@@ -29,9 +29,7 @@ _log = logging.getLogger(__name__)
 __all__ = [
     "DROPPED_PROXY_ENV",
     "EgressPolicy",
-    "EgressPolicyError",
     "ProxyEnvVars",
-    "force_through_proxy_env",
 ]
 
 
@@ -45,27 +43,6 @@ __all__ = [
 # =============================================================================
 # Errors
 # =============================================================================
-
-
-class EgressPolicyError(Exception):
-    """Egress policy configuration failed.
-
-    Attributes:
-        message: Error description.
-        domain: Affected domain, if known.
-        retryable: Whether the operation can be retried.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        domain: str | None = None,
-        retryable: bool = False,
-    ) -> None:
-        super().__init__(message)
-        self.domain = domain
-        self.retryable = retryable
 
 
 # =============================================================================
@@ -132,44 +109,3 @@ class ProxyEnvVars:
 # =============================================================================
 
 
-def force_through_proxy_env(
-    proxy_url: str,
-    token: str | None = None,
-    *,
-    no_proxy: str = "localhost,127.0.0.1,::1",
-) -> dict[str, str]:
-    """Generate proxy environment variables for controlled egress.
-
-    Matches QM's forceThroughProxyEnv pattern.
-
-    Args:
-        proxy_url: Proxy URL (e.g., "http://proxy.internal:8080").
-        token: Optional auth token to embed in URL.
-        no_proxy: Hosts to bypass proxy.
-
-    Returns:
-        Dictionary of proxy environment variables.
-
-    Example:
-        >>> env = force_through_proxy_env("http://proxy:8080", token="secret123")
-        >>> "secret123" in env["HTTP_PROXY"]
-        True
-    """
-    from urllib.parse import urlparse
-
-    parsed = urlparse(proxy_url)
-
-    if token:
-        # Embed token in URL: http://x:TOKEN@host:port
-        auth_url = f"{parsed.scheme}://x:{token}@{parsed.netloc}"
-    else:
-        auth_url = proxy_url
-
-    return {
-        "HTTP_PROXY": auth_url,
-        "http_proxy": auth_url,
-        "HTTPS_PROXY": auth_url,
-        "https_proxy": auth_url,
-        "NO_PROXY": no_proxy,
-        "no_proxy": no_proxy,
-    }

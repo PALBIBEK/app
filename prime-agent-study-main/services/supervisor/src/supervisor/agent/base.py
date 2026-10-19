@@ -32,13 +32,6 @@ class AgentPhase(Enum):
         return self in (AgentPhase.STOPPED, AgentPhase.ERROR)
 
 
-class SendMode(Enum):
-    """Message send modes."""
-    PROMPT = "prompt"
-    SYSTEM = "system"
-    CONTINUE = "continue"
-
-
 @dataclass(frozen=True)
 class AgentState:
     """Immutable snapshot of agent state."""
@@ -136,29 +129,3 @@ class AgentRuntime(Protocol):
         ...
 
 
-class AgentRuntimeBase:
-    """Optional base class with common runtime functionality."""
-
-    def __init__(self, session_id: str = "") -> None:
-        self._session_id = session_id
-        self._phase = AgentPhase.CREATED
-        self._capabilities: Capabilities | None = None
-
-    @property
-    def session_id(self) -> str:
-        return self._session_id
-
-    @property
-    def phase(self) -> AgentPhase:
-        return self._phase
-
-    def _set_phase(self, phase: AgentPhase) -> None:
-        self._phase = phase
-
-    def _ensure_phase(self, *allowed: AgentPhase) -> None:
-        if self._phase not in allowed:
-            from supervisor.agent.errors import AgentNotReadyError
-            raise AgentNotReadyError(
-                message=f"Agent in phase {self._phase.value}, expected one of {[p.value for p in allowed]}",
-                session_id=self._session_id,
-            )

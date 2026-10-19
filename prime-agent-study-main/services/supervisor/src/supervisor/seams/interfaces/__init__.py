@@ -18,23 +18,23 @@ from supervisor.seams.interfaces.subagent_transport import (
 from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 __all__ = [
-    # ToolProvider
-    "ToolClassifier",
-    "ToolProvider",
-    # ModelGatewayClient
-    "ModelCatalog",
-    "ModelGatewayClient",
-    # PromptAssembler
-    "PromptAssembler",
-    # SubagentTransport
-    "SubagentTransport",
-    "SubagentTransportImpl",
-    "NamedProviderRegistry",
-    # ContextMemoryProvider
-    "ContextMemoryProvider",
     "CompactionDecision",
     "CompactionPreparation",
     "CompactionResult",
+    # ContextMemoryProvider
+    "ContextMemoryProvider",
     "MemoryInvokeContext",
+    # ModelGatewayClient
+    "ModelCatalog",
+    "ModelGatewayClient",
+    "NamedProviderRegistry",
+    # PromptAssembler
+    "PromptAssembler",
     "RecallBlock",
+    # SubagentTransport
+    "SubagentTransport",
+    "SubagentTransportImpl",
+    # ToolProvider
+    "ToolClassifier",
+    "ToolProvider",
 ]

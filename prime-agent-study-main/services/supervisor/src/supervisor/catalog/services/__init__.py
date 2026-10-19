@@ -29,14 +29,8 @@ Example:
     published = await catalog.publish(principal_id, artifact)
 """
 
-from supervisor.catalog.services.authz import CatalogAuthz
-from supervisor.catalog.services.catalog_service import CatalogService
-from supervisor.catalog.services.resolver import CompositionResolver
 from supervisor.catalog.services.tool_implementations import require_implemented
 
 __all__ = [
-    "CatalogAuthz",
-    "CatalogService",
-    "CompositionResolver",
     "require_implemented",
 ]

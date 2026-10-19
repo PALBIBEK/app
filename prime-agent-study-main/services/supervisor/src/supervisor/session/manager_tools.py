@@ -129,35 +129,37 @@ class ToolOps(ApprovalOps):
             return ToolInvokeOutcome(tool_call_id=call_id, result=result)
 
         # Pre-invoke require_approval gate (before outbox / provider body).
-        if await self._resolve_require_approval(session_id, name):
-            if not await self._harness_request_allowed(session_id, call_id):
-                manifest = self._pinned_manifest(row)
-                timeout = (
-                    manifest.approvals.timeout_s
-                    if manifest.approvals is not None
-                    else 300.0
-                )
-                payload, parked = await self._handle_approval_required(
+        if (
+            await self._resolve_require_approval(session_id, name)
+            and not await self._harness_request_allowed(session_id, call_id)
+        ):
+            manifest = self._pinned_manifest(row)
+            timeout = (
+                manifest.approvals.timeout_s
+                if manifest.approvals is not None
+                else 300.0
+            )
+            payload, parked = await self._handle_approval_required(
+                session_id,
+                None,
+                ApprovalRequired(
+                    approval_id="",
+                    prompt=f"Approval required to invoke tool {name!r}",
+                    options=["approve", "deny"],
+                    timeout_s=timeout,
+                    harness_request_id=call_id,
+                ),
+            )
+            if parked:
+                await self._record(
                     session_id,
-                    None,
-                    ApprovalRequired(
-                        approval_id="",
-                        prompt=f"Approval required to invoke tool {name!r}",
-                        options=["approve", "deny"],
-                        timeout_s=timeout,
-                        harness_request_id=call_id,
-                    ),
+                    payload,
+                    turn_id=None,
+                    trace_id=run_trace,
                 )
-                if parked:
-                    await self._record(
-                        session_id,
-                        payload,
-                        turn_id=None,
-                        trace_id=run_trace,
-                    )
-                    raise SessionAwaitingApproval(
-                        f"session awaiting approval id={session_id!r} tool={name!r}"
-                    )
+                raise SessionAwaitingApproval(
+                    f"session awaiting approval id={session_id!r} tool={name!r}"
+                )
 
         ctx = ToolInvokeContext(trace_id=call_id, extra=self.tool_context(session_id, tenant_id))
         begin = await self._tool_outbox.begin(

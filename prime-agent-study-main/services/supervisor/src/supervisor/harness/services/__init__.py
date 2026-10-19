@@ -23,13 +23,13 @@ from supervisor.harness.services.spawn_planner import (
 )
 
 __all__ = [
+    # Compatibility
+    "CompatibilityChecker",
     # Resolver
     "HarnessCatalog",
     "HarnessResolver",
-    # Compatibility
-    "CompatibilityChecker",
-    "load_supported_protocol_versions",
     # Spawn
     "SpawnPlanner",
     "build_spawn_plan",
+    "load_supported_protocol_versions",
 ]

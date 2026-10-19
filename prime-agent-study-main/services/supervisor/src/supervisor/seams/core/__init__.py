@@ -29,25 +29,25 @@ from supervisor.seams.core.types import (
 __all__ = [
     # Types
     "AssembledPrompt",
+    # Errors
+    "BadArgs",
     "ChatMessage",
     "ChildHandle",
     "ChildId",
     "ChildInfo",
     "Completion",
+    "DepthExceeded",
     "JobHandle",
     "JobId",
     "PromptBindings",
+    "ProviderConflict",
+    "ProviderMissing",
+    "SeamError",
     "StreamEvent",
     "SubagentRequest",
     "SubagentRunResult",
     "ToolDescriptor",
     "ToolInvokeContext",
     "ToolResult",
-    # Errors
-    "BadArgs",
-    "DepthExceeded",
-    "ProviderConflict",
-    "ProviderMissing",
-    "SeamError",
     "UnsupportedCapability",
 ]

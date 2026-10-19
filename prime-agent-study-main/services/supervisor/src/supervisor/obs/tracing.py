@@ -8,7 +8,6 @@ from typing import Any
 
 from supervisor.agent.events import Envelope
 from supervisor.obs.projector import JournalProjector, SpanSink
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanRecord
 
 _log = logging.getLogger(__name__)
@@ -281,16 +280,6 @@ def _build_otlp_sink(service_name: str) -> SpanSink:
     tracer = trace.get_tracer("yal-supervisor")
     _log.info("OTLP exporter configured endpoint=%s sample_ratio=%s", endpoint, sample_ratio)
     return OtlpBridgeSink(tracer)
-
-
-def make_test_projector(**kwargs: Any) -> JournalProjector:
-    sink = kwargs.pop("sink", None) or FakeSpanSink()
-    return JournalProjector(
-        sink=sink,
-        tenant_id=kwargs.get("tenant_id", "test"),
-        harness_id=kwargs.get("harness_id", "test"),
-        harness_version=kwargs.get("harness_version", "test-v1"),
-    )
 
 
 def make_inmemory_otlp_projector(

@@ -20,18 +20,9 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
-    "RouteNotFoundError",
     "RouteStore",
     "SandboxRoute",
 ]
-
-
-class RouteNotFoundError(KeyError):
-    """Route does not exist for scope."""
-
-    def __init__(self, scope_id: str) -> None:
-        super().__init__(f"no route for scope {scope_id!r}")
-        self.scope_id = scope_id
 
 
 def _utcnow() -> datetime:

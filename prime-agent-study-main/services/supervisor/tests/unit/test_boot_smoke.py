@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 import supervisor
 
 
-
 def test_every_module_imports() -> None:
     failures = {}
     for mod in pkgutil.walk_packages(supervisor.__path__, "supervisor."):

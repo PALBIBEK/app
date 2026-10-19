@@ -156,7 +156,7 @@ def make_catalog() -> HarnessCatalog:
 
 @pytest.fixture
 async def session_env(tmp_path: Path):
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 's.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 's.db'}") as (_engine, factory):
         writer = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         reader = JournalReader(factory, blob_dir=tmp_path / "blobs")
         registry = SessionRegistry()

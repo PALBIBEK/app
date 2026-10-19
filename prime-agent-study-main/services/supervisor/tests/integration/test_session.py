@@ -51,7 +51,7 @@ async def test_level2_crash_recovery_needs_review_then_cold(session_env) -> None
     m = session_env["manager"]
     writer = session_env["writer"]
     reader = session_env["reader"]
-    registry = session_env["registry"]
+    session_env["registry"]
     catalog = session_env["catalog"]
     from supervisor.session.manager import SessionManager
     from supervisor.session.registry import SessionRegistry

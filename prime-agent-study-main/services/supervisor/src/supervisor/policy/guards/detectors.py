@@ -15,7 +15,6 @@ import json
 from typing import Any
 
 __all__ = [
-    "args_similar",
     "call_hash",
     "canonicalize_args",
     "normalize_string",
@@ -96,43 +95,3 @@ def call_hash(tool_name: str, args: dict[str, Any]) -> str:
     return _fast_hash(payload.encode("utf-8"))
 
 
-def args_similar(
-    args1: dict[str, Any],
-    args2: dict[str, Any],
-    *,
-    threshold: float = 0.9,
-) -> bool:
-    """Check if two argument sets are similar.
-
-    Uses simple string comparison of canonical forms.
-    For more sophisticated similarity, consider:
-    - Levenshtein distance
-    - Jaccard similarity
-    - Semantic embedding comparison
-
-    Args:
-        args1: First argument set
-        args2: Second argument set
-        threshold: Similarity threshold (0-1)
-
-    Returns:
-        True if arguments are similar
-    """
-    # For now, use exact hash match
-    # Can be extended with fuzzy matching later
-    return call_hash("_", args1) == call_hash("_", args2)
-
-
-def extract_key_fields(args: dict[str, Any], keys: list[str]) -> dict[str, Any]:
-    """Extract specific fields for focused comparison.
-
-    Useful when only certain fields matter for repetition detection.
-
-    Args:
-        args: Full argument dict
-        keys: Keys to extract
-
-    Returns:
-        Subset of args with only specified keys
-    """
-    return {k: args[k] for k in keys if k in args}

@@ -31,15 +31,15 @@ if TYPE_CHECKING:
 __all__ = [
     # Store protocols
     "ArtifactStoreProtocol",
-    "UsageStoreProtocol",
+    # Analytics protocol
+    "CatalogAnalyticsProtocol",
+    # Auth protocol
+    "CatalogAuthzProtocol",
     # Service protocols
     "CatalogServiceProtocol",
     "CompositionResolverProtocol",
     "RuntimeBinderProtocol",
-    # Auth protocol
-    "CatalogAuthzProtocol",
-    # Analytics protocol
-    "CatalogAnalyticsProtocol",
+    "UsageStoreProtocol",
 ]
 
 

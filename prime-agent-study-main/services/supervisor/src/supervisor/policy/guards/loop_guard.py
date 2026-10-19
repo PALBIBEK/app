@@ -130,38 +130,36 @@ class LoopGuard:
                     )
 
         # Check oscillation: A-B-A-B pattern
-        if config.oscillation != GuardAction.OFF:
-            if len(window) >= 4:
-                a, b, c, d = list(window)[-4:]
-                if a == c and b == d and a != b:
-                    return GuardVerdict(
-                        tripped=True,
-                        detector=GuardDetector.OSCILLATION,
-                        action=config.oscillation,
-                        detail=(
-                            f"oscillation: A-B-A-B pattern detected "
-                            f"tool={tool_name!r} hashes=({a},{b})"
-                        ),
-                        call_hash=args_hash,
-                        tool_name=tool_name,
-                        call_count=stall_count,
-                    )
-
-        # Check stall: too many calls without progress
-        if config.stall_iterations > 0:
-            if stall_count >= config.stall_iterations:
+        if config.oscillation != GuardAction.OFF and len(window) >= 4:
+            a, b, c, d = list(window)[-4:]
+            if a == c and b == d and a != b:
                 return GuardVerdict(
                     tripped=True,
-                    detector=GuardDetector.STALL,
-                    action=GuardAction.ABORT,
+                    detector=GuardDetector.OSCILLATION,
+                    action=config.oscillation,
                     detail=(
-                        f"stall: no progress for {stall_count} tool iterations "
-                        f"last_tool={tool_name!r}"
+                        f"oscillation: A-B-A-B pattern detected "
+                        f"tool={tool_name!r} hashes=({a},{b})"
                     ),
                     call_hash=args_hash,
                     tool_name=tool_name,
                     call_count=stall_count,
                 )
+
+        # Check stall: too many calls without progress
+        if config.stall_iterations > 0 and stall_count >= config.stall_iterations:
+            return GuardVerdict(
+                tripped=True,
+                detector=GuardDetector.STALL,
+                action=GuardAction.ABORT,
+                detail=(
+                    f"stall: no progress for {stall_count} tool iterations "
+                    f"last_tool={tool_name!r}"
+                ),
+                call_hash=args_hash,
+                tool_name=tool_name,
+                call_count=stall_count,
+            )
 
         return GuardVerdict(
             tripped=False,

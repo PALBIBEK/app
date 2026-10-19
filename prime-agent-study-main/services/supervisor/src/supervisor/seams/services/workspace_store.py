@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from supervisor.seams.core.errors import SeamError
 
@@ -79,7 +79,7 @@ class WorkspaceFileRecord:
     deleted: bool = False
 
 
-WorkspaceBase: TypeAlias = dict[str, tuple[int, str]]
+type WorkspaceBase = dict[str, tuple[int, str]]
 """What a session's tree started from: path -> (version, sha256) in the scope."""
 
 

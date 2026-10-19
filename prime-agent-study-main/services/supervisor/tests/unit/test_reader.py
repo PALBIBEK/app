@@ -20,7 +20,7 @@ from supervisor.journal.writer import JournalWriter
 
 @pytest.fixture
 async def journal(tmp_path: Path):
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         r = JournalReader(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
@@ -134,7 +134,7 @@ async def test_latest_history_returns_last_run_end_not_first(journal) -> None:
 
 @pytest.mark.asyncio
 async def test_empty_session_returns_empty_not_error(journal) -> None:
-    w, r = journal
+    _w, r = journal
     assert await r.read("s1", since=-1) == []
     assert await r.unpaired_tool_starts("s1") == []
     assert await r.latest_history("s1") is None
@@ -143,7 +143,7 @@ async def test_empty_session_returns_empty_not_error(journal) -> None:
 
 @pytest.mark.asyncio
 async def test_blob_payload_round_trips(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'b.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'b.db'}") as (_engine, factory):
         blobs = tmp_path / "blobs"
         w = JournalWriter(factory, blob_dir=blobs, blob_threshold=64)
         r = JournalReader(factory, blob_dir=blobs)

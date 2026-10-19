@@ -347,19 +347,3 @@ _LIFECYCLE = (RunStart, RunEnd, TurnStart, TurnEnd)
 _TERMINAL = (RunEnd, TurnEnd, ToolEnd, SubagentEnd, JobEnd, CompactionEnd)
 
 
-def is_lifecycle_event(event: AgentEvent) -> bool:
-    return isinstance(event, _LIFECYCLE)
-
-
-def is_terminal_event(event: AgentEvent) -> bool:
-    return isinstance(event, _TERMINAL)
-
-
-def is_error_event(event: AgentEvent) -> bool:
-    if isinstance(event, ErrorEvent):
-        return True
-    if isinstance(event, ToolEnd) and event.is_error:
-        return True
-    if isinstance(event, TurnEnd) and event.stop_reason == "error":
-        return True
-    return False

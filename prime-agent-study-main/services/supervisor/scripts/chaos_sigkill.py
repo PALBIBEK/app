@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import multiprocessing as mp
 import os
@@ -202,7 +203,7 @@ async def phase_restart_and_check(db_path: Path, blob_dir: Path, planted: dict) 
         decision = await recovery.decide(sid, session_row=row)
         envs = await reader.read(sid, since=-1)
         seqs = [e.seq for e in envs]
-        gaps = [a + 1 for a, b in zip(seqs, seqs[1:]) if b != a + 1]
+        gaps = [a + 1 for a, b in itertools.pairwise(seqs) if b != a + 1]
         types = [type(e.payload).__name__ for e in envs]
         report["cases"]["mid_turn"] = {
             "resume_state": decision.state.value,

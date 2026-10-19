@@ -109,31 +109,37 @@ class QuotaEnforcer:
                 )
 
         # Check tenant session limit
-        if limits.max_sessions_per_tenant is not None:
-            if state.active_sessions >= limits.max_sessions_per_tenant:
-                raise SessionQuotaExceeded(
-                    tenant_id=tenant_id,
-                    current=state.active_sessions,
-                    limit=limits.max_sessions_per_tenant,
-                )
+        if (
+            limits.max_sessions_per_tenant is not None
+            and state.active_sessions >= limits.max_sessions_per_tenant
+        ):
+            raise SessionQuotaExceeded(
+                tenant_id=tenant_id,
+                current=state.active_sessions,
+                limit=limits.max_sessions_per_tenant,
+            )
 
         # Check sandbox limit
-        if requires_sandbox and limits.max_sandboxes_per_tenant is not None:
-            if state.active_sandboxes >= limits.max_sandboxes_per_tenant:
-                raise SandboxQuotaExceeded(
-                    tenant_id=tenant_id,
-                    current=state.active_sandboxes,
-                    limit=limits.max_sandboxes_per_tenant,
-                )
+        if (
+            requires_sandbox and limits.max_sandboxes_per_tenant is not None
+            and state.active_sandboxes >= limits.max_sandboxes_per_tenant
+        ):
+            raise SandboxQuotaExceeded(
+                tenant_id=tenant_id,
+                current=state.active_sandboxes,
+                limit=limits.max_sandboxes_per_tenant,
+            )
 
         # Check cost limit
-        if limits.max_cost_per_tenant is not None:
-            if state.total_cost_usd > limits.max_cost_per_tenant:
-                raise CostQuotaExceeded(
-                    tenant_id=tenant_id,
-                    current=state.total_cost_usd,
-                    limit=limits.max_cost_per_tenant,
-                )
+        if (
+            limits.max_cost_per_tenant is not None
+            and state.total_cost_usd > limits.max_cost_per_tenant
+        ):
+            raise CostQuotaExceeded(
+                tenant_id=tenant_id,
+                current=state.total_cost_usd,
+                limit=limits.max_cost_per_tenant,
+            )
 
         return state
 

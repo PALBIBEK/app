@@ -22,7 +22,7 @@ from supervisor.journal.writer import JournalWriter
 
 
 async def _journal_pair(tmp_path: Path):
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         r = JournalReader(factory, blob_dir=tmp_path / "blobs")
         yield w, r
@@ -30,7 +30,7 @@ async def _journal_pair(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_level1_echo_round_trip(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'echo.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'echo.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         r = JournalReader(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("echo-1", runtime="echo")
@@ -85,7 +85,7 @@ async def test_level2_crash_simulation_unpaired_tool(tmp_path: Path) -> None:
         # Writer dropped here (context exit) — no ToolEnd committed.
 
     # New reader on the same DB file.
-    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (_engine, factory):
         r = JournalReader(factory, blob_dir=tmp_path / "blobs")
         unpaired = await r.unpaired_tool_starts("crash-1")
         assert len(unpaired) == 1
@@ -111,7 +111,7 @@ async def test_level2_crash_simulation_unpaired_tool(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_session_reconstructable_from_read_and_latest_history(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'recon.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'recon.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         r = JournalReader(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("recon", runtime="echo")

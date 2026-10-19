@@ -8,7 +8,7 @@ never match.
 
 from __future__ import annotations
 
-import supervisor.session as session
+from supervisor import session
 from supervisor.session import errors, manager
 
 

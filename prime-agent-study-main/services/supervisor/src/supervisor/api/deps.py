@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Header, HTTPException, Request
@@ -19,13 +18,8 @@ from supervisor.journal.commands import (
 from supervisor.journal.reader import JournalReader
 from supervisor.seams.services import (
     AuthzService,
-    ForbiddenError,
-    Grant,
-    GrantDenied,
     GrantStore,
-    NotScopeMember,
     Principal,
-    UnauthorizedError,
 )
 from supervisor.session import SessionManager
 
@@ -172,37 +166,6 @@ def get_grant_store(request: Request) -> GrantStore:
     if store is None:
         raise HTTPException(status_code=503, detail="grant store not configured")
     return store  # type: ignore[return-value]
-
-
-def require_grant(
-    grant: Grant | str,
-) -> Callable[..., Coroutine[Any, Any, Principal]]:
-    """Normative FastAPI dep: ``require_grant(scope_id, grant) -> Principal``."""
-    needed = Grant(grant) if not isinstance(grant, Grant) else grant
-
-    async def _dep(
-        scope_id: str,
-        request: Request,
-        principal: Principal | None = None,
-        authorization: str | None = Header(default=None),
-        x_tenant_id: str | None = Header(default=None),
-        x_principal_id: str | None = Header(default=None),
-    ) -> Principal:
-        resolved = principal or await current_principal(
-            request,
-            authorization=authorization,
-            x_tenant_id=x_tenant_id,
-            x_principal_id=x_principal_id,
-        )
-        authz = get_authz(request)
-        try:
-            return await authz.require(resolved, scope_id, needed)
-        except UnauthorizedError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        except (GrantDenied, NotScopeMember, ForbiddenError) as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-    return _dep
 
 
 def request_principal_id(request: Request, tenant_id: str) -> str:

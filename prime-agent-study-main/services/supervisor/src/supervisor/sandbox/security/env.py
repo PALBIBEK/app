@@ -28,8 +28,6 @@ from urllib.parse import urlparse
 
 __all__ = [
     "DROPPED_PROXY_ENV",
-    "EnvSanitizer",
-    "inject_proxy_env",
     "is_allowed_gateway_inject",
     "is_denied_env_key",
     "sanitize_sandbox_env",
@@ -243,47 +241,6 @@ def strip_proxy_env(env: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in env.items() if k not in DROPPED_PROXY_ENV}
 
 
-def inject_proxy_env(
-    env: dict[str, str],
-    proxy_url: str,
-    *,
-    no_proxy: str = "localhost,127.0.0.1,::1",
-) -> dict[str, str]:
-    """Inject controlled proxy environment variables.
-
-    First strips any existing proxy vars, then injects controlled proxy.
-    Forces all traffic through specified proxy.
-
-    Args:
-        env: Base environment dictionary.
-        proxy_url: Proxy URL to inject (e.g., "http://proxy:8080").
-        no_proxy: Comma-separated list of hosts to bypass proxy.
-
-    Returns:
-        Environment with controlled proxy vars injected.
-
-    Example:
-        >>> env = {"PATH": "/usr/bin"}
-        >>> result = inject_proxy_env(env, "http://proxy:8080")
-        >>> result["HTTP_PROXY"]
-        'http://proxy:8080'
-    """
-    # First strip any existing proxy vars
-    result = strip_proxy_env(env)
-
-    # Then inject controlled proxy
-    result.update({
-        "HTTP_PROXY": proxy_url,
-        "http_proxy": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "https_proxy": proxy_url,
-        "NO_PROXY": no_proxy,
-        "no_proxy": no_proxy,
-    })
-
-    return result
-
-
 # =============================================================================
 # Core Functions
 # =============================================================================
@@ -383,22 +340,11 @@ def _is_safe_gateway_host(host: str) -> bool:
             return True
 
     # Private IP ranges
-    if (host.startswith("10.") or
-        host.startswith("192.168.") or
-        host.startswith("172.16.") or
-        host.startswith("172.17.") or
-        host.startswith("172.18.") or
-        host.startswith("172.19.") or
-        host.startswith("172.2") or
-        host.startswith("172.30.") or
-        host.startswith("172.31.")):
+    if (host.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30.", "172.31."))):
         return True
 
     # Single-word hostname = Docker Compose DNS (no TLD)
-    if "." not in host:
-        return True
-
-    return False
+    return "." not in host
 
 
 def is_allowed_gateway_inject(key: str, value: str) -> bool:
@@ -516,79 +462,3 @@ def sanitize_sandbox_env(
 # Class-Based API (Alternative)
 # =============================================================================
 
-class EnvSanitizer:
-    """Reusable environment sanitizer with custom configuration.
-
-    Use this when you need to customize deny/allow patterns beyond defaults.
-
-    Example:
-        >>> sanitizer = EnvSanitizer(
-        ...     extra_denied={"CUSTOM_SECRET"},
-        ...     extra_allowed={"CUSTOM_SAFE_VAR"},
-        ... )
-        >>> env = sanitizer.sanitize({"CUSTOM_SECRET": "x", "CUSTOM_SAFE_VAR": "y"})
-    """
-
-    __slots__ = ("_allowed_passthrough", "_denied_exact", "_strip_proxy")
-
-    def __init__(
-        self,
-        *,
-        extra_denied: frozenset[str] | None = None,
-        extra_allowed: frozenset[str] | None = None,
-        strip_proxy: bool = True,
-    ) -> None:
-        self._denied_exact = _DENIED_EXACT | (extra_denied or frozenset())
-        self._allowed_passthrough = _ALLOWED_PASSTHROUGH | (extra_allowed or frozenset())
-        self._strip_proxy = strip_proxy
-
-    def is_denied(self, key: str) -> bool:
-        """Check if key should be denied."""
-        if key in self._denied_exact or key.upper() in self._denied_exact:
-            return True
-
-        upper = key.upper()
-        for prefix in _DENIED_PREFIXES:
-            if upper.startswith(prefix):
-                return True
-
-        if _SENSITIVE_PATTERN.search(upper):
-            return key not in self._allowed_passthrough
-
-        return False
-
-    def sanitize(
-        self,
-        extra: dict[str, str] | None = None,
-        *,
-        base: dict[str, str] | None = None,
-        strip_proxy: bool | None = None,
-    ) -> dict[str, str]:
-        """Build sanitized environment.
-
-        Args:
-            extra: Additional env vars to include (also filtered).
-            base: Base environment (defaults to os.environ).
-            strip_proxy: Override instance setting for proxy stripping.
-
-        Returns:
-            Sanitized environment dict.
-        """
-        source = base if base is not None else dict(os.environ)
-        result: dict[str, str] = {}
-
-        for key, value in source.items():
-            if key in self._allowed_passthrough and not self.is_denied(key):
-                result[key] = value
-
-        if extra:
-            for key, value in extra.items():
-                if is_allowed_gateway_inject(key, value) or not self.is_denied(key):
-                    result[key] = value
-
-        # Strip proxy vars if requested
-        should_strip = strip_proxy if strip_proxy is not None else self._strip_proxy
-        if should_strip:
-            result = strip_proxy_env(result)
-
-        return result

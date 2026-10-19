@@ -40,7 +40,6 @@ __all__ = [
     "SandboxWorkspace",
     "TreeWorkspace",
     "Workspace",
-    "workspace_for",
 ]
 
 LOGICAL_ROOT: Final = "/workspace"
@@ -430,6 +429,3 @@ def _sandbox_errors() -> Iterator[None]:
         raise UnsupportedCapability(f"the session's sandbox cannot do this: {exc}") from exc
 
 
-def workspace_for(sandbox: Sandbox | None, host_dir: str | os.PathLike[str]) -> Workspace:
-    """The workspace a session's tools act on: its sandbox when it has one."""
-    return SandboxWorkspace(sandbox) if sandbox is not None else HostWorkspace(host_dir)

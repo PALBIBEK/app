@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from supervisor.api import deps
 from supervisor.seams.services import (
@@ -42,11 +42,6 @@ class PresignDownloadOut(BaseModel):
     expires_in_s: int
     path: str
     content_sha256: str
-
-
-class PutFileMeta(BaseModel):
-    mime_type: str | None = None
-    expected_version: int | None = Field(default=None)
 
 
 def _workspace_store(request: Request) -> WorkspaceStore:

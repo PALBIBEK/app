@@ -28,10 +28,6 @@ def known_runtime_names() -> frozenset[str]:
     return _KNOWN_RUNTIMES
 
 
-def is_valid_runtime(name: str) -> bool:
-    return name in _KNOWN_RUNTIMES
-
-
 def create_runtime(
     runtime_name: str,
     *,

@@ -44,25 +44,17 @@ from supervisor.journal.serde import (
     decode_event,
     encode_event,
     event_type_name,
-    is_known_event_type,
-    registered_event_types,
 )
 from supervisor.journal.writer import JournalWriter, OversizedPayloadError
 
 __all__ = [
-    # Writer
+    "CommandStore",
+    "DeserializationError",
+    "JournalReader",
     "JournalWriter",
     "OversizedPayloadError",
-    # Reader
-    "JournalReader",
-    # Commands
-    "CommandStore",
-    # Serialization
-    "encode_event",
-    "decode_event",
-    "event_type_name",
-    "is_known_event_type",
-    "registered_event_types",
     "SerializationError",
-    "DeserializationError",
+    "decode_event",
+    "encode_event",
+    "event_type_name",
 ]

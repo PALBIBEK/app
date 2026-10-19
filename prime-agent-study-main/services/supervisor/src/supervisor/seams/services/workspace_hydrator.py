@@ -19,7 +19,6 @@ from supervisor.seams.services.workspace_store import (
 __all__ = [
     "StoreWorkspaceHydrator",
     "WorkspaceHydrator",
-    "as_workspace_hydrator",
 ]
 
 
@@ -71,5 +70,3 @@ class StoreWorkspaceHydrator:
             return await self._store.sync(scope_id, tree, base=base)
 
 
-def as_workspace_hydrator(store: WorkspaceStore) -> WorkspaceHydrator:
-    return StoreWorkspaceHydrator(store)

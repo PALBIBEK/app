@@ -357,47 +357,6 @@ def resolve_sandbox_create(
     return provider, image
 
 
-def resolve_sandbox_create_full(
-    manifest: HarnessManifest,
-    *,
-    deploy_provider: SandboxProvider | None,
-    profile: SandboxProfile | None = None,
-    client: object | None = None,
-) -> SandboxResolution:
-    """Resolve sandbox with full metadata (alternative API).
-
-    Same as resolve_sandbox_create but returns a SandboxResolution
-    dataclass with additional metadata.
-
-    Args:
-        manifest: Harness manifest with requirements.
-        deploy_provider: Default provider from deployment config.
-        profile: Optional sandbox profile override.
-        client: Provider-specific client.
-
-    Returns:
-        SandboxResolution with provider, image, and metadata.
-
-    Example:
-        >>> resolution = resolve_sandbox_create_full(manifest, ...)
-        >>> if resolution.has_sandbox:
-        ...     print(f"Using profile: {resolution.profile_used}")
-    """
-    provider, image = resolve_sandbox_create(
-        manifest,
-        deploy_provider=deploy_provider,
-        profile=profile,
-        client=client,
-    )
-
-    return SandboxResolution(
-        provider=provider,
-        image_digest=image,
-        requires_sandbox=manifest.requires_sandbox,
-        profile_used=profile.name if profile else None,
-    )
-
-
 def _provider_name(provider: object) -> str:
     """A provider's name as the strict-mode guard spells it (enum or string)."""
     return str(getattr(provider, "value", provider))

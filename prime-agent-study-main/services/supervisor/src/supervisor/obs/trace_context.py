@@ -37,10 +37,6 @@ def parse_traceparent(header: str | None) -> str | None:
     return m.group(2).lower()
 
 
-def is_valid_trace_id(value: str | None) -> bool:
-    return bool(value and _HEX32.match(value))
-
-
 def format_traceparent(trace_id: str, *, span_id: str | None = None) -> str:
     """Build a valid W3C traceparent for the given 32-hex trace id."""
     tid = trace_id.lower()

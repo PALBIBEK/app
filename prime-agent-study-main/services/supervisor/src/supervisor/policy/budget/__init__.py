@@ -7,7 +7,6 @@ Components:
 - BudgetExceeded: Exception for budget violations
 """
 
-from supervisor.policy.budget.estimator import CostEstimator
 from supervisor.policy.budget.pricing import ModelPrice, ModelPricing
 from supervisor.policy.budget.tracker import BudgetTracker
 from supervisor.policy.errors import BudgetExceeded
@@ -15,7 +14,6 @@ from supervisor.policy.errors import BudgetExceeded
 __all__ = [
     "BudgetExceeded",
     "BudgetTracker",
-    "CostEstimator",
     "ModelPrice",
     "ModelPricing",
 ]

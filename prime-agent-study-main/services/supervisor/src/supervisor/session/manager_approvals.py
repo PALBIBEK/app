@@ -155,9 +155,7 @@ class ApprovalOps(SessionManagerBase):
             return False
         if prior.status == "responded" and is_allow_choice(prior.choice):
             return True
-        if prior.status == "timed_out" and is_allow_choice(prior.choice):
-            return True
-        return False
+        return bool(prior.status == "timed_out" and is_allow_choice(prior.choice))
 
     async def _handle_approval_required(
         self,

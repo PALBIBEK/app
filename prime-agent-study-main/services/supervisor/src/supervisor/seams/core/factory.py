@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
@@ -51,9 +51,7 @@ def lab_echo_allowed(*, explicit: bool | None = None) -> bool:
     if flag in ("0", "false", "no"):
         return False
     # Staging/prod: never unmarked echo.
-    if _staging_or_prod():
-        return False
-    return True
+    return not _staging_or_prod()
 
 
 def build_context_memory_from_profile(
@@ -303,6 +301,3 @@ def build_runtime_seams(
     )
 
 
-def build_runtime_seams_from_handles(**kwargs: Any) -> RuntimeSeams:
-    """Alias kept for binder clarity — same as ``build_runtime_seams``."""
-    return build_runtime_seams(**kwargs)

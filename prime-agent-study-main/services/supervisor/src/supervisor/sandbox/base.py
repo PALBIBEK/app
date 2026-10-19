@@ -135,24 +135,6 @@ class WorkspaceSyncUnsupported(SandboxError):
         )
 
 
-class ProvisionError(SandboxError):
-    """Failed to create a new sandbox.
-
-    Recovery: Check provider resources, retry if retryable=True.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        provider: str,
-        *,
-        retryable: bool = True,
-        cause: Exception | None = None,
-    ) -> None:
-        super().__init__(message, provider=provider, retryable=retryable)
-        self.__cause__ = cause
-
-
 class BlobStagingUnsupported(SandboxError):
     """Provider does not support blob staging (stage_in/stage_out).
 

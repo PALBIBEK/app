@@ -53,27 +53,16 @@ from __future__ import annotations
 # Errors
 # =============================================================================
 from supervisor.catalog.core.errors import (
-    CatalogConnectionError,
-    # Base
     CatalogError,
     CatalogOwnershipRequired,
-    # Permission
-    CatalogPermissionDenied,
-    # Storage
-    CatalogStorageError,
     CompositionDigestRequired,
-    # Composition
     CompositionIncomplete,
-    # Integrity
     DigestMismatch,
     DigestMissing,
     FloatingRef,
     HarnessVersionMismatch,
-    ImmutableArtifact,
-    # Validation
     InvalidArtifact,
     InvalidDigest,
-    # Status
     NotOffered,
 )
 
@@ -96,23 +85,18 @@ from supervisor.catalog.core.protocols import (
 from supervisor.catalog.core.types import (
     AgentComposition,
     ApprovalDefault,
-    # Type alias
     Artifact,
-    # Enums
     ArtifactKind,
-    # Metadata
     ArtifactMetadata,
     ArtifactStatus,
     ArtifactUsageRecord,
     ArtifactUsageStats,
-    CatalogAction,
     CatalogGrant,
     DigestRef,
     FileEffects,
     MemoryProfile,
     PlugBindings,
     PromptPack,
-    # Artifact types
     PromptSection,
     RecallBackend,
     SandboxProfile,
@@ -125,23 +109,10 @@ from supervisor.catalog.core.types import (
 # =============================================================================
 # Services
 # =============================================================================
-from supervisor.catalog.services import (
-    CatalogAuthz,
-    CatalogService,
-    CompositionResolver,
-)
-
 # =============================================================================
 # Repositories
 # =============================================================================
-from supervisor.catalog.storage import (
-    InMemoryArtifactStore,
-    InMemoryUsageStore,
-    PostgresArtifactStore,
-    PostgresUsageStore,
-    reject_floating_ref,
-    validate_digest_format,
-)
+from supervisor.catalog.storage import reject_floating_ref, validate_digest_format
 
 # =============================================================================
 # Converters
@@ -151,107 +122,78 @@ from supervisor.catalog.storage.converters import (
     artifact_to_dict,
     composition_from_dict,
     composition_to_dict,
-    # Helpers
     kind_of,
     memory_profile_from_dict,
     memory_profile_to_dict,
     metadata_from_dict,
     metadata_to_dict,
-    # From dict
     prompt_pack_from_dict,
-    # To dict
     prompt_pack_to_dict,
     sandbox_profile_from_dict,
     sandbox_profile_to_dict,
-    session_pins_from_dict,
-    session_pins_to_dict,
     tool_set_from_dict,
     tool_set_to_dict,
     with_digest,
-    with_metadata,
     with_status,
 )
 
 __all__ = [
-    # Types - Enums
-    "ArtifactKind",
-    "ArtifactStatus",
-    "SandboxProviderName",
-    "FileEffects",
+    "AgentComposition",
     "ApprovalDefault",
-    "RecallBackend",
-    "CatalogGrant",
-    "CatalogAction",
-    # Types - Metadata/Analytics
+    "Artifact",
+    "ArtifactKind",
     "ArtifactMetadata",
+    "ArtifactStatus",
+    "ArtifactStoreProtocol",
     "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    # Types - Artifacts
-    "PromptSection",
-    "PromptPack",
-    "ToolDefinition",
-    "ToolSet",
-    "DigestRef",
-    "PlugBindings",
-    "AgentComposition",
-    "SandboxProfile",
-    "MemoryProfile",
-    "SessionPins",
-    "Artifact",
-    # Errors
+    "CatalogAnalyticsProtocol",
+    "CatalogAuthzProtocol",
     "CatalogError",
+    "CatalogGrant",
+    "CatalogOwnershipRequired",
+    "CatalogServiceProtocol",
+    "CompositionDigestRequired",
+    "CompositionIncomplete",
+    "CompositionResolverProtocol",
     "DigestMismatch",
     "DigestMissing",
-    "InvalidDigest",
-    "NotOffered",
-    "ImmutableArtifact",
+    "DigestRef",
+    "FileEffects",
     "FloatingRef",
-    "CompositionIncomplete",
-    "CompositionDigestRequired",
     "HarnessVersionMismatch",
-    "CatalogPermissionDenied",
-    "CatalogOwnershipRequired",
-    "CatalogStorageError",
-    "CatalogConnectionError",
     "InvalidArtifact",
-    # Protocols
-    "ArtifactStoreProtocol",
-    "UsageStoreProtocol",
-    "CatalogServiceProtocol",
-    "CompositionResolverProtocol",
+    "InvalidDigest",
+    "MemoryProfile",
+    "NotOffered",
+    "PlugBindings",
+    "PromptPack",
+    "PromptSection",
+    "RecallBackend",
     "RuntimeBinderProtocol",
-    "CatalogAuthzProtocol",
-    "CatalogAnalyticsProtocol",
-    # Converters
-    "prompt_pack_from_dict",
-    "tool_set_from_dict",
-    "composition_from_dict",
-    "sandbox_profile_from_dict",
-    "memory_profile_from_dict",
-    "session_pins_from_dict",
-    "metadata_from_dict",
+    "SandboxProfile",
+    "SandboxProviderName",
+    "SessionPins",
+    "ToolDefinition",
+    "ToolSet",
+    "UsageStoreProtocol",
     "artifact_from_dict",
-    "prompt_pack_to_dict",
-    "tool_set_to_dict",
-    "composition_to_dict",
-    "sandbox_profile_to_dict",
-    "memory_profile_to_dict",
-    "session_pins_to_dict",
-    "metadata_to_dict",
     "artifact_to_dict",
+    "composition_from_dict",
+    "composition_to_dict",
     "kind_of",
+    "memory_profile_from_dict",
+    "memory_profile_to_dict",
+    "metadata_from_dict",
+    "metadata_to_dict",
+    "prompt_pack_from_dict",
+    "prompt_pack_to_dict",
+    "reject_floating_ref",
+    "sandbox_profile_from_dict",
+    "sandbox_profile_to_dict",
+    "tool_set_from_dict",
+    "tool_set_to_dict",
+    "validate_digest_format",
     "with_digest",
     "with_status",
-    "with_metadata",
-    # Repositories
-    "InMemoryArtifactStore",
-    "InMemoryUsageStore",
-    "PostgresArtifactStore",
-    "PostgresUsageStore",
-    "reject_floating_ref",
-    "validate_digest_format",
-    # Services
-    "CatalogService",
-    "CatalogAuthz",
-    "CompositionResolver",
 ]
