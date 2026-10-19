@@ -43,6 +43,8 @@ class HarnessSettings:
         memory_service_url: URL for durable memory service (optional)
         memory_tenant: Tenant ID for memory service
         memory_namespace: Namespace for memory service
+        memory_subject: Subject for memory service (default: the session)
+        memory_lease_owner: Lease owner for memory service (optional)
         default_protocol_versions: Default supported protocol versions
     """
 
@@ -53,6 +55,8 @@ class HarnessSettings:
     memory_tenant: str
     memory_namespace: str
     default_protocol_versions: frozenset[int]
+    memory_subject: str | None = None
+    memory_lease_owner: str | None = None
 
     @classmethod
     def from_env(cls) -> HarnessSettings:
@@ -93,6 +97,8 @@ class HarnessSettings:
             memory_tenant=memory_tenant,
             memory_namespace=memory_namespace,
             default_protocol_versions=frozenset({1, 2}),
+            memory_subject=os.environ.get("MEMORY_SUBJECT", "").strip() or None,
+            memory_lease_owner=os.environ.get("MEMORY_LEASE_OWNER", "").strip() or None,
         )
 
     def get_contracts_path(self) -> Path | None:

@@ -187,16 +187,17 @@ def materialize_harness_binds(
     # Durable Memory Service bind (Tier 1)
     if settings.memory_service_url:
         ms_path = yal / "memory_service.json"
-        subject = f"session:{sid}"
         durable_doc: dict[str, object] = {
             "base_url": settings.memory_service_url,
             "session_id": sid,
             "scope": {
                 "tenant": tenant_id or settings.memory_tenant,
-                "subject": subject,
+                "subject": settings.memory_subject or f"session:{sid}",
                 "namespace": settings.memory_namespace,
             },
         }
+        if settings.memory_lease_owner:
+            durable_doc["lease_owner"] = settings.memory_lease_owner
         _write_json(ms_path, durable_doc)
         created_files["memory_service_json"] = str(ms_path)
 
