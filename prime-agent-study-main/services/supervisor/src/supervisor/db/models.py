@@ -62,7 +62,6 @@ class SessionRow(Base):
 class EventRow(Base):
     __tablename__ = "events"
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_events_session_seq"),
         # Idempotent appends look events up by their deterministic id.
         Index("ix_events_session_event_id", "session_id", "event_id"),
     )
@@ -127,7 +126,6 @@ class CatalogArtifactRow(Base):
 
     __tablename__ = "catalog_artifacts"
     __table_args__ = (
-        UniqueConstraint("kind", "artifact_id", "digest", name="uq_catalog_artifact"),
         Index("ix_catalog_artifacts_created_by", "created_by"),
         Index("ix_catalog_artifacts_owner_id", "owner_id"),
         Index("ix_catalog_artifacts_status", "status"),

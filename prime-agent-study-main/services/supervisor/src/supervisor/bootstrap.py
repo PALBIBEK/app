@@ -17,7 +17,8 @@ from supervisor.catalog.loading.bootstrap import (
 )
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.config import Settings
-from supervisor.db.engine import create_all, make_engine, session_factory
+from supervisor.db.engine import make_engine, session_factory
+from supervisor.db.migrate import migrate
 from supervisor.harness import HarnessCatalog, load_manifest
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
@@ -55,7 +56,7 @@ async def bootstrap_supervisor(
 
     if session_maker is None:
         engine = make_engine(settings.database_url)
-        await create_all(engine)
+        await migrate(engine)
         session_maker = session_factory(engine)
 
     harness_catalog = bootstrap_harness_catalog(settings.harness_versions_dir)

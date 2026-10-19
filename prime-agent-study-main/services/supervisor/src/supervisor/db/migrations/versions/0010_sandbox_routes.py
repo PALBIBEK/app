@@ -6,15 +6,15 @@ Reference: QM's sandbox-routing.ts pattern.
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0010_sandbox_routes"
-down_revision: Union[str, None] = "0009_workspace_partial_unique"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0009_workspace_partial_unique"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

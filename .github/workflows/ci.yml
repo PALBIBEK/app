@@ -57,6 +57,19 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:  # the supervisor's migration tests run against it
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +139,9 @@ jobs:
           echo "127.0.0.1 model-gateway acp temporal memory-service" | sudo tee -a /etc/hosts
       - name: Start the stack
         run: $PROJECT/e2e/stack/up.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
+      - name: The migrated schema matches the models
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: DATABASE_URL=postgresql+asyncpg://yal:yal@127.0.0.1:5433/supervisor .venv/bin/alembic check
       - name: End-to-end stages
         run: $PROJECT/e2e/run.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
       - name: Logs
