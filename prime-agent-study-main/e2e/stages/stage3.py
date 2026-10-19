@@ -198,10 +198,10 @@ check("[no-tools] no catalog tools offered (platform tools only)", not (offered 
 
 # --- D. model routes ---------------------------------------------------------------
 print("\n## D. Model routes")
-sid = session("r-unknown", composition("r-unknown", route="no-such-model"))
-run, _, calls = turn(sid, "hello", 1)
-errors = [e.get("data", {}) for e in run if e.get("type") == "error"]
-check("[unknown route] the turn ends with a clear error, not a hang", "run_end" in types(run) and bool(errors), (types(run), errors[:1]))
+r = u.publish("composition", BASE | {"name": "r-unknown", "plug_bindings": {
+    "gateway_base_url": "http://model-gateway:8090", "model_route": "no-such-model"}})
+check("[unknown route] refused at publish, before any session can start on it (F17)",
+      r.status_code == 422 and "not served" in r.text, (r.status_code, r.text[:200]))
 sid = session("r-other-url", composition("r-other-url", url="http://127.0.0.1:8090"))
 run, _, calls = turn(sid, '/tool ls {"path": "."}', 1)
 check("[different gateway URL] still answers (chat-completions client)", "run_end" in types(run) and bool(calls), (types(run), [c["path"] for c in calls]))

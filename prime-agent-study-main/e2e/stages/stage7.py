@@ -51,12 +51,22 @@ def publish(kind: str, body: dict, user: User = alice) -> dict:
     return {"id": r.json()["artifact_id"], "digest": r.json()["digest"]}
 
 
-SANDBOX = publish("sandbox_profile", COMMON | {"name": "pol-sandbox", "provider": "local_process", "image_digest": REAL_IMAGE,
-                                               "file_effects": "workspace_write", "approval_default": "ask"})
+SANDBOX_BODY = COMMON | {"name": "pol-sandbox", "provider": "local_process", "image_digest": REAL_IMAGE,
+                        "file_effects": "workspace_write", "approval_default": "ask"}
+SANDBOX = publish("sandbox_profile", SANDBOX_BODY)
+_sandboxes: dict[str, dict] = {alice.tenant: SANDBOX}
+
+
+def sandbox_for(user: User) -> dict:
+    """A tenant cannot see, or publish under, another tenant's name: each gets its own copy."""
+    if user.tenant not in _sandboxes:
+        body = SANDBOX_BODY | {"name": f"pol-sandbox-{user.tenant}"}
+        _sandboxes[user.tenant] = publish("sandbox_profile", body, user)
+    return _sandboxes[user.tenant]
 
 
 def comp(name: str, harness: str = "githi-v1", user: User = alice) -> tuple[str, str, str]:
-    body = local("compositions", "githi-v1") | {"name": name, "harness_version": harness, "sandbox_profile": SANDBOX,
+    body = local("compositions", "githi-v1") | {"name": name, "harness_version": harness, "sandbox_profile": sandbox_for(user),
                                                 "plug_bindings": {"gateway_base_url": "http://model-gateway:8090",
                                                                   "model_route": "standin-chat"}}
     return name, publish("composition", body, user)["digest"], harness
@@ -352,13 +362,13 @@ def section_h_quotas() -> None:
             subprocess.run([os.environ["E2E_CTL"], "restart", svc], check=True)
         time.sleep(10)
         tess = User(f"t9-{uuid.uuid4().hex[:6]}", "tess")
-        c = comp("pol-quota", user=tess)
+        c = comp(f"pol-quota-{tess.tenant}", user=tess)
         rs = [tess.create(c[0], c[1]) for _ in range(3)]
         codes = [r.status_code for r in rs]
         check("a tenant past its session quota is refused with 429 and a reason", codes == [201, 201, 429]
               and "quota_exceeded" in rs[2].text, (codes, rs[2].text[:160]))
         other = User(f"t8-{uuid.uuid4().hex[:6]}", "otto")
-        c8 = comp("pol-quota8", user=other)
+        c8 = comp(f"pol-quota-{other.tenant}", user=other)
         check("...without affecting another tenant", other.create(c8[0], c8[1]).status_code == 201)
         burst = [tess.get("/v1/sessions").status_code for _ in range(60)]
         check("a burst past the per-minute limit gets 429s", 429 in burst, {k: burst.count(k) for k in set(burst)})
