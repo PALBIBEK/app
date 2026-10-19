@@ -24,14 +24,19 @@ class RememberArgs(ToolArgs):
 async def remember(args: RememberArgs, ctx: ToolContext) -> dict[str, Any]:
     """Store a durable fact in long-term memory (append-only, safe to retry).
 
-    Scoped to the calling session's tenant; the scope is never taken from the
-    model's arguments.
+    Scoped to the session's tenant, user and agent (so that user's later sessions
+    with this agent recall it); the scope is never taken from the model's arguments.
     """
     if not args.content.strip():
         raise InvalidArguments("content must not be empty")
     if not memory_service_base_url():
         raise UnsupportedCapability("long-term memory is not configured for this deployment")
-    scope = resolve_memory_scope(session_id=ctx.session_id or "", tenant_id=ctx.tenant_id or "")
+    scope = resolve_memory_scope(
+        session_id=ctx.session_id or "",
+        tenant_id=ctx.tenant_id or "",
+        owner=ctx.owner,
+        agent=ctx.agent,
+    )
     return await asyncio.to_thread(
         write_memory_item,
         content=args.content,

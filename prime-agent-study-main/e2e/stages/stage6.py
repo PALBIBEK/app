@@ -158,6 +158,10 @@ s2 = session(c)
 run, calls = turn(s2, "Alice dog named", 1)
 rec = (payloads(run, "MemoryRecall") or [{}])[0]
 check("a NEW session for the same user recalls it (long-term memory)", "Rex" in json.dumps(rec) or "Rex" in seen(calls), rec)
+s3 = session(c, user=bob)
+run, calls = turn(s3, "Alice dog named", 1, user=bob)
+rec = (payloads(run, "MemoryRecall") or [{}])[0]
+check("another user's session on the same agent does not recall it", "Rex" not in json.dumps(rec) and "Rex" not in seen(calls), rec)
 
 # --- E. fork carries the conversation --------------------------------------------
 print("\n## E. Fork")

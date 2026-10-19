@@ -49,6 +49,7 @@ class GithiRuntime:
         self._session_dir: str | None = None
         self._workspace: Workspace | None = None
         self._on_mutate: Callable[[], None] | None = None
+        self._identity: dict[str, str] = {}
         self._history: list[dict[str, Any]] = []
         self._busy = False
         self._abort_requested = False
@@ -73,6 +74,10 @@ class GithiRuntime:
         """Called whenever a tool changes the workspace (drives workspace sync)."""
         self._on_mutate = callback
 
+    def set_identity(self, *, owner: str, agent: str) -> None:
+        """Whose session this is and which agent runs it: tools scope long-term memory by them."""
+        self._identity = {"owner": owner, "agent": agent}
+
     def loop(self, *, should_abort: Callable[[], bool] = lambda: False) -> AgentLoop:
         """Turn pieces bound to this session's seams and workspace."""
         return AgentLoop(
@@ -80,6 +85,7 @@ class GithiRuntime:
             session_id=self._session_id,
             workspace=self._workspace,
             on_mutate=self._on_mutate,
+            identity=self._identity,
             should_abort=should_abort,
         )
 

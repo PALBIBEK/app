@@ -33,6 +33,7 @@ from supervisor.seams.compaction import (
     extract_previous_summary,
     whole_exchanges,
 )
+from supervisor.memory.binding import long_term_agent
 from supervisor.session.workspaces import session_workspace
 
 if TYPE_CHECKING:
@@ -97,6 +98,11 @@ class PinnedContextMemory:
             session_id=session_id,
             tenant_id=row.tenant_id,
             workspace_path=str(session_workspace(session_id)),
+            owner=row.owner_principal_id or row.tenant_id,
+            agent=long_term_agent(
+                composition_id=(row.composition_pins or {}).get("composition_id"),
+                harness_version=row.harness_version,
+            ),
         )
         return _Binding(
             profile,

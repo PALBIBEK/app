@@ -71,6 +71,7 @@ from supervisor.seams import (
     ToolResult,
 )
 from supervisor.seams.services import (
+    resolve_memory_scope,
     AuthzService,
     GrantStore,
     Principal,
@@ -79,7 +80,7 @@ from supervisor.seams.services import (
     WorkspaceConflictError,
     VirtualKeyClient,
 )
-from supervisor.memory.binding import MemoryRequest, agent_pin, resolve_binding
+from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models import model_router
 from supervisor.models.browser import BrowserAccess, BrowserGrant
@@ -223,6 +224,8 @@ class SessionManager:
         self._sandboxes: dict[str, Sandbox | None] = {}
         self._modes: dict[str, SessionMode] = {}
         self._seams: dict[str, RuntimeSeams] = {}
+        # Long-term memory identity per live session: (owner, agent name).
+        self._long_term: dict[str, tuple[str, str]] = {}
         self._workspace: dict[str, SessionWorkspaceState] = {}
         self._fallback_seams = build_runtime_seams()
         self._budget = budget or BudgetTracker(session_factory)
@@ -458,6 +461,16 @@ class SessionManager:
         sandbox, and the hook that marks the workspace dirty when a tool changes it.
         """
         model = session_model(manifest, pins)
+        owner, agent = self._long_term.setdefault(
+            session_id,
+            (
+                principal.id,
+                long_term_agent(
+                    composition_id=pins.composition_id if pins is not None else None,
+                    harness_version=manifest.harness_version,
+                ),
+            ),
+        )
         token = self._mint_gateway_key(
             session_id,
             tenant_id=tenant_id,
@@ -478,6 +491,9 @@ class SessionManager:
                 memory_profile=memory_profile,
                 session_id=session_id,
                 tenant_id=tenant_id,
+                memory_scope=resolve_memory_scope(
+                    session_id=session_id, tenant_id=tenant_id, owner=owner, agent=agent
+                ),
             )
             session_dir = str(ws)
         if seams is not None:
@@ -486,6 +502,9 @@ class SessionManager:
         set_mutate = getattr(runtime, "set_on_mutate", None)
         if callable(set_mutate):
             set_mutate(lambda: self._workspace_svc.mark_dirty(ws_state))
+        set_identity = getattr(runtime, "set_identity", None)
+        if callable(set_identity) and (identity := self._long_term.get(session_id)) is not None:
+            set_identity(owner=identity[0], agent=identity[1])
         await runtime.start(sandbox, session_dir)
         return runtime
 
@@ -543,6 +562,8 @@ class SessionManager:
     def tool_context(self, session_id: str, tenant_id: str) -> dict[str, Any]:
         """``ToolInvokeContext.extra`` for a session: identity, its workspace, change hook."""
         extra: dict[str, Any] = {"session_id": session_id, "tenant_id": tenant_id}
+        if (identity := self._long_term.get(session_id)) is not None:
+            extra["owner"], extra["agent"] = identity
         runtime_workspace = getattr(self._registry.get(session_id), "workspace", None)
         sandbox = self._sandboxes.get(session_id)
         if runtime_workspace is not None:
@@ -962,6 +983,7 @@ class SessionManager:
                 _log.exception("sandbox destroy failed session=%s", session_id)
         self._modes.pop(session_id, None)
         self._seams.pop(session_id, None)
+        self._long_term.pop(session_id, None)
         self._workspace.pop(session_id, None)
         self._sandbox_policy.clear(session_id)
         self._guards.clear(session_id)

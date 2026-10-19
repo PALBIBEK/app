@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -60,12 +60,14 @@ class AgentLoop:
         session_id: str | None,
         workspace: Workspace | None = None,
         on_mutate: Callable[[], None] | None = None,
+        identity: Mapping[str, str] | None = None,
         should_abort: Callable[[], bool] = lambda: False,
     ) -> None:
         self._seams = seams
         self._session_id = session_id
         self._workspace = workspace
         self._on_mutate = on_mutate
+        self._identity = dict(identity or {})
         self._should_abort = should_abort
 
     # --- whole turn (offline only) ---------------------------------------------
@@ -178,7 +180,11 @@ class AgentLoop:
             result: dict[str, Any] = {"error": "no tool_provider seam configured"}
             return ToolEnd(tool_call_id=call_id, tool_name=name, result=result, is_error=True)
 
-        extra: dict[str, Any] = {"session_id": self._session_id, "tenant_id": tenant_id}
+        extra: dict[str, Any] = {
+            "session_id": self._session_id,
+            "tenant_id": tenant_id,
+            **self._identity,
+        }
         if self._workspace is not None:
             extra["workspace"] = self._workspace
         if self._on_mutate is not None:

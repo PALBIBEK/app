@@ -27,6 +27,8 @@ class ToolContext:
 
     session_id: str | None = None
     tenant_id: str | None = None
+    owner: str | None = None  # the user the session belongs to
+    agent: str | None = None  # the agent's name (composition, else harness version)
     trace_id: str = ""
     timeout_s: float = DEFAULT_TIMEOUT_S
     on_mutate: Callable[[], None] | None = None
@@ -65,6 +67,8 @@ class ToolContext:
         return cls(
             session_id=session_id,
             tenant_id=_text(extra.get("tenant_id")),
+            owner=_text(extra.get("owner")),
+            agent=_text(extra.get("agent")),
             trace_id=ctx.trace_id,
             timeout_s=timeout_s,
             on_mutate=extra.get("on_mutate"),

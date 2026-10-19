@@ -60,8 +60,18 @@ def resolve_memory_scope(
     tenant_id: str = "",
     subject: str | None = None,
     namespace: str | None = None,
+    owner: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, str]:
-    """Build Scope{tenant,subject,namespace} using session extras / env defaults."""
+    """The long-term memory scope ``{tenant, subject, namespace}`` for a session.
+
+    A fact belongs to a user and an agent: the subject is ``user:<owner>`` and the
+    namespace the agent's name, so the user's next session with that agent (or a
+    newer version of it) recalls it, and no other user's does. Explicit values
+    win; ``MEMORY_SUBJECT`` / ``MEMORY_NAMESPACE`` apply only without an owner or
+    agent (a deployment-wide subject must never merge different users' memories);
+    the session itself is the last resort.
+    """
     sid = (session_id or "").strip() or "unknown"
     tenant = (
         (tenant_id or "").strip()
@@ -70,11 +80,13 @@ def resolve_memory_scope(
     )
     sub = (
         (subject or "").strip()
+        or (f"user:{owner.strip()}" if owner and owner.strip() else "")
         or os.environ.get("MEMORY_SUBJECT", "").strip()
         or f"session:{sid}"
     )
     ns = (
         (namespace or "").strip()
+        or (agent or "").strip()
         or os.environ.get("MEMORY_NAMESPACE", "").strip()
         or "facts"
     )

@@ -9,6 +9,7 @@ Reference: Original bind_files.py refactored with settings and security.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,6 +75,7 @@ def materialize_harness_binds(
     session_id: str | None = None,
     tenant_id: str | None = None,
     settings: HarnessSettings | None = None,
+    memory_scope: Mapping[str, str] | None = None,
 ) -> SessionFilesPaths:
     """Write .yal/{pins.json,system_prompt.txt,tools.json,...} under session_dir.
 
@@ -190,7 +192,10 @@ def materialize_harness_binds(
         durable_doc: dict[str, object] = {
             "base_url": settings.memory_service_url,
             "session_id": sid,
-            "scope": {
+            # The supervisor's long-term scope (user and agent) when it gives one.
+            "scope": dict(memory_scope)
+            if memory_scope
+            else {
                 "tenant": tenant_id or settings.memory_tenant,
                 "subject": settings.memory_subject or f"session:{sid}",
                 "namespace": settings.memory_namespace,

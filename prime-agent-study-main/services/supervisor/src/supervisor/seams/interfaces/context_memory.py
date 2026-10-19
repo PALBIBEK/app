@@ -21,6 +21,8 @@ class MemoryInvokeContext:
     tenant_id: str = ""
     trace_id: str = ""
     workspace_path: str = ""
+    owner: str = ""  # the user the session belongs to (long-term memory subject)
+    agent: str = ""  # the agent's name (long-term memory namespace)
 
 
 @dataclass(frozen=True)
