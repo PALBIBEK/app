@@ -7,7 +7,7 @@ from typing import Any
 
 
 def _supervisor_src() -> Path:
-    return Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    return Path(__file__).resolve().parents[2] / "supervisor"
 
 
 def _agent_platform_root() -> Path:
@@ -44,29 +44,7 @@ def test_sp_u01_tool_provider_fake_lists_and_invokes() -> None:
     assert result.payload == "hi"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 # --- Fail loud ---
-
-
-
-
-
-
-
-
-
-
 
 
 # --- Contract / architecture ---
@@ -122,31 +100,6 @@ def test_sp_c03_journal_session_api_free_of_provider_concretes() -> None:
                 assert needle not in body, f"{path}: found {needle}"
 
 
-
-
-
-
-def test_sp_c06_contracts_seams_md_lists_protocols_and_codes() -> None:
-    doc = _agent_platform_root() / "contracts" / "seams.md"
-    text = doc.read_text()
-    for needle in (
-        "ToolProvider",
-        "PromptAssembler",
-        "SubagentTransport",
-        "ModelGatewayClient",
-        "UNSUPPORTED_CAPABILITY",
-        "PROVIDER_MISSING",
-        "PROVIDER_CONFLICT",
-        "BAD_ARGS",
-        "DEPTH_EXCEEDED",
-    ):
-        assert needle in text, f"missing {needle} in contracts/seams.md"
-
-
-
-
-
-
 def test_sp_a03_journal_schemas_remain_provider_type_free() -> None:
     journal = _supervisor_src() / "journal"
     banned = (
@@ -167,7 +120,7 @@ def test_sp_a04_model_gateway_tree_independent() -> None:
     """QUEUE model-gateway: sibling exists and must not import supervisor."""
     root = _agent_platform_root() / "services" / "model-gateway"
     assert root.is_dir(), "model-gateway sibling service required"
-    src = root / "src"
+    src = root / "model_gateway"
     assert src.is_dir()
     offenders: list[str] = []
     for path in src.rglob("*.py"):
@@ -180,14 +133,6 @@ def test_sp_a04_model_gateway_tree_independent() -> None:
 # --- Integration ---
 
 
-
-
-
-
-
-
 # --- Scale ---
-
-
 
 

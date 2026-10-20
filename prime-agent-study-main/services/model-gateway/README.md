@@ -4,8 +4,7 @@ Independently deployable model access service. It serves the LiteLLM end-user
 contract a QM-style client discovers and calls — model listing and model-group
 metadata, plus chat completions, Anthropic Messages and OpenAI Responses — and
 holds every vendor key. Develop and test this package **alone** — no supervisor
-DB, catalog, or harness imports required. Normative contract:
-[`contracts/model_gateway.md`](../../contracts/model_gateway.md).
+DB, catalog, or harness imports required.
 
 ## Config
 
@@ -111,8 +110,7 @@ docker compose up --build
 
 To let the supervisor discover this gateway's groups and speak each group's
 native protocol, also set on the supervisor `MODEL_GATEWAY_URL`,
-`MODEL_GATEWAY_API_KEY` and `MODEL_GATEWAY_API_KEY_HEADER`
-([`contracts/model_routing.md`](../../contracts/model_routing.md)).
+`MODEL_GATEWAY_API_KEY` and `MODEL_GATEWAY_API_KEY_HEADER`.
 
 Do **not** copy vendor keys onto the supervisor service.
 

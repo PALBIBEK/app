@@ -68,7 +68,6 @@ def resolve_lab_provider(state: Any | None = None) -> str:
         AI_ROOT
         / "services"
         / "supervisor"
-        / "src"
         / "supervisor"
         / "seams"
         / "providers"

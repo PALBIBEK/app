@@ -66,7 +66,7 @@ def check_root_compose() -> int:
         )
     if "PROFILE:" not in text and "PROFILE=" not in text:
         return _fail("root compose must declare PROFILE (e.g. PROFILE: ${PROFILE:-dev})")
-    if not re.search(r"(?m)^\s*memory:\s*$", text):
+    if not re.search(r"(?m)^\s*memory(-service)?:\s*$", text):
         return _fail("root docker-compose.yml missing memory service (D7)")
     if "MEMORY_SERVICE_URL" not in text:
         return _fail("root compose supervisor must set MEMORY_SERVICE_URL")

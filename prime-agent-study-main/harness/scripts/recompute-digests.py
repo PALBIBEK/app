@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT.parent / "services" / "supervisor" / "src"))
+sys.path.insert(0, str(ROOT.parent / "services" / "supervisor"))
 
 from supervisor.catalog.core.digests import content_digest  # noqa: E402
 from supervisor.catalog.storage import artifact_from_dict  # noqa: E402

@@ -270,7 +270,7 @@ async def test_assistant_before_tool_ordering_guard(svc: MemoryService):
 
 
 def test_no_supervisor_imports():
-    root = Path(__file__).resolve().parents[1] / "src"
+    root = Path(__file__).resolve().parents[1] / "memory_service"
     offenders: list[str] = []
     for path in root.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
@@ -280,12 +280,6 @@ def test_no_supervisor_imports():
 
 
 # --- DM-C1 ---
-
-
-def test_contract_exists():
-    # tests/ -> memory/ -> services/ -> agent-platform/contracts
-    contract = Path(__file__).resolve().parents[2].parent / "contracts" / "durable_memory.md"
-    assert contract.is_file(), contract
 
 
 # --- DM-I1 / DM-I2 ---

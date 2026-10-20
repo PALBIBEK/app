@@ -23,7 +23,7 @@ def agent_platform_root() -> Path:
 
     Found by walking up from this file rather than counting levels, so moving
     modules around cannot silently point it at the wrong directory. Falls back
-    to the layout ``<root>/services/supervisor/src/supervisor/...``.
+    to the layout ``<root>/services/supervisor/supervisor/...``.
     """
     here = Path(__file__).resolve()
     for parent in here.parents:

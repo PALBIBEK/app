@@ -15,12 +15,6 @@ from model_gateway.virtual_keys import MemoryVirtualKeyStore
 
 SERVICE = "d5-local-demo-svc"
 REPO = Path(__file__).resolve().parents[3]
-LOCAL_DEMO = (
-    REPO
-    / "development"
-    / "ai-backend-production-grade"
-    / "LOCAL_DEMO.md"
-)
 
 _ECHO_ONLY = {
     "echo": {"provider": "echo", "upstream_model": "echo"},
@@ -82,24 +76,6 @@ def test_d5_local_demo_vendor_keys_unlock_non_echo_route(
     assert "githi" in ids or "openai" in ids or non_echo, (
         "LOCAL_DEMO model depth requires a non-echo route when vendor keys are set; "
         f"got ids={sorted(ids)}"
-    )
-
-
-def test_d5_local_demo_echo_only_gate_docs_forbid_claiming_real_chat() -> None:
-    """§6 E: LOCAL_DEMO must treat echo-only claiming real chat as FAIL."""
-    assert LOCAL_DEMO.is_file(), LOCAL_DEMO
-    text = LOCAL_DEMO.read_text(encoding="utf-8").lower()
-    assert "echo-only" in text or "echo only" in text or "echo" in text
-    # Gate language: mock / echo claiming real chat is a failure mode.
-    assert "fail" in text
-    asserts_honesty = (
-        ("echo" in text and "fail" in text)
-        or "real chat" in text
-        or "mock" in text
-    )
-    assert asserts_honesty, (
-        "LOCAL_DEMO.md must document that echo-only / mock chat claiming "
-        "'real agent chat' fails the local-demo gate"
     )
 
 

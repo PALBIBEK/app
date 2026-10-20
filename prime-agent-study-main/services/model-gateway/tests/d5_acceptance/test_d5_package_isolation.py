@@ -7,8 +7,8 @@ from pathlib import Path
 
 
 def _gateway_src_root() -> Path:
-    # tests/d5_acceptance/ → tests/ → model-gateway/ → src/model_gateway
-    return Path(__file__).resolve().parents[2] / "src" / "model_gateway"
+    # tests/d5_acceptance/ → tests/ → model-gateway/ → model_gateway/
+    return Path(__file__).resolve().parents[2] / "model_gateway"
 
 
 def test_t12_no_supervisor_imports_in_gateway_package() -> None:

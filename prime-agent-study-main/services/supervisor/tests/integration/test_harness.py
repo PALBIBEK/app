@@ -125,7 +125,7 @@ async def test_recovery_policy_pinned(tmp_path: Path) -> None:
 
 
 def test_harness_leak_checks() -> None:
-    root = Path(__file__).resolve().parents[2] / "src" / "supervisor" / "harness"
+    root = Path(__file__).resolve().parents[2] / "supervisor" / "harness"
     leaks_rt: list[str] = []
     for path in root.rglob("*.py"):
         for i, line in enumerate(path.read_text().splitlines(), 1):

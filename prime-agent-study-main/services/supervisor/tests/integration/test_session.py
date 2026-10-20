@@ -119,7 +119,7 @@ async def test_level3_fork_independent_prefix_copy(session_env) -> None:
     await m.terminate(fork_id)
 
 
-SRC = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+SRC = Path(__file__).resolve().parents[2] / "supervisor"
 SESSION = SRC / "session"
 CAMEL = re.compile(r"[a-z][A-Z]")
 
