@@ -56,5 +56,4 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 
 Adapters should: buffer on hot path → flush at checkpoints → `load` / `recall` via HTTP.
 
-- **#1 Pi:** `harness/src/extensions/memory/durable/` + `.yal/memory_service.json`
-- **#2 Simple loop:** `memory_service.adapters.SimpleLoopAdapter` (constructor scope, `begin`/`note`/`checkpoint`)
+- **Simple loop:** `memory_service.adapters.SimpleLoopAdapter` (constructor scope, `begin`/`note`/`checkpoint`)

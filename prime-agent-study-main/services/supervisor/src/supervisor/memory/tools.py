@@ -50,14 +50,16 @@ _MEMORY_DESCRIPTION: Final = (
 )
 
 _HISTORY_DESCRIPTION: Final = (
-    "Search or reopen THIS conversation's own durable transcript — past turns and tool calls, "
-    "including parts compacted out of your current context. Tool results are excluded. Use it "
-    'when something earlier in this conversation is referenced but not in front of you ("that '
-    'file from last week", "what did we decide"). Distinct from `memory` search, which searches '
-    "remembered facts across conversations; `history` searches only this one, verbatim. With "
-    "`query`, matching is case-insensitive, all terms must match, and the newest matching entries "
-    "return, each tagged type#seq with its timestamp. With `seq`, the one entry with that seq "
-    "returns in full — use it to follow a type#seq pointer from a search hit."
+    "Read THIS conversation's own durable transcript — every past turn, tool call and tool "
+    "result, including parts compacted out of your current context (a compaction summary names "
+    "the entries it replaced). Use it when something earlier in this conversation is referenced "
+    'but not in front of you ("that file from last week", "the output of that command"). '
+    "Distinct from `memory`, which holds remembered facts across conversations; `history` reads "
+    "only this one, verbatim. Entries are tagged type#seq with a timestamp. One mode per call: "
+    "`query` searches messages and tool calls (not results), newest first, all terms must match; "
+    "`seq` opens one entry in full, a tool result too; `from_seq` (with optional `to_seq`) reads a "
+    "range in order, each entry clipped (open one for all of it); `call_id` returns one tool call "
+    "with its result, in full."
 )
 
 MEMORY_SCHEMA: Final[dict[str, Any]] = {
@@ -138,6 +140,19 @@ HISTORY_SCHEMA: Final[dict[str, Any]] = {
                 "limit": {
                     "type": "integer",
                     "description": "Max entries to return (default 20, query mode only).",
+                },
+                "from_seq": {
+                    "type": "integer",
+                    "description": "Read the entries from this seq on, oldest first (bounded; it "
+                    "says where to continue).",
+                },
+                "to_seq": {
+                    "type": "integer",
+                    "description": "With from_seq: the last seq to read (inclusive).",
+                },
+                "call_id": {
+                    "type": "string",
+                    "description": "A tool call's id: returns that call and its result in full.",
                 },
             },
         },
@@ -344,6 +359,15 @@ class TurnMemory:
     # --- history ---------------------------------------------------------------
 
     def _history(self, args: Mapping[str, Any]) -> ToolOutput:
+        if (call_id := args.get("call_id")) is not None:
+            found = session_history.call_entries(self.events, str(call_id))
+            return ToolOutput(found or f"[no tool call {call_id!r} in this conversation]")
+        if (start := args.get("from_seq")) is not None:
+            end = args.get("to_seq")
+            if not _is_int(start) or (end is not None and not _is_int(end)):
+                return ToolOutput("[error] history `from_seq` and `to_seq` must be integers.", True)
+            listed = session_history.slice_entries(self.events, start, end)
+            return ToolOutput(listed or f"[no entries from #{start} in this conversation]")
         seq = args.get("seq")
         if seq is not None:
             if not isinstance(seq, int) or isinstance(seq, bool):
@@ -361,6 +385,10 @@ class TurnMemory:
         return ToolOutput(
             "\n".join(hits) if hits else f'[nothing in this conversation matches "{query}"]'
         )
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 PLATFORM_TOOLS: Final = frozenset({MEMORY_TOOL, HISTORY_TOOL, SESSIONS_TOOL})

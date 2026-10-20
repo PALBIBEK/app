@@ -6,7 +6,7 @@ image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 mode: sticky
 model: anthropic/claude-sonnet-4
 # tools: recovery classification only — NOT the production ToolSet catalog.
-# Production tools come from composition digests → .yal/tools.json (see contracts/harness_binders.md).
+# Production tools come from the composition's ToolSet digest (harness/tool_sets/).
 # Must be a subset of harness/tool_sets/githi-tools.json.
 tools:
   bash: { class: non_atomic }

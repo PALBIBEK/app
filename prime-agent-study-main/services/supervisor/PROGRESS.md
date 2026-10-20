@@ -393,6 +393,54 @@ On `feat/bh-phase2-brain` (workstreams BH4, BH5).
   by the vault while the secret is in no journal event, no prompt, no file or
   environment variable in the sandbox, and no secrets-API response.
 
+### 17. One runtime: githi (the Pi harness is removed)
+On `feat/bh-phase3-brain`, by decision: the supervisor runs githi, its own
+runtime, and `echo` for lightweight sessions; the external Pi agent and its
+harness are gone.
+- **Removed:** the `harness` runtime (Pi's subprocess RPC: runtime, framing,
+  translation, state), the spawn planner, the `.yal/` session-file binds (Pi's
+  extensions read them; githi binds its seams in process), Pi's TypeScript
+  extensions and image, the `coding-v1` manifest, the `coding-v1` and
+  `coding-durable-v1` compositions and the `coding-docker-v1` sandbox profile,
+  the `harness_binders` contract, and the tests and fixtures that served only
+  Pi. `githi/reference/pi/` stays: it is the reference githi was built from.
+- **Kept:** the manifest and catalog layer (githi-v1 is a harness version), and
+  every generic catalog artifact (`coding-prompt` and `coding-tools`, which
+  githi compositions and the e2e stages use; the durable memory profiles).
+- **Existing data:** migration 0017 deletes harness versions registered on the
+  retired runtime (loading one would fail boot), marks open sessions on it
+  failed (they cannot resume), and deprecates compositions on it. Boot also
+  skips, with a warning, any stored version it cannot load.
+- Supervisor suite: 804 passing (the Pi-only tests are gone).
+
+### 18. Brain and hands, Phase 3: the session is githi's context object (BH7)
+- **The journal is what the model reads, not only its window.** githi's
+  `history` tool, which searched the transcript and opened a message or tool
+  call, now also:
+  - opens a **tool result** by its seq, verbatim (a text result as the tool
+    returned it, up to 20,000 characters with the middle of a longer one
+    elided); search still leaves results out, as in QM;
+  - reads a **range** (`from_seq`, optional `to_seq`), oldest first, each entry
+    clipped with a pointer to all of it, at most 50 entries or 20,000
+    characters, saying where to continue;
+  - returns **one tool call with its result** (`call_id`).
+  Like search, it reads only what the audience may see (after the cutoff).
+- **A compaction cites what it replaced.** Its summary ends with the journal
+  range it stands in for and how to reopen it, and `CompactionEnd` records
+  `replaced_from_seq`/`replaced_to_seq`; the range is found from where the kept
+  tail starts in the journal (the whole carried-over journal when it cannot be
+  found, still a correct pointer).
+- **Found on the live stack: a newer event broke older readers.** A worker on
+  the new code journalled `CompactionEnd` with its new fields; an API process on
+  the older code could not decode it and cut the session's event stream. In a
+  rolling deploy that is the normal state, so reading now ignores fields this
+  build does not know (a missing required field still fails).
+- **Gate test:** a turn writes and reads a file; the next turn is compacted, the
+  file's text is no longer in the model's context, and the model reopens the
+  read's result from the cited range, verbatim; every history of the test
+  replays deterministically. Unit tests cover search, opening, slices and their
+  bounds, calls, and the cited range.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -471,10 +519,16 @@ Open:
 - **One intermittent hang.** `test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session`
   hit its 300 s timeout once in CI and passed 6 of 6 runs locally; CI now
   annotates a hung test's stack, so the next occurrence names its cause.
+- **An update can find its workflow not ready.** About one run in six of
+  `test_githi_pinned.py` + `test_subagent_jobs.py` (also on `main`) failed a
+  background-subagent test: Temporal answered a `submit` with
+  `WorkflowNotReadyFailure` ("unexpected workflow task failure"), which it
+  means to be retried. The session client now re-sends such an update with a
+  short backoff (every update carries its id, so a retry never runs twice);
+  the files then passed 6 of 6 runs. Which workflow task failed, and why, is
+  not yet known: it did not reproduce with a history dump in place.
 - **No real-model CI run.** Every automated turn uses the gateway's echo model;
   a real-model job needs a `MODEL_E2E_API_KEY` secret.
-- **The coding-v1 Pi harness** needs its image pushed to a registry and the
-  external Pi agent; not done.
 
 ---
 
@@ -612,17 +666,17 @@ also fixed nine real bugs that type checking and the stricter tests found.
 It isn't 10 because:
 - the staging compose file and the Kubernetes manifests still can't run a
   session (no Temporal or worker);
-- no automated run has used a real model;
-- the coding-v1 Pi harness isn't done.
+- no automated run has used a real model.
 The first is the one that matters for shipping.
 
 ---
 
 ## Next step
 
-0. **Brain and hands, Phase 3** (BH6 Pi harness loop on the worker, BH7 the
-   session as a context object), then Phase 4 (BH8 many hands) and BH9's log
-   capture.
+0. **Brain and hands, Phase 3:** BH7, the session as a context object for
+   githi (an `events` tool over the journal; compaction that cites the range it
+   replaced). BH6 (Pi's loop) is dropped with Pi. Then Phase 4 (BH8 many hands)
+   and BH9's log capture.
 1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
    `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
    `docker-compose.yml`, and run the staging stack in CI the way compose smoke

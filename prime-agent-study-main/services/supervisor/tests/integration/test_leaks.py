@@ -12,26 +12,10 @@ PI_KEYS = re.compile(
     r"messageCount|contextWindow|toolName)\b"
 )
 MEMBRANE = {
-    SRC / "agent" / "runtimes" / "harness" / "translate.py",
-    SRC / "agent" / "runtimes" / "harness" / "commands.py",
-    SRC / "agent" / "runtimes" / "harness" / "state.py",
     SRC / "seams" / "providers" / "mcp_tools.py",
 }
 RUNTIMES_ROOT = SRC / "agent" / "runtimes"
 
-
-
-
-
-
-def test_echo_does_not_depend_on_harness() -> None:
-    echo = RUNTIMES_ROOT / "echo"
-    leaks: list[str] = []
-    for path in echo.rglob("*.py"):
-        text = path.read_text()
-        if "runtimes.harness" in text:
-            leaks.append(str(path.relative_to(SRC)))
-    assert leaks == [], "echo imports harness:\n" + "\n".join(leaks)
 
 
 def test_journal_does_not_import_runtimes() -> None:

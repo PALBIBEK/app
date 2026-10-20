@@ -12,13 +12,18 @@ no-op with the same body and a conflict with a different one.
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import HarnessVersionRow
+from supervisor.harness.core.errors import HarnessError
 from supervisor.harness.core.types import HarnessManifest
 from supervisor.harness.services.resolver import HarnessCatalog, HarnessStatus
 from supervisor.harness.storage.converters import manifest_from_dict, manifest_to_dict
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "HarnessVersionConflict",
@@ -113,9 +118,16 @@ async def hydrate_harness_catalog(
     """Load every registered version into ``catalog`` at boot; returns how many."""
     async with factory() as db:
         rows = (await db.execute(select(HarnessVersionRow))).scalars().all()
+    loaded = 0
     for row in rows:
-        _reconcile(catalog, row)
-    return len(rows)
+        try:
+            _reconcile(catalog, row)
+        except HarnessError as exc:
+            # One version this build cannot run (a retired runtime) must not stop boot.
+            logger.warning("harness version %s not loaded: %s", row.harness_version, exc)
+            continue
+        loaded += 1
+    return loaded
 
 
 async def _row(

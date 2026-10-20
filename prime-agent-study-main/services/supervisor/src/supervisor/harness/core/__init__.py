@@ -2,7 +2,7 @@
 
 This module provides the foundational types for the harness subsystem:
 - Enums: HarnessStatus, RuntimeMode, ToolClass, RecoveryAction, etc.
-- Types: HarnessManifest, SpawnPlan, RuntimeCapabilities, etc.
+- Types: HarnessManifest, RuntimeCapabilities, etc.
 - Errors: HarnessError hierarchy with structured error data
 - Protocols: Interface definitions for DI and testing
 - Digests: Content hashing utilities
@@ -31,15 +31,12 @@ from supervisor.harness.core.errors import (
     IncompatibleHarness,
     InvalidDigest,
     InvalidEnvironmentValue,
-    InvalidGatewayConfig,
     ManifestError,
     ManifestParseError,
     ManifestValidationError,
-    MissingHarnessCli,
     MissingRuntimeCapability,
     PathTraversalAttempt,
     SandboxRequired,
-    SpawnError,
     UnknownHarness,
     UnsupportedProtocol,
 )
@@ -47,8 +44,6 @@ from supervisor.harness.core.protocols import (
     CompatibilityCheckerProtocol,
     HarnessResolverProtocol,
     ManifestParserProtocol,
-    SessionFilesBinderProtocol,
-    SpawnPlannerProtocol,
 )
 from supervisor.harness.core.types import (
     ApprovalSpec,
@@ -57,8 +52,6 @@ from supervisor.harness.core.types import (
     HarnessManifest,
     RecoveryPolicy,
     RuntimeCapabilities,
-    SessionFilesPaths,
-    SpawnPlan,
     SubagentsSpec,
     ToolSpec,
 )
@@ -84,12 +77,10 @@ __all__ = [
     "IncompatibleHarness",
     "InvalidDigest",
     "InvalidEnvironmentValue",
-    "InvalidGatewayConfig",
     "ManifestError",
     "ManifestParseError",
     "ManifestParserProtocol",
     "ManifestValidationError",
-    "MissingHarnessCli",
     "MissingRuntimeCapability",
     "PathTraversalAttempt",
     "RecoveryAction",
@@ -97,11 +88,6 @@ __all__ = [
     "RuntimeCapabilities",
     "RuntimeMode",
     "SandboxRequired",
-    "SessionFilesBinderProtocol",
-    "SessionFilesPaths",
-    "SpawnError",
-    "SpawnPlan",
-    "SpawnPlannerProtocol",
     "SubagentsSpec",
     "ToolClass",
     "ToolSpec",

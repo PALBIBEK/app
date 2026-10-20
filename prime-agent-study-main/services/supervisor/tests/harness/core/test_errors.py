@@ -10,11 +10,9 @@ from supervisor.harness.core.errors import (
     InvalidEnvironmentValue,
     ManifestError,
     ManifestValidationError,
-    MissingHarnessCli,
     MissingRuntimeCapability,
     PathTraversalAttempt,
     SandboxRequired,
-    SpawnError,
     UnknownHarness,
     UnsupportedProtocol,
     VersionResolutionError,
@@ -127,15 +125,6 @@ class TestSandboxRequired:
         assert "sandbox" in str(err).lower()
 
 
-class TestMissingHarnessCli:
-    """Tests for MissingHarnessCli error."""
-
-    def test_message(self) -> None:
-        """Test error message."""
-        err = MissingHarnessCli()
-        assert "HARNESS_CLI" in str(err)
-
-
 class TestPathTraversalAttempt:
     """Tests for PathTraversalAttempt error."""
 
@@ -184,10 +173,4 @@ class TestErrorInheritance:
         """Test compatibility error hierarchy."""
         err = UnsupportedProtocol(requested=3, supported=[1, 2])
         assert isinstance(err, IncompatibleHarness)
-        assert isinstance(err, HarnessError)
-
-    def test_spawn_errors_inherit_correctly(self) -> None:
-        """Test spawn error hierarchy."""
-        err = MissingHarnessCli()
-        assert isinstance(err, SpawnError)
         assert isinstance(err, HarnessError)

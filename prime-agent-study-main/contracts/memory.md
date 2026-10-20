@@ -89,6 +89,4 @@ Constructed only via `build_runtime_seams(context_memory=...)`,
 - Agent introspection: [`AGENT_CONTRACT.md`](./AGENT_CONTRACT.md) (compaction pair)
 - Research: `agent-platform-research/session-memory/`
 - HTTP RPC: `POST /v1/sessions/{id}/memory/compact` and `POST /v1/sessions/{id}/memory/recall`
-- Materialized bind: `.yal/memory_rpc.json` with `compact_url`, `recall_url`, optional `tenant_id`
-- Pi hooks (`extensions/memory/hooks.ts`): prefer supervisor RPC when bind present; gateway summarize is fallback only; `session_before_turn` recall when `recall.enabled`
-- Shipped: `coding-v1` pins `memory_profiles/default`
+- Shipped: `githi-v1` pins `memory_profiles/default`

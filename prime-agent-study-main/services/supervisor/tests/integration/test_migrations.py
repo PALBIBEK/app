@@ -70,3 +70,49 @@ async def test_a_database_without_migration_history_is_refused_not_guessed(fresh
             await migrate(engine)
     finally:
         await engine.dispose()
+
+
+async def test_retiring_the_pi_harness_keeps_boot_and_closes_its_sessions(fresh_db: str) -> None:
+    """0017: a registered ``harness``-runtime version is gone, its sessions failed, compositions deprecated."""
+    from alembic import command
+
+    from supervisor.db.migrate import alembic_config
+    from supervisor.db.models import CatalogArtifactRow, HarnessVersionRow, SessionRow
+
+    def to(revision: str):  # type: ignore[no-untyped-def]
+        def run(conn: Connection) -> None:
+            config = alembic_config()
+            config.attributes["connection"] = conn
+            command.upgrade(config, revision)
+
+        return run
+
+    engine = make_engine(fresh_db)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(to("0016_vault"))
+            await conn.execute(
+                HarnessVersionRow.__table__.insert().values(
+                    harness_version="my-pi", protocol_version=1, runtime="harness", manifest={}
+                )
+            )
+            for sid, runtime, status in (("s-pi", "harness", "active"), ("s-old", "harness", "terminated"),
+                                         ("s-githi", "githi", "active")):
+                await conn.execute(SessionRow.__table__.insert().values(id=sid, runtime=runtime, status=status))
+            for name, harness in (("pi-comp", "my-pi"), ("shipped-pi", "coding-v1"), ("g", "githi-v1")):
+                await conn.execute(
+                    CatalogArtifactRow.__table__.insert().values(
+                        kind="composition", artifact_id=name, digest="sha256:" + "0" * 64,
+                        body={"harness_version": harness},
+                    )
+                )
+            await conn.run_sync(to("head"))
+        async with engine.connect() as conn:
+            versions = (await conn.execute(text("SELECT harness_version FROM harness_versions"))).all()
+            sessions = dict((await conn.execute(text("SELECT id, status FROM sessions"))).all())
+            comps = dict((await conn.execute(text("SELECT artifact_id, status FROM catalog_artifacts"))).all())
+        assert versions == []
+        assert sessions == {"s-pi": "failed", "s-old": "terminated", "s-githi": "active"}
+        assert comps == {"pi-comp": "deprecated", "shipped-pi": "deprecated", "g": "offered"}
+    finally:
+        await engine.dispose()

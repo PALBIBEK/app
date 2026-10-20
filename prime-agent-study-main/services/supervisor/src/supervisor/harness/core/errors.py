@@ -23,18 +23,15 @@ __all__ = [
     "IncompatibleHarness",
     "InvalidDigest",
     "InvalidEnvironmentValue",
-    "InvalidGatewayConfig",
     # Manifest
     "ManifestError",
     "ManifestParseError",
     "ManifestValidationError",
-    "MissingHarnessCli",
     "MissingRuntimeCapability",
     # Security
     "PathTraversalAttempt",
     "SandboxRequired",
     # Spawn
-    "SpawnError",
     # Resolution
     "UnknownHarness",
     "UnsupportedProtocol",
@@ -290,48 +287,6 @@ class ApprovalsNotSupported(IncompatibleHarness):
 # =============================================================================
 # Spawn Errors
 # =============================================================================
-
-
-class SpawnError(HarnessError):
-    """Failed to build spawn plan.
-
-    Base class for spawn-related errors.
-    """
-
-    error_code = "SPAWN_ERROR"
-
-
-class MissingHarnessCli(SpawnError):
-    """HARNESS_CLI not configured.
-
-    This error is raised when the harness runtime is requested
-    but no CLI path is available.
-    """
-
-    error_code = "MISSING_HARNESS_CLI"
-
-    def __init__(self) -> None:
-        super().__init__(
-            "harness runtime requires HARNESS_CLI or .yal/launch.json cli entry",
-            detail={},
-        )
-
-
-class InvalidGatewayConfig(SpawnError):
-    """Gateway configuration is invalid.
-
-    This error is raised when plug_bindings.gateway_base_url
-    is set but the gateway is not properly configured.
-    """
-
-    error_code = "INVALID_GATEWAY_CONFIG"
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(
-            f"invalid gateway configuration: {reason}",
-            detail={"reason": reason},
-        )
-        self.reason = reason
 
 
 # =============================================================================

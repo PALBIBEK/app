@@ -158,12 +158,12 @@ async def test_id_only_create_pins_the_latest_offered_digest(pipeline: Pipeline)
     [
         pytest.param(lambda p: {"composition_digest": "latest"}, CatalogError, id="floating-ref"),
         pytest.param(
-            lambda p: {"composition_digest": p.digest_of("coding-v1")},
+            lambda p: {"composition_digest": p.digest_of("githi-tools-v1")},
             NotOffered,
             id="digest-of-another-composition",
         ),
         pytest.param(
-            lambda p: {"harness_version": "coding-v1"},
+            lambda p: {"harness_version": "kg-v1"},
             HarnessVersionMismatch,
             id="wrong-harness-version",
         ),

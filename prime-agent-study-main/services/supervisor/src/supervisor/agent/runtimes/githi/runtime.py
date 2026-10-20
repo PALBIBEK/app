@@ -1,6 +1,6 @@
 """Githi AgentRuntime — the platform runtime protocol over ``AgentLoop``.
 
-Matches ``EchoRuntime`` / ``HarnessRuntime`` so ``SessionManager`` can
+Matches ``EchoRuntime`` so ``SessionManager`` can
 ``create_runtime("githi")`` without a special case.
 
 Everything githi uses is pinned and handed in: seams (prompt, tools, model

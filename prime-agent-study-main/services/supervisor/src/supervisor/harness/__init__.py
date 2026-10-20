@@ -1,4 +1,4 @@
-"""Harness subsystem - version resolution, compatibility, and spawn planning.
+"""Harness subsystem - the versioned agent manifests sessions pin, their resolution and compatibility.
 
 This module provides harness lifecycle management:
 
@@ -7,10 +7,9 @@ Enums:
     GuardBehavior, ApprovalOnTimeout - Configuration options
 
 Types:
-    HarnessManifest, SpawnPlan, RuntimeCapabilities - Core dataclasses
+    HarnessManifest, RuntimeCapabilities - Core dataclasses
     ToolSpec, BudgetSpec, GuardSpec, ApprovalSpec - Configuration specs
     RecoveryPolicy, SubagentsSpec - Policy configurations
-    SessionFilesPaths - Materialized file paths
 
 Errors:
     HarnessError and subclasses - Rich exception hierarchy with structured data
@@ -22,11 +21,6 @@ Services:
     HarnessResolver - Version resolution with thread-safe caching
     HarnessCatalog - In-memory catalog for testing
     CompatibilityChecker - Runtime compatibility validation
-    SpawnPlanner - Subprocess spawn plan building
-
-Materializers:
-    materialize_harness_binds - Create .yal/ session files
-    read_plug_bindings, read_launch_cli - Read configuration files
 
 Config:
     HarnessSettings - Environment-based configuration
@@ -99,15 +93,12 @@ from supervisor.harness.core.errors import (
     IncompatibleHarness,
     InvalidDigest,
     InvalidEnvironmentValue,
-    InvalidGatewayConfig,
     ManifestError,
     ManifestParseError,
     ManifestValidationError,
-    MissingHarnessCli,
     MissingRuntimeCapability,
     PathTraversalAttempt,
     SandboxRequired,
-    SpawnError,
     UnknownHarness,
     UnsupportedProtocol,
     VersionResolutionError,
@@ -120,8 +111,6 @@ from supervisor.harness.core.protocols import (
     CompatibilityCheckerProtocol,
     HarnessResolverProtocol,
     ManifestParserProtocol,
-    SessionFilesBinderProtocol,
-    SpawnPlannerProtocol,
 )
 
 # =============================================================================
@@ -134,8 +123,6 @@ from supervisor.harness.core.types import (
     HarnessManifest,
     RecoveryPolicy,
     RuntimeCapabilities,
-    SessionFilesPaths,
-    SpawnPlan,
     SubagentsSpec,
     ToolSpec,
     default_recovery_policy,
@@ -144,8 +131,6 @@ from supervisor.harness.core.types import (
 # =============================================================================
 # Materializers
 # =============================================================================
-from supervisor.harness.materializers import materialize_harness_binds
-
 # =============================================================================
 # Services
 # =============================================================================
@@ -153,8 +138,6 @@ from supervisor.harness.services import (
     CompatibilityChecker,
     HarnessCatalog,
     HarnessResolver,
-    SpawnPlanner,
-    build_spawn_plan,
     load_supported_protocol_versions,
 )
 
@@ -213,12 +196,10 @@ __all__ = [
     "IncompatibleHarness",
     "InvalidDigest",
     "InvalidEnvironmentValue",
-    "InvalidGatewayConfig",
     "ManifestError",
     "ManifestParseError",
     "ManifestParserProtocol",
     "ManifestValidationError",
-    "MissingHarnessCli",
     "MissingRuntimeCapability",
     "PathTraversalAttempt",
     "RecoveryAction",
@@ -226,12 +207,6 @@ __all__ = [
     "RuntimeCapabilities",
     "RuntimeMode",
     "SandboxRequired",
-    "SessionFilesBinderProtocol",
-    "SessionFilesPaths",
-    "SpawnError",
-    "SpawnPlan",
-    "SpawnPlanner",
-    "SpawnPlannerProtocol",
     "SubagentsSpec",
     "ToolClass",
     "ToolSpec",
@@ -243,7 +218,6 @@ __all__ = [
     "assert_digest",
     "budget_spec_from_dict",
     "budget_spec_to_dict",
-    "build_spawn_plan",
     "canonical_json_bytes",
     "clear_settings_cache",
     "content_digest",
@@ -256,7 +230,6 @@ __all__ = [
     "load_supported_protocol_versions",
     "manifest_from_dict",
     "manifest_to_dict",
-    "materialize_harness_binds",
     "parse_yaml",
     "recovery_policy_from_dict",
     "recovery_policy_to_dict",

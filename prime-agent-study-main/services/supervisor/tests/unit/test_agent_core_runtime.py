@@ -59,27 +59,7 @@ def test_a3_seams_are_per_runtime_not_global() -> None:
     assert rt_a.seams.tool_provider is not rt_b.seams.tool_provider
 
 
-# --- U2 / U5 / U8 / N3 / N4: harness capabilities, model, sandbox, mode ---
-
-
-@pytest.mark.asyncio
-async def test_u5_harness_get_capabilities_matches_compat() -> None:
-    rt = create_runtime("harness")
-    caps = await rt.get_capabilities()
-    static = capabilities_for("harness")
-    assert caps.supports_fork == static.supports_fork
-    assert caps.supports_approvals == static.supports_approvals
-    assert int(caps.protocol_version) in static.protocol_versions
-    assert caps.supports_get_state == ("get_state" in static.commands)
-
-
-
-
-@pytest.mark.asyncio
-async def test_u8_n3_harness_start_without_sandbox_fails_loud() -> None:
-    rt = create_runtime("harness")
-    with pytest.raises(ValueError, match="sandbox"):
-        await rt.start(None, None)
+# --- N4: mode ---
 
 
 @pytest.mark.asyncio
@@ -160,4 +140,4 @@ def test_a4_only_factory_names_concrete_runtime_classes() -> None:
         if isinstance(node, ast.ImportFrom) and node.module and "runtimes" in node.module:
             for alias in node.names or []:
                 named.add(alias.name)
-    assert "EchoRuntime" in named and "HarnessRuntime" in named
+    assert "EchoRuntime" in named and "GithiRuntime" in named

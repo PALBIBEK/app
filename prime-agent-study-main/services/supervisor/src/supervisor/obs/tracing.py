@@ -286,7 +286,7 @@ def make_inmemory_otlp_projector(
     *,
     tenant_id: str = "t1",
     harness_id: str = "coding",
-    harness_version: str = "coding-v1",
+    harness_version: str = "githi-v1",
 ) -> tuple[JournalProjector, Any]:
     """Test helper: projector → OTel InMemorySpanExporter (no network)."""
     from opentelemetry.sdk.resources import Resource

@@ -6,9 +6,11 @@ domain error's class name, so endpoints keep their existing status codes.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from collections.abc import AsyncIterator
-from typing import Any
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Final
 
 from temporalio.client import (
     Client,
@@ -46,6 +48,39 @@ class SessionCommandError(Exception):
 
 class TemporalUnavailable(Exception):
     """Temporal cannot be reached; the command was not delivered."""
+
+
+logger = logging.getLogger(__name__)
+
+_NOT_READY_RETRIES: Final = 8
+_NOT_READY_BACKOFF_S: Final = 0.1
+
+
+def _workflow_not_ready(exc: RPCError) -> bool:
+    """The update reached a workflow whose task failed or was not yet running it.
+
+    Temporal's ``WorkflowNotReadyFailure``: nothing ran, so sending the same update
+    again is how it is meant to be handled. Every update here carries its own id,
+    so a retry that races a delivered one returns that one's outcome.
+    """
+    if exc.status is not RPCStatusCode.FAILED_PRECONDITION:
+        return False
+    return "WorkflowNotReady" in str(exc.raw_grpc_status) or "workflow task failure" in str(exc)
+
+
+async def _delivered[T](send: Callable[[], Awaitable[T]]) -> T:
+    """``send`` an update, again while the workflow is not ready for it (bounded backoff)."""
+    delay = _NOT_READY_BACKOFF_S
+    for attempt in range(_NOT_READY_RETRIES):
+        try:
+            return await send()
+        except RPCError as exc:
+            if not _workflow_not_ready(exc) or attempt == _NOT_READY_RETRIES - 1:
+                raise
+            logger.info("workflow not ready for an update (%s); retrying in %.1fs", exc, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 2.0)
+    raise AssertionError("unreachable")
 
 
 @contextlib.asynccontextmanager
@@ -117,29 +152,36 @@ class SessionWorkflows:
         )
 
     async def submit(self, session_id: str, message: Message) -> Accepted:
+        handle = self._handle(session_id)
         async with _commands():
-            return await self._handle(session_id).execute_update(
-                AgentSessionWorkflow.submit_message, message, id=f"msg:{message.command_id}"
+            return await _delivered(
+                lambda: handle.execute_update(
+                    AgentSessionWorkflow.submit_message, message, id=f"msg:{message.command_id}"
+                )
             )
 
     async def op(self, op: SessionOp) -> dict[str, Any] | None:
         """Run a session operation on the session's worker; a re-sent op_id runs once."""
+        handle = self._handle(op.session_id)
         async with _commands():
-            result = await self._handle(op.session_id).execute_update(
-                AgentSessionWorkflow.session_op, op, id=f"op:{op.op_id}"
+            result = await _delivered(
+                lambda: handle.execute_update(AgentSessionWorkflow.session_op, op, id=f"op:{op.op_id}")
             )
         return result.body
 
     async def respond_approval(
         self, session_id: str, approval_id: str, choice: str, *, responded_by: str | None = None
     ) -> None:
+        handle = self._handle(session_id)
         async with _commands():
-            await self._handle(session_id).execute_update(
-                AgentSessionWorkflow.respond_approval,
-                ApprovalChoice(approval_id, choice, responded_by),
-                # Per choice: a retry of the same answer runs once, but a corrected
-                # answer is a new request, not the stored outcome of the refused one.
-                id=f"approval:{approval_id}:{choice}",
+            await _delivered(
+                lambda: handle.execute_update(
+                    AgentSessionWorkflow.respond_approval,
+                    ApprovalChoice(approval_id, choice, responded_by),
+                    # Per choice: a retry of the same answer runs once, but a corrected
+                    # answer is a new request, not the stored outcome of the refused one.
+                    id=f"approval:{approval_id}:{choice}",
+                )
             )
 
     async def abort(self, session_id: str) -> None:
@@ -148,8 +190,11 @@ class SessionWorkflows:
 
     async def terminate(self, session_id: str) -> None:
         try:
+            handle = self._handle(session_id)
             async with _commands():
-                await self._handle(session_id).execute_update(AgentSessionWorkflow.terminate)
+                await _delivered(
+                    lambda: handle.execute_update(AgentSessionWorkflow.terminate, id="terminate")
+                )
         except SessionCommandError as exc:
             if exc.kind != "SessionClosed":  # already closed means already terminated
                 raise

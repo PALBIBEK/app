@@ -35,7 +35,6 @@ from supervisor.hands import HandRecipe, HandWorkspace
 from supervisor.harness import (
     HarnessManifest,
     manifest_to_dict,
-    materialize_harness_binds,
 )
 from supervisor.harness.core.errors import UnknownHarness
 from supervisor.harness.repository import harness_owner, sync_harness_version
@@ -52,7 +51,6 @@ from supervisor.seams import (
 from supervisor.seams.services import (
     Principal,
     SessionWorkspaceState,
-    resolve_memory_scope,
 )
 from supervisor.seams.services.virtual_keys import MintedVirtualKey
 from supervisor.session.access import session_visibility, visible_to
@@ -293,7 +291,7 @@ class SessionManager(UpkeepOps):
         sandbox, and the hook that marks the workspace dirty when a tool changes it.
         """
         model = session_model(manifest, pins)
-        owner, agent = self._long_term.setdefault(
+        self._long_term.setdefault(
             session_id,
             (
                 principal.id,
@@ -313,22 +311,8 @@ class SessionManager(UpkeepOps):
         )
         seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
         await self._authorize_tools(session_id, tenant_id, seams)
-        session_dir: str | None = None
-        if pins is not None and seams is not None:
-            ws = session_workspace(session_id)
-            materialize_harness_binds(
-                ws,
-                pins,
-                seams,
-                sandbox_profile=sandbox_profile,
-                memory_profile=memory_profile,
-                session_id=session_id,
-                tenant_id=tenant_id,
-                memory_scope=resolve_memory_scope(
-                    session_id=session_id, tenant_id=tenant_id, owner=owner, agent=agent
-                ),
-            )
-            session_dir = str(ws)
+        # The session's directory on the worker: githi's workspace until a sandbox serves.
+        session_dir = str(session_workspace(session_id)) if pins is not None and seams is not None else None
         if seams is not None:
             self._seams[session_id] = seams
         runtime = create_runtime(runtime_name, seams=seams, model=model, session_id=session_id)

@@ -1,91 +1,51 @@
-# YAL agent harness
+# YAL agent catalog
 
-Versioned agent behavior for the YAL supervisor: manifests, composition catalog,
-and Pi TypeScript extensions. The supervisor materializes digest-pinned binds into
-`session_dir/.yal/`; extensions read those files — they do not own the tool/prompt catalog.
+The versioned, digest-pinned artifacts a supervisor session is composed from.
+Sessions run on githi, the supervisor's own agent runtime (or `echo` for
+lightweight development sessions); a session pins exact digests of everything
+below at create, and runs on them for its whole life.
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `versions/*.yaml` | Harness manifest — recovery classes, budget, guards, sandbox mode |
-| `compositions/` | AgentComposition entries (digest-backed) |
+| `versions/*.yaml` | Harness manifests: runtime, recovery classes, budget, guards, approvals, sandbox mode |
+| `compositions/` | AgentComposition entries: a manifest plus a prompt pack, tool set, sandbox and memory profile |
 | `prompt_packs/` | PromptPack artifacts |
-| `tool_sets/` | ToolSet artifacts (production tools for the model) |
-| `src/extensions/` | Pi TS extensions (`registerPrompt`, `registerTools`, gateway, …) |
-| `images/Dockerfile` | Digest-pinned runtime image with compiled extensions |
+| `tool_sets/` | ToolSet artifacts (the tools the model is offered) |
+| `sandbox_profiles/` | SandboxProfile artifacts (provider, image, file effects) |
+| `memory_profiles/` | MemoryProfile artifacts (compaction and recall) |
 
-## Two tool definitions (read this)
+## Two tool definitions
 
 | Source | Purpose |
 |---|---|
 | `versions/*.yaml` → `tools:` | **Recovery classification only** (`pure`, `idempotent`, …) |
-| `tool_sets/*.json` | **Production ToolSet** → `.yal/tools.json` |
+| `tool_sets/*.json` | **The tools offered to the model**, bound by the composition |
 
-Recovery tool names must be a subset of the composition ToolSet. CI verifies this via
-`verify_recovery_tools_in_compositions()`.
+Recovery tool names must be a subset of the composition's ToolSet; CI checks this
+(`verify_recovery_tools_in_compositions()`).
 
-## Local development
+## Publishing catalog changes
 
-### 1. Build extensions
-
-```bash
-cd harness
-npm run build          # tsc → dist/extensions/
-npm run typecheck
-```
-
-### 2. Materialize `.yal/` without a running supervisor
+After editing `tool_sets/`, `prompt_packs/`, `sandbox_profiles/`, `memory_profiles/`
+or `compositions/`:
 
 ```bash
-./scripts/dev-materialize.sh .dev-workspace coding-v1
-# or
-npm run check:binds    # build + node scripts/check-binds.mjs (needs workspace)
+python3 scripts/recompute-digests.py
 ```
 
-Uses `services/supervisor/scripts/materialize_harness_dev.py` under the hood.
-
-### 3. Publish catalog changes
-
-After editing `tool_sets/`, `prompt_packs/`, or `compositions/`:
-
-```bash
-npm run recompute-digests
-```
-
-Commit updated `digest` fields. Supervisor `verify_composition_catalog()` must pass at boot.
-
-## Docker image
-
-Build from **harness root** (not `images/`):
-
-```bash
-docker build -f images/Dockerfile -t pi-harness:coding-v1 .
-docker inspect --format='{{index .RepoDigests 0}}' pi-harness:coding-v1
-```
-
-Pin the digest in `versions/<name>.yaml` → `image_digest`.
-
-Always run sandboxes with `--init` so Pi subprocess zombies are reaped.
+Commit the updated `digest` fields; the supervisor's
+`verify_composition_catalog()` must pass at boot.
 
 ## Shipped manifests
 
 | Version | Runtime | Sandbox | Mode |
 |---|---|---|---|
-| `coding-v1` | `harness` (Pi RPC) | required | sticky |
+| `githi-v1` | `githi` | required (built on first use) | sticky |
 | `kg-v1` | `echo` (dev / lightweight) | none | stateless |
 
 ## Contracts
 
-- [`../contracts/harness_binders.md`](../contracts/harness_binders.md) — `.yal/` file layout
 - [`../contracts/composition.md`](../contracts/composition.md) — catalog digests
-- Supervisor [`../services/supervisor/ARCHITECTURE.md`](../services/supervisor/ARCHITECTURE.md) — babysitter vs brain
-
-## Tests
-
-Supervisor unit tests cover materialization and extension reads:
-
-```bash
-cd ../services/supervisor
-pytest tests/unit/test_harness_binders.py -v
-```
+- Supervisor [`../services/supervisor/PROGRESS.md`](../services/supervisor/PROGRESS.md)

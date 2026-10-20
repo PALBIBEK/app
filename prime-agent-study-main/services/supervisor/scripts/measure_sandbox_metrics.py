@@ -2,7 +2,7 @@
 """Record Phase 1 sandbox measurements for ARCHITECTURE Step 9.
 
 Usage:
-  python scripts/measure_sandbox_metrics.py [--image pi-harness:coding-v1]
+  python scripts/measure_sandbox_metrics.py [--image buildpack-deps:bookworm-scm]
 
 Prints JSON lines suitable for pasting into the Step 9 metrics table.
 Skips metrics when Docker is unavailable.
@@ -60,8 +60,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Measure sandbox metrics for Step 9")
     parser.add_argument(
         "--image",
-        default="node:22-slim",
-        help="Container image to cold-start (default: node:22-slim proxy)",
+        default="buildpack-deps:bookworm-scm",
+        help="Container image to cold-start (default: the githi-v1 sandbox image)",
     )
     args = parser.parse_args()
     results: dict[str, object] = {
@@ -69,7 +69,7 @@ def main() -> int:
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "cold_start": measure_cold_start(args.image),
         "notes": [
-            "Replace image with digest-pinned harness image for production numbers",
+            "Pass the digest-pinned sandbox image for production numbers",
             "Run docker stats during an active turn for peak RSS",
             "E2B pause/resume: use vendor dashboard or API on staging project",
         ],

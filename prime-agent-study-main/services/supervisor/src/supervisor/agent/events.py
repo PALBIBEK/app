@@ -203,13 +203,21 @@ class CompactionStart:
 
 @dataclass(frozen=True)
 class CompactionEnd:
-    """``messages``: the compacted conversation, the checkpoint later turns build on."""
+    """``messages``: the compacted conversation, the checkpoint later turns build on.
+
+    ``replaced_from_seq``/``replaced_to_seq``: the journal entries its summary stands
+    in for, which stay in the journal, readable verbatim.
+    """
 
     compaction_id: str
     stop_reason: str  # ok | error | cancelled | deferred
     tokens_after: int | None = None
     summary_digest: str | None = None
     messages: list[dict[str, Any]] | None = None
+    # The journal entries the summary replaced (inclusive): the model reopens them
+    # with the ``history`` tool, so a compaction is never the only copy.
+    replaced_from_seq: int | None = None
+    replaced_to_seq: int | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
