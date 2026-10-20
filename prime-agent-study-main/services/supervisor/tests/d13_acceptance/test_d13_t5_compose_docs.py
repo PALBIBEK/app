@@ -8,13 +8,6 @@ from tests.d13_acceptance.conftest import AI_ROOT
 
 ROOT_COMPOSE = AI_ROOT / "docker-compose.yml"
 STAGING_COMPOSE = AI_ROOT / "deploy" / "staging" / "docker-compose.staging.yml"
-LOCAL_DEMO = (
-    AI_ROOT
-    / "development"
-    / "ai-backend-production-grade"
-    / "LOCAL_DEMO.md"
-)
-D13_DOC = AI_ROOT / "development" / "ai-backend-production-grade" / "D13.md"
 
 # E2E-only compose under supervisor/tests must NOT satisfy the local-demo gate alone.
 E2E_ONLY = AI_ROOT / "services" / "supervisor" / "tests" / "e2e" / "docker-compose.yml"
@@ -57,20 +50,3 @@ def test_t5_root_or_staging_compose_includes_jaeger_and_otlp_endpoint() -> None:
             )
 
 
-def test_t5_docs_document_otel_exporter_and_jaeger_demo() -> None:
-    """T5 companion: LOCAL_DEMO / D13 must document OTEL_EXPORTER_OTLP_ENDPOINT for operators."""
-    demo = _read(LOCAL_DEMO)
-    d13 = _read(D13_DOC)
-    docs = demo + "\n" + d13
-
-    assert "Jaeger" in docs or "jaeger" in docs
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in docs, (
-        "LOCAL_DEMO.md or D13.md must document OTEL_EXPORTER_OTLP_ENDPOINT "
-        "(sample ratio / reaper env also expected in D13 §5 A)"
-    )
-    # Sample / reaper knobs called out in acceptance checklist.
-    assert (
-        "YAL_OTEL_SAMPLE_RATIO" in docs
-        or "sample ratio" in docs.lower()
-        or "reaper" in docs.lower()
-    ), "docs must mention sample ratio and/or reaper env for local demo ops"

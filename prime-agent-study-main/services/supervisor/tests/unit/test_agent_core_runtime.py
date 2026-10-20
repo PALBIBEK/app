@@ -14,13 +14,7 @@ from supervisor.harness.services.compat_checker import capabilities_for
 # --- U3 / U9 / N2: factory loud fail + known names ---
 
 
-
-
-
-
 # --- U1 / U4: echo get_capabilities on Protocol surface ---
-
-
 
 
 @pytest.mark.asyncio
@@ -44,8 +38,6 @@ def test_u6_echo_accepts_empty_seams() -> None:
     assert seams.model_gateway is None
     rt = create_runtime("echo", seams=seams)
     assert rt.seams is seams
-
-
 
 
 def test_a3_seams_are_per_runtime_not_global() -> None:
@@ -88,24 +80,6 @@ async def test_u10_capabilities_for_agrees_with_runtime_get_capabilities() -> No
 
 
 # --- C4 / A5 / A1: docs + no Cordis ---
-
-
-def test_c4_a5_agent_core_contract_doc() -> None:
-    root = Path(__file__).resolve().parents[4]  # agent-platform/
-    doc = root / "contracts" / "agent_core.md"
-    assert doc.is_file(), f"missing {doc}"
-    text = doc.read_text()
-    for needle in (
-        "Definition",
-        "Provider",
-        "Consumer",
-        "RuntimeSeams",
-        "consumes",
-        "not own",
-    ):
-        assert needle.lower() in text.lower(), f"missing {needle!r} in agent_core.md"
-
-
 
 
 def test_c5_session_journal_api_do_not_import_concrete_runtimes() -> None:

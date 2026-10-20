@@ -152,10 +152,9 @@ async def test_barren_flush_skips_extraction(svc: MemoryService):
     assert METRICS.extraction_jobs_skipped_barren >= 1
 
 
-def test_rls_sql_and_slo_docs_exist():
+def test_rls_sql_ships():
     root = Path(__file__).resolve().parents[1]
     assert (root / "rls_postgres.sql").is_file()
-    assert (root / "docs" / "slo.md").is_file()
 
 
 def test_http_metrics_and_erase():

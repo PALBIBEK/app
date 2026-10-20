@@ -47,5 +47,4 @@ Commit the updated `digest` fields; the supervisor's
 
 ## Contracts
 
-- [`../contracts/composition.md`](../contracts/composition.md) — catalog digests
 - Supervisor [`../services/supervisor/PROGRESS.md`](../services/supervisor/PROGRESS.md)

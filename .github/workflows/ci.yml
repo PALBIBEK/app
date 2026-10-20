@@ -45,6 +45,9 @@ jobs:
           exit $status
       - name: Shipped catalog digests are current
         run: python "$PROJECT/harness/scripts/recompute-digests.py" --check
+      - name: Compose files ship no empty auth defaults
+        working-directory: ${{ env.PROJECT }}
+        run: python scripts/check_staging_auth.py
       - name: Types (supervisor)
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |

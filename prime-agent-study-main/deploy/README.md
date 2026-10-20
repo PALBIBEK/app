@@ -9,7 +9,6 @@
 | `k8s/supervisor-deployment.yaml` | HA deployment with preStop + readiness |
 | `k8s/networkpolicy-sandbox-default-deny.yaml` | Default-deny egress template for sandboxes |
 | `k8s/external-secret-gateway.yaml` | ESO template for gateway/DB secrets |
-| `../docs/cold-resume-slo.md` | Cold-resume SLO and routing options |
 
 ### Staging
 
@@ -56,7 +55,7 @@ Kubernetes: template keys live in `k8s/external-secret-gateway.yaml` (ESO →
 | `SANDBOX_PROVIDER` | `local_docker` | Root + staging compose set `SANDBOX_PROVIDER:-local_docker` on supervisor. githi compositions pin the `githi-docker-v1` sandbox profile. |
 | `MULTI_TENANT_STRICT=true` | off | **Required for shared prod:** refuses `local_process` / `local_docker` at boot; use **`e2b`** or `none`. |
 
-**E2B network/egress (multi-tenant path):** E2B sandboxes run on E2B cloud VMs with SaaS-managed egress. Supervisor never injects vendor API keys or `GATEWAY_TOKEN` into sandbox env — only optional `vk_*` for agent→gateway. Operators must configure E2B account/firewall policy to allow DNS + model-gateway egress only. See `contracts/sandbox_profile.md` § Provider network / egress.
+**E2B network/egress (multi-tenant path):** E2B sandboxes run on E2B cloud VMs with SaaS-managed egress. Supervisor never injects vendor API keys or `GATEWAY_TOKEN` into sandbox env — only optional `vk_*` for agent→gateway. Operators must configure E2B account/firewall policy to allow DNS + model-gateway egress only.
 
 **Docker hardening:** `local_docker` uses `network_mode=none`, `cap_drop=ALL`, mem/CPU limits. For controlled egress in K8s, apply `k8s/networkpolicy-sandbox-default-deny.yaml` in the sandbox namespace.
 

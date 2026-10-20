@@ -282,12 +282,6 @@ def test_no_supervisor_imports():
 # --- DM-C1 ---
 
 
-def test_contract_exists():
-    # tests/ -> memory/ -> services/ -> agent-platform/contracts
-    contract = Path(__file__).resolve().parents[2].parent / "contracts" / "durable_memory.md"
-    assert contract.is_file(), contract
-
-
 # --- DM-I1 / DM-I2 ---
 
 

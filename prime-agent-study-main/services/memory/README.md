@@ -2,8 +2,6 @@
 
 Independent durable **Memory Service** for the YAL agent platform (Tier 1 session log + Tier 2 semantic bank).
 
-- **Contract:** `../../contracts/durable_memory.md`
-- **Research:** `agent-platform-research/Memory/memory.md`
 - **Does not** import `supervisor`. Developable alone.
 
 ## Run
@@ -44,7 +42,6 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 | Metrics | `GET /v1/metrics` |
 | Cost | Embed cache; skip barren `turn/end` extraction |
 | Tenant | `TenantGate`; Postgres `rls_postgres.sql` |
-| SLO | `docs/slo.md` |
 
 ## Limits
 

@@ -41,17 +41,6 @@ def test_eso_includes_vendor_keys_for_configured_routes() -> None:
     )
 
 
-def test_contract_documents_prod_auth_streaming_metering() -> None:
-    """§6 C: contract/README auth required in prod; streaming + metering sections."""
-    contract = REPO / "contracts" / "model_gateway.md"
-    assert contract.is_file()
-    text = contract.read_text(encoding="utf-8").lower()
-    assert "fail" in text or "auth" in text
-    assert "production" in text or "staging" in text
-    # Streaming + metering called out for D5 ops honesty.
-    assert "stream" in text or "sse" in text or "meter" in text or "cost" in text
-
-
 @pytest.mark.xfail(
     strict=False,
     reason="D5 High: durable multi-replica VK store — not MVP; memory store OK for single replica",

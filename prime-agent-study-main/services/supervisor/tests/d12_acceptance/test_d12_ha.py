@@ -57,96 +57,6 @@ async def test_t9_cold_resume_peer_can_message_from_shared_journal(
 
 
 @pytest.mark.asyncio
-async def test_t10_ha_mode_documented_not_silent_round_robin_warm() -> None:
-    """T10: Cold-resume-only / sticky / replicas=1 documented; no warm-safe RR claim."""
-    staging = AI_ROOT / "deploy" / "staging" / "docker-compose.staging.yml"
-    cold_doc = AI_ROOT / "docs" / "cold-resume-slo.md"
-    session_scale = (
-        AI_ROOT
-        / "development"
-        / "ai-backend-production-grade"
-        / "SESSION-AT-SCALE.md"
-    )
-    d12 = (
-        AI_ROOT
-        / "development"
-        / "ai-backend-production-grade"
-        / "D12.md"
-    )
-
-    assert staging.is_file(), f"missing staging compose: {staging}"
-    texts: list[tuple[str, str]] = []
-    for path in (staging, cold_doc, session_scale, d12):
-        if path.is_file():
-            texts.append((path.name, path.read_text(encoding="utf-8")))
-
-    combined = "\n".join(t for _, t in texts).lower()
-
-    mentions_policy = (
-        "replicas=1" in combined
-        or "replica=1" in combined
-        or "sticky" in combined
-        or "cold resume" in combined
-        or "cold-resume" in combined
-        or "session affinity" in combined
-        or "shared live bus" in combined
-        or "live bus" in combined
-    )
-    assert mentions_policy, (
-        "HA mode must document replicas=1 OR sticky OR cold-resume OR shared live bus"
-    )
-
-    # Fail if docs claim round-robin is warm-safe. Allow "forbidden/never/no silent RR".
-    for name, raw in texts:
-        low = raw.lower()
-        for m in re.finditer(r"round[\s-]?robin", low):
-            start = max(0, m.start() - 48)
-            end = min(len(low), m.end() + 80)
-            window = low[start:end]
-            if any(
-                w in window
-                for w in (
-                    "forbidden",
-                    "never",
-                    "do not",
-                    "don't",
-                    "no silent",
-                    "not ",
-                    "unsafe",
-                    "avoid",
-                )
-            ):
-                continue
-            if any(
-                w in window
-                for w in (
-                    "warm-safe",
-                    "warm safe",
-                    "sufficient for warm",
-                    "enough for warm",
-                    "sticky not required",
-                )
-            ):
-                pytest.fail(
-                    f"{name} claims round-robin as warm-safe (forbidden):\n{window!r}"
-                )
-
-    # Staging compose must not silently imply multi-replica warm without caveats.
-    staging_text = staging.read_text(encoding="utf-8").lower()
-    if "supervisor-a" in staging_text and "supervisor-b" in staging_text:
-        assert (
-            "sticky" in staging_text
-            or "cold resume" in staging_text
-            or "cold-resume" in staging_text
-            or "per-replica" in staging_text
-            or "warm" in staging_text
-        ), (
-            "dual supervisor staging must document sticky OR cold-resume "
-            "(not silent multi-replica warm)"
-        )
-
-
-@pytest.mark.asyncio
 async def test_t10_wrong_replica_live_hub_is_process_local(
     dual_peer_stacks,
 ) -> None:
@@ -199,15 +109,6 @@ async def test_t10_wrong_replica_live_hub_is_process_local(
             )
     finally:
         b["manager"].unsubscribe_live(sid, sub_b)
-
-
-
-
-
-
-
-
-
 
 
 def dual_manager_from(stack: dict):

@@ -70,14 +70,6 @@ def test_mc_u3_compaction_start_end_share_id() -> None:
     assert start.compaction_id == end.compaction_id == cid
 
 
-def test_mc_c1_contracts_exist() -> None:
-    root = Path(__file__).resolve().parents[4]  # agent-platform
-    assert (root / "contracts" / "memory.md").is_file()
-    body = (root / "contracts" / "AGENT_CONTRACT.md").read_text()
-    assert "compaction_start" in body
-    assert "memory_recall" in body
-
-
 def test_mc_a1_session_journal_api_no_memory_provider_concretes() -> None:
     src = Path(__file__).resolve().parents[2] / "src" / "supervisor"
     banned = (
