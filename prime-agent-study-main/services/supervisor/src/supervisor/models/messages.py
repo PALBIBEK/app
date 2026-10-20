@@ -362,9 +362,48 @@ def _tool_json(tool: Tool) -> dict[str, Any]:
 CONTEXT_SAFETY_TOKENS = 4096
 
 
+MIN_REPLY_TOKENS = 1024
+"""A call that leaves the model less room than this to answer is not sent."""
+
+
+def safety_tokens(window: int) -> int:
+    """The margin kept for the estimate's error: 4,096 tokens, at most an eighth of the window."""
+    return min(CONTEXT_SAFETY_TOKENS, window // 8)
+
+
+def fits_with_reply(window: int) -> int:
+    """The largest prompt that still leaves room for an answer (compaction keeps under it)."""
+    return window - safety_tokens(window) - MIN_REPLY_TOKENS
+
+
+class ContextWindowFull(Exception):
+    """The prompt leaves the model no room to answer: compact, or start a new session.
+
+    Raised instead of sending a call capped to a handful of output tokens, which
+    the model ends at once (``length``) with an empty answer that looks like a
+    normal one.
+    """
+
+    code = "CONTEXT_WINDOW_FULL"
+
+    def __init__(self, *, prompt_tokens: int, window: int, model: str) -> None:
+        super().__init__(
+            f"the conversation (~{prompt_tokens} tokens) fills {model}'s {window}-token window: "
+            "no room is left for an answer; it is compacted at the next message, or start a new session"
+        )
+        self.prompt_tokens = prompt_tokens
+        self.window = window
+
+
 def clamp_max_tokens(spec: ModelSpec, context: Context, max_tokens: int) -> int:
-    """Cap the output so prompt + output (+ a safety margin) fit the context window."""
+    """Cap the output so prompt + output (+ a safety margin) fit the context window.
+
+    Raises ``ContextWindowFull`` when what is left is too little for an answer.
+    """
     if spec.context_window <= 0:
         return max(1, max_tokens)
-    available = spec.context_window - estimate_context_tokens(context) - CONTEXT_SAFETY_TOKENS
-    return min(max_tokens, max(1, available))
+    prompt = estimate_context_tokens(context)
+    available = spec.context_window - prompt - safety_tokens(spec.context_window)
+    if available < min(max_tokens, MIN_REPLY_TOKENS):
+        raise ContextWindowFull(prompt_tokens=prompt, window=spec.context_window, model=spec.id)
+    return min(max_tokens, available)

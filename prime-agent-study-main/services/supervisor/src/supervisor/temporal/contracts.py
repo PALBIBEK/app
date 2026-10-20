@@ -107,6 +107,8 @@ NON_RETRYABLE = (
     "WorkspaceUnavailable",
     "SeamError",
     "ToolOutcomeUnknown",
+    # The prompt fills the model's window: a retry sends the same prompt.
+    "ContextWindowFull",
 )
 
 
