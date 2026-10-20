@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import signal
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -165,18 +168,93 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
 app = create_app()
 
 
-def main() -> None:
+def _flag(name: str) -> bool:
+    """A listener is on unless its flag says off (``0``, ``false``, ``no``, ``off``)."""
+    return os.environ.get(name, "1").strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def listeners(settings: Settings) -> list[tuple[str, Any]]:
+    """What this process serves: the API, the model gateway, the memory service.
+
+    One process, one port each (8080, 8090, 8092 by default), so their URLs stay
+    what they were as separate services. Each can be switched off: a deploy with
+    several API copies serves the gateway (whose virtual keys live in its
+    memory) from one copy only (``SERVE_MODEL_GATEWAY=0`` on the others).
+    """
     import uvicorn
 
-    from supervisor.config import Settings
+    out: list[tuple[str, Any]] = []
+    if _flag("SERVE_SUPERVISOR_API"):
+        out.append(("api", uvicorn.Config("supervisor.main:app", host=settings.host, port=settings.port)))
+    if _flag("SERVE_MODEL_GATEWAY"):
+        port = int(os.environ.get("MODEL_GATEWAY_PORT", "8090"))
+        out.append(("model-gateway", uvicorn.Config("supervisor.gateway.app:app", host=settings.host, port=port)))
+    if _flag("SERVE_MEMORY_SERVICE"):
+        from supervisor.memory_service.app import create_app as memory_app
 
-    settings = Settings.from_env()
-    uvicorn.run(
-        "supervisor.main:app",
-        host=settings.host,
-        port=settings.port,
-        reload=False,
-    )
+        url = os.environ.get("MEMORY_DATABASE_URL", "sqlite+aiosqlite:///./memory.db")
+        host = os.environ.get("MEMORY_HOST", settings.host)
+        port = int(os.environ.get("MEMORY_PORT", "8092"))
+        out.append(("memory-service", uvicorn.Config(memory_app(database_url=url), host=host, port=port)))
+    return out
+
+
+def serve(configs: list[tuple[str, Any]]) -> None:
+    """Run every listener, each on its own thread and event loop.
+
+    The first runs on the main thread as a plain uvicorn server: it owns SIGTERM
+    and SIGINT, so the API's drain (chained onto uvicorn's handler at startup)
+    works as when it ran alone. The others run on their own threads, so a
+    blocking call from one to another (the API reading the gateway's model
+    list) is answered instead of waiting on its own loop. When the first stops,
+    the others are stopped and joined.
+    """
+    import threading
+
+    import uvicorn
+
+    class _Side(uvicorn.Server):
+        @contextlib.contextmanager
+        def capture_signals(self) -> Iterator[None]:
+            yield  # signals belong to the main thread's server
+
+    (_, first), *rest = configs
+    sides = [(_Side(config), name) for name, config in rest]
+    threads = [
+        threading.Thread(target=server.run, name=f"serve-{name}", daemon=True) for server, name in sides
+    ]
+
+    def stop_sides() -> None:
+        for server, _ in sides:
+            server.should_exit = True
+        for thread in threads:
+            thread.join(timeout=30)
+
+    class _Main(uvicorn.Server):
+        @contextlib.contextmanager
+        def capture_signals(self) -> Iterator[None]:
+            # uvicorn re-raises the signal it caught when this block exits, which
+            # ends the process: the others shut down (lifespans included) first.
+            with super().capture_signals():
+                try:
+                    yield
+                finally:
+                    stop_sides()
+
+    logger.info("serving %s", ", ".join(f"{name} :{c.port}" for name, c in configs))
+    for thread in threads:
+        thread.start()
+    try:
+        _Main(first).run()
+    finally:
+        stop_sides()
+
+
+def main() -> None:
+    configs = listeners(Settings.from_env())
+    if not configs:
+        raise SystemExit("nothing to serve: SERVE_SUPERVISOR_API, SERVE_MODEL_GATEWAY and SERVE_MEMORY_SERVICE are all off")
+    serve(configs)
 
 
 if __name__ == "__main__":

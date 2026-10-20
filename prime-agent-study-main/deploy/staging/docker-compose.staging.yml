@@ -35,10 +35,13 @@ services:
   model-gateway:
     build:
       context: ..
-      dockerfile: services/model-gateway/Dockerfile
+      dockerfile: services/supervisor/Dockerfile
     ports:
       - "8090:8090"
     environment:
+      # The supervisor image, serving only the model gateway.
+      SERVE_SUPERVISOR_API: "0"
+      SERVE_MEMORY_SERVICE: "0"
       ENV: staging
       AUTH_REQUIRED: "true"
       MODEL_GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-staging-gateway-token}
@@ -69,10 +72,13 @@ services:
   memory:
     build:
       context: ..
-      dockerfile: services/memory/Dockerfile
+      dockerfile: services/supervisor/Dockerfile
     ports:
       - "8092:8092"
     environment:
+      # The supervisor image, serving only the memory service.
+      SERVE_SUPERVISOR_API: "0"
+      SERVE_MODEL_GATEWAY: "0"
       ENV: staging
       AUTH_REQUIRED: "true"
       MEMORY_PORT: "8092"
@@ -109,6 +115,9 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # The gateway and the memory service run in their own containers.
+      SERVE_MODEL_GATEWAY: "0"
+      SERVE_MEMORY_SERVICE: "0"
       ENV: staging
       # The vault's keys (key_id:base64 of 32 random bytes; first one seals). Every
       # replica needs the same list. Generate: python -c "import base64,os;print('k1:'+base64.b64encode(os.urandom(32)).decode())"
@@ -170,6 +179,9 @@ services:
     ports:
       - "8081:8080"
     environment:
+      # The gateway and the memory service run in their own containers.
+      SERVE_MODEL_GATEWAY: "0"
+      SERVE_MEMORY_SERVICE: "0"
       ENV: staging
       # The vault's keys (key_id:base64 of 32 random bytes; first one seals). Every
       # replica needs the same list. Generate: python -c "import base64,os;print('k1:'+base64.b64encode(os.urandom(32)).decode())"

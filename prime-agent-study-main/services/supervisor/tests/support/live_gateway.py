@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import json
 import socket
-import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-GATEWAY_SRC = Path(__file__).resolve().parents[3] / "model-gateway"
 SERVICE_TOKEN = "gateway-service-token"
 KEY_HEADER = "x-litellm-api-key"
 
@@ -76,10 +73,9 @@ def _free_port() -> int:
 def serve_gateway(
     monkeypatch: pytest.MonkeyPatch, groups: Mapping[str, dict[str, Any]] = DEFAULT_GROUPS
 ) -> Iterator[LiveGateway]:
-    if str(GATEWAY_SRC) not in sys.path:
-        monkeypatch.syspath_prepend(str(GATEWAY_SRC))
     import uvicorn
-    from model_gateway.app import app
+
+    from supervisor.gateway.app import app
 
     for name in (
         "AUTH_REQUIRED",

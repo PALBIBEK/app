@@ -6,13 +6,11 @@ export REPO="${REPO:-$(cd "$E2E_DIR/.." && pwd)}"
 export SVC="$REPO/services"
 export E2E_RUN_DIR="${E2E_RUN_DIR:-$E2E_DIR/.run}"
 export PY="${E2E_PYTHON:-$SVC/supervisor/.venv/bin/python}"
-export GW_PY="${E2E_GATEWAY_PYTHON:-$SVC/model-gateway/.venv/bin/python}"
-export MEM_PY="${E2E_MEMORY_PYTHON:-$SVC/memory/.venv/bin/python}"
 export TEMPORAL_CLI="${TEMPORAL_CLI:-temporal}"
 export PG_HOST="${PG_HOST:-127.0.0.1}" PG_PORT="${PG_PORT:-5433}" PG_USER="${PG_USER:-yal}" PG_PASSWORD="${PG_PASSWORD:-yal}"
 
-# --- model gateway ---------------------------------------------------------
-export GW_ENV="PROFILE=dev ENV=development PORT=8090 MODEL_GATEWAY_TOKEN=dev-local-gateway-token \
+# --- model gateway (the supervisor image with SERVE_MODEL_GATEWAY only, :8090) ---------------
+export GW_ENV="PROFILE=dev ENV=development MODEL_GATEWAY_TOKEN=dev-local-gateway-token \
 MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key MODEL_GATEWAY_DEFAULT_ROUTE=echo \
 OPENAI_API_KEY=standin OPENAI_BASE_URL=http://127.0.0.1:9100/v1 \
 ANTHROPIC_API_KEY=standin ANTHROPIC_BASE_URL=http://127.0.0.1:9100"
@@ -44,7 +42,7 @@ export MEMORY_SERVICE_URL=http://memory-service:8092 MEMORY_SERVICE_TOKEN=dev-lo
 export OTEL_EXPORTER_OTLP_ENDPOINT= YAL_REAPER_INTERVAL_S=300
 export ALLOW_LAB_ECHO=0   # production subagent default: nested sessions through the gateway
 
-# --- memory service ----------------------------------------------------------
+# --- memory service (the supervisor image with SERVE_MEMORY_SERVICE only, :8092) --------------
 export MEM_ENV="MEMORY_DATABASE_URL=postgresql+asyncpg://$PG_USER:$PG_PASSWORD@$PG_HOST:$PG_PORT/memory MEMORY_PORT=8092 \
 MEMORY_HOST=127.0.0.1 MEMORY_SERVICE_TOKEN=dev-local-memory-token MEMORY_ALLOW_STATIC_TOKEN=1 ENV=development \
 SERVICE_JWT_SECRET=dev-local-service-jwt-secret-32b!!"

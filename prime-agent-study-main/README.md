@@ -5,10 +5,10 @@ Supervisor service, the versioned agent catalog, and shared agent contracts.
 ```
 prime-agent-study-main/
 ├── services/
-│   ├── supervisor/      # the supervisor: API, Temporal worker, sessions, hands  (package: supervisor/)
-│   ├── model-gateway/   # the model gateway: routes, keys, wire protocols        (package: model_gateway/)
-│   ├── memory/          # the durable memory service                             (package: memory_service/)
-│   └── shared/          # code the services share                                (package: shared/)
+│   └── supervisor/      # one package, one image (package: supervisor/)
+│       ├── supervisor/gateway/          # the model gateway: routes, keys, wire protocols (:8090)
+│       ├── supervisor/memory_service/   # the memory service: long-term memory (:8092)
+│       └── supervisor/…                 # the API (:8080), Temporal worker, sessions, hands
 ├── harness/             # the agent catalog: harness versions and compositions
 ├── contracts/           # protocol_versions.yaml, read at runtime
 ├── deploy/              # staging and Kubernetes manifests
@@ -25,6 +25,11 @@ Two axes in the supervisor:
 
 Harness versions declare `requires_sandbox`. Session `modes.py` maps that to
 sticky vs. stateless-per-turn.
+
+`python -m supervisor.main` serves the API, the gateway and the memory service on
+their own ports; `SERVE_SUPERVISOR_API`, `SERVE_MODEL_GATEWAY` and
+`SERVE_MEMORY_SERVICE` (default on) pick which, so each can run in its own
+container from the same image (as `docker-compose.yml` does).
 
 ## Quick start
 

@@ -38,6 +38,9 @@ services:
     ports:
       - "8080:8080"
     environment: &supervisor-env
+      # The gateway and the memory service run in their own containers.
+      SERVE_MODEL_GATEWAY: "0"
+      SERVE_MEMORY_SERVICE: "0"
       # Every session runs as a Temporal workflow executed by supervisor-worker.
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
@@ -188,10 +191,13 @@ services:
   model-gateway:
     build:
       context: .
-      dockerfile: services/model-gateway/Dockerfile
+      dockerfile: services/supervisor/Dockerfile
     ports:
       - "8090:8090"
     environment:
+      # The supervisor image, serving only the model gateway.
+      SERVE_SUPERVISOR_API: "0"
+      SERVE_MEMORY_SERVICE: "0"
       PROFILE: ${PROFILE:-dev}
       ENV: ${ENV:-development}
       # Non-empty default for local. Empty tokens only if PROFILE=dev and you override explicitly.
@@ -212,10 +218,13 @@ services:
   memory-service:
     build:
       context: .
-      dockerfile: services/memory/Dockerfile
+      dockerfile: services/supervisor/Dockerfile
     ports:
       - "8092:8092"
     environment:
+      # The supervisor image, serving only the memory service.
+      SERVE_SUPERVISOR_API: "0"
+      SERVE_MODEL_GATEWAY: "0"
       ENV: ${ENV:-development}
       MEMORY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/memory
       # Verifies the supervisor's service JWTs (same secret as the supervisor).

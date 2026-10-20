@@ -117,17 +117,10 @@ def test_sp_a03_journal_schemas_remain_provider_type_free() -> None:
 
 
 def test_sp_a04_model_gateway_tree_independent() -> None:
-    """QUEUE model-gateway: sibling exists and must not import supervisor."""
-    root = _agent_platform_root() / "services" / "model-gateway"
-    assert root.is_dir(), "model-gateway sibling service required"
-    src = root / "model_gateway"
-    assert src.is_dir()
-    offenders: list[str] = []
-    for path in src.rglob("*.py"):
-        body = path.read_text()
-        if "import supervisor" in body or "from supervisor" in body:
-            offenders.append(str(path.relative_to(root)))
-    assert offenders == [], f"gateway must not import supervisor: {offenders}"
+    """The model gateway lives in the supervisor package but imports nothing from the rest of it."""
+    from tests.support.layering import imports_outside
+
+    assert imports_outside("supervisor.gateway") == []
 
 
 # --- Integration ---

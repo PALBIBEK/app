@@ -21,6 +21,10 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: SERVE_MODEL_GATEWAY  # its own Deployment (gateway-memory-deployment.yaml)
+              value: "0"
+            - name: SERVE_MEMORY_SERVICE
+              value: "0"
             - name: DRAIN_GRACE_S
               value: "30"
             - name: IDLE_REAP_MAX_SECONDS
