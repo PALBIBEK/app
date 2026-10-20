@@ -28,17 +28,23 @@ from supervisor.api.schemas import (
     NotebookRestore,
     RevisionOut,
 )
+from supervisor.memory.client import (
+    MemoryRefused,
+    MemoryServiceNotConfigured,
+    MemoryUnavailable,
+    UnavailableNotebooks,
+)
 from supervisor.memory.cross import search_across
-from supervisor.memory.errors import (
+from supervisor.memory.platform import MemoryPlatform
+from supervisor.memory.service import CaptureContext, MemoryService
+from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
 )
-from supervisor.memory.platform import MemoryPlatform
-from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import Edit, Fact, Notebook
+from supervisor.memory_service.notebooks.types import Edit, Fact, Notebook
 from supervisor.seams.services import Principal
 
 router = APIRouter(prefix="/v1/memory", tags=["memory"])
@@ -46,8 +52,10 @@ router = APIRouter(prefix="/v1/memory", tags=["memory"])
 
 def _platform(request: Request) -> MemoryPlatform:
     platform = getattr(deps._state(request), "memory", None)
-    if platform is None:
-        raise HTTPException(status_code=503, detail="memory is not configured")
+    if platform is None or isinstance(platform.store, UnavailableNotebooks):
+        raise HTTPException(
+            status_code=503, detail="long-term memory is not configured (no memory service)"
+        )
     return platform
 
 
@@ -67,6 +75,8 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MemoryDisclosureDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (MemoryUnavailable, MemoryRefused, MemoryServiceNotConfigured) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 async def _owned(platform: MemoryPlatform, notebook_id: str, principal: Principal) -> Notebook:
@@ -83,7 +93,8 @@ def _view(platform: MemoryPlatform, principal: Principal) -> MemoryService:
 
 
 async def _out(platform: MemoryPlatform, notebook: Notebook) -> NotebookOut:
-    stats = await platform.store.stats(notebook.id)
+    async with _errors():
+        stats = await platform.store.stats(notebook.id)
     return NotebookOut(
         id=notebook.id,
         agent_pin=notebook.agent_pin,
@@ -119,12 +130,13 @@ async def list_notebooks(
     principal: Principal = Depends(deps.current_principal),
 ) -> list[NotebookOut]:
     platform = _platform(request)
-    notebooks = await platform.store.list_notebooks(
-        tenant_id=principal.tenant_id or principal.id,
-        owner=principal.id,
-        agent_pin=agent_pin,
-        archived=archived,
-    )
+    async with _errors():
+        notebooks = await platform.store.list_notebooks(
+            tenant_id=principal.tenant_id or principal.id,
+            owner=principal.id,
+            agent_pin=agent_pin,
+            archived=archived,
+        )
     return [await _out(platform, nb) for nb in notebooks]
 
 
@@ -285,13 +297,13 @@ async def search_memory(
     if body.notebook_id is not None:
         notebooks = [(await _owned(platform, body.notebook_id, principal)).id]
     else:
-        notebooks = [
-            nb.id
-            for nb in await platform.store.list_notebooks(
+        async with _errors():
+            listed = await platform.store.list_notebooks(
                 tenant_id=principal.tenant_id or principal.id,
                 owner=principal.id,
                 agent_pin=body.agent_pin,
             )
-        ]
-    hits = await search_across(_view(platform, principal), notebooks, body.query, body.limit)
+        notebooks = [nb.id for nb in listed]
+    async with _errors():
+        hits = await search_across(_view(platform, principal), notebooks, body.query, body.limit)
     return [MemoryHit(notebook_id=nb, fact=fact) for nb, fact in hits]

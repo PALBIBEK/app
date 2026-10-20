@@ -20,7 +20,7 @@ from supervisor.app import SupervisorState
 from supervisor.db.models import ScopeMembershipRow, ScopeRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.service import CaptureContext
-from supervisor.memory.types import Fact, Sensitivity, personal_source
+from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source
 from supervisor.seams.core.types import ChatMessage
 from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
@@ -30,7 +30,8 @@ from tests.support.githi_env import LS, Env, payloads, run_ended
 from tests.support.scripted import ScriptedGateway
 from tests.support.workflow_histories import replayable_histories
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+# Notebooks live in the memory service: a live one, found as production finds it.
+pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
 
 TRACKED = CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=())
 QUICK = {"capture_quiet_s": 1}

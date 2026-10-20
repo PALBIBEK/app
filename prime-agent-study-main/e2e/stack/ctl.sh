@@ -19,9 +19,10 @@ start_service() {
     s3)       start_one s3 "$PY -m moto.server -H 127.0.0.1 -p 8333" ;;
     acp)      start_one acp "$PY $E2E_DIR/stack/acp.py" ;;
     relay)    start_one relay "$PY $E2E_DIR/stack/relay.py" ;;
-    gateway)  start_one gateway "cd $SVC/model-gateway && env $GW_ENV MODEL_GATEWAY_ROUTES_JSON='$MODEL_GATEWAY_ROUTES_JSON' $GW_PY -m model_gateway" ;;
-    memory)   start_one memory "cd $SVC/memory && env $MEM_ENV $MEM_PY -m memory_service" ;;
-    api)      start_one api "cd $SVC/supervisor && PORT=8080 HOST=127.0.0.1 $PY -m supervisor.main" ;;
+    # One image, three processes, as compose and k8s deploy it: each serves its own part.
+    gateway)  start_one gateway "cd $SVC/supervisor && env $GW_ENV MODEL_GATEWAY_ROUTES_JSON='$MODEL_GATEWAY_ROUTES_JSON' HOST=127.0.0.1 SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 $PY -m supervisor.main" ;;
+    memory)   start_one memory "cd $SVC/supervisor && env $MEM_ENV SERVE_SUPERVISOR_API=0 SERVE_MODEL_GATEWAY=0 $PY -m supervisor.main" ;;
+    api)      start_one api "cd $SVC/supervisor && PORT=8080 HOST=127.0.0.1 SERVE_MODEL_GATEWAY=0 SERVE_MEMORY_SERVICE=0 $PY -m supervisor.main" ;;
     worker)   start_one worker "cd $SVC/supervisor && $PY -m supervisor.temporal.worker" ;;
     worker2)  start_one worker2 "cd $SVC/supervisor && $PY -m supervisor.temporal.worker" ;;
     *) echo "unknown service: $1" >&2; return 2 ;;

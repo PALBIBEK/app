@@ -16,7 +16,8 @@ from supervisor.main import create_app
 from supervisor.memory.binding import MemoryBinding, MemoryRequest, agent_pin
 from tests.support.session_env import make_catalog
 
-pytestmark = pytest.mark.asyncio
+# Notebooks live in the memory service: a live one, found as production finds it.
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("memory_service_url")]
 
 ALICE = {"X-Tenant-Id": "t1", "X-Principal-Id": "alice"}
 BOB = {"X-Tenant-Id": "t1", "X-Principal-Id": "bob"}

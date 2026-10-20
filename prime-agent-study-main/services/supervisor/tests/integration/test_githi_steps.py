@@ -45,7 +45,8 @@ from tests.support.githi_env import (
 from tests.support.scripted import ScriptedGateway, slow_tool
 from tests.support.workflow_histories import replayable_histories
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+# Every production session has long-term memory (its default notebook), so these do too.
+pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
 
 
 async def test_githi_turn_runs_one_activity_per_model_and_tool_call(

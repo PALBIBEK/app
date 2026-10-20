@@ -16,9 +16,14 @@ spec:
     spec:
       containers:
         - name: model-gateway
-          image: yal-model-gateway:latest
+          image: yal-supervisor:latest  # one image; this container serves only the gateway
           ports:
             - containerPort: 8090
+          env:
+            - name: SERVE_SUPERVISOR_API
+              value: "0"
+            - name: SERVE_MEMORY_SERVICE
+              value: "0"
           envFrom:
             - secretRef:
                 name: yal-gateway-credentials
@@ -57,10 +62,14 @@ spec:
     spec:
       containers:
         - name: memory
-          image: yal-memory:latest
+          image: yal-supervisor:latest  # one image; this container serves only the memory service
           ports:
             - containerPort: 8092
           env:
+            - name: SERVE_SUPERVISOR_API
+              value: "0"
+            - name: SERVE_MODEL_GATEWAY
+              value: "0"
             - name: MEMORY_PORT
               value: "8092"
             - name: ENV

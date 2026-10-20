@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.memory.errors import MemoryFactsMissing, NotebookExists, RevisionConflict
-from supervisor.memory.render import clean_captured, fact_line
+from supervisor.memory.client import NotebookClient
 from supervisor.memory.service import CaptureContext, NotebookMemory
-from supervisor.memory.store import NotebookStore
-from supervisor.memory.types import (
+from supervisor.memory_service.notebooks.errors import (
+    MemoryFactsMissing,
+    NotebookExists,
+    RevisionConflict,
+)
+from supervisor.memory_service.notebooks.render import clean_captured, fact_line
+from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
     Edit,
     Provenance,
@@ -19,18 +22,18 @@ from supervisor.memory.types import (
     personal_source,
     scope_source,
 )
+from tests.support.notebooks import MemoryServiceHandle
 
 pytestmark = pytest.mark.asyncio
 
-Factory = async_sessionmaker[AsyncSession]
 ALICE = "alice"
 PIN = "composition:githi@sha256:abc"
 SCOPE_X = scope_source("x")
 ORDINARY_TRACKED = CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=())
 
 
-async def _memory(memory_db: Factory) -> tuple[NotebookMemory, str]:
-    store = NotebookStore(memory_db)
+async def _memory(notebooks: NotebookClient) -> tuple[NotebookMemory, str]:
+    store = notebooks
     notebook = await store.ensure(tenant_id="t1", owner=ALICE, agent_pin=PIN, name="default")
     return NotebookMemory(store), notebook.id
 
@@ -50,8 +53,8 @@ def test_captured_text_is_cleaned_and_claims_are_labelled() -> None:
     ]
 
 
-async def test_capture_dedupes_and_tightens_provenance(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_capture_dedupes_and_tightens_provenance(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     assert await memory.capture(nb, ["Prefers tea", "Owns billing"], context=ORDINARY_TRACKED) == 2
     # The same fact again (case and spacing differ) adds no text...
     sensitive = CaptureContext(sensitivity=Sensitivity.SENSITIVE, source=SCOPE_X, inherited=())
@@ -64,8 +67,8 @@ async def test_capture_dedupes_and_tightens_provenance(memory_db: Factory) -> No
     assert set(tea.sources) == {personal_source(ALICE), SCOPE_X}
 
 
-async def test_untracked_context_makes_provenance_unknown(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_untracked_context_makes_provenance_unknown(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     await memory.capture(
         nb, ["Likes jazz"], context=CaptureContext(sensitivity=Sensitivity.ORDINARY)
     )
@@ -78,8 +81,8 @@ async def test_untracked_context_makes_provenance_unknown(memory_db: Factory) ->
     assert SCOPE_X in secret.provenance.sources and not secret.provenance.source_unknown
 
 
-async def test_edits_keep_ids_and_are_all_or_nothing(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_edits_keep_ids_and_are_all_or_nothing(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     await memory.capture(nb, ["Prefers tea", "Owns billing"], context=ORDINARY_TRACKED)
     tea, billing = await memory.facts(nb)
     with pytest.raises(MemoryFactsMissing) as err:
@@ -97,8 +100,8 @@ async def test_edits_keep_ids_and_are_all_or_nothing(memory_db: Factory) -> None
     assert SCOPE_X in edited.provenance.sources and edited.provenance.source_unknown
 
 
-async def test_every_change_is_one_revision_and_clearing_keeps_history(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_every_change_is_one_revision_and_clearing_keeps_history(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     store = memory.store
     await memory.capture(nb, ["a", "b"], context=ORDINARY_TRACKED)
     assert (await store.get(nb)).revision == 1, "one transaction, one revision"
@@ -113,8 +116,8 @@ async def test_every_change_is_one_revision_and_clearing_keeps_history(memory_db
     assert ops == [(1, "insert", "a"), (1, "insert", "b"), (2, "delete", "b"), (3, "delete", "a")]
 
 
-async def test_history_reads_and_restores_never_declassify(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_history_reads_and_restores_never_declassify(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     await memory.capture(nb, ["Codename is Kiwi", "Prefers tea"], context=ORDINARY_TRACKED)
     kiwi, tea = await memory.facts(nb)
     # Later the codename is learned to be restricted, then reworded; tea is deleted.
@@ -139,9 +142,9 @@ async def test_history_reads_and_restores_never_declassify(memory_db: Factory) -
     assert (await memory.history(nb))[-1].op in {"restore", "update", "delete"}
 
 
-async def test_concurrent_writers_never_lose_a_fact(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
-    others = [NotebookMemory(NotebookStore(memory_db)) for _ in range(4)]  # other workers
+async def test_concurrent_writers_never_lose_a_fact(memory_svc: MemoryServiceHandle) -> None:
+    memory, nb = await _memory(memory_svc.client())
+    others = [NotebookMemory(memory_svc.client()) for _ in range(4)]  # other workers
     writers = [memory, *others]
     await asyncio.gather(
         *(
@@ -155,19 +158,21 @@ async def test_concurrent_writers_never_lose_a_fact(memory_db: Factory) -> None:
     assert sorted(set(revisions)) == list(range(1, 21)), "each writer got its own revision"
 
 
-async def test_stale_writes_are_refused(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_stale_writes_are_refused(memory_svc: MemoryServiceHandle) -> None:
+    """The store's stale-write check, where the transactions run (the memory service)."""
+    memory, nb = await _memory(memory_svc.client())
     await memory.capture(nb, ["a"], context=ORDINARY_TRACKED)
 
     async def noop(_tx: object) -> None:
         return None
 
+    store = memory_svc.app.state.memory.notebooks.store
     with pytest.raises(RevisionConflict):
-        await memory.store.transact(nb, noop, expect_revision=0)
+        await store.transact(nb, noop, expect_revision=0)
 
 
-async def test_notebook_names_are_unique_per_owner_and_pin(memory_db: Factory) -> None:
-    store = NotebookStore(memory_db)
+async def test_notebook_names_are_unique_per_owner_and_pin(notebooks: NotebookClient) -> None:
+    store = notebooks
     made = await asyncio.gather(
         *(
             store.ensure(tenant_id="t1", owner=ALICE, agent_pin=PIN, name="project")
@@ -184,8 +189,8 @@ async def test_notebook_names_are_unique_per_owner_and_pin(memory_db: Factory) -
     assert len({made[0].id, other_pin.id, other_owner.id}) == 3
 
 
-async def test_fact_lines_carry_ids_for_editing(memory_db: Factory) -> None:
-    memory, nb = await _memory(memory_db)
+async def test_fact_lines_carry_ids_for_editing(notebooks: NotebookClient) -> None:
+    memory, nb = await _memory(notebooks)
     await memory.capture(nb, ["Prefers tea"], context=ORDINARY_TRACKED)
     (fact,) = await memory.facts(nb)
     assert fact_line(fact).startswith(f"#{fact.id} (")

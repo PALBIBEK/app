@@ -16,6 +16,7 @@ from supervisor.harness import HarnessCatalog
 from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
+from supervisor.memory.client import NotebookClient
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
 from supervisor.obs.metrics import MetricsRegistry
@@ -87,6 +88,7 @@ def build_supervisor(
     workspace_store: WorkspaceStore | None = None,
     browser: BrowserAccess | None = None,
     vault: Vault | None = None,
+    notebooks: NotebookClient | None = None,
 ) -> SupervisorState:
     writer = JournalWriter(session_factory, blob_dir=blob_dir)
     reader = JournalReader(session_factory, blob_dir=blob_dir)
@@ -100,7 +102,7 @@ def build_supervisor(
         authz=authz,
         hydrator=getattr(sandbox_provider, "_hydrator", None),
     )
-    memory = MemoryPlatform(session_factory)
+    memory = MemoryPlatform(session_factory, notebooks=notebooks)
     vault = vault or Vault(session_factory, Keyring.from_env())
     from supervisor.hands.runners import set_hub
 

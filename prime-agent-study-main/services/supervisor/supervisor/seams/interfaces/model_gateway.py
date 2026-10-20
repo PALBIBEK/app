@@ -15,7 +15,7 @@ class ModelGatewayClient(Protocol):
     """Definition: routed LLM access without embedding vendor SDK authority.
 
     OpenAI-compat vocabulary (G-1). HTTP deployable:
-    ``services/model-gateway/`` + ``HttpModelGatewayClient``.
+    ``supervisor.gateway`` + ``HttpModelGatewayClient``.
     """
 
     def complete(

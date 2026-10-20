@@ -9,6 +9,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+# the memory service's local archive and SQLite file
+memory_archive/
+memory.db
 *.egg
 
 # Node / Next

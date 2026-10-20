@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import time
@@ -42,6 +43,7 @@ from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.harness.services.compat_checker import capabilities_for, check
 from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
+from supervisor.memory.client import MemoryServiceNotConfigured, UnavailableNotebooks
 from supervisor.models import model_router
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
@@ -199,6 +201,18 @@ class SessionManager(UpkeepOps):
             )
 
             snap = manifest_to_dict(manifest)
+            request = memory if isinstance(memory, MemoryRequest) else MemoryRequest.from_dict(memory)
+            if isinstance(self._memory.store, UnavailableNotebooks):
+                # No memory service: notebooks a client named are refused outright; the
+                # implicit default notebook is simply absent (the session has no
+                # long-term memory), so a deployment without one still runs sessions.
+                if MemoryRequest.names_notebooks(memory):
+                    raise MemoryServiceNotConfigured(
+                        "this session asks for notebooks, but no memory service is configured "
+                        "(MEMORY_SERVICE_URL)"
+                    )
+                _warn_no_memory_service()
+                request = MemoryRequest.without_notebooks()
             binding = await resolve_binding(
                 self._memory.store,
                 tenant_id=tenant_id,
@@ -206,7 +220,8 @@ class SessionManager(UpkeepOps):
                 pin=agent_pin(
                     harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
                 ),
-                request=memory if isinstance(memory, MemoryRequest) else MemoryRequest.from_dict(memory),
+                request=request,
+                agent=(self._long_term.get(session_id) or (None, None))[1],
             )
             await self._writer.ensure_session(
                 session_id,
@@ -981,3 +996,11 @@ class SessionManager(UpkeepOps):
             except Exception:
                 logger.exception("failed to write terminal event session=%s", session_id)
             self._registry.remove(session_id)
+
+
+@functools.cache
+def _warn_no_memory_service() -> None:
+    logger.warning(
+        "no memory service is configured (MEMORY_SERVICE_URL): sessions run without "
+        "long-term memory"
+    )

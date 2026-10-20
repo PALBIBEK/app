@@ -16,9 +16,9 @@ from supervisor.memory import history as session_history
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.cross import read_notebook, search_across
 from supervisor.memory.disclosure import Audience
-from supervisor.memory.errors import MemoryDisclosureDenied, MemoryFactsMissing
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import CaptureMetadata, Edit, Provenance
+from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
+from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Provenance
 
 MEMORY_TOOL: Final = "memory"
 HISTORY_TOOL: Final = "history"

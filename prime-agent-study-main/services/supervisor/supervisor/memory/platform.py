@@ -24,10 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.db.models import ScopeMembershipRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.classification import ClassifiedMemory, OneShot
+from supervisor.memory.client import NotebookClient, UnavailableNotebooks
 from supervisor.memory.disclosure import Audience, DisclosedMemory, IsMember
 from supervisor.memory.service import MemoryService, NotebookMemory
-from supervisor.memory.store import NotebookStore
-from supervisor.memory.types import scope_source
+from supervisor.memory_service.notebooks.types import scope_source
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage
 
@@ -70,9 +70,17 @@ class MemoryPlatform:
         is_member: IsMember | None = None,
         one_shot: OneShot | None = None,
         layers: Callable[[MemoryService], MemoryService] | None = None,
+        notebooks: NotebookClient | None = None,
     ) -> None:
+        """``notebooks``: the memory service's notebooks (default ``MEMORY_SERVICE_URL``).
+
+        Without one, long-term memory is unavailable and says so when used: there
+        is no second, local store to fall back on.
+        """
         self._db = factory
-        self.store = NotebookStore(factory)
+        self.store: NotebookClient | UnavailableNotebooks = (
+            notebooks or NotebookClient.from_env() or UnavailableNotebooks()
+        )
         self.notebooks = NotebookMemory(self.store)
         self.base: MemoryService = layers(self.notebooks) if layers else self.notebooks
         self._is_member = is_member or self._db_membership

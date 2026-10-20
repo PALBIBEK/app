@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Final
 
 from supervisor.memory.classification import SENSITIVITY_PROMPT, OneShot
-from supervisor.memory.render import bullets
-from supervisor.memory.types import Sensitivity
+from supervisor.memory_service.notebooks.render import bullets
+from supervisor.memory_service.notebooks.types import Sensitivity
 
 logger = logging.getLogger(__name__)
 

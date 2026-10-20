@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory.classification import ClassifiedMemory
+from supervisor.memory.client import NotebookClient
 from supervisor.memory.disclosure import Audience, DisclosedMemory
-from supervisor.memory.errors import MemoryDisclosureDenied, MemoryFactsMissing
 from supervisor.memory.service import CaptureContext, NotebookMemory
-from supervisor.memory.store import NotebookStore
-from supervisor.memory.types import Edit, Provenance, Sensitivity, personal_source, scope_source
+from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
+from supervisor.memory_service.notebooks.types import (
+    Edit,
+    Provenance,
+    Sensitivity,
+    personal_source,
+    scope_source,
+)
 
 pytestmark = pytest.mark.asyncio
 
-Factory = async_sessionmaker[AsyncSession]
 ALICE, BOB = "alice", "bob"
 X = scope_source("x")
 
@@ -32,8 +36,8 @@ class Members:
         return principal in self.scopes.get(scope_id, set())
 
 
-async def _seeded(memory_db: Factory) -> tuple[NotebookMemory, str]:
-    store = NotebookStore(memory_db)
+async def _seeded(notebooks: NotebookClient) -> tuple[NotebookMemory, str]:
+    store = notebooks
     nb = (await store.ensure(tenant_id="t1", owner=ALICE, agent_pin="p", name="default")).id
     memory = NotebookMemory(store)
 
@@ -66,8 +70,8 @@ async def _texts(view: DisclosedMemory, nb: str) -> set[str]:
     return {f.text for f in await view.facts(nb)}
 
 
-async def test_a_private_session_sees_its_owners_notebook(memory_db: Factory) -> None:
-    memory, nb = await _seeded(memory_db)
+async def test_a_private_session_sees_its_owners_notebook(notebooks: NotebookClient) -> None:
+    memory, nb = await _seeded(notebooks)
     members = Members(x={ALICE})
     view = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), members))
     assert await _texts(view, nb) == {
@@ -81,8 +85,8 @@ async def test_a_private_session_sees_its_owners_notebook(memory_db: Factory) ->
     assert "learned in x" not in await _texts(view, nb)
 
 
-async def test_a_shared_audience_sees_only_what_everyone_is_entitled_to(memory_db: Factory) -> None:
-    memory, nb = await _seeded(memory_db)
+async def test_a_shared_audience_sees_only_what_everyone_is_entitled_to(notebooks: NotebookClient) -> None:
+    memory, nb = await _seeded(notebooks)
     members = Members(x={ALICE, BOB})
     shared = Audience(ALICE, X, (ALICE, BOB), members)
     assert await _texts(_view(memory, shared), nb) == {"learned in x"}
@@ -93,8 +97,8 @@ async def test_a_shared_audience_sees_only_what_everyone_is_entitled_to(memory_d
     assert await _texts(_view(memory, external), nb) == {"learned in x"}
 
 
-async def test_lookup_failures_fail_closed(memory_db: Factory) -> None:
-    memory, nb = await _seeded(memory_db)
+async def test_lookup_failures_fail_closed(notebooks: NotebookClient) -> None:
+    memory, nb = await _seeded(notebooks)
     members = Members(x={ALICE})
     members.broken = True
     view = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), members))
@@ -102,16 +106,16 @@ async def test_lookup_failures_fail_closed(memory_db: Factory) -> None:
     assert "ordinary personal" in await _texts(view, nb), "no lookup needed for own facts"
 
 
-async def test_recall_search_and_read_use_the_same_view(memory_db: Factory) -> None:
-    memory, nb = await _seeded(memory_db)
+async def test_recall_search_and_read_use_the_same_view(notebooks: NotebookClient) -> None:
+    memory, nb = await _seeded(notebooks)
     shared = _view(memory, Audience(ALICE, X, (ALICE, BOB), Members(x={ALICE, BOB})))
     assert [c.text.split(") ", 1)[1] for c in await shared.recall(nb)] == ["learned in x"]
     assert await shared.query(nb, "personal") == []
     assert "personal" not in await shared.read(nb)
 
 
-async def test_only_a_narrow_audience_may_edit_and_never_hidden_facts(memory_db: Factory) -> None:
-    memory, nb = await _seeded(memory_db)
+async def test_only_a_narrow_audience_may_edit_and_never_hidden_facts(notebooks: NotebookClient) -> None:
+    memory, nb = await _seeded(notebooks)
     members = Members(x={ALICE, BOB})
     facts = {f.text: f for f in await memory.facts(nb)}
     shared = _view(memory, Audience(ALICE, X, (ALICE, BOB), members))
@@ -131,8 +135,8 @@ async def test_only_a_narrow_audience_may_edit_and_never_hidden_facts(memory_db:
     assert len(await memory.facts(nb)) == 4, "nothing was changed"
 
 
-async def test_explicit_captures_and_edits_are_classified(memory_db: Factory) -> None:
-    store = NotebookStore(memory_db)
+async def test_explicit_captures_and_edits_are_classified(notebooks: NotebookClient) -> None:
+    store = notebooks
     nb = (await store.ensure(tenant_id="t1", owner=ALICE, agent_pin="p", name="default")).id
     asked: list[str] = []
 
@@ -167,8 +171,8 @@ async def test_explicit_captures_and_edits_are_classified(memory_db: Factory) ->
     assert edited.provenance.sensitivity is Sensitivity.SENSITIVE
 
 
-async def test_a_failing_classifier_means_unknown(memory_db: Factory) -> None:
-    store = NotebookStore(memory_db)
+async def test_a_failing_classifier_means_unknown(notebooks: NotebookClient) -> None:
+    store = notebooks
     nb = (await store.ensure(tenant_id="t1", owner=ALICE, agent_pin="p", name="default")).id
 
     async def broken(system: str, content: str) -> str:

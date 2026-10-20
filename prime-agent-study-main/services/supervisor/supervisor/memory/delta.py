@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from supervisor.memory.cross import Recalled, render_recall
-from supervisor.memory.render import fact_hash, render_facts
-from supervisor.memory.types import Fact, Provenance, Sensitivity
+from supervisor.memory_service.notebooks.render import fact_hash, render_facts
+from supervisor.memory_service.notebooks.types import Fact, Provenance, Sensitivity
 
 
 @dataclass(frozen=True, slots=True)

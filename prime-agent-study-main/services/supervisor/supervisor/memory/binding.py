@@ -15,7 +15,7 @@ from enum import StrEnum
 from typing import Any
 
 from supervisor.harness.core.digests import content_digest
-from supervisor.memory.store import NotebookStore
+from supervisor.memory.client import NotebookClient, UnavailableNotebooks
 
 DEFAULT_NOTEBOOK = "default"
 # QM per-turn capture: flush a burst after this much quiet, or after this many turns.
@@ -104,6 +104,18 @@ class MemoryRequest:
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "read": list(self.read)}
 
+    @staticmethod
+    def names_notebooks(data: MemoryRequest | dict[str, Any] | None) -> bool:
+        """Whether a client asked for notebooks by name (not just the default)."""
+        if isinstance(data, MemoryRequest):
+            return True
+        return bool(data) and ("write" in data or "read" in data)  # type: ignore[operator]
+
+    @classmethod
+    def without_notebooks(cls) -> MemoryRequest:
+        """No long-term memory for the session (no memory service is configured)."""
+        return cls(write=None, read=())
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryBinding:
@@ -162,18 +174,25 @@ class MemoryBinding:
 
 
 async def resolve_binding(
-    store: NotebookStore,
+    store: NotebookClient | UnavailableNotebooks,
     *,
     tenant_id: str,
     owner: str,
     pin: str,
     request: MemoryRequest | None,
+    agent: str | None = None,
 ) -> MemoryBinding:
-    """Resolve names to this owner's notebooks for this pin, creating them on first use."""
+    """Resolve names to this owner's notebooks for this pin, creating them on first use.
+
+    ``agent`` (the agent's name, see ``long_term_agent``) is where a new notebook's
+    facts are indexed for recall by meaning, so a newer version still finds them.
+    """
     request = request or MemoryRequest()
     names = list(dict.fromkeys([*([request.write] if request.write else []), *request.read]))
     notebooks = {
-        name: await store.ensure(tenant_id=tenant_id, owner=owner, agent_pin=pin, name=name)
+        name: await store.ensure(
+            tenant_id=tenant_id, owner=owner, agent_pin=pin, name=name, agent=agent
+        )
         for name in names
     }
     return MemoryBinding(

@@ -487,6 +487,50 @@ harness are gone.
   last poll, and the command that failed. Unit tests cover hand keys, leases (on
   SQLite and Postgres), the runner hub, and log capture.
 
+### 20. One process, and one long-term memory (`feat/one-process`)
+- **One package, one process.** The model gateway and the memory service moved
+  into the supervisor package (`supervisor/gateway`, `supervisor/memory_service`;
+  their tests to `tests/gateway`, `tests/memory_store`); one `pyproject`, one
+  image, one suite. `python -m supervisor.main` serves the API (:8080), the
+  gateway (:8090) and the memory service (:8092), each on its own thread and
+  event loop; `SERVE_SUPERVISOR_API` / `SERVE_MODEL_GATEWAY` /
+  `SERVE_MEMORY_SERVICE` pick which, so compose, staging and k8s keep three
+  containers from one image. Found on the stack: on one shared loop, the API's
+  blocking read of the gateway's model list timed out, so publish let unknown
+  models through (`test_serve_listeners`).
+- **Notebooks live only in the memory service.** It owns the notebook store and
+  routes (`memory_service/notebooks`); the supervisor is a client
+  (`supervisor/memory/client.py`). Each operation that reads facts and writes
+  on them (capture, edit, delete, clear, restore) is one call, so the read and
+  the write stay in one transaction where the facts are. Requests carry a JWT
+  for the notebook's tenant, taken from its id (`<tenant>~<hex>`); the service
+  checks the stored tenant, so another tenant's notebook is "not found" even
+  under a forged prefix. Disclosure and classification stay in the supervisor,
+  which knows audiences; the memory service imports nothing from it.
+- **The semantic bank and notebooks are one memory.** A live fact that is safe
+  to recall without audience rules (the owner's own, ordinary, fully traced) is
+  also an item in the bank, so `remember`, durable recall and erasure reach it;
+  a deleted fact leaves the bank, and erasing a user takes their notebooks with
+  their history.
+- **The supervisor's own notebook store and tables are gone.** Migration 0020
+  drops them when empty, and otherwise renames them `legacy_*`, so nothing is
+  lost.
+- **Without a memory service there is no long-term memory, and nothing pretends
+  otherwise:** sessions run without the implicit default notebook (one
+  warning), a session that names notebooks is refused (503), the memory API
+  answers 503. That error is not retryable; it had sent session creation into
+  an endless activity retry. `python -m supervisor.main` serving the memory
+  service points the API at it by default.
+- Tests: the notebook routes through the client with production JWT auth
+  (tenancy, a forged prefix, error mapping, a refused or absent service, history
+  and restore, what reaches the bank, erasure); the unconfigured rules;
+  migration 0020 both ways on Postgres. The memory unit tests run through the
+  real routes on SQLite and on a fresh Postgres database each (their Postgres
+  variant never ran in CI before), and the turn-level memory tests against a
+  live memory service over HTTP. Suite: 1048 passing with Postgres. Live: e2e
+  stage 6 (memory) 23/23 with every notebook in the memory service's database;
+  stages 3, 4, 7, 7q all green; stage 2 82/83 (its Docker check runs in CI).
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:

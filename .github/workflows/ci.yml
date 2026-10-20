@@ -2,7 +2,7 @@ name: ci
 
 # The quality gates of the agent platform (prime-agent-study-main/), on every push and PR:
 # lint, types, every service's test suite, the end-to-end suite against a real stack
-# (Postgres, Temporal, gateway, memory service, API and worker as separate processes),
+# (Postgres, Temporal, the API process serving the gateway and memory service too, and the worker),
 # and a docker-compose smoke test. A live model turn runs when MODEL_E2E_API_KEY is set.
 
 on:
@@ -36,12 +36,7 @@ jobs:
       - name: Lint (each service under its own rules)
         run: |
           status=0
-          for pair in supervisor:supervisor model-gateway:model_gateway memory:memory_service; do
-            svc=${pair%%:*}; pkg=${pair##*:}
-            echo "::group::ruff $svc"
-            (cd "$PROJECT/services/$svc" && ruff check "$pkg" --output-format github) || status=1
-            echo "::endgroup::"
-          done
+          (cd "$PROJECT/services/supervisor" && ruff check supervisor tests --output-format github) || status=1
           (cd "$PROJECT/e2e" && ruff check . --output-format github) || status=1
           exit $status
       - name: Shipped catalog digests are current
@@ -74,10 +69,6 @@ jobs:
           --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [supervisor, model-gateway, memory]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -85,20 +76,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
-        run: |
-          case "${{ matrix.service }}" in
-            supervisor) pip install -e ".[dev,postgres,s3]" ;;
-            memory)     pip install -e ".[dev,postgres]" ;;
-            *)          pip install -e ".[dev]" ;;
-          esac
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: pip install -e ".[dev,postgres,s3]"
       - name: Temporal CLI (the supervisor's workflow tests start a dev server)
-        if: matrix.service == 'supervisor'
         run: |
           curl -sSf https://temporal.download/cli.sh | sh
           echo "TEMPORAL_CLI_PATH=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
-      - name: Test
-        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
+      - name: Test (the supervisor, its model gateway and its memory service)
+        working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
           set -o pipefail
           pytest -q -rfE 2>&1 | tee pytest.out || {
@@ -134,12 +119,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: One virtualenv per service, as each is deployed
+      - name: The supervisor's virtualenv (it serves the gateway and the memory service too)
         working-directory: ${{ env.PROJECT }}/services
-        run: |
-          python -m venv supervisor/.venv && supervisor/.venv/bin/pip install -q -e "supervisor[dev,postgres,s3]"
-          python -m venv model-gateway/.venv && model-gateway/.venv/bin/pip install -q -e "model-gateway[dev]"
-          python -m venv memory/.venv && memory/.venv/bin/pip install -q -e "memory[dev,postgres]"
+        run: python -m venv supervisor/.venv && supervisor/.venv/bin/pip install -q -e "supervisor[dev,postgres,s3]"
       - name: Temporal CLI
         run: |
           curl -sSf https://temporal.download/cli.sh | sh
