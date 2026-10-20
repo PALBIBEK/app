@@ -169,3 +169,30 @@ async def test_workers_starting_one_session_at_once_keep_one_key(db: Factory) ->
     stored = await SessionKeys(vault).stored("s1")
     assert stored is not None and {token for token, _ in got} == {stored.value}
     assert sum(fresh for _, fresh in got) == 1
+
+
+def test_mcp_credentials_are_named_by_origin_and_found_in_composites() -> None:
+    from supervisor.seams.providers.tools.composite_tools import CompositeToolProvider
+    from supervisor.seams.providers.tools.mcp_tools import McpToolProvider
+    from supervisor.seams.providers.tools.null_tools import NullToolProvider
+    from supervisor.vault.credentials import mcp_secret_name, tool_servers
+
+    assert mcp_secret_name("HTTPS://Tools.Example.com:8443/mcp/v1") == "mcp:https://tools.example.com:8443"
+    a, b = McpToolProvider(server_url="http://a/mcp"), McpToolProvider(server_url="http://b/mcp")
+    nested = CompositeToolProvider(NullToolProvider(), CompositeToolProvider(a, b))
+    assert tool_servers(nested) == [a, b] and tool_servers(NullToolProvider()) == []
+
+
+def test_an_mcp_server_that_echoes_its_credential_has_it_redacted() -> None:
+    import httpx
+
+    from supervisor.seams.providers.tools.mcp_tools import McpToolProvider
+
+    def echo(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text=f"bad token {request.headers.get('authorization')}")
+
+    server = McpToolProvider(server_url="http://a/mcp", transport=httpx.MockTransport(echo))
+    server.authorize("tok-123456")
+    result = server.invoke(None, "x", {})  # type: ignore[arg-type]
+    assert not result.ok and "tok-123456" not in (result.error or "")
+    assert "Bearer [redacted]" in (result.error or "")

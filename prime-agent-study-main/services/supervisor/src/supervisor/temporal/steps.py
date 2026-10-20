@@ -521,7 +521,7 @@ class GithiSteps:
     async def _runtime(self, session_id: str) -> GithiRuntime:
         """The session's runtime, resumed here if cold: for work beside its sandbox."""
         await self._manager.ensure_ready(session_id)
-        await self._manager.renew_gateway_key(session_id)  # its subagents call the model too
+        await self._manager.refresh_credentials(session_id)  # its subagents call the model too
         runtime = self._manager._registry.get(session_id)
         assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
         return runtime
@@ -529,7 +529,7 @@ class GithiSteps:
     async def _brain(self, session_id: str) -> GithiRuntime:
         """What a model step needs (seams, model, prompt, tool schemas), on any worker."""
         runtime = await self._manager.brain(session_id)
-        await self._manager.renew_gateway_key(session_id)
+        await self._manager.refresh_credentials(session_id)
         assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
         return runtime
 

@@ -250,6 +250,7 @@ class UpkeepOps(ChildOps):
         self._modes.pop(session_id, None)
         self._seams.pop(session_id, None)
         self._brains.pop(session_id, None)
+        self._tenant_of.pop(session_id, None)
         self._long_term.pop(session_id, None)
         self._workspace.pop(session_id, None)
         self._sandbox_policy.clear(session_id)

@@ -23,6 +23,7 @@ from supervisor.api import (
     scopes,
     sessions,
     subagents,
+    tenant_secrets,
     tools,
     workspace,
 )
@@ -155,6 +156,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(notebooks.router)
     app.include_router(subagents.router)
     app.include_router(models.router)
+    app.include_router(tenant_secrets.router)
     return app
 
 

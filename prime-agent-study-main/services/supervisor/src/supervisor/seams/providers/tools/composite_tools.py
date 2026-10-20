@@ -20,6 +20,10 @@ class CompositeToolProvider:
             raise ValueError("CompositeToolProvider requires at least one provider")
         self._providers = providers
 
+    @property
+    def providers(self) -> tuple[ToolProvider, ...]:
+        return self._providers
+
     def list_tools(self) -> list[ToolDescriptor]:
         seen: set[str] = set()
         out: list[ToolDescriptor] = []

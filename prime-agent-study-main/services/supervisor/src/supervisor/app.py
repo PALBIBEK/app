@@ -52,6 +52,7 @@ class SupervisorState:
     authz: AuthzService | None = None
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
+    vault: Vault | None = None
     writer: JournalWriter | None = None
     memory: MemoryPlatform | None = None
     # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
@@ -98,6 +99,7 @@ def build_supervisor(
         hydrator=getattr(sandbox_provider, "_hydrator", None),
     )
     memory = MemoryPlatform(session_factory)
+    vault = vault or Vault(session_factory, Keyring.from_env())
     manager = SessionManager(
         session_factory=session_factory,
         writer=writer,
@@ -115,7 +117,7 @@ def build_supervisor(
         memory=memory,
         browser=browser,
         workspace_store=workspace_store,
-        vault=vault or Vault(session_factory, Keyring.from_env()),
+        vault=vault,
     )
 
     async def check_db() -> bool:
@@ -152,6 +154,7 @@ def build_supervisor(
         authz=authz,
         grant_store=gs,
         workspace_store=workspace_store,
+        vault=vault,
         writer=writer,
         memory=memory,
     )

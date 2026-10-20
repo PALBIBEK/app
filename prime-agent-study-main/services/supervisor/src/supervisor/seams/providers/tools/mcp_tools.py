@@ -9,11 +9,18 @@ import httpx
 
 from supervisor.seams.core.types import ToolDescriptor, ToolInvokeContext, ToolResult
 
+_REDACTED = "[redacted]"
+
 
 class McpToolProvider:
     """Provider: OpenAI-compat tool surface backed by an MCP HTTP endpoint.
 
     Couples only via ``server_url`` — MCP server is developed/deployed separately.
+
+    The supervisor is the credential proxy: a server that wants a credential
+    gets it from the tenant's vault (``authorize``), on the supervisor's own
+    request. The model and the sandbox never hold it, and a server that echoes
+    it back has it redacted from what the model sees.
     """
 
     def __init__(
@@ -21,12 +28,36 @@ class McpToolProvider:
         *,
         server_url: str,
         timeout: float = 60.0,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not server_url.strip():
             raise ValueError("server_url required")
         self._url = server_url.rstrip("/")
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(timeout=timeout, transport=transport)
         self._closed = False
+        self._secret: str | None = None
+
+    @property
+    def server_url(self) -> str:
+        return self._url
+
+    def authorize(self, secret: str | None) -> None:
+        """Send ``Authorization: Bearer <secret>`` from now on (None: send none)."""
+        self._secret = secret or None
+
+    def _redact(self, text: str) -> str:
+        return text.replace(self._secret, _REDACTED) if self._secret else text
+
+    def _scrub(self, value: Any) -> Any:
+        if not self._secret:
+            return value
+        if isinstance(value, str):
+            return self._redact(value)
+        if isinstance(value, list):
+            return [self._scrub(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._scrub(v) for k, v in value.items()}
+        return value
 
     def _rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
         body: dict[str, Any] = {
@@ -36,10 +67,11 @@ class McpToolProvider:
         }
         if params is not None:
             body["params"] = params
-        resp = self._client.post(self._url, json=body)
+        headers = {"Authorization": f"Bearer {self._secret}"} if self._secret else None
+        resp = self._client.post(self._url, json=body, headers=headers)
         if resp.status_code >= 400:
-            raise RuntimeError(f"MCP HTTP {resp.status_code}: {resp.text}")
-        data = resp.json()
+            raise RuntimeError(self._redact(f"MCP HTTP {resp.status_code}: {resp.text}"))
+        data = self._scrub(resp.json())
         if "error" in data:
             err = data["error"]
             raise RuntimeError(

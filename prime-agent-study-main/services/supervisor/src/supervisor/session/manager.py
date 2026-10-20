@@ -312,6 +312,7 @@ class SessionManager(UpkeepOps):
             ws_state=ws_state,
         )
         seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
+        await self._authorize_tools(session_id, tenant_id, seams)
         session_dir: str | None = None
         if pins is not None and seams is not None:
             ws = session_workspace(session_id)
@@ -407,6 +408,21 @@ class SessionManager(UpkeepOps):
             self._key_expiry[session_id] = stored.expires_at.timestamp()
         return token
 
+    async def _authorize_tools(
+        self, session_id: str, tenant_id: str, seams: RuntimeSeams | None
+    ) -> None:
+        self._tenant_of[session_id] = tenant_id
+        if self._credentials is not None and seams is not None:
+            await self._credentials.authorize(tenant_id, seams.tool_provider)
+
+    async def refresh_credentials(self, session_id: str) -> None:
+        """Before a step: a fresh gateway key if it is near its end, rotated tool secrets."""
+        await self.renew_gateway_key(session_id)
+        tenant = self._tenant_of.get(session_id)
+        seams = self._seams.get(session_id)
+        if self._credentials is not None and tenant is not None and seams is not None:
+            await self._credentials.authorize(tenant, seams.tool_provider)
+
     async def renew_gateway_key(self, session_id: str) -> bool:
         """Before a model call: swap in a fresh key when this worker's is near its end.
 
@@ -490,6 +506,7 @@ class SessionManager(UpkeepOps):
             ),
         )
         seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
+        await self._authorize_tools(session_id, row.tenant_id, seams)
         if live := self._registry.get(session_id):  # resumed here meanwhile
             return live
         brain = create_runtime(row.runtime, seams=seams, model=model, session_id=session_id)
