@@ -519,11 +519,14 @@ Open:
 - **One intermittent hang.** `test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session`
   hit its 300 s timeout once in CI and passed 6 of 6 runs locally; CI now
   annotates a hung test's stack, so the next occurrence names its cause.
-- **An intermittent workflow-task failure in background subagents.** About one
-  run in six of `test_githi_pinned.py` + `test_subagent_jobs.py` fails a
-  background-subagent test with "unable to perform workflow execution update due
-  to unexpected workflow task failure"; it reproduces on `main` after Phase 2
-  and passes alone. Its cause is not found yet.
+- **An update can find its workflow not ready.** About one run in six of
+  `test_githi_pinned.py` + `test_subagent_jobs.py` (also on `main`) failed a
+  background-subagent test: Temporal answered a `submit` with
+  `WorkflowNotReadyFailure` ("unexpected workflow task failure"), which it
+  means to be retried. The session client now re-sends such an update with a
+  short backoff (every update carries its id, so a retry never runs twice);
+  the files then passed 6 of 6 runs. Which workflow task failed, and why, is
+  not yet known: it did not reproduce with a history dump in place.
 - **No real-model CI run.** Every automated turn uses the gateway's echo model;
   a real-model job needs a `MODEL_E2E_API_KEY` secret.
 
