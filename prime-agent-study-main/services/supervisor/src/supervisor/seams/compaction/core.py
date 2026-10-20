@@ -234,7 +234,7 @@ def summarize_span(
     if summarizer is None:
         return COMPACTION_NOTICE
     try:
-        summary = summarizer(messages, previous_summary)
+        summary = _fitting(summarizer, messages, previous_summary)
     except Exception:
         # The run goes on, but the dropped span is lost rather than summarised, so say why.
         logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
@@ -243,6 +243,41 @@ def summarize_span(
         logger.warning("compaction summarizer returned nothing; dropping the span behind a notice")
         return COMPACTION_NOTICE
     return f"{SUMMARY_MARKER}\n{summary.strip()}"
+
+
+_SPLIT_DEPTH = 10
+"""How many times a span too big for the window is halved before giving up."""
+
+
+def _too_big(exc: Exception) -> bool:
+    """The span does not fit the model's window (``models.messages.ContextWindowFull``)."""
+    return getattr(exc, "code", None) == "CONTEXT_WINDOW_FULL"
+
+
+def _fitting(
+    summarizer: Summarizer,
+    messages: list[dict[str, Any]],
+    previous: str | None,
+    depth: int = 0,
+) -> str:
+    """Summarise ``messages``, in pieces that fit the summarizer's window.
+
+    A span too big for one call is halved: the first half's summary is the
+    previous summary the second half is folded into. A single message too big on
+    its own keeps its start and end (the middle is elided).
+    """
+    try:
+        return summarizer(messages, previous)
+    except Exception as exc:
+        if not _too_big(exc) or depth >= _SPLIT_DEPTH:
+            raise
+    if len(messages) > 1:
+        mid = len(messages) // 2
+        first = _fitting(summarizer, messages[:mid], previous, depth + 1)
+        return _fitting(summarizer, messages[mid:], first.strip() or previous, depth + 1)
+    text = _content(messages[0])
+    shorter, _ = _truncate_text(text, len(text) // 2)
+    return _fitting(summarizer, [{**messages[0], "content": shorter}], previous, depth + 1)
 
 
 def _checkpoint(

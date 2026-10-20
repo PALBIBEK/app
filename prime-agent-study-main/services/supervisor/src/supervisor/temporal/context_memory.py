@@ -37,6 +37,7 @@ from supervisor.agent.events import (
 )
 from supervisor.memory.binding import long_term_agent
 from supervisor.memory.history import message_text
+from supervisor.models.messages import fits_with_reply
 from supervisor.seams import CompactionPreparation, MemoryInvokeContext, ModelCatalog
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
@@ -100,7 +101,32 @@ class _Binding:
         are capped to the model's window: unscaled, a 16k reserve on an 8k model
         made the limit negative and a 20k recent span kept everything.
         """
-        return min(window - self.reserve(window), int(window * self.profile.pressure_ratio))
+        return min(
+            window - self.reserve(window),
+            int(window * self.profile.pressure_ratio),
+            fits_with_reply(window),  # past it, the next call is refused (ContextWindowFull)
+        )
+
+
+def _reported_tokens(events: Sequence[Envelope], memory: ContextMemoryProvider) -> int:
+    """What the next call will send, from the provider's count of the last one.
+
+    The last model call's input and output, plus what the user said since (the
+    run being compacted for starts with a new message). 0 with no reported usage.
+    """
+    last, usage = None, None
+    for i, env in enumerate(events):
+        p = env.payload
+        if isinstance(p, MessageEnd) and p.role == "assistant" and p.usage is not None:
+            last, usage = i, p.usage
+    if last is None or usage is None:
+        return 0
+    after = [
+        {"role": p.role, "content": p.content}
+        for env in events[last + 1 :]
+        if isinstance(p := env.payload, MessageEnd)
+    ]
+    return int(usage.input_tokens + usage.output_tokens) + (memory.estimate_tokens(after) if after else 0)
 
 
 _MAX_RESERVE_SHARE = 0.25
@@ -157,7 +183,10 @@ class PinnedContextMemory:
         binding = await self._binding(session_id)
         if binding is None or not binding.profile.compaction_enabled:
             return
-        tokens = binding.memory.estimate_tokens(prior)
+        # The estimate sees only the conversation; the model also gets the system
+        # prompt, the tool schemas and recalled memory. The provider's own count of
+        # the last call includes all of it, so the larger of the two decides.
+        tokens = max(binding.memory.estimate_tokens(prior), _reported_tokens(events, binding.memory))
         window = await binding.context_window()
         if tokens <= binding.limit(window):
             return

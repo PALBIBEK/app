@@ -266,7 +266,7 @@ if SMALL and want("I", f"Compaction on a small window ({SMALL})"):
     turn(csid, f"Remember this code word for later in this conversation: {code}. Reply only 'ok'.", 1)
     filler = " ".join(f"Paragraph {i}: " + "the quick brown fox jumps over the lazy dog " * 30 for i in range(4))
     n = 1
-    for _ in range(5):
+    for _ in range(9):
         n += 1
         turn(csid, f"Summarise this in one sentence: {filler}", n)
         if payloads(alice.events(csid), "CompactionEnd"):
