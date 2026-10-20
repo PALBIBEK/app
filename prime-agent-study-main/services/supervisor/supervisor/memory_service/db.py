@@ -30,6 +30,8 @@ def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession
 
 
 async def init_db(engine: AsyncEngine) -> None:
+    import supervisor.memory_service.notebooks.models  # noqa: F401 — their tables join Base
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

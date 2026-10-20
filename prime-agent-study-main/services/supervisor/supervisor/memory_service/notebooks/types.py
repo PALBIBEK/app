@@ -137,6 +137,8 @@ class Notebook:
     created_at: int
     archived_at: int | None = None
     last_tidied_at: int | None = None
+    agent: str | None = None
+    """The agent's name (survives new versions): where its facts sit in the semantic bank."""
 
     @property
     def home(self) -> str:
@@ -192,3 +194,24 @@ class RecallContext:
     session_id: str | None = None
     max_chars: int = RECALL_MAX_CHARS
     extra: dict[str, object] = field(default_factory=dict)
+
+
+NOTEBOOK_ID_SEP = "~"
+
+
+def notebook_id(tenant_id: str) -> str:
+    """A new notebook id: ``<tenant>~<random hex>``.
+
+    It names its tenant so any worker can address the memory service on that
+    tenant's behalf without a lookup; the service still checks the notebook's
+    stored tenant against the caller's, so a forged prefix finds nothing.
+    """
+    import uuid
+
+    return f"{tenant_id}{NOTEBOOK_ID_SEP}{uuid.uuid4().hex}"
+
+
+def tenant_of(notebook_id: str) -> str:
+    """The tenant a notebook id names (``""`` for an id without one)."""
+    tenant, sep, _ = notebook_id.rpartition(NOTEBOOK_ID_SEP)
+    return tenant if sep else ""

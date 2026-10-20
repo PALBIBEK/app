@@ -7,11 +7,11 @@ import asyncio
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.memory.errors import MemoryFactsMissing, NotebookExists, RevisionConflict
-from supervisor.memory.render import clean_captured, fact_line
+from supervisor.memory_service.notebooks.errors import MemoryFactsMissing, NotebookExists, RevisionConflict
+from supervisor.memory_service.notebooks.render import clean_captured, fact_line
 from supervisor.memory.service import CaptureContext, NotebookMemory
 from supervisor.memory.store import NotebookStore
-from supervisor.memory.types import (
+from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
     Edit,
     Provenance,

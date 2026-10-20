@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from supervisor.memory.types import Candidate, Fact
+from supervisor.memory_service.notebooks.types import Candidate, Fact
 
 _SPACE = re.compile(r"\s+")
 _BULLET = re.compile(r"^[-*]\s+")

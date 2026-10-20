@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import Candidate, CaptureMetadata, Edit, Fact, RecallContext, Revision
+from supervisor.memory_service.notebooks.types import Candidate, CaptureMetadata, Edit, Fact, RecallContext, Revision
 
 
 class MemoryView:

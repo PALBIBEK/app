@@ -17,6 +17,8 @@ from supervisor.memory_service.erase import EraseService
 from supervisor.memory_service.extract import ExtractionQueue, Extractor
 from supervisor.memory_service.leases import LeaseManager
 from supervisor.memory_service.metrics import METRICS
+from supervisor.memory_service.notebooks.ops import NotebookOps
+from supervisor.memory_service.notebooks.store import NotebookStore
 from supervisor.memory_service.outbox import Outbox
 from supervisor.memory_service.recall import HybridRecall
 from supervisor.memory_service.recovery import (
@@ -48,7 +50,6 @@ from supervisor.memory_service.types import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 class SeqConflict(Exception):
     """Durable seq does not match expected contiguous next."""
@@ -82,6 +83,8 @@ class MemoryService:
         self._extraction = ExtractionQueue(self._factory, self._bank, extractor)
         self._recall = HybridRecall(self._bank, self._embedder)
         self._erase = EraseService(self._factory)
+        # The one long-term store: notebooks of facts, indexed into the same bank.
+        self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(
             self._factory, ObjectArchive(arch_root), hot_days=hot_days
@@ -308,9 +311,15 @@ class MemoryService:
     ) -> dict[str, int]:
         if not self._ready:
             await self.startup()
-        return await self._erase.erase_subject(
+        erased = await self._erase.erase_subject(
             tenant=tenant, subject=subject, actor=actor, reason=reason
         )
+        # A user's notebooks go too, history included (erasure is not clearing).
+        if subject.startswith("user:"):
+            erased["notebooks_erased"] = await self.notebooks.store.erase_owner(
+                tenant_id=tenant, owner=subject.removeprefix("user:")
+            )
+        return erased
 
     async def archive_session(self, session_id: str) -> dict:
         if not self._ready:

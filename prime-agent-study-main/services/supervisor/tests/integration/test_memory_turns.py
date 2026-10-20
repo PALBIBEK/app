@@ -20,7 +20,7 @@ from supervisor.app import SupervisorState
 from supervisor.db.models import ScopeMembershipRow, ScopeRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.service import CaptureContext
-from supervisor.memory.types import Fact, Sensitivity, personal_source
+from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source
 from supervisor.seams.core.types import ChatMessage
 from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow

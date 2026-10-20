@@ -18,10 +18,10 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from supervisor.memory.errors import MemoryDisclosureDenied, MemoryFactsMissing
-from supervisor.memory.render import parse_fact_id, query_facts, render_facts
+from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
+from supervisor.memory_service.notebooks.render import parse_fact_id, query_facts, render_facts
 from supervisor.memory.service import MemoryService
-from supervisor.memory.types import (
+from supervisor.memory_service.notebooks.types import (
     Candidate,
     CaptureMetadata,
     Edit,

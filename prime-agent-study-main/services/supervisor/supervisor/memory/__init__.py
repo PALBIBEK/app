@@ -8,7 +8,7 @@ from supervisor.memory.binding import MemoryBinding, MemoryRequest, agent_pin
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import Fact, Notebook, Provenance, Sensitivity
+from supervisor.memory_service.notebooks.types import Fact, Notebook, Provenance, Sensitivity
 
 __all__ = [
     "Audience",

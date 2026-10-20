@@ -27,7 +27,7 @@ from supervisor.memory.classification import ClassifiedMemory, OneShot
 from supervisor.memory.disclosure import Audience, DisclosedMemory, IsMember
 from supervisor.memory.service import MemoryService, NotebookMemory
 from supervisor.memory.store import NotebookStore
-from supervisor.memory.types import scope_source
+from supervisor.memory_service.notebooks.types import scope_source
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage
 

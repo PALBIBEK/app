@@ -29,7 +29,7 @@ from supervisor.api.schemas import (
     RevisionOut,
 )
 from supervisor.memory.cross import search_across
-from supervisor.memory.errors import (
+from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     NotebookExists,
@@ -38,7 +38,7 @@ from supervisor.memory.errors import (
 )
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import Edit, Fact, Notebook
+from supervisor.memory_service.notebooks.types import Edit, Fact, Notebook
 from supervisor.seams.services import Principal
 
 router = APIRouter(prefix="/v1/memory", tags=["memory"])

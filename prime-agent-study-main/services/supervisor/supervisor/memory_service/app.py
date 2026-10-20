@@ -15,6 +15,7 @@ from supervisor.memory_service.auth import (
     enforce_scope_tenant,
     resolve_http_auth,
 )
+from supervisor.memory_service.notebooks.routes import router as notebook_router
 from supervisor.memory_service.rate_limit import (
     TokenBucketLimiter,
     is_mutating_method,
@@ -477,6 +478,7 @@ def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI
     app.state.rate_limiter = TokenBucketLimiter()
 
     app.include_router(router)
+    app.include_router(notebook_router)
     return app
 
 

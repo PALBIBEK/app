@@ -14,7 +14,7 @@ from dataclasses import replace
 from typing import Final
 
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory.types import CaptureMetadata, Edit, Sensitivity, stricter
+from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
 from supervisor.memory.view import MemoryView
 
 logger = logging.getLogger(__name__)
