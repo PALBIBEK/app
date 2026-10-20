@@ -11,7 +11,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from supervisor.api import deps
 from supervisor.api.wire import envelope_to_wire
@@ -181,3 +181,15 @@ async def stream_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/{session_id}/hand-logs/{ref}")
+async def hand_logs(
+    session_id: str, ref: str, request: Request, tenant_id: str = Depends(deps.current_tenant)
+) -> Response:
+    """What a lost hand's provider recorded (``HandLost.logs_ref``), saved before it was destroyed."""
+    await deps.require_session_access(tenant_id, session_id, request)
+    data = await deps.get_reader(request).hand_logs(session_id, ref)
+    if data is None:
+        raise HTTPException(status_code=404, detail="no such hand logs in this session")
+    return Response(content=data, media_type="text/plain; charset=utf-8")

@@ -173,6 +173,11 @@ async def sync_composition(
             for row in compositions
             for field, kind in _REFERENCES
             if isinstance(ref := row.body.get(field), dict) and ref.get("id") and ref.get("digest")
+        } | {
+            (ArtifactKind.SANDBOX_PROFILE.value, ref["id"], ref["digest"])
+            for row in compositions
+            for ref in (row.body.get("hands") or {}).values()
+            if isinstance(ref, dict) and ref.get("id") and ref.get("digest")
         }
         references = (
             list(

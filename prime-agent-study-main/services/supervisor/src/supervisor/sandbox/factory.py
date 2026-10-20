@@ -32,6 +32,7 @@ class ProviderName(StrEnum):
     LOCAL_PROCESS = "local_process"
     LOCAL_DOCKER = "local_docker"
     E2B = "e2b"
+    RUNNER = "runner"
 
 
 # Aliases for flexibility
@@ -45,6 +46,7 @@ _PROVIDER_ALIASES: dict[str, ProviderName] = {
     "local_docker": ProviderName.LOCAL_DOCKER,
     "docker": ProviderName.LOCAL_DOCKER,
     "e2b": ProviderName.E2B,
+    "runner": ProviderName.RUNNER,
 }
 
 
@@ -132,6 +134,10 @@ def create_sandbox_provider(
     if canonical == ProviderName.E2B:
         from supervisor.sandbox.providers.e2b import E2BProvider
         return E2BProvider(client=client)
+
+    if canonical == ProviderName.RUNNER:
+        from supervisor.sandbox.providers.runner import RunnerProvider
+        return RunnerProvider()  # the process's runner hub (set at boot)
 
     # Should be unreachable due to enum exhaustiveness
     raise UnknownProviderError(str(canonical))

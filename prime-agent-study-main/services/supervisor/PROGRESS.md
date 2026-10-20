@@ -441,6 +441,52 @@ harness are gone.
   replays deterministically. Unit tests cover search, opening, slices and their
   bounds, calls, and the cited range.
 
+### 19. Brain and hands, Phase 4: many hands, lent and hosted anywhere (BH8, BH9)
+- **A session can have many hands.** A composition pins named hands
+  (`hands: [[name, sandbox_profile ref]]`), each its own sandbox under the key
+  `{session}~{name}`; the default hand's key stays the session id. Tools that
+  need a workspace get a `hand` argument (an enum of the pinned names) and
+  default to the default hand; an unknown hand is `UNKNOWN_HAND`. Provisioning,
+  checkpoints, adoption after a restart, the orphan reaper, terminate and drain
+  cover every hand, and `HandProvisioned`/`HandCheckpointed`/`HandLost` say
+  which. Only the default hand mirrors the session's scope; a named hand starts
+  empty and restores from its own checkpoints.
+- **A hand can be lent, with a fencing token.** `hand_leases` (Postgres) holds
+  at most one lease per hand, 15 minutes, renewed on use. While a hand is lent,
+  the session's own calls on it get `HAND_LENT`; a borrower whose lease ended
+  (taken back, expired, or superseded) gets `LEASE_ENDED`, so a stale borrower
+  never writes into a hand someone else holds.
+- **Background subagents can use tools ("hand jobs").** A background job may
+  borrow one of the session's named hands: the child loop runs on any worker
+  (at most 20 steps) and each tool call goes back through the parent session's
+  `INVOKE_TOOL` op carrying the lease, so policy, approvals and the journal stay
+  the parent's. The hand is given back when the job ends, or if it fails to
+  start; the job's outcome says which hand it held and until when.
+- **Hands on a tenant's own machine (customer runners).** `python -m
+  supervisor.runner` dials out over HTTPS and long-polls
+  `GET /v1/runners/{name}/next`; nothing connects to it. Commands queue in
+  Postgres (`runner_commands`), so any API replica serves it and any worker
+  drives its hands. A sandbox profile with `provider: runner` names the runner;
+  only sessions of the runner's tenant reach it. The token is shown once, stored
+  as a SHA-256, opens only its own queue, and stops working when re-keyed. A
+  runner that stops polling for 30 s is offline: its hands are lost, and the
+  next call is a `WORKSPACE_RESET` like any lost sandbox.
+- **A lost hand's logs are kept (BH9).** Before a lost sandbox is destroyed,
+  its provider's record is read (at most 10 s), saved content-addressed beside
+  the journal, and named by `HandLost.logs_ref`;
+  `GET /v1/sessions/{id}/hand-logs/{ref}` returns it, for refs the session's own
+  events name. Docker gives the container's state (exit code, OOM kill, error)
+  and output tail; a runner hand gives the runner's last poll and the hand's
+  last 50 commands as the supervisor saw them (an offline runner cannot be
+  asked). Nobody needs a shell into a container holding user data.
+- **Gate tests:** one session writes in two hands in one turn, lends `build` to
+  a background job, gets `HAND_LENT` on it while lent, and reads the job's file
+  once the hand is back. A real runner process hosts a named hand: the file
+  lands on the runner's disk and not in the default hand; when the runner dies
+  the next call is a workspace reset, and the saved logs name the runner, its
+  last poll, and the command that failed. Unit tests cover hand keys, leases (on
+  SQLite and Postgres), the runner hub, and log capture.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -450,7 +496,7 @@ harness are gone.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Tests: 824 in the supervisor, all passing** on Postgres and Temporal (from
+- **Tests: 841 in the supervisor, all passing** on Postgres and Temporal (from
   228 at the start), 81 in the model gateway, 79 in the memory service; every
   CI job green (see W9). Temporal-backed tests need `TEMPORAL_CLI_PATH` where
   the dev-server download is blocked.
@@ -480,7 +526,6 @@ Open:
   - Checkpoint scopes are never deleted (no retention policy yet).
   - Checkpoint state is per worker: after a takeover the first checkpoint
     uploads every file again.
-  - A lost sandbox's own logs are not kept (BH9's log capture is not done).
   - The TTFT gain is unmeasured where it matters (Docker, E2B).
 - **Brain and hands (Phase 2 limits).**
   - A key renewal mints a new key with a new $5 budget: the gateway budgets
@@ -494,6 +539,18 @@ Open:
     settings RBAC): the API takes the tenant from the service identity.
   - Only MCP tool servers use tenant secrets; the MCP recall backend does not
     yet.
+- **Brain and hands (Phase 4 limits).**
+  - Sandbox policy (egress, limits) is evaluated against the default hand's
+    profile only, not per named hand.
+  - A hand job that is retried (its activity) starts its loop again from the
+    beginning; its tool calls are idempotent per op id, but model calls are
+    repeated.
+  - A runner hand is not adopted as a live object after a restart (`adopt`
+    returns none); its files survive because its id on the runner is derived
+    from the hand key, so the next call finds them.
+  - local_process sandboxes keep no logs, and a runner's own process logs stay
+    on the runner; the Docker log path is tested against a stand-in container
+    here (no Docker locally).
 - **An import cycle:** importing `supervisor.seams.providers` before
   `supervisor.main` fails (seams.services ↔ sandbox.providers); it predates this
   work and only bites a script that imports in that order.
@@ -673,10 +730,6 @@ The first is the one that matters for shipping.
 
 ## Next step
 
-0. **Brain and hands, Phase 3:** BH7, the session as a context object for
-   githi (an `events` tool over the journal; compaction that cites the range it
-   replaced). BH6 (Pi's loop) is dropped with Pi. Then Phase 4 (BH8 many hands)
-   and BH9's log capture.
 1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
    `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
    `docker-compose.yml`, and run the staging stack in CI the way compose smoke

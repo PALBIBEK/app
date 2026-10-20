@@ -314,6 +314,10 @@ def composition_from_dict(data: dict[str, Any]) -> AgentComposition:
         memory_profile=memory_ref,
         plug_bindings=PlugBindings.from_dict(data.get("plug_bindings")),
         metadata=metadata_from_dict(data.get("metadata")),
+        hands=tuple(
+            (str(name), DigestRef(id=ref["id"], digest=ref["digest"]))
+            for name, ref in sorted((data.get("hands") or {}).items())
+        ),
     )
 
 
@@ -352,6 +356,9 @@ def composition_to_dict(comp: AgentComposition) -> dict[str, Any]:
 
     if comp.plug_bindings is not None:
         result["plug_bindings"] = comp.plug_bindings.body_for_digest()  # its serial form; from_dict reads it back
+
+    if comp.hands:
+        result["hands"] = {name: {"id": ref.id, "digest": ref.digest} for name, ref in comp.hands}
 
     return result
 
@@ -394,6 +401,7 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         image_digest=data.get("image_digest"),
         browser_model=bool(data.get("browser_model", False)),
         metadata=metadata_from_dict(data.get("metadata")),
+        runner=data.get("runner") or None,
     )
 
 
@@ -419,6 +427,7 @@ def sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         "image_digest": profile.image_digest,
         "browser_model": profile.browser_model,
         "metadata": metadata_to_dict(profile.metadata),
+        **({"runner": profile.runner} if profile.runner else {}),
     }
 
 
@@ -585,6 +594,7 @@ def with_digest(artifact: Artifact, digest: str) -> Artifact:
             memory_profile=artifact.memory_profile,
             plug_bindings=artifact.plug_bindings,
             metadata=artifact.metadata,
+            hands=artifact.hands,
         )
     raise TypeError(f"unknown artifact type {type(artifact)!r}")
 
@@ -642,6 +652,7 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
             memory_profile=artifact.memory_profile,
             plug_bindings=artifact.plug_bindings,
             metadata=artifact.metadata,
+            hands=artifact.hands,
         )
     raise TypeError(f"unknown artifact type {type(artifact)!r}")
 

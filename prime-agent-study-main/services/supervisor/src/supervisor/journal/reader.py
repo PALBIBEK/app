@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from sqlalchemy import select
@@ -34,6 +35,21 @@ class JournalReader:
                 )
             ).scalars().all()
         return [self._to_envelope(row) for row in rows]
+
+    async def hand_logs(self, session_id: str, ref: str) -> bytes | None:
+        """A lost hand's saved logs, if one of the session's ``HandLost`` events names ``ref``."""
+        async with self._factory() as db:
+            rows = (
+                await db.execute(
+                    select(EventRow).where(EventRow.session_id == session_id, EventRow.type == "HandLost")
+                )
+            ).scalars().all()
+        if not any(getattr(self._to_envelope(r).payload, "logs_ref", None) == ref for r in rows):
+            return None
+        try:
+            return self.read_blob(ref)
+        except FileNotFoundError:
+            return None
 
     async def unpaired_tool_starts(self, session_id: str) -> list[ToolStart]:
         """ToolStart events whose tool_call_id has no matching ToolEnd."""
@@ -163,6 +179,12 @@ class JournalReader:
             trace_id=row.trace_id,
             payload=payload,
         )
+
+    def read_blob(self, ref: str) -> bytes:
+        """A blob stored with ``JournalWriter.put_blob``; ``FileNotFoundError`` if there is none."""
+        if self._blob_dir is None or not re.fullmatch(r"[0-9a-f]{64}", ref):
+            raise FileNotFoundError(ref)
+        return (self._blob_dir / ref).read_bytes()
 
     def _load_payload(self, payload: dict) -> dict:
         ref = payload.get("_blob_ref")

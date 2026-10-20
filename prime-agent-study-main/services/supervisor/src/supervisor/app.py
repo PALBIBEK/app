@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.catalog.storage import CompositionCatalog
+from supervisor.hands.runners import RunnerHub
 from supervisor.harness import HarnessCatalog
 from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
@@ -53,6 +54,7 @@ class SupervisorState:
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
     vault: Vault | None = None
+    runners: RunnerHub | None = None
     writer: JournalWriter | None = None
     memory: MemoryPlatform | None = None
     # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
@@ -100,6 +102,10 @@ def build_supervisor(
     )
     memory = MemoryPlatform(session_factory)
     vault = vault or Vault(session_factory, Keyring.from_env())
+    from supervisor.hands.runners import set_hub
+
+    runners = RunnerHub(session_factory)
+    set_hub(runners)  # what the ``runner`` sandbox provider reaches tenants' runners through
     manager = SessionManager(
         session_factory=session_factory,
         writer=writer,
@@ -155,6 +161,7 @@ def build_supervisor(
         grant_store=gs,
         workspace_store=workspace_store,
         vault=vault,
+        runners=runners,
         writer=writer,
         memory=memory,
     )

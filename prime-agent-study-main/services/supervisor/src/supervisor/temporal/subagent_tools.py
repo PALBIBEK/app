@@ -26,6 +26,8 @@ from pydantic import ValidationError
 from temporalio import activity
 
 from supervisor.agent.events import BackgroundResults, JobEnd, JobStart, ToolEnd
+from supervisor.hands.keys import hand_key
+from supervisor.hands.leases import Borrower
 from supervisor.seams import SubagentRequest
 from supervisor.temporal.contracts import (
     START_JOB_SIGNAL,
@@ -65,6 +67,13 @@ class SubagentArgs(ToolArgs):
     background: bool = False
     """Start it and return at once with a job_id; read its outcome later with subagent_result"""
 
+    hand: str = ""
+    """Background only: lend it one of your sandboxes to work in; you get it back when it ends"""
+
+
+class HandLent(ToolError):
+    code = "HAND_LENT"
+
 
 class SubagentResultArgs(ToolArgs):
     job_id: str
@@ -91,6 +100,11 @@ class SubagentTools:
         task = json_schema(SubagentArgs)
         if not spec.allow_background:
             del task["properties"]["background"]
+        hands = self._manager.hand_names(session_id)
+        if not spec.allow_background or len(hands) <= 1:
+            del task["properties"]["hand"]
+        else:
+            task["properties"]["hand"]["enum"] = hands
         tools = [
             _function(
                 SUBAGENT, "Delegate a self-contained task to a subagent and get its answer.", task
@@ -140,6 +154,8 @@ class SubagentTools:
             description=args.description,
             mode="background" if args.background else "spawn",
         )
+        if args.hand and not args.background:
+            raise InvalidArguments("only a background subagent can borrow a hand")
         if not args.background:
             result = await self._manager.spawn_child(
                 session_id, tenant_id=row.tenant_id, provider=None, request=request, turn_id=run_id
@@ -149,28 +165,60 @@ class SubagentTools:
                 is_error=result.status not in ("ok", "stop", None),
             )
 
+        op_id = f"{run_id}:{call_id}"
+        job_id, job_run = job_ids(op_id)
+        job_args: dict[str, Any] = {
+            "prompt": args.prompt,
+            "description": args.description,
+            "mode": "background",
+        }
+        if args.hand:
+            job_args["lease"] = (await self._lend(session_id, args.hand, job_id)).to_dict()
         op = SessionOp(
             session_id=session_id,
-            op_id=f"{run_id}:{call_id}",
+            op_id=op_id,
             kind=Op.START_BACKGROUND,
             tenant_id=row.tenant_id,
-            args={"prompt": args.prompt, "description": args.description, "mode": "background"},
+            args=job_args,
         )
-        job_id, job_run = job_ids(op.op_id)
-        provider = await self._manager.resolve_subagent_provider(session_id, None)
-        await self._manager.begin_subagent_background(
-            session_id,
-            tenant_id=row.tenant_id,
-            provider=provider,
-            request=request,
-            job_id=job_id,
-            run_id=job_run,
-            turn_id=run_id,
+        try:
+            provider = await self._manager.resolve_subagent_provider(session_id, None)
+            await self._manager.begin_subagent_background(
+                session_id,
+                tenant_id=row.tenant_id,
+                provider=provider,
+                request=request,
+                job_id=job_id,
+                run_id=job_run,
+                turn_id=run_id,
+            )
+            # The session's workflow runs the job durably (a re-sent signal starts it once).
+            handle = activity.client().get_workflow_handle(workflow_id(session_id))
+            await handle.signal(START_JOB_SIGNAL, StartJob(op=op, provider=provider))
+        except BaseException:
+            if (lent := Borrower.from_dict(job_args.get("lease"))) is not None:
+                # No job will run: the hand goes straight back rather than wait out its lease.
+                await self._manager._leases.give_back(
+                    hand_key(session_id, lent.hand), lent.holder, lent.token
+                )
+            raise
+        return Outcome(
+            {"job_id": job_id, "status": "started"}
+            | ({"hand": args.hand, "lent_until": "the job ends"} if args.hand else {})
         )
-        # The session's workflow runs the job durably (a re-sent signal starts it once).
-        handle = activity.client().get_workflow_handle(workflow_id(session_id))
-        await handle.signal(START_JOB_SIGNAL, StartJob(op=op, provider=provider))
-        return Outcome({"job_id": job_id, "status": "started"})
+
+    async def _lend(self, session_id: str, hand: str, job_id: str) -> Borrower:
+        """Lend ``hand`` to the job (a re-sent call renews the same lease)."""
+        if hand not in self._manager.hand_names(session_id):
+            raise InvalidArguments(
+                f"no hand {hand!r}; your hands: {', '.join(self._manager.hand_names(session_id))}"
+            )
+        lease = await self._manager._leases.lend(hand_key(session_id, hand), job_id)
+        if lease is None:
+            current = await self._manager._leases.current(hand_key(session_id, hand))
+            holder = current.holder if current is not None else "another job"
+            raise HandLent(f"your {hand!r} hand is already lent to {holder}")
+        return Borrower(hand, lease.holder, lease.token)
 
     async def unannounced(self, session_id: str) -> list[dict[str, Any]]:
         """Finished background subagents the model has neither been told about nor asked for."""

@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 
 from supervisor.agent.events import JobEnd
+from supervisor.hands.keys import hand_key
+from supervisor.hands.leases import Borrower
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.seams import SubagentRequest
 from supervisor.session import SessionManager
 from supervisor.session.subagent_ops import journal_background_end
 from supervisor.temporal.contracts import JobEndRequest, JobOutcome, JobSpec
+from supervisor.temporal.hand_jobs import run_hand_job
 from supervisor.temporal.steps import heartbeating
 
 
@@ -28,7 +31,12 @@ class JobSteps:
         """Run the job's provider call (heartbeating) and journal its end, once."""
         if (ended := await self._ended(spec)) is not None:
             return ended  # a retry after the end was journalled
-        request = SubagentRequest(**spec.request)
+        fields = dict(spec.request)
+        lease = Borrower.from_dict(fields.pop("lease", None))
+        request = SubagentRequest(**fields)
+        if lease is not None:  # it works in a hand its session lent it
+            done = await run_hand_job(self._manager, spec, request, lease)
+            return await self.end(JobEndRequest(spec, done.stop_reason, done.text or None))
         ops = await self._manager.subagent_job_ops(spec.session_id, request)
         result = await heartbeating(asyncio.to_thread(ops.run_background, spec.provider, request))
         return await self.end(JobEndRequest(spec, result.status or "ok", result.text or None))
@@ -36,6 +44,11 @@ class JobSteps:
     async def end(self, req: JobEndRequest) -> JobOutcome:
         """Journal the job's end; returns the end that was actually recorded."""
         spec = req.spec
+        if (lease := Borrower.from_dict(spec.request.get("lease"))) is not None:
+            # However the job ends, the hand goes back to its session (a no-op if it was).
+            await self._manager._leases.give_back(
+                hand_key(spec.session_id, lease.hand), lease.holder, lease.token
+            )
         if (ended := await self._ended(spec)) is not None:
             return ended
         await journal_background_end(

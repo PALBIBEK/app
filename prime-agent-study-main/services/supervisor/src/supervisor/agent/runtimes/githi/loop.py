@@ -140,6 +140,11 @@ class AgentLoop:
         prompt = assembler.assemble(PromptBindings(cwd="/workspace"))
         return [ChatMessage(role="system", content=prompt.text), *chat]
 
+    @property
+    def tool_provider(self) -> Any:
+        """The session's tool seam (None when it has none)."""
+        return self._seams.tool_provider if self._seams else None
+
     def tool_schemas(self) -> list[dict[str, Any]]:
         """The pinned tools in the model's function-calling shape."""
         provider = self._seams.tool_provider if self._seams else None
@@ -166,10 +171,12 @@ class AgentLoop:
         *,
         tenant_id: str | None = None,
         env: dict[str, str] | None = None,
+        workspace: Workspace | None = None,
     ) -> ToolEnd:
         """Run one tool call through the tool seam, in the session's workspace.
 
-        ``env`` is what the session grants this turn's commands (see ``ToolContext.env``).
+        ``env`` is what the session grants this turn's commands (see ``ToolContext.env``);
+        ``workspace`` is another of the session's hands to act in instead.
         """
         call_id = str(call.get("id") or uuid4().hex)
         name = str(call.get("name") or "unknown")
@@ -185,8 +192,8 @@ class AgentLoop:
             "tenant_id": tenant_id,
             **self._identity,
         }
-        if self._workspace is not None:
-            extra["workspace"] = self._workspace
+        if (acting := workspace or self._workspace) is not None:
+            extra["workspace"] = acting
         if self._on_mutate is not None:
             extra["on_mutate"] = self._on_mutate
         if env:
