@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
@@ -75,11 +75,38 @@ class ToolOps(ApprovalOps):
         return HandForCall(hand_id=sandbox.id if sandbox is not None else None)
 
     async def after_call(
-        self, session_id: str, hand: HandForCall, code: str | None, error: str | None
-    ) -> None:
-        """After a tool ran: a sandbox it found dead is let go (the next call gets a new one)."""
-        if hand.hand_id is not None and code == WorkspaceReset.code:
-            await self._hands.lose(session_id, hand.hand_id, error or "the sandbox stopped")
+        self,
+        session_id: str,
+        hand: HandForCall,
+        name: str,
+        provider: ToolProvider | None,
+        result: ToolResult,
+    ) -> ToolResult:
+        """After a tool ran in a sandbox: note what it changed, or let a dead sandbox go.
+
+        A reset result is rewritten to say what the model gets back (the last
+        checkpoint) and what it must redo (processes, rebuilt folders).
+        """
+        if hand.hand_id is None:
+            return result
+        if result.code == WorkspaceReset.code:
+            await self._hands.lose(session_id, hand.hand_id, result.error or "the sandbox stopped")
+            restored = (
+                self._checkpoints.notice(session_id)
+                if self._checkpoints is not None
+                else "nothing was saved, so it starts empty (or from the session's scope)."
+            )
+            return replace(result, error=f"{result.error} Next call: {restored}")
+        pure = isinstance(provider, ToolClassifier) and provider.tool_class(name) == "pure"
+        sandbox = self._hands.sandbox(session_id)
+        if self._checkpoints is not None and not pure and sandbox is not None:
+            try:
+                await self._checkpoints.observe(
+                    session_id, sandbox, processes=self._hand_isolated(session_id)
+                )
+            except Exception:
+                logger.warning("observing sandbox failed session=%s", session_id, exc_info=True)
+        return result
 
     async def tool_env(self, session_id: str) -> dict[str, str]:
         """What this turn's commands may hold: the browse runner's model access, if any.
@@ -223,7 +250,7 @@ class ToolOps(ApprovalOps):
             result = hand.unavailable
         else:
             result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
-            await self.after_call(session_id, hand, result.code, result.error)
+            result = await self.after_call(session_id, hand, name, seams.tool_provider, result)
         result = await self._tool_outbox.complete(
             session_id,
             tool_call_id=call_id,

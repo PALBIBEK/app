@@ -112,6 +112,7 @@ def build_supervisor(
         virtual_key_client=vk,
         memory=memory,
         browser=browser,
+        workspace_store=workspace_store,
     )
 
     async def check_db() -> bool:

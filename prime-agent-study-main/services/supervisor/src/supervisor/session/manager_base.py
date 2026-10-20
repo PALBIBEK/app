@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.agent.events import (
     Envelope,
     ErrorEvent,
+    HandCheckpointed,
     HandLost,
     HandProvisioned,
     RunEnd,
@@ -27,8 +28,10 @@ from supervisor.catalog.core.types import FileEffects
 from supervisor.catalog.providers.binder import bind_runtime_seams
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.catalog.storage import CompositionCatalog
-from supervisor.db.models import EventRow, SessionRow
+from supervisor.db.models import EventRow, ScopeRow, SessionRow
 from supervisor.hands import SessionHands
+from supervisor.hands.checkpoint import Checkpointer, checkpoint_scope
+from supervisor.hands.inspect import Changes
 from supervisor.harness import (
     GuardSpec,
     HarnessCatalog,
@@ -57,6 +60,7 @@ from supervisor.seams.services import (
     SessionWorkspaceState,
     VirtualKeyClient,
     WorkspaceConflictError,
+    WorkspaceStore,
 )
 from supervisor.session.errors import (
     SessionAwaitingApproval,
@@ -143,6 +147,7 @@ class SessionManagerBase:
         virtual_key_client: VirtualKeyClient | None = None,
         memory: MemoryPlatform | None = None,
         browser: BrowserAccess | None = None,
+        workspace_store: WorkspaceStore | None = None,
     ) -> None:
         self._db = session_factory
         self._writer = writer
@@ -154,6 +159,13 @@ class SessionManagerBase:
         self._live = LiveHub(maxsize=live_queue_max)
         self._fanout: dict[str, asyncio.Task[None]] = {}
         self._hands = SessionHands(_HandHooks(self))
+        # Change-aware checkpoints of each sandbox, where there is a store to keep them.
+        self._checkpoints = (
+            Checkpointer(workspace_store, record=self._journal_checkpoint)
+            if workspace_store is not None
+            else None
+        )
+        self._checkpoint_scopes: set[str] = set()
         self._creating: set[str] = set()  # sessions whose journal row does not exist yet
         self._modes: dict[str, SessionMode] = {}
         self._seams: dict[str, RuntimeSeams] = {}
@@ -454,6 +466,69 @@ class SessionManagerBase:
             event_key=f"hand:{sandbox.id}:provisioned",
         )
 
+    def _hand_isolated(self, session_id: str) -> bool:
+        """Whether the session's sandboxes run in their own container (processes observable)."""
+        recipe = self._hands.recipe(session_id)
+        return recipe is not None and recipe.provider_name in ISOLATING_PROVIDERS
+
+    async def checkpoint(self, session_id: str) -> None:
+        """Save what the session's tools changed since the last checkpoint, if anything.
+
+        Runs while the model works on its next step. A failure only means this step
+        is not saved: the next step tries again, with everything still pending.
+        """
+        sandbox = self._hands.sandbox(session_id)
+        if self._checkpoints is None or sandbox is None or self._checkpoints.due(session_id) is None:
+            return
+        try:
+            await self._ensure_checkpoint_scope(session_id)
+            await self._checkpoints.checkpoint(session_id, sandbox)
+        except Exception:
+            logger.exception("checkpoint failed session=%s", session_id)
+
+    async def _ensure_checkpoint_scope(self, session_id: str) -> None:
+        """The session's checkpoint scope exists and belongs to the session's owner."""
+        scope_id = checkpoint_scope(session_id)
+        if scope_id in self._checkpoint_scopes:
+            return
+        row = await self._get_session_row(session_id)
+        owner = row.owner_principal_id or row.tenant_id
+        async with self._db() as db:
+            if await db.get(ScopeRow, scope_id) is None:
+                db.add(
+                    ScopeRow(
+                        id=scope_id,
+                        type="session",
+                        owner_principal_id=owner,
+                        name=f"checkpoints of session {session_id}",
+                    )
+                )
+                await db.commit()
+                if self._grant_store is not None:
+                    await self._grant_store.bootstrap_owner(owner, scope_id)
+        self._checkpoint_scopes.add(scope_id)
+
+    async def _has_checkpoint(self, session_id: str) -> bool:
+        return any(
+            isinstance(e.payload, HandCheckpointed)
+            for e in await self._reader.read(session_id, since=-1)
+        )
+
+    async def _journal_checkpoint(
+        self, session_id: str, sandbox: Sandbox, changes: Changes, processes: frozenset[str]
+    ) -> None:
+        await self._record(
+            session_id,
+            HandCheckpointed(
+                hand_id=sandbox.id,
+                files=len(changes.written),
+                removed=len(changes.removed),
+                processes=sorted(processes),
+            ),
+            turn_id=None,
+            trace_id=self._trace_for(session_id),
+        )
+
     async def _stop_runtime_keep_session(self, session_id: str) -> None:
         runtime = self._registry.remove(session_id)
         if runtime is not None:
@@ -493,10 +568,18 @@ class _HandHooks:
         self._m = manager
 
     async def hydrate(self, session_id: str, sandbox: Sandbox) -> None:
-        state = self._m._workspace.get(session_id)
+        """A new sandbox starts empty: load the session's last checkpoint, else its scope."""
+        m = self._m
+        state = m._workspace.get(session_id)
+        if m._checkpoints is not None and await m._has_checkpoint(session_id):
+            await m._checkpoints.restore(
+                session_id, sandbox, processes=m._hand_isolated(session_id)
+            )
+            if state is not None and state.scope_id is not None:
+                state.ready = True  # the checkpoint mirrors the scope's files and the edits since
+            return
         if state is not None and state.scope_id is not None:
-            # A new sandbox starts empty: always load what the session saved.
-            await self._m._workspace_svc.ensure_hydrated(state, sandbox, force=True)
+            await m._workspace_svc.ensure_hydrated(state, sandbox, force=True)
 
     async def provisioned(self, session_id: str, sandbox: Sandbox, cause: str) -> None:
         if session_id in self._m._creating:

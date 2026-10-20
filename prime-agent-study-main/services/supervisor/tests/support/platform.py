@@ -16,6 +16,7 @@ from supervisor.catalog.loading.bootstrap import (
 )
 from supervisor.catalog.repository import hydrate_composition_catalog
 from supervisor.harness import HarnessCatalog, load_manifest
+from supervisor.seams.services import WorkspaceStore
 from tests.support.scripted import all_variants
 from tests.support.session_env import TrackingProvider
 
@@ -34,7 +35,10 @@ def shipped_harness_catalog() -> HarnessCatalog:
 
 
 async def boot_platform(
-    factory: async_sessionmaker[AsyncSession], blob_dir: Path
+    factory: async_sessionmaker[AsyncSession],
+    blob_dir: Path,
+    *,
+    workspace_store: WorkspaceStore | None = None,
 ) -> tuple[SupervisorState, TrackingProvider]:
     """One supervisor process, as bootstrap_supervisor builds it (persisted catalog hydrated)."""
     compositions = bootstrap_composition_catalog(default_catalog_dir())
@@ -47,5 +51,6 @@ async def boot_platform(
         blob_dir=blob_dir,
         sandbox_provider=sandboxes,
         composition_catalog=compositions,
+        workspace_store=workspace_store,
     )
     return state, sandboxes

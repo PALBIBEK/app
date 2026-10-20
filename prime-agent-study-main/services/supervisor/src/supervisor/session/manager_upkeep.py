@@ -233,6 +233,8 @@ class UpkeepOps(ChildOps):
             except Exception:
                 logger.exception("stop failed session=%s", session_id)
         sandbox = self._hands.release(session_id)
+        if self._checkpoints is not None:
+            self._checkpoints.forget(session_id)
         if sandbox is not None:
             try:
                 await sandbox.destroy()

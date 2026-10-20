@@ -288,6 +288,22 @@ class HandProvisioned:
 
 
 @dataclass(frozen=True)
+class HandCheckpointed:
+    """What the session's sandbox held, saved while the model was thinking.
+
+    Taken only for a step whose tools changed something; ``files`` and
+    ``removed`` count what this checkpoint changed, ``processes`` is what was
+    running (not restorable: a reset tells the model to restart them).
+    """
+
+    hand_id: str
+    files: int
+    removed: int
+    processes: list[str] = field(default_factory=list)
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
+@dataclass(frozen=True)
 class HandLost:
     """A sandbox died under the session; the next tool call that needs one gets a fresh one."""
 
@@ -338,6 +354,7 @@ AgentEvent = (
     | MemoryContext
     | BackgroundResults
     | HandProvisioned
+    | HandCheckpointed
     | HandLost
     | Settled
     | ErrorEvent

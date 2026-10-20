@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable
+from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
@@ -158,6 +159,15 @@ def _user_text(run: list[Any]) -> str:
     return ""
 
 
+def _as_tool_result(result: dict[str, Any]) -> ToolResult:
+    return ToolResult(
+        ok=bool(result.get("ok")),
+        payload=result.get("payload"),
+        error=result.get("error"),
+        code=result.get("code"),
+    )
+
+
 def denied_result(error: str, code: str) -> dict[str, Any]:
     """A refused tool call's result in the same shape as a tool's own (F16)."""
     return {"ok": False, "payload": None, "error": error, "code": code}
@@ -281,6 +291,19 @@ class GithiSteps:
     # --- model ---------------------------------------------------------------
 
     async def model_step(self, req: StepRequest) -> StepResult:
+        """One model call, with the sandbox checkpointed while the model works.
+
+        The checkpoint saves what the previous tools changed; the step returns only
+        once it is done, so the next tool never runs ahead of it (Crab's barrier,
+        without making the model wait).
+        """
+        saving = asyncio.create_task(self._manager.checkpoint(req.session_id))
+        try:
+            return await self._model_step(req)
+        finally:
+            await saving
+
+    async def _model_step(self, req: StepRequest) -> StepResult:
         sid, run_id = req.session_id, req.run_id
         key = f"{req.step}:assistant"
         if (assistant := await self._keyed(sid, run_id, key)) is None:
@@ -411,8 +434,10 @@ class GithiSteps:
                 end = await runtime.loop().run_tool(
                     invocation, tenant_id=row.tenant_id, env=await self._manager.tool_env(sid)
                 )
-                result, is_error = end.result, end.is_error
-                await self._manager.after_call(sid, hand, result.get("code"), result.get("error"))
+                checked = await self._manager.after_call(
+                    sid, hand, call["name"], provider, _as_tool_result(end.result)
+                )
+                result, is_error = asdict(checked), not checked.ok
         await self._record(
             sid,
             run_id,
