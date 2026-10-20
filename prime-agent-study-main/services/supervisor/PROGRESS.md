@@ -496,7 +496,7 @@ harness are gone.
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Tests: 824 in the supervisor, all passing** on Postgres and Temporal (from
+- **Tests: 841 in the supervisor, all passing** on Postgres and Temporal (from
   228 at the start), 81 in the model gateway, 79 in the memory service; every
   CI job green (see W9). Temporal-backed tests need `TEMPORAL_CLI_PATH` where
   the dev-server download is blocked.

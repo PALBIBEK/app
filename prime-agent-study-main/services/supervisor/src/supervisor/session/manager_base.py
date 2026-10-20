@@ -631,7 +631,7 @@ class _HandHooks:
             session_id,
             HandLost(
                 hand_id=sandbox.id, provider=sandbox.info.provider, reason=reason, hand=hand,
-                logs_ref=ref, logs_bytes=len(logs) if ref else 0,
+                logs_ref=ref, logs_bytes=len(logs) if ref and logs else 0,
             ),
             turn_id=None,
             trace_id=self._m._trace_for(session_id),
