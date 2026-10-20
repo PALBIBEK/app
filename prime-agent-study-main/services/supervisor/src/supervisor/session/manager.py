@@ -173,7 +173,12 @@ class SessionManager(UpkeepOps):
         # The sandboxes' recipes are resolved now (a config that can never get one is
         # refused here); each sandbox is built when a tool first needs it.
         self._register_hands(
-            session_id, manifest, harness_version=harness_version, profile=profile, pins=pins
+            session_id,
+            manifest,
+            harness_version=harness_version,
+            profile=profile,
+            pins=pins,
+            tenant_id=tenant_id,
         )
         self._workspace[session_id] = ws_state
         self._creating.add(session_id)
@@ -704,7 +709,12 @@ class SessionManager(UpkeepOps):
         )
         if session_id not in self._hands:
             self._register_hands(
-                session_id, harness, harness_version=row.harness_version, profile=profile, pins=pins
+                session_id,
+                harness,
+                harness_version=row.harness_version,
+                profile=profile,
+                pins=pins,
+                tenant_id=row.tenant_id,
             )
         self._workspace[session_id] = ws_state
         # The sandboxes a dead worker left, if they survived, keep serving (F21);
@@ -816,6 +826,7 @@ class SessionManager(UpkeepOps):
         harness_version: str | None,
         profile: Any | None,
         pins: SessionPins | None,
+        tenant_id: str | None = None,
     ) -> None:
         """The session's default hand and every named hand its composition pins."""
         self._hands.register(
@@ -825,6 +836,7 @@ class SessionManager(UpkeepOps):
                 session_id=session_id,
                 harness_version=harness_version,
                 sandbox_profile=profile,
+                tenant_id=tenant_id,
             ),
         )
         if pins is None or not pins.hands or self._composition_catalog is None:
@@ -842,6 +854,7 @@ class SessionManager(UpkeepOps):
                     harness_version=harness_version,
                     sandbox_profile=named,
                     hand=name,
+                    tenant_id=tenant_id,
                 ),
             )
 
@@ -853,6 +866,7 @@ class SessionManager(UpkeepOps):
         harness_version: str | None = None,
         sandbox_profile: Any | None = None,
         hand: str | None = None,
+        tenant_id: str | None = None,
     ) -> HandRecipe | None:
         """How to build the session's sandboxes, or None if its harness runs none.
 
@@ -876,6 +890,10 @@ class SessionManager(UpkeepOps):
         if hand is not None:
             # The session label is the hand's key, so adoption and the reaper find it.
             labels["supervisor.hand"] = hand
+        if tenant_id is not None:
+            labels["supervisor.tenant_id"] = tenant_id
+        if sandbox_profile is not None and getattr(sandbox_profile, "runner", None):
+            labels["supervisor.runner"] = sandbox_profile.runner
         return HandRecipe(provider=provider, image=digest, labels=labels)
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:

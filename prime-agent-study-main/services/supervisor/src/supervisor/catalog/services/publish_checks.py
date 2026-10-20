@@ -41,6 +41,8 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
         _check_memory_profile(name, artifact)
     if kind == "composition":
         _check_hands(name, artifact)
+    if kind == "sandbox_profile":
+        _check_runner(name, artifact)
     for field, model in _models_named(kind, artifact):
         _check_served(kind, name, field, model)
 
@@ -54,6 +56,14 @@ def _unknown_keys(given: Mapping[str, Any], parsed: Mapping[str, Any], prefix: s
             yield path
         elif isinstance(value, Mapping) and isinstance(parsed[key], Mapping):
             yield from _unknown_keys(value, parsed[key], f"{path}.")
+
+
+def _check_runner(name: str, profile: Any) -> None:
+    on_runner = str(getattr(profile.provider, "value", profile.provider)) == "runner"
+    if on_runner and not profile.runner:
+        raise InvalidArtifact("sandbox_profile", name, "provider 'runner' needs runner: the runner's name")
+    if profile.runner and not on_runner:
+        raise InvalidArtifact("sandbox_profile", name, "runner is only for provider 'runner'")
 
 
 def _check_hands(name: str, composition: Any) -> None:

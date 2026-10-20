@@ -89,6 +89,7 @@ class SandboxProviderName(StrEnum):
     LOCAL_PROCESS = "local_process"
     LOCAL_DOCKER = "local_docker"
     E2B = "e2b"
+    RUNNER = "runner"  # a tenant's own machine, through its runner (``hands.runners``)
 
 
 class FileEffects(StrEnum):
@@ -394,6 +395,8 @@ class SandboxProfile:
     image_digest: str | None = None
     browser_model: bool = False
     metadata: ArtifactMetadata | None = None
+    runner: str | None = None
+    """``provider: runner`` only: which of the tenant's runners hosts the hands."""
 
     def body_for_digest(self) -> dict[str, Any]:
         """Canonical content body for hashing."""
@@ -410,6 +413,8 @@ class SandboxProfile:
             body["image_digest"] = self.image_digest
         if self.browser_model:  # only when set, so profiles without it keep their digests
             body["browser_model"] = True
+        if self.runner:
+            body["runner"] = self.runner
         return body
 
 

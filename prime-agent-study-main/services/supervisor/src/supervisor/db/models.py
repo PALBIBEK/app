@@ -389,3 +389,33 @@ class HandLeaseRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class RunnerRow(Base):
+    """A tenant's runner: a machine of theirs that hosts hands and dials out to us."""
+
+    __tablename__ = "runners"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_seen_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class RunnerCommandRow(Base):
+    """One operation for a runner to carry out (``supervisor.hands.runners``)."""
+
+    __tablename__ = "runner_commands"
+    __table_args__ = (Index("ix_runner_commands_queue", "tenant_id", "runner", "status", "created_ms"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    runner: Mapped[str] = mapped_column(String(64), nullable=False)
+    sandbox_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    op: Mapped[str] = mapped_column(String(32), nullable=False)
+    args: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    claimed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

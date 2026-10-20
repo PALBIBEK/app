@@ -401,6 +401,7 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         image_digest=data.get("image_digest"),
         browser_model=bool(data.get("browser_model", False)),
         metadata=metadata_from_dict(data.get("metadata")),
+        runner=data.get("runner") or None,
     )
 
 
@@ -426,6 +427,7 @@ def sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         "image_digest": profile.image_digest,
         "browser_model": profile.browser_model,
         "metadata": metadata_to_dict(profile.metadata),
+        **({"runner": profile.runner} if profile.runner else {}),
     }
 
 
