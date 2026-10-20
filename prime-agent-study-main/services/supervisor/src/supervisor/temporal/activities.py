@@ -203,6 +203,11 @@ class SessionActivities:
         with _as_application_error():
             return await self._steps.model_step(req)
 
+    @activity.defn(name=Activity.CHECKPOINT)
+    async def checkpoint(self, session_id: str) -> None:
+        with _as_application_error():
+            await heartbeating(self._manager.checkpoint(session_id))
+
     @activity.defn(name=Activity.TOOL_CALL)
     async def tool_call(self, req: ToolRequest) -> bool:
         with _as_application_error():
@@ -261,6 +266,7 @@ class SessionActivities:
             self.terminate,
             self.begin_run,
             self.model_step,
+            self.checkpoint,
             self.tool_call,
             self.request_approval,
             self.resolve_approval,

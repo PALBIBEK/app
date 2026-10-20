@@ -180,3 +180,21 @@ async def test_a_resumed_session_adopts_the_sandbox_its_last_worker_left(
     assert asked == [sid]
     assert fresh.manager._hands.sandbox(sid) is left
     assert len(provider.create_calls) == creates  # type: ignore[attr-defined]
+
+
+async def test_a_renewed_session_key_rekeys_every_model_calling_seam(boot: Boot) -> None:
+    """The fake mints keys that are already expiring, so the next model step renews.
+
+    The key lives in the vault; the renewed one replaces it there and on the live
+    gateway client the summarizer and subagents share.
+    """
+    state = await boot()
+    sid = await _create(state)
+    _assert_one_keyed_gateway(state, sid, "token-1")
+    assert await state.manager.renew_gateway_key(sid)
+    _assert_one_keyed_gateway(state, sid, "token-2")
+    assert state.manager._session_keys is not None
+    stored = await state.manager._session_keys.stored(sid)
+    assert stored is not None and stored.value == "token-2"
+    await state.manager.terminate(sid)
+    assert await state.manager._session_keys.stored(sid) is None

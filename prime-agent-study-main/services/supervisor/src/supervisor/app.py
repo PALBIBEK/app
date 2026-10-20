@@ -23,6 +23,7 @@ from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.seams.services import AuthzService, WorkspaceStore
 from supervisor.session import SessionManager, SessionRegistry
+from supervisor.vault import Keyring, Vault
 
 if TYPE_CHECKING:
     from supervisor.temporal.sessions import SessionWorkflows
@@ -51,6 +52,7 @@ class SupervisorState:
     authz: AuthzService | None = None
     grant_store: object | None = None
     workspace_store: WorkspaceStore | None = None
+    vault: Vault | None = None
     writer: JournalWriter | None = None
     memory: MemoryPlatform | None = None
     # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
@@ -82,6 +84,7 @@ def build_supervisor(
     virtual_key_client: object | None = None,
     workspace_store: WorkspaceStore | None = None,
     browser: BrowserAccess | None = None,
+    vault: Vault | None = None,
 ) -> SupervisorState:
     writer = JournalWriter(session_factory, blob_dir=blob_dir)
     reader = JournalReader(session_factory, blob_dir=blob_dir)
@@ -96,6 +99,7 @@ def build_supervisor(
         hydrator=getattr(sandbox_provider, "_hydrator", None),
     )
     memory = MemoryPlatform(session_factory)
+    vault = vault or Vault(session_factory, Keyring.from_env())
     manager = SessionManager(
         session_factory=session_factory,
         writer=writer,
@@ -113,6 +117,7 @@ def build_supervisor(
         memory=memory,
         browser=browser,
         workspace_store=workspace_store,
+        vault=vault,
     )
 
     async def check_db() -> bool:
@@ -149,6 +154,7 @@ def build_supervisor(
         authz=authz,
         grant_store=gs,
         workspace_store=workspace_store,
+        vault=vault,
         writer=writer,
         memory=memory,
     )

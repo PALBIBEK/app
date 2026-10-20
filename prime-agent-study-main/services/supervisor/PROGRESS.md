@@ -355,6 +355,44 @@ Phase 1 (workstreams BH1–BH3, part of BH9) is on `feat/bh-phase1-hands`.
   replaced with its file restored), and e2e stage 4 section F. Supervisor
   suite 839 passing.
 
+### 16. Brain and hands, Phase 2: the brain runs anywhere, credentials stay out of the hands
+On `feat/bh-phase2-brain` (workstreams BH4, BH5).
+- **The vault** (`supervisor/vault`): secrets sealed with AES-256-GCM in
+  Postgres (`vault_secrets`, migration 0016), each authenticated together with
+  its owner and name, so a ciphertext moved to another row does not open.
+  Keys come from `VAULT_KEYS` (`id:base64`, first one seals, all open, so they
+  rotate); production and staging refuse to start without it (the staging
+  compose requires it); elsewhere a development key is used, with a warning.
+- **One gateway key per session, kept in the vault.** Before, every runtime
+  start minted a key: each resume, takeover or restart got a new key and a new
+  $5 budget, and a session up for more than the key's hour lost model access.
+  Now every worker running the session reads the same key; it is renewed ten
+  minutes before it expires, and the live gateway client (shared by the
+  summarizer and subagents) is rekeyed in place. Terminate deletes it.
+- **Model steps run on any worker** (`workflow.patched("brain-anywhere")`).
+  The model step goes to the shared queue; a new `CHECKPOINT` activity runs on
+  the sandbox's worker beside it, and both finish before the next tool. A
+  worker that does not hold the session builds its *brain* from the pins and
+  the vault key (never started, no sandbox, not resumed; cached LRU). So a
+  worker holding sandboxes is no bottleneck for thinking, and a session whose
+  worker died keeps thinking while it is adopted. Histories from before the
+  patch replay the old path: one recorded on `main` is a test fixture, and the
+  test fails if the patch is removed.
+- **The supervisor is the credential proxy for tool servers.** A tenant puts a
+  server's credential in the vault (`PUT /v1/secrets/mcp:<origin>`; values are
+  write-only, listing returns names), and every session of that tenant calls
+  that MCP server with `Authorization: Bearer …` from the supervisor. Rotated
+  secrets reach live sessions within a minute. A server that echoes the
+  credential has it redacted before the model sees it.
+- Tests: the vault on SQLite and Postgres (round trip, nothing readable at
+  rest, a moved ciphertext refused, rotation, one key under concurrent first
+  use, env parsing), renewal rekeying every model-calling seam, a two-worker
+  Temporal test (model steps on one worker; tool and checkpoints on the one
+  holding the sandbox; the other never resumed the session), the replay of
+  pre-patch and new histories, and an injection test: an MCP tool authorised
+  by the vault while the secret is in no journal event, no prompt, no file or
+  environment variable in the sandbox, and no secrets-API response.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -396,8 +434,18 @@ Open:
     uploads every file again.
   - A lost sandbox's own logs are not kept (BH9's log capture is not done).
   - The TTFT gain is unmeasured where it matters (Docker, E2B).
-  - Model steps and tool steps still share the session's sticky worker
-    (Phase 2, BH4).
+- **Brain and hands (Phase 2 limits).**
+  - A key renewal mints a new key with a new $5 budget: the gateway budgets
+    per key, not per session (a per-session budget needs the gateway to sum by
+    session). The cost limit the supervisor enforces is per session and exact.
+  - Two workers minting a session's first key at once keep one; the other key
+    is left to expire unused (revoking by session would revoke both).
+  - A brain on a worker that does not hold the session is cached and evicted
+    LRU (256); an evicted brain's HTTP clients are not closed explicitly.
+  - Who in a tenant may change its secrets is left to the caller (the BFF's
+    settings RBAC): the API takes the tenant from the service identity.
+  - Only MCP tool servers use tenant secrets; the MCP recall backend does not
+    yet.
 - **An import cycle:** importing `supervisor.seams.providers` before
   `supervisor.main` fails (seams.services ↔ sandbox.providers); it predates this
   work and only bites a script that imports in that order.
@@ -572,9 +620,9 @@ The first is the one that matters for shipping.
 
 ## Next step
 
-0. **Brain and hands, Phase 2** (BH4 brain on any worker, BH5 credentials out of
-   the hands), then Phase 3 (BH6 Pi harness loop on the worker, BH7 the
-   session as a context object) and Phase 4 (BH8 many hands).
+0. **Brain and hands, Phase 3** (BH6 Pi harness loop on the worker, BH7 the
+   session as a context object), then Phase 4 (BH8 many hands) and BH9's log
+   capture.
 1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
    `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
    `docker-compose.yml`, and run the staging stack in CI the way compose smoke

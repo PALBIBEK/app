@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -52,6 +54,7 @@ from supervisor.seams.services import (
     SessionWorkspaceState,
     resolve_memory_scope,
 )
+from supervisor.seams.services.virtual_keys import MintedVirtualKey
 from supervisor.session.access import session_visibility, visible_to
 from supervisor.session.errors import (
     RecoveryBlocked,
@@ -59,6 +62,9 @@ from supervisor.session.errors import (
 from supervisor.session.modes import SessionMode, mode_for_manifest
 from supervisor.session.recovery import ResumeState
 from supervisor.session.workspaces import session_workspace
+
+_BRAINS_KEPT = 256
+"""Brains (sessions run elsewhere) a worker keeps built; each holds seams and an HTTP client."""
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +303,7 @@ class SessionManager(UpkeepOps):
                 ),
             ),
         )
-        token = self._mint_gateway_key(
+        token = await self._gateway_key(
             session_id,
             tenant_id=tenant_id,
             principal=principal,
@@ -306,6 +312,7 @@ class SessionManager(UpkeepOps):
             ws_state=ws_state,
         )
         seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
+        await self._authorize_tools(session_id, tenant_id, seams)
         session_dir: str | None = None
         if pins is not None and seams is not None:
             ws = session_workspace(session_id)
@@ -341,7 +348,7 @@ class SessionManager(UpkeepOps):
             await runtime.start(await self._hands.ensure(session_id, cause="eager"), session_dir)
         return runtime
 
-    def _mint_gateway_key(
+    async def _gateway_key(
         self,
         session_id: str,
         *,
@@ -368,17 +375,152 @@ class SessionManager(UpkeepOps):
         def group(name: str) -> str:
             return (router.target_for(name) if router is not None else None) or name
 
-        allowed = list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
-        minted = self._vk_client.mint(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            principal_id=principal.id,
-            allowed_models=allowed,
-            scope_id=ws_state.scope_id,
+        allowed = (
+            list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
         )
-        ws_state.virtual_key_token = minted.token
-        ws_state.virtual_key_id = minted.key_id
-        return minted.token
+        client = self._vk_client
+
+        def mint() -> MintedVirtualKey:
+            minted = client.mint(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                principal_id=principal.id,
+                allowed_models=allowed,
+                scope_id=ws_state.scope_id,
+            )
+            ws_state.virtual_key_id = minted.key_id
+            self._key_expiry[session_id] = minted.expires_at
+            return minted
+
+        self._key_mints[session_id] = mint
+        if self._session_keys is None:
+            token = (await asyncio.to_thread(mint)).token
+        else:
+            token = await self._current_key(session_id, mint)
+        ws_state.virtual_key_token = token
+        return token
+
+    async def _current_key(self, session_id: str, mint: Callable[[], MintedVirtualKey]) -> str:
+        assert self._session_keys is not None
+        token, _ = await self._session_keys.current(session_id, mint)
+        stored = await self._session_keys.stored(session_id)
+        if stored is not None and stored.expires_at is not None:
+            self._key_expiry[session_id] = stored.expires_at.timestamp()
+        return token
+
+    async def _authorize_tools(
+        self, session_id: str, tenant_id: str, seams: RuntimeSeams | None
+    ) -> None:
+        self._tenant_of[session_id] = tenant_id
+        if self._credentials is not None and seams is not None:
+            await self._credentials.authorize(tenant_id, seams.tool_provider)
+
+    async def refresh_credentials(self, session_id: str) -> None:
+        """Before a step: a fresh gateway key if it is near its end, rotated tool secrets."""
+        await self.renew_gateway_key(session_id)
+        tenant = self._tenant_of.get(session_id)
+        seams = self._seams.get(session_id)
+        if self._credentials is not None and tenant is not None and seams is not None:
+            await self._credentials.authorize(tenant, seams.tool_provider)
+
+    async def renew_gateway_key(self, session_id: str) -> bool:
+        """Before a model call: swap in a fresh key when this worker's is near its end.
+
+        The vault holds the session's key; when it is near expiry the first worker
+        to notice mints the next one and every other worker picks that one up. The
+        live gateway client (shared by the summarizer and subagents) is rekeyed in
+        place. Returns whether the key changed.
+        """
+        from supervisor.vault.session_keys import RENEW_BEFORE_S
+
+        mint = self._key_mints.get(session_id)
+        expiry = self._key_expiry.get(session_id)
+        if mint is None or expiry is None or expiry - time.time() > RENEW_BEFORE_S:
+            return False
+        ws_state = self._workspace.get(session_id)
+        old = ws_state.virtual_key_token if ws_state is not None else None
+        if self._session_keys is None:
+            token = (await asyncio.to_thread(mint)).token
+        else:
+            token = await self._current_key(session_id, mint)
+        if token == old:
+            return False
+        if ws_state is not None:
+            ws_state.virtual_key_token = token
+        seams = self._seams.get(session_id)
+        rekey = getattr(getattr(seams, "model_gateway", None), "rekey", None)
+        if callable(rekey):
+            rekey(token)
+        else:
+            logger.warning(
+                "session %s: gateway key renewed but its runtime cannot take it", session_id
+            )
+        return True
+
+    async def brain(self, session_id: str) -> Any:
+        """The session's brain for a model step: on this worker, whoever holds its sandbox.
+
+        Where this worker runs the session it is that runtime. Elsewhere it is the
+        same runtime built from the session's pins and its gateway key from the vault,
+        never started and given no sandbox: a model step needs the seams, the model,
+        the prompt and the tool schemas, not the hands. Brains are cached (LRU).
+        """
+        live = self._registry.get(session_id)
+        if live is not None:
+            return live
+        if (cached := self._brains.get(session_id)) is not None:
+            self._brains.move_to_end(session_id)
+            return cached
+        await self._require_active(session_id)
+        row = await self._get_session_row(session_id)
+        manifest = self._pinned_manifest(row)
+        pins: SessionPins | None = None
+        memory_profile = None
+        if row.composition_pins and self._composition_catalog is not None:
+            pins = SessionPins.from_dict(dict(row.composition_pins))
+            await sync_composition(
+                self._composition_catalog, self._db, pins.composition_id, pins.composition_digest
+            )
+            memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
+        principal = Principal(id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id)
+        model = session_model(manifest, pins)
+        owner, agent = self._long_term.setdefault(
+            session_id,
+            (
+                principal.id,
+                long_term_agent(
+                    composition_id=pins.composition_id if pins is not None else None,
+                    harness_version=manifest.harness_version,
+                ),
+            ),
+        )
+        token = await self._gateway_key(
+            session_id,
+            tenant_id=row.tenant_id,
+            principal=principal,
+            model=model,
+            summarizer_model=_summarizer_model(memory_profile),
+            # The key is scoped like the owner's; this state is only the mint's input.
+            ws_state=SessionWorkspaceState(
+                scope_id=row.scope_id, principal=principal if row.scope_id else None
+            ),
+        )
+        seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
+        await self._authorize_tools(session_id, row.tenant_id, seams)
+        if live := self._registry.get(session_id):  # resumed here meanwhile
+            return live
+        brain = create_runtime(row.runtime, seams=seams, model=model, session_id=session_id)
+        set_identity = getattr(brain, "set_identity", None)
+        if callable(set_identity):
+            set_identity(owner=owner, agent=agent)
+        if seams is not None:
+            self._seams[session_id] = seams
+        self._brains[session_id] = brain
+        while len(self._brains) > _BRAINS_KEPT:
+            evicted, _ = self._brains.popitem(last=False)
+            if self._registry.get(evicted) is None:
+                self._seams.pop(evicted, None)
+        return brain
 
     def _bind_seams(
         self,
