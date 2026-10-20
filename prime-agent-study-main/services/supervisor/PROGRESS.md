@@ -359,6 +359,9 @@ Open:
 - **The gateway's virtual-key store and QM's model-call audit are in-process.**
   One gateway replica, and the audit resets on restart (the journal is the
   durable record of every call).
+- **One intermittent hang.** `test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session`
+  hit its 300 s timeout once in CI and passed 6 of 6 runs locally; CI now
+  annotates a hung test's stack, so the next occurrence names its cause.
 - **No real-model CI run.** Every automated turn uses the gateway's echo model;
   a real-model job needs a `MODEL_E2E_API_KEY` secret.
 - **The coding-v1 Pi harness** needs its image pushed to a registry and the
@@ -456,6 +459,10 @@ workstreams (W1 to W9), one commit per item on `hardening/ten`.
   terminate, which flushes pending memory capture). Two weak assertions became
   real ones (the duplicate-command test, the slow-subscriber test). What
   remains polls a condition or simulates a slow tool or model on purpose.
+- **Tests that broke when CI was slow:** three API test modules signed their
+  JWTs at import with a five-minute life, so after a slow run every later
+  request got 401 (one helper now, `tests/support/auth.py`, signs per request);
+  a job test read the workflow's status a moment before it closed.
 - The memory service's 39 routes moved out of `create_app` (complexity 40) onto
   a module router; its one mypy error fixed.
 
