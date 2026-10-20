@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from supervisor.seams.core.types import ToolDescriptor, ToolInvokeContext, ToolResult
-from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
+from supervisor.seams.interfaces.tool_provider import (
+    ToolClassifier,
+    ToolProvider,
+    needs_workspace,
+)
 
 
 class CompositeToolProvider:
@@ -33,6 +37,13 @@ class CompositeToolProvider:
             if name in {t.name for t in provider.list_tools()}:
                 return provider.tool_class(name) if isinstance(provider, ToolClassifier) else None
         return None
+
+    def needs_workspace(self, name: str) -> bool:
+        """Whether the first provider offering ``name`` needs the session's sandbox for it."""
+        for provider in self._providers:
+            if name in {t.name for t in provider.list_tools()}:
+                return needs_workspace(provider, name)
+        return False
 
     def invoke(
         self,

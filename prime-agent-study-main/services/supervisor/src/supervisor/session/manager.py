@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from decimal import Decimal
@@ -28,6 +29,7 @@ from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profi
 from supervisor.catalog.repository import sync_composition
 from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
 from supervisor.db.models import ScopeRow, SessionIndexRow, SessionRow
+from supervisor.hands import HandRecipe, HandWorkspace
 from supervisor.harness import (
     HarnessManifest,
     manifest_to_dict,
@@ -41,7 +43,6 @@ from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent,
 from supervisor.models import model_router
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
-from supervisor.sandbox.base import Sandbox
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
 from supervisor.seams import (
     build_runtime_seams,
@@ -150,9 +151,7 @@ class SessionManager(UpkeepOps):
             memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
 
         if self._quotas is not None:
-            sandbox_ids = [
-                sid for sid, sbx in self._sandboxes.items() if sbx is not None
-            ]
+            sandbox_ids = list(self._hands.live)
             live_sandboxes = await self._quotas.count_live_sandboxes(
                 tenant_id, sandbox_ids
             )
@@ -166,64 +165,77 @@ class SessionManager(UpkeepOps):
             await self._ensure_scope_binding(scope_id, principal)
             await self._workspace_svc.require_sandbox_exec(ws_state)
 
-        sandbox = await self._maybe_create_sandbox(
-            manifest,
-            session_id=session_id,
-            harness_version=harness_version,
-            sandbox_profile=profile,
-        )
-        if scope_id is not None and sandbox is not None:
-            await self._workspace_svc.ensure_hydrated(ws_state, sandbox)
-
-        runtime = await self._start_runtime(
+        # The sandbox's recipe is resolved now (a config that can never get one is
+        # refused here); the sandbox itself is built when a tool first needs it.
+        self._hands.register(
             session_id,
-            runtime_name=runtime_name,
-            manifest=manifest,
-            pins=pins,
-            sandbox=sandbox,
-            sandbox_profile=profile,
-            memory_profile=memory_profile,
-            tenant_id=tenant_id,
-            principal=principal,
-            ws_state=ws_state,
-        )
-
-        snap = manifest_to_dict(manifest)
-        binding = await resolve_binding(
-            self._memory.store,
-            tenant_id=tenant_id,
-            owner=principal.id,
-            pin=agent_pin(
-                harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
+            self._hand_recipe(
+                manifest,
+                session_id=session_id,
+                harness_version=harness_version,
+                sandbox_profile=profile,
             ),
-            request=memory if isinstance(memory, MemoryRequest) else MemoryRequest.from_dict(memory),
         )
-        await self._writer.ensure_session(
-            session_id,
-            runtime=runtime_name,
-            tenant_id=tenant_id,
-            harness_version=harness_version,
-        )
-        async with self._db() as db:
-            row = await db.get(SessionRow, session_id)
-            assert row is not None
-            row.runtime = runtime_name
-            row.harness_version = harness_version
-            row.manifest = snap
-            row.composition_pins = pins_json
-            row.tenant_id = tenant_id
-            row.scope_id = scope_id
-            row.status = "active"
-            # Memory: owned by the creating principal, for this exact agent version.
-            row.owner_principal_id = binding.owner
-            row.agent_pin = binding.agent_pin
-            row.memory = binding.to_dict()
-            await db.commit()
-
-        self._registry.put(session_id, runtime)
-        self._sandboxes[session_id] = sandbox
-        self._modes[session_id] = mode_for_manifest(manifest)
         self._workspace[session_id] = ws_state
+        self._creating.add(session_id)
+        try:
+            runtime = await self._start_runtime(
+                session_id,
+                runtime_name=runtime_name,
+                manifest=manifest,
+                pins=pins,
+                sandbox_profile=profile,
+                memory_profile=memory_profile,
+                tenant_id=tenant_id,
+                principal=principal,
+                ws_state=ws_state,
+            )
+
+            snap = manifest_to_dict(manifest)
+            binding = await resolve_binding(
+                self._memory.store,
+                tenant_id=tenant_id,
+                owner=principal.id,
+                pin=agent_pin(
+                    harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
+                ),
+                request=memory if isinstance(memory, MemoryRequest) else MemoryRequest.from_dict(memory),
+            )
+            await self._writer.ensure_session(
+                session_id,
+                runtime=runtime_name,
+                tenant_id=tenant_id,
+                harness_version=harness_version,
+            )
+            async with self._db() as db:
+                row = await db.get(SessionRow, session_id)
+                assert row is not None
+                row.runtime = runtime_name
+                row.harness_version = harness_version
+                row.manifest = snap
+                row.composition_pins = pins_json
+                row.tenant_id = tenant_id
+                row.scope_id = scope_id
+                row.status = "active"
+                # Memory: owned by the creating principal, for this exact agent version.
+                row.owner_principal_id = binding.owner
+                row.agent_pin = binding.agent_pin
+                row.memory = binding.to_dict()
+                await db.commit()
+        except BaseException:
+            # Nothing of a half-made session stays: no sandbox, no hand.
+            if (half := self._hands.release(session_id)) is not None:
+                with contextlib.suppress(Exception):
+                    await half.destroy()
+            self._workspace.pop(session_id, None)
+            raise
+        finally:
+            self._creating.discard(session_id)
+
+        if (eager := self._hands.sandbox(session_id)) is not None:
+            await self._announce_hand(session_id, eager, "eager")
+        self._registry.put(session_id, runtime)
+        self._modes[session_id] = mode_for_manifest(manifest)
         self._configure_policy(session_id, manifest, sandbox_profile=profile)
         self._start_fanout(session_id, runtime)
         return session_id
@@ -260,7 +272,6 @@ class SessionManager(UpkeepOps):
         runtime_name: str,
         manifest: HarnessManifest,
         pins: SessionPins | None,
-        sandbox: Sandbox | None,
         sandbox_profile: Any | None,
         memory_profile: Any | None,
         tenant_id: str,
@@ -318,7 +329,14 @@ class SessionManager(UpkeepOps):
         set_identity = getattr(runtime, "set_identity", None)
         if callable(set_identity) and (identity := self._long_term.get(session_id)) is not None:
             set_identity(owner=identity[0], agent=identity[1])
-        await runtime.start(sandbox, session_dir)
+        # A runtime that takes a workspace gets its sandbox on first use (and a fresh
+        # one after a loss); any other runtime needs its sandbox before it starts.
+        set_workspace = getattr(runtime, "set_workspace", None)
+        if self._hands.recipe(session_id) is not None and callable(set_workspace):
+            await runtime.start(None, session_dir)
+            set_workspace(HandWorkspace(lambda: self._hands.sandbox(session_id)))
+        else:
+            await runtime.start(await self._hands.ensure(session_id, cause="eager"), session_dir)
         return runtime
 
     def _mint_gateway_key(
@@ -557,34 +575,32 @@ class SessionManager(UpkeepOps):
             scope_id=row.scope_id,
             principal=principal if row.scope_id else None,
         )
-        existing = self._sandboxes.get(session_id)
-        sandbox: Sandbox | None
-        if existing is not None:
-            sandbox = existing
-        else:
-            sandbox = await self._maybe_create_sandbox(
-                harness,
-                session_id=session_id,
-                harness_version=row.harness_version,
-                sandbox_profile=profile,
-                adopt=True,
+        if session_id not in self._hands:
+            self._hands.register(
+                session_id,
+                self._hand_recipe(
+                    harness,
+                    session_id=session_id,
+                    harness_version=row.harness_version,
+                    sandbox_profile=profile,
+                ),
             )
-            if row.scope_id is not None and sandbox is not None:
-                await self._workspace_svc.ensure_hydrated(ws_state, sandbox)
+        self._workspace[session_id] = ws_state
+        # The sandbox a dead worker left, if it survived, keeps serving (F21);
+        # otherwise the next tool call that needs one builds it.
+        await self._hands.adopt(session_id)
         # V-6: re-bind from stored pins; do not re-resolve floating catalog.
         runtime = await self._start_runtime(
             session_id,
             runtime_name=row.runtime,
             manifest=harness,
             pins=pins,
-            sandbox=sandbox,
             sandbox_profile=profile,
             memory_profile=memory_profile,
             tenant_id=row.tenant_id,
             principal=principal,
             ws_state=ws_state,
         )
-        self._workspace[session_id] = ws_state
         history = await self._reader.latest_history(session_id)
         # D13: reconstruct open-span state from journal after cold resume / restart.
         try:
@@ -610,7 +626,6 @@ class SessionManager(UpkeepOps):
             logger.exception("span reconstruct on resume failed session=%s", session_id)
         _ = history
         self._registry.put(session_id, runtime)
-        self._sandboxes[session_id] = sandbox
         self._modes[session_id] = mode_for_manifest(harness)
         self._configure_policy(session_id, harness, sandbox_profile=profile)
         self._start_fanout(session_id, runtime)
@@ -671,17 +686,19 @@ class SessionManager(UpkeepOps):
             )
         return new_id
 
-    async def _maybe_create_sandbox(
+    def _hand_recipe(
         self,
         manifest: HarnessManifest,
         *,
-        session_id: str | None = None,
+        session_id: str,
         harness_version: str | None = None,
         sandbox_profile: Any | None = None,
-        adopt: bool = False,
-    ) -> Sandbox | None:
-        """The session's sandbox: with ``adopt`` (a resume), the one its last worker
-        left if it survived (and the agent's files with it, F21), else a fresh one."""
+    ) -> HandRecipe | None:
+        """How to build the session's sandboxes, or None if its harness runs none.
+
+        Resolving checks the harness, the profile and multi-tenant policy now, so a
+        session that could never get a sandbox is refused at creation.
+        """
         provider, digest = resolve_sandbox_create(
             manifest,
             deploy_provider=self._provider,
@@ -690,24 +707,13 @@ class SessionManager(UpkeepOps):
         )
         if provider is None:
             return None
-        if adopt and session_id:
-            adopted = await provider.adopt(session_id)
-            if adopted is not None:
-                logger.info(
-                    "resume: adopted %s sandbox %s session=%s",
-                    adopted.info.provider, adopted.info.id, session_id,
-                )
-                return adopted
-        labels: dict[str, str] = {}
-        if session_id:
-            labels["supervisor.session_id"] = session_id
-        if harness_version or manifest.harness_version:
-            labels["supervisor.harness_version"] = (
-                harness_version or manifest.harness_version
-            )
+        labels = {
+            "supervisor.session_id": session_id,
+            "supervisor.harness_version": harness_version or manifest.harness_version,
+        }
         if sandbox_profile is not None:
             labels["supervisor.sandbox_profile"] = sandbox_profile.name
-        return await provider.create(image=digest, labels=labels or None)
+        return HandRecipe(provider=provider, image=digest, labels=labels)
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:
         old = self._fanout.get(session_id)

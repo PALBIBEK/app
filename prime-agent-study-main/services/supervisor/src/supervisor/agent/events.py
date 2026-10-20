@@ -269,6 +269,34 @@ class BackgroundResults:
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
+# ── Hands (sandboxes) ──────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class HandProvisioned:
+    """A sandbox now serves the session's tools.
+
+    ``cause``: ``first_use`` (the first tool call that needed one), ``replaced``
+    (after a loss), ``adopted`` (the one a dead worker left, still alive) or
+    ``eager`` (a runtime that cannot start without one).
+    """
+
+    hand_id: str
+    provider: str
+    cause: str
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
+@dataclass(frozen=True)
+class HandLost:
+    """A sandbox died under the session; the next tool call that needs one gets a fresh one."""
+
+    hand_id: str
+    provider: str
+    reason: str
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
 # ── Meta Events ────────────────────────────────────────────────────────────────
 
 
@@ -309,6 +337,8 @@ AgentEvent = (
     | MemoryInjected
     | MemoryContext
     | BackgroundResults
+    | HandProvisioned
+    | HandLost
     | Settled
     | ErrorEvent
 )

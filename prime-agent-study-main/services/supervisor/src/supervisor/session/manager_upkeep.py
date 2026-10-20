@@ -32,13 +32,13 @@ class UpkeepOps(ChildOps):
 
     def reattach_sandbox(self, session_id: str, sandbox: Sandbox) -> None:
         """Bind a live sandbox discovered after supervisor restart."""
-        self._sandboxes[session_id] = sandbox
+        self._hands.attach(session_id, sandbox)
 
     async def rehydrate_workspace(self, session_id: str) -> None:
         """Force hydrate durable SoT into the live sandbox cache (D9 LOCAL_DEMO)."""
         await self._require_active(session_id)
         ws = self._workspace.get(session_id)
-        sandbox = self._sandboxes.get(session_id)
+        sandbox = self._hands.sandbox(session_id)
         if ws is None or ws.scope_id is None:
             raise WorkspaceUnavailable("session has no scope-bound workspace")
         if sandbox is None:
@@ -105,7 +105,7 @@ class UpkeepOps(ChildOps):
             await self.terminate(session_id)
             return
 
-        sandbox = self._sandboxes.get(session_id)
+        sandbox = self._hands.sandbox(session_id)
         runtime = self._registry.get(session_id)
         if sandbox is not None:
             try:
@@ -116,7 +116,7 @@ class UpkeepOps(ChildOps):
                     await sandbox.destroy()
                 except Exception:
                     logger.exception("reap_idle destroy failed session=%s", session_id)
-                self._sandboxes.pop(session_id, None)
+                self._hands.detach(session_id)
         if runtime is not None:
             try:
                 await runtime.stop()
@@ -155,7 +155,7 @@ class UpkeepOps(ChildOps):
 
         for sid in list(self._modes.keys()):
             mode = self._modes.get(sid)
-            sandbox = self._sandboxes.get(sid)
+            sandbox = self._hands.sandbox(sid)
             runtime = self._registry.get(sid)
             if mode == SessionMode.STICKY and sandbox is not None:
                 try:
@@ -178,7 +178,7 @@ class UpkeepOps(ChildOps):
 
         paused_ids: list[str] = []
         for sid in list(self._modes.keys()):
-            if self._modes.get(sid) == SessionMode.STICKY and sid in self._sandboxes:
+            if self._modes.get(sid) == SessionMode.STICKY and sid in self._hands:
                 paused_ids.append(sid)
 
         if paused_ids:
@@ -206,7 +206,7 @@ class UpkeepOps(ChildOps):
             logger.exception("span session_terminal reap failed session=%s", session_id)
 
         ws_state = self._workspace.get(session_id)
-        sandbox = self._sandboxes.get(session_id)
+        sandbox = self._hands.sandbox(session_id)
         if ws_state is not None and sandbox is not None:
             try:
                 await self._workspace_svc.sync_if_dirty(ws_state, sandbox)
@@ -232,7 +232,7 @@ class UpkeepOps(ChildOps):
                 await runtime.stop()
             except Exception:
                 logger.exception("stop failed session=%s", session_id)
-        sandbox = self._sandboxes.pop(session_id, None)
+        sandbox = self._hands.release(session_id)
         if sandbox is not None:
             try:
                 await sandbox.destroy()

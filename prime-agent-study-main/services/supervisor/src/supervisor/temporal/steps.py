@@ -402,6 +402,9 @@ class GithiSteps:
             provider = runtime.seams.tool_provider if runtime.seams else None
             if (denial := self._manager.tool_denial(sid, call["name"], provider)) is not None:
                 result, is_error = denied_result(denial, "FILE_EFFECTS_DENIED"), True
+            elif (hand := await self._manager.hand_for_call(sid, call["name"], provider)).unavailable:
+                result = denied_result(hand.unavailable.error or "", hand.unavailable.code or "")
+                is_error = True
             else:
                 row = await self._manager._get_session_row(sid)
                 invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
@@ -409,6 +412,7 @@ class GithiSteps:
                     invocation, tenant_id=row.tenant_id, env=await self._manager.tool_env(sid)
                 )
                 result, is_error = end.result, end.is_error
+                await self._manager.after_call(sid, hand, result.get("code"), result.get("error"))
         await self._record(
             sid,
             run_id,

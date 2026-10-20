@@ -40,6 +40,7 @@ __all__ = [
     "SandboxWorkspace",
     "TreeWorkspace",
     "Workspace",
+    "logical_relpath",
 ]
 
 LOGICAL_ROOT: Final = "/workspace"
@@ -104,7 +105,7 @@ class Workspace(Protocol):
         ...
 
 
-def _logical_relpath(path: str) -> str:
+def logical_relpath(path: str) -> str:
     """Normalize a model-supplied path without touching any filesystem."""
     text = str(path).strip().replace("\\", "/")
     if "\x00" in text:
@@ -140,7 +141,7 @@ class HostWorkspace:
         raw = Path(str(path).strip()).expanduser()
         if raw.is_absolute() and raw.is_relative_to(self._root):
             path = raw.relative_to(self._root).as_posix()
-        rel = _logical_relpath(path)
+        rel = logical_relpath(path)
         # Lexically inside; now make sure no symlink on the way leads out.
         if not (self._root / rel).resolve().is_relative_to(self._root):
             raise PathEscape(path)
@@ -259,7 +260,7 @@ class TreeWorkspace:
         return f"TreeWorkspace({self._tree!r})"
 
     def relpath(self, path: str) -> str:
-        return _logical_relpath(path)
+        return logical_relpath(path)
 
     async def read_bytes(self, path: str) -> bytes:
         rel = self.relpath(path)
@@ -341,7 +342,7 @@ class SandboxWorkspace:
         return f"SandboxWorkspace({self._sandbox.info.provider}:{self._sandbox.id})"
 
     def relpath(self, path: str) -> str:
-        return _logical_relpath(path)
+        return logical_relpath(path)
 
     def _abs(self, rel: str) -> str:
         root = self._sandbox.info.workdir.rstrip("/") or LOGICAL_ROOT

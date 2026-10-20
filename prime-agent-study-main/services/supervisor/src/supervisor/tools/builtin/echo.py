@@ -10,7 +10,7 @@ class EchoArgs(ToolArgs):
     text: str = ""
 
 
-@tool(tool_class=ToolClass.PURE)
+@tool(tool_class=ToolClass.PURE, needs_workspace=False)
 async def echo(args: EchoArgs, ctx: ToolContext) -> dict[str, str]:
     """Echo text (dev / smoke tool)"""
     return {"text": args.text}

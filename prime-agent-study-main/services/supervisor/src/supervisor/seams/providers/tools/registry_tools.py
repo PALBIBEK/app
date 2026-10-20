@@ -96,6 +96,11 @@ class RegistryToolProvider:
         spec = self._specs.get(name)
         return spec.tool_class.value if spec is not None else None
 
+    def needs_workspace(self, name: str) -> bool:
+        """Whether ``name`` acts on the session's files or shell (``WorkspaceNeeds``)."""
+        spec = self._specs.get(name)
+        return spec is not None and spec.needs_workspace
+
     def invoke(self, ctx: ToolInvokeContext, name: str, args: dict[str, Any]) -> ToolResult:
         """Run one call to completion; every failure becomes a typed ``ToolResult``."""
         try:

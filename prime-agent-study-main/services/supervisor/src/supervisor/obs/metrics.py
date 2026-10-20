@@ -43,7 +43,7 @@ class MetricsRegistry:
                 "total_cost": float(cost or 0.0),
                 "requests": self._request_counts.get(str(tenant_id), 0),
             }
-        live_sandboxes = sum(1 for s in manager._sandboxes.values() if s is not None)
+        live_sandboxes = len(manager._hands.live)
         return {
             "live_sandboxes": live_sandboxes,
             "tenants": tenants,
