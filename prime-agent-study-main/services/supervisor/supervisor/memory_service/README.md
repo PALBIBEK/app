@@ -34,6 +34,21 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 | recall | Hybrid RRF + token budget; optional Tier 1 `memory/recall` log |
 | extraction | Async on `turn/end` flush; stingy heuristic; failures isolated |
 
+### Notebooks (long-term memory)
+| Concern | Behavior |
+|---|---|
+| Owner | One tenant, one owner (principal), one exact agent version (`agent_pin`) |
+| Ids | `<tenant>~<hex>`: any caller can address the right tenant; the stored tenant is still checked |
+| Facts | Stable ids; provenance (sensitivity, sources) only tightens |
+| Changes | One locked transaction each: capture (deduplicated), edit, delete, clear, restore |
+| History | Every change a revision; read the facts at any revision; restore never declassifies |
+| Bank | Each live fact that is the owner's own, ordinary and fully traced is also a bank item |
+| Erase | `erase_subject` for `user:<owner>` removes their notebooks, history included |
+| Routes | `/v1/notebooks…`; the supervisor's `supervisor.memory.client` is the client |
+
+Who may *see* a fact (disclosure across audiences) is decided by the supervisor,
+which knows scopes and their members; this service never imports it.
+
 ### Ops (Phase 5)
 | Concern | Behavior |
 |---|---|
