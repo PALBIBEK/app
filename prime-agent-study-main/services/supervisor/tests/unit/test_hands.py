@@ -122,7 +122,7 @@ async def test_a_dead_sandbox_becomes_a_workspace_reset(tmp_path: Path) -> None:
     shutil.rmtree(sandbox.root)  # the sandbox dies under the session
     with pytest.raises(WorkspaceReset) as reset:
         await workspace.read_bytes("a.txt")
-    assert reset.value.code == "WORKSPACE_RESET" and "fresh one" in str(reset.value)
+    assert reset.value.code == "WORKSPACE_RESET" and "fresh sandbox" in str(reset.value)
     with pytest.raises(WorkspaceReset):
         await workspace.run("ls", timeout_s=5)
 

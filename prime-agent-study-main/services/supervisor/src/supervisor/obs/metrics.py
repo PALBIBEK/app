@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from supervisor.db.models import SessionIndexRow, SessionRow
+from supervisor.obs.latency import recent_ttft
 from supervisor.session import SessionManager
 
 _ACTIVE = ("active", "paused", "awaiting_approval")
@@ -37,6 +38,7 @@ class MetricsRegistry:
                     .group_by(SessionRow.tenant_id)
                 )
             ).all()
+            ttft = await recent_ttft(db)
         for tenant_id, count, cost in rows:
             tenants[str(tenant_id)] = {
                 "active_sessions": int(count),
@@ -47,6 +49,7 @@ class MetricsRegistry:
         return {
             "live_sandboxes": live_sandboxes,
             "tenants": tenants,
+            "ttft": ttft.to_dict(),
         }
 
 

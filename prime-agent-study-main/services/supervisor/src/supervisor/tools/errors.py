@@ -106,9 +106,7 @@ class WorkspaceReset(ToolError):
 
     def __init__(self, reason: str) -> None:
         super().__init__(
-            "your workspace was reset: its sandbox stopped "
-            f"({reason}). A fresh one starts with your next tool call, holding the "
-            "files saved at the end of the last turn; running processes and changes "
-            "made since then are gone. Check the files you need, then retry."
+            f"your workspace was reset: its sandbox stopped ({reason}), so this call did "
+            "not complete. A fresh sandbox starts with your next tool call."
         )
         self.reason = reason

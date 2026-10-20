@@ -132,7 +132,10 @@ class Checkpointer:
         """What a reset will not bring back, for the model."""
         lost = sorted(self._saved.get(session_id, Fingerprint()).processes or ())
         parts = [
-            "the files saved at your last model step are restored",
+            (
+                "your files are restored as they were at the last checkpoint, taken after "
+                "every step that changed them"
+            ),
             (
                 f"folders that are rebuilt ({', '.join(REBUILT_DIRS[:3])}, caches) are not: "
                 "reinstall or rebuild them"

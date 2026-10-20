@@ -27,6 +27,10 @@ class HandRecipe:
     def provider_name(self) -> str:
         return self.provider.name
 
+    async def preflight(self) -> None:
+        """Raise if no sandbox could be built from this recipe (nothing is built)."""
+        await self.provider.preflight(image=self.image)
+
     async def build(self) -> Sandbox:
         return await self.provider.create(image=self.image, labels=dict(self.labels) or None)
 

@@ -179,6 +179,8 @@ class SessionManager(UpkeepOps):
         self._workspace[session_id] = ws_state
         self._creating.add(session_id)
         try:
+            if (recipe := self._hands.recipe(session_id)) is not None:
+                await recipe.preflight()  # refuse now what could never get a sandbox
             runtime = await self._start_runtime(
                 session_id,
                 runtime_name=runtime_name,
@@ -489,7 +491,9 @@ class SessionManager(UpkeepOps):
         """Everything that must hold before a turn may start; raises the reason it cannot."""
         await self.ensure_ready(session_id)
         ws = self._workspace.get(session_id)
-        if ws is not None:
+        # Only a sandbox that exists can be half-loaded; one built later is checked
+        # by the tool call that builds it (hand_for_call).
+        if ws is not None and self._hands.sandbox(session_id) is not None:
             self._workspace_svc.assert_ready(ws)
         state = await self._budget.check(session_id)
         if state.exceeded:

@@ -791,6 +791,14 @@ class SandboxProvider(ABC):
         """Provider name for logging and metrics."""
         ...
 
+    async def preflight(self, *, image: str | None = None) -> None:
+        """Raise if this provider could not build a sandbox from ``image`` now.
+
+        Cheap (no sandbox is built): sessions build theirs lazily, so creation calls
+        this to refuse a configuration that could never get one. Default: nothing
+        to check.
+        """
+
     @abstractmethod
     async def create(
         self,

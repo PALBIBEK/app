@@ -96,7 +96,7 @@ class ToolOps(ApprovalOps):
                 if self._checkpoints is not None
                 else "nothing was saved, so it starts empty (or from the session's scope)."
             )
-            return replace(result, error=f"{result.error} Next call: {restored}")
+            return replace(result, error=f"{result.error} In it: {restored}")
         pure = isinstance(provider, ToolClassifier) and provider.tool_class(name) == "pure"
         sandbox = self._hands.sandbox(session_id)
         if self._checkpoints is not None and not pure and sandbox is not None:
@@ -258,4 +258,6 @@ class ToolOps(ApprovalOps):
             result=result,
             trace_id=run_trace,
         )
+        # No model step follows a direct call to overlap with: save its changes now.
+        await self.checkpoint(session_id)
         return ToolInvokeOutcome(tool_call_id=call_id, result=result)

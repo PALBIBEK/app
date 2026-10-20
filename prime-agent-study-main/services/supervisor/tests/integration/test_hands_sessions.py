@@ -74,7 +74,7 @@ async def test_a_dead_sandbox_is_replaced_and_its_files_come_back(
     assert [u.cause for u in ups] == ["first_use", "replaced"]
     reset, again = payloads(events, ToolEnd)[1:]
     assert reset.result["code"] == "WORKSPACE_RESET"
-    assert "files saved at your last model step are restored" in reset.result["error"]
+    assert "restored as they were at the last checkpoint" in reset.result["error"]
     assert again.result == {"ok": True, "payload": "hello", "error": None, "code": None}
     assert await state.manager.session_status(sid) == "active", "the session goes on"
 

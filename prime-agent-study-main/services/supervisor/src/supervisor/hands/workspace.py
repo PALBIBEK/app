@@ -90,4 +90,4 @@ def _reason(exc: BaseException) -> str:
     if isinstance(exc, SandboxGone):
         return exc.reason
     cause = exc.__cause__ or exc
-    return f"{type(cause).__name__}: {cause}"[:200]
+    return f"it is no longer running; the call failed with {type(cause).__name__}: {cause}"[:240]
