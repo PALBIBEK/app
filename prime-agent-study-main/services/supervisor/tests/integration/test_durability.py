@@ -32,6 +32,7 @@ from supervisor.temporal.sessions import SessionWorkflows
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.platform import boot_platform
+from tests.support.waits import settled
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -188,7 +189,7 @@ async def test_messages_sent_while_busy_queue_and_each_runs_once(
         duplicate = await cluster.sessions.submit(sid, Message("c2", "two"))
         assert (first.queued, second.queued, duplicate.queued) == (False, True, True)
         await cluster.wait_for(state, sid, _count("RunEnd", 2))
-        await asyncio.sleep(1.5)
+        await settled(cluster.sessions, sid, 2)
         assert _types(await state.reader.read(sid)).count("RunStart") == 2
         await cluster.sessions.terminate(sid)
 
@@ -206,7 +207,7 @@ async def test_long_sessions_continue_as_new_and_keep_their_state(cluster: Clust
         assert (await handle.describe()).run_id != first_run, "expected continue-as-new"
         # Re-sending an early command after continue-as-new must not run it again.
         await cluster.sessions.submit(sid, Message("c0", "message 0"))
-        await asyncio.sleep(1.5)
+        await settled(cluster.sessions, sid, 8)
         assert _types(await state.reader.read(sid)).count("RunStart") == 8
         assert (await cluster.sessions.status(sid)).turns_completed == 8
         await cluster.sessions.terminate(sid)

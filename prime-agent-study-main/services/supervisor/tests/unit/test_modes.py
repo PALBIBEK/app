@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from supervisor.agent.events import RunEnd
+from tests.support.waits import counted, journalled, until
 
 
 @pytest.mark.asyncio
@@ -20,8 +21,12 @@ async def test_stateless_removes_runtime_after_run_end(session_env) -> None:
         env = await asyncio.wait_for(q.get(), timeout=1)
         if isinstance(env.payload, RunEnd):
             break
-    await asyncio.sleep(0.05)
-    assert registry.get(sid) is None
+
+    async def runtime() -> object:
+        return registry.get(sid)
+
+    # A stateless session stops its runtime once the turn has ended.
+    await until(runtime, lambda r: r is None)
     await m.terminate(sid)
 
 
@@ -36,8 +41,7 @@ async def test_stateless_resume_produces_same_event_types(session_env) -> None:
         env = await asyncio.wait_for(q.get(), timeout=1)
         if isinstance(env.payload, RunEnd):
             break
-    await asyncio.sleep(0.05)
-    first = [type(e.payload).__name__ for e in await reader.read(sid, since=-1)]
+    first = [type(e.payload).__name__ for e in await journalled(reader, sid, counted("RunEnd"))]
 
     # Second turn after cold resume (runtime was removed).
     await m.send(sid, "second", command_id="c2")
@@ -49,8 +53,9 @@ async def test_stateless_resume_produces_same_event_types(session_env) -> None:
             break
         if isinstance(env.payload, RunEnd):
             break
-    await asyncio.sleep(0.05)
-    all_events = [type(e.payload).__name__ for e in await reader.read(sid, since=-1)]
+    all_events = [
+        type(e.payload).__name__ for e in await journalled(reader, sid, counted("RunEnd", 2))
+    ]
     second = all_events[len(first) :]
     assert first == second
     await m.terminate(sid)

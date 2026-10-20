@@ -12,6 +12,7 @@ from supervisor.agent.events import RunEnd
 from supervisor.db.models import SessionRow
 from supervisor.session.manager import SessionManager
 from supervisor.session.registry import SessionRegistry
+from tests.support.waits import counted, journalled
 
 
 @pytest.mark.asyncio
@@ -127,9 +128,8 @@ async def test_full_live_queue_does_not_block_journal(session_env) -> None:
     q.put_nowait(object())  # type: ignore[arg-type]
 
     await m.send(sid, "hello", command_id="c1")
-    await asyncio.sleep(0.1)
-    journaled = await reader.read(sid, since=-1)
-    assert len(journaled) >= 5
+    # A full live queue must not stop the journal: the whole turn is still recorded.
+    await journalled(reader, sid, counted("RunEnd"))
     await m.terminate(sid)
 
 
@@ -155,9 +155,7 @@ async def test_runtime_failure_writes_terminal_event(session_env) -> None:
 
     runtime.events = boom  # type: ignore[method-assign]
     m._start_fanout(sid, runtime)
-    await asyncio.sleep(0.1)
-    types = [type(e.payload).__name__ for e in await reader.read(sid, since=-1)]
-    assert "ErrorEvent" in types
+    await journalled(reader, sid, counted("ErrorEvent"))
     await m.terminate(sid)
 
 

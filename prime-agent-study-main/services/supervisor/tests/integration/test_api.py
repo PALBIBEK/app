@@ -12,6 +12,7 @@ from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from tests.support.session_env import make_catalog
+from tests.support.waits import payload_names
 
 HEADERS = {"X-Tenant-Id": "t1"}
 SRC = Path(__file__).resolve().parents[2] / "src" / "supervisor"
@@ -46,7 +47,7 @@ async def test_echo_full_round_trip(tmp_path) -> None:
                 headers=HEADERS,
             )
             assert mr.status_code == 202
-            await asyncio.sleep(0.15)
+            await payload_names(state.manager, sid, lambda names: "RunEnd" in names)
 
             buf = ""
             stop = (await state.manager.snapshot_events(sid))[-1][0]
@@ -118,9 +119,17 @@ async def test_dedup_survives_process_restart(tmp_path) -> None:
             )
             assert r2.status_code == 202
             assert r2.json() == body1
-            await asyncio.sleep(0.1)
-            payloads_after = await state2.manager.event_payloads(sid)
-            assert payloads_after.count("RunEnd") == payloads_before.count("RunEnd")
+            # Barrier: a new message runs after anything the replay could have started.
+            r3 = await client.post(
+                f"/v1/sessions/{sid}/messages",
+                json={"text": "barrier", "command_id": "after-replay"},
+                headers=HEADERS,
+            )
+            assert r3.status_code == 202
+            payloads_after = await payload_names(
+                state2.manager, sid, lambda names: names.count("RunEnd") >= 2
+            )
+            assert payloads_after.count("RunEnd") == payloads_before.count("RunEnd") + 1
 
 
 

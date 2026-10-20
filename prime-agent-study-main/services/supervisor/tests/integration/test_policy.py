@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,16 +17,6 @@ from supervisor.policy.approvals import ApprovalBroker
 from supervisor.session.manager import SessionManager
 from supervisor.session.registry import SessionRegistry
 from tests.support.session_env import make_manifest
-
-
-async def _drain(m: SessionManager, sid: str, timeout: float = 2.0) -> None:
-    await asyncio.sleep(0.15)
-
-
-
-
-
-
 
 
 @pytest.mark.asyncio
