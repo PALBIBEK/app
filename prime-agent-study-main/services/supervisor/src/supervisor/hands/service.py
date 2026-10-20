@@ -7,6 +7,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Protocol
 
+from supervisor.hands.keys import split_key
 from supervisor.hands.recipe import HandRecipe
 
 if TYPE_CHECKING:
@@ -62,6 +63,13 @@ class SessionHands:
 
     def recipe(self, session_id: str) -> HandRecipe | None:
         return self._recipes.get(session_id)
+
+    def keys_of(self, session_id: str) -> list[str]:
+        """The keys of every hand registered for ``session_id``: its default hand first."""
+        return sorted(
+            (key for key in self._recipes if split_key(key)[0] == session_id),
+            key=lambda key: (key != session_id, key),
+        )
 
     def sandbox(self, session_id: str) -> Sandbox | None:
         return self.live.get(session_id)

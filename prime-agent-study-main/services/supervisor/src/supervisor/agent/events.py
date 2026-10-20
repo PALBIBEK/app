@@ -292,6 +292,8 @@ class HandProvisioned:
     hand_id: str
     provider: str
     cause: str
+    hand: str = "default"
+    """Which of the session's hands (``default``, or a name its composition pins)."""
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 
@@ -308,6 +310,8 @@ class HandCheckpointed:
     files: int
     removed: int
     processes: list[str] = field(default_factory=list)
+    hand: str = "default"
+    """Which of the session's hands (``default``, or a name its composition pins)."""
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 
@@ -318,6 +322,8 @@ class HandLost:
     hand_id: str
     provider: str
     reason: str
+    hand: str = "default"
+    """Which of the session's hands (``default``, or a name its composition pins)."""
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 

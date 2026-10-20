@@ -32,6 +32,7 @@ from supervisor.catalog.repository import sync_composition
 from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
 from supervisor.db.models import ScopeRow, SessionIndexRow, SessionRow
 from supervisor.hands import HandRecipe, HandWorkspace
+from supervisor.hands.keys import hand_key
 from supervisor.harness import (
     HarnessManifest,
     manifest_to_dict,
@@ -169,22 +170,17 @@ class SessionManager(UpkeepOps):
             await self._ensure_scope_binding(scope_id, principal)
             await self._workspace_svc.require_sandbox_exec(ws_state)
 
-        # The sandbox's recipe is resolved now (a config that can never get one is
-        # refused here); the sandbox itself is built when a tool first needs it.
-        self._hands.register(
-            session_id,
-            self._hand_recipe(
-                manifest,
-                session_id=session_id,
-                harness_version=harness_version,
-                sandbox_profile=profile,
-            ),
+        # The sandboxes' recipes are resolved now (a config that can never get one is
+        # refused here); each sandbox is built when a tool first needs it.
+        self._register_hands(
+            session_id, manifest, harness_version=harness_version, profile=profile, pins=pins
         )
         self._workspace[session_id] = ws_state
         self._creating.add(session_id)
         try:
-            if (recipe := self._hands.recipe(session_id)) is not None:
-                await recipe.preflight()  # refuse now what could never get a sandbox
+            for key in self._hands.keys_of(session_id):
+                if (recipe := self._hands.recipe(key)) is not None:
+                    await recipe.preflight()  # refuse now what could never get a sandbox
             runtime = await self._start_runtime(
                 session_id,
                 runtime_name=runtime_name,
@@ -230,9 +226,10 @@ class SessionManager(UpkeepOps):
                 await db.commit()
         except BaseException:
             # Nothing of a half-made session stays: no sandbox, no hand.
-            if (half := self._hands.release(session_id)) is not None:
-                with contextlib.suppress(Exception):
-                    await half.destroy()
+            for key in self._hands.keys_of(session_id):
+                if (half := self._hands.release(key)) is not None:
+                    with contextlib.suppress(Exception):
+                        await half.destroy()
             self._workspace.pop(session_id, None)
             raise
         finally:
@@ -706,19 +703,14 @@ class SessionManager(UpkeepOps):
             principal=principal if row.scope_id else None,
         )
         if session_id not in self._hands:
-            self._hands.register(
-                session_id,
-                self._hand_recipe(
-                    harness,
-                    session_id=session_id,
-                    harness_version=row.harness_version,
-                    sandbox_profile=profile,
-                ),
+            self._register_hands(
+                session_id, harness, harness_version=row.harness_version, profile=profile, pins=pins
             )
         self._workspace[session_id] = ws_state
-        # The sandbox a dead worker left, if it survived, keeps serving (F21);
+        # The sandboxes a dead worker left, if they survived, keep serving (F21);
         # otherwise the next tool call that needs one builds it.
-        await self._hands.adopt(session_id)
+        for key in self._hands.keys_of(session_id):
+            await self._hands.adopt(key)
         # V-6: re-bind from stored pins; do not re-resolve floating catalog.
         runtime = await self._start_runtime(
             session_id,
@@ -816,6 +808,43 @@ class SessionManager(UpkeepOps):
             )
         return new_id
 
+    def _register_hands(
+        self,
+        session_id: str,
+        manifest: HarnessManifest,
+        *,
+        harness_version: str | None,
+        profile: Any | None,
+        pins: SessionPins | None,
+    ) -> None:
+        """The session's default hand and every named hand its composition pins."""
+        self._hands.register(
+            session_id,
+            self._hand_recipe(
+                manifest,
+                session_id=session_id,
+                harness_version=harness_version,
+                sandbox_profile=profile,
+            ),
+        )
+        if pins is None or not pins.hands or self._composition_catalog is None:
+            return
+        for name, profile_id, digest in pins.hands:
+            named = self._composition_catalog.get(
+                "sandbox_profile", profile_id, digest, require_offered=True
+            )
+            key = hand_key(session_id, name)
+            self._hands.register(
+                key,
+                self._hand_recipe(
+                    manifest,
+                    session_id=key,
+                    harness_version=harness_version,
+                    sandbox_profile=named,
+                    hand=name,
+                ),
+            )
+
     def _hand_recipe(
         self,
         manifest: HarnessManifest,
@@ -823,6 +852,7 @@ class SessionManager(UpkeepOps):
         session_id: str,
         harness_version: str | None = None,
         sandbox_profile: Any | None = None,
+        hand: str | None = None,
     ) -> HandRecipe | None:
         """How to build the session's sandboxes, or None if its harness runs none.
 
@@ -843,6 +873,9 @@ class SessionManager(UpkeepOps):
         }
         if sandbox_profile is not None:
             labels["supervisor.sandbox_profile"] = sandbox_profile.name
+        if hand is not None:
+            # The session label is the hand's key, so adoption and the reaper find it.
+            labels["supervisor.hand"] = hand
         return HandRecipe(provider=provider, image=digest, labels=labels)
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:

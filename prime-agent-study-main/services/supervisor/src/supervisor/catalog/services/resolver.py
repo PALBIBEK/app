@@ -175,6 +175,12 @@ def resolve_composition(
         sandbox_profile_id = comp.sandbox_profile.id
         sandbox_profile_digest = comp.sandbox_profile.digest
 
+    # Named hands: each a sandbox profile, pinned like the default one
+    hands: list[tuple[str, str, str]] = []
+    for hand_name, ref in comp.hands:
+        catalog.get(ArtifactKind.SANDBOX_PROFILE, ref.id, ref.digest, require_offered=True)
+        hands.append((hand_name, ref.id, ref.digest))
+
     # Handle optional memory profile
     memory_profile_id: str | None = None
     memory_profile_digest: str | None = None
@@ -211,6 +217,7 @@ def resolve_composition(
         mcp_server_url=comp.plug_bindings.mcp_server_url if comp.plug_bindings else None,
         acp_base_url=comp.plug_bindings.acp_base_url if comp.plug_bindings else None,
         model_route=apply_runtime_model_route(pinned_route),
+        hands=tuple(hands),
     )
 
 
@@ -233,3 +240,6 @@ def require_tenant_access(catalog: CompositionCatalog, pins: SessionPins, tenant
         name = getattr(pins, id_field)
         if name and not catalog.visible_to(kind, name, tenant_id):
             raise NotOffered(kind=kind.value, artifact_id=name, digest=getattr(pins, digest_field) or "")
+    for _, profile, digest in pins.hands:
+        if not catalog.visible_to(ArtifactKind.SANDBOX_PROFILE, profile, tenant_id):
+            raise NotOffered(kind=ArtifactKind.SANDBOX_PROFILE.value, artifact_id=profile, digest=digest)

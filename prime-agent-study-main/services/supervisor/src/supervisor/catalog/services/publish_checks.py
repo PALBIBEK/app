@@ -9,11 +9,15 @@ memory profile with ``summarization_model`` at the top level instead of under
 - a memory profile that recalls over MCP without naming the server (F11);
 - a model the gateway does not serve: a composition's ``model_route``, a memory
   profile's summarizer (F17). Checked only when the gateway's models are known,
-  so a gateway outage does not block publishing.
+  so a gateway outage does not block publishing;
+- a composition's named hand whose name a tool call could not carry (lowercase
+  letters, digits, ``-`` and ``_``, at most 32), or ``default``, which is the
+  sandbox profile's own name, or a named hand on a composition with no default.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -23,6 +27,8 @@ from supervisor.catalog.storage import artifact_to_dict
 __all__ = ["check_publishable"]
 
 _IGNORED = frozenset({"digest"})  # derived from the content, recomputed on publish
+_HAND_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+DEFAULT_HAND = "default"
 
 
 def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None:
@@ -33,6 +39,8 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
         raise InvalidArtifact(kind, name, f"unknown field(s): {', '.join(unknown)}")
     if kind == "memory_profile":
         _check_memory_profile(name, artifact)
+    if kind == "composition":
+        _check_hands(name, artifact)
     for field, model in _models_named(kind, artifact):
         _check_served(kind, name, field, model)
 
@@ -46,6 +54,19 @@ def _unknown_keys(given: Mapping[str, Any], parsed: Mapping[str, Any], prefix: s
             yield path
         elif isinstance(value, Mapping) and isinstance(parsed[key], Mapping):
             yield from _unknown_keys(value, parsed[key], f"{path}.")
+
+
+def _check_hands(name: str, composition: Any) -> None:
+    for hand, _ in composition.hands:
+        if hand == DEFAULT_HAND or not _HAND_NAME.fullmatch(hand):
+            raise InvalidArtifact(
+                "composition",
+                name,
+                f"hand name {hand!r}: use lowercase letters, digits, '-' or '_' (at most 32), "
+                f"not {DEFAULT_HAND!r}",
+            )
+    if composition.hands and composition.sandbox_profile is None:
+        raise InvalidArtifact("composition", name, "named hands need a sandbox_profile (the default hand)")
 
 
 def _check_memory_profile(name: str, profile: Any) -> None:

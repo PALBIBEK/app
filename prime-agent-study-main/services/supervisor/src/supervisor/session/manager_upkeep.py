@@ -105,18 +105,19 @@ class UpkeepOps(ChildOps):
             await self.terminate(session_id)
             return
 
-        sandbox = self._hands.sandbox(session_id)
         runtime = self._registry.get(session_id)
-        if sandbox is not None:
+        for key in self._hands.keys_of(session_id):
+            if (sandbox := self._hands.sandbox(key)) is None:
+                continue
             try:
                 await sandbox.pause()
             except Exception:
-                logger.exception("reap_idle pause failed session=%s", session_id)
+                logger.exception("reap_idle pause failed hand=%s", key)
                 try:
                     await sandbox.destroy()
                 except Exception:
-                    logger.exception("reap_idle destroy failed session=%s", session_id)
-                self._hands.detach(session_id)
+                    logger.exception("reap_idle destroy failed hand=%s", key)
+                self._hands.detach(key)
         if runtime is not None:
             try:
                 await runtime.stop()
@@ -155,17 +156,19 @@ class UpkeepOps(ChildOps):
 
         for sid in list(self._modes.keys()):
             mode = self._modes.get(sid)
-            sandbox = self._hands.sandbox(sid)
             runtime = self._registry.get(sid)
-            if mode == SessionMode.STICKY and sandbox is not None:
+            for key in self._hands.keys_of(sid):
+                sandbox = self._hands.sandbox(key)
+                if mode != SessionMode.STICKY or sandbox is None:
+                    continue
                 try:
                     await sandbox.pause()
                 except SnapshotUnsupported:
                     # Expected for providers without snapshots (local_process): the
                     # adopting worker starts the sandbox afresh. Not an error.
-                    logger.info("drain: %s keeps no snapshot session=%s", sandbox.info.provider, sid)
+                    logger.info("drain: %s keeps no snapshot hand=%s", sandbox.info.provider, key)
                 except Exception:
-                    logger.exception("drain pause failed session=%s", sid)
+                    logger.exception("drain pause failed hand=%s", key)
             if runtime is not None:
                 try:
                     await runtime.stop()
@@ -239,14 +242,15 @@ class UpkeepOps(ChildOps):
                 await runtime.stop()
             except Exception:
                 logger.exception("stop failed session=%s", session_id)
-        sandbox = self._hands.release(session_id)
-        if self._checkpoints is not None:
-            self._checkpoints.forget(session_id)
-        if sandbox is not None:
-            try:
-                await sandbox.destroy()
-            except Exception:
-                logger.exception("sandbox destroy failed session=%s", session_id)
+        for key in self._hands.keys_of(session_id) or [session_id]:
+            sandbox = self._hands.release(key)
+            if self._checkpoints is not None:
+                self._checkpoints.forget(key)
+            if sandbox is not None:
+                try:
+                    await sandbox.destroy()
+                except Exception:
+                    logger.exception("sandbox destroy failed hand=%s", key)
         self._modes.pop(session_id, None)
         self._seams.pop(session_id, None)
         self._brains.pop(session_id, None)

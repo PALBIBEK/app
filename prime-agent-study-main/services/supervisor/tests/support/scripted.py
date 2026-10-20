@@ -42,6 +42,7 @@ class ScriptedGateway:
     # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
     window: int | None = None
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
+    tools_seen: list[list[dict[str, Any]]] = dataclasses.field(default_factory=list)
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
@@ -52,6 +53,7 @@ class ScriptedGateway:
             return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
         with self._lock:
             self.seen.append(list(messages))
+            self.tools_seen.append(list(tools))
             if self.fail_first > 0:
                 self.fail_first -= 1
                 raise ConnectionError("model gateway unavailable (scripted)")

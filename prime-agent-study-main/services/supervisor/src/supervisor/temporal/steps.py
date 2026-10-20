@@ -37,6 +37,7 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.runtimes.githi.loop import MAX_TOOL_ITERATIONS, AgentLoop
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
+from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import RecoveryAction
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
@@ -49,6 +50,7 @@ from supervisor.memory.turn import SessionMemory
 from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ToolResult
+from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
@@ -433,14 +435,25 @@ class GithiSteps:
             provider = runtime.seams.tool_provider if runtime.seams else None
             if (denial := self._manager.tool_denial(sid, call["name"], provider)) is not None:
                 result, is_error = denied_result(denial, "FILE_EFFECTS_DENIED"), True
-            elif (hand := await self._manager.hand_for_call(sid, call["name"], provider)).unavailable:
+            elif (
+                hand := await self._manager.hand_for_call(
+                    sid,
+                    call["name"],
+                    provider,
+                    (args := take_hand(dict(call["arguments"]), self._manager.hand_names(sid)))[1],
+                )
+            ).unavailable:
                 result = denied_result(hand.unavailable.error or "", hand.unavailable.code or "")
                 is_error = True
             else:
                 row = await self._manager._get_session_row(sid)
-                invocation = {"id": call_id, "name": call["name"], "arguments": call["arguments"]}
+                invocation = {"id": call_id, "name": call["name"], "arguments": args[0]}
+                named = hand.key is not None and hand.key != sid
                 end = await runtime.loop().run_tool(
-                    invocation, tenant_id=row.tenant_id, env=await self._manager.tool_env(sid)
+                    invocation,
+                    tenant_id=row.tenant_id,
+                    env=await self._manager.tool_env(sid),
+                    workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
                 )
                 checked = await self._manager.after_call(
                     sid, hand, call["name"], provider, _as_tool_result(end.result)
@@ -540,7 +553,12 @@ class GithiSteps:
 
     async def _tool_schemas(self, session_id: str, loop: AgentLoop) -> list[dict[str, Any]]:
         """The session's catalog tools, then the memory and subagent tools it does not shadow."""
-        schemas = loop.tool_schemas()
+        hands = self._manager.hand_names(session_id)
+        provider = loop.tool_provider
+        schemas = [
+            with_hand_argument(s, hands) if needs_workspace(provider, s["function"]["name"]) else s
+            for s in loop.tool_schemas()
+        ]
         names = {s["function"]["name"] for s in schemas}
         platform = (await self._memory.tools(session_id)).schemas()
         platform += await self._subagents.schemas(session_id)

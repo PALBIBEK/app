@@ -548,10 +548,11 @@ class AgentComposition:
         harness_version: Required harness version
         prompt_pack: Reference to PromptPack
         tool_set: Reference to ToolSet
-        sandbox_profile: Optional SandboxProfile reference
+        sandbox_profile: Optional SandboxProfile reference (the session's default hand)
         memory_profile: Optional MemoryProfile reference
         plug_bindings: External service endpoints
         metadata: Creator and ownership info
+        hands: Further sandboxes the session may use, by name (each a SandboxProfile)
     """
 
     name: str
@@ -566,6 +567,7 @@ class AgentComposition:
     memory_profile: DigestRef | None = None
     plug_bindings: PlugBindings | None = None
     metadata: ArtifactMetadata | None = None
+    hands: tuple[tuple[str, DigestRef], ...] = ()
 
     def body_for_digest(self) -> dict[str, Any]:
         """Canonical content body for hashing."""
@@ -585,6 +587,8 @@ class AgentComposition:
             pb = self.plug_bindings.body_for_digest()
             if pb:
                 body["plug_bindings"] = pb
+        if self.hands:  # only when set: compositions without hands keep their digests
+            body["hands"] = {name: ref.to_dict() for name, ref in sorted(self.hands)}
         return body
 
 
@@ -639,10 +643,12 @@ class SessionPins:
     mcp_server_url: str | None = None
     acp_base_url: str | None = None
     model_route: str | None = None
+    hands: tuple[tuple[str, str, str], ...] = ()
+    """Named hands beyond the default: (name, sandbox profile id, digest)."""
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        data: dict[str, str] = {
+        data: dict[str, Any] = {
             "composition_id": self.composition_id,
             "composition_digest": self.composition_digest,
             "harness_version": self.harness_version,
@@ -667,6 +673,8 @@ class SessionPins:
             data["acp_base_url"] = self.acp_base_url
         if self.model_route is not None:
             data["model_route"] = self.model_route
+        if self.hands:
+            data["hands"] = {name: {"id": pid, "digest": d} for name, pid, d in self.hands}
         return data
 
     @classmethod
@@ -688,6 +696,10 @@ class SessionPins:
             mcp_server_url=data.get("mcp_server_url"),
             acp_base_url=data.get("acp_base_url"),
             model_route=data.get("model_route"),
+            hands=tuple(
+                (str(name), str(ref["id"]), str(ref["digest"]))
+                for name, ref in sorted((data.get("hands") or {}).items())
+            ),
         )
 
 

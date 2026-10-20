@@ -34,6 +34,7 @@ from supervisor.db.models import EventRow, ScopeRow, SessionRow
 from supervisor.hands import SessionHands
 from supervisor.hands.checkpoint import Checkpointer, checkpoint_scope
 from supervisor.hands.inspect import Changes
+from supervisor.hands.keys import DEFAULT_HAND, split_key
 from supervisor.harness import (
     GuardSpec,
     HarnessCatalog,
@@ -472,41 +473,48 @@ class SessionManagerBase:
         except Exception:
             logger.exception("span projection failed session=%s", session_id)
 
-    async def _announce_hand(self, session_id: str, sandbox: Sandbox, cause: str) -> None:
-        """Journal that ``sandbox`` serves the session (once per sandbox: a keyed event)."""
+    async def _announce_hand(self, key: str, sandbox: Sandbox, cause: str) -> None:
+        """Journal that ``sandbox`` serves one of the session's hands (once per sandbox)."""
+        session_id, hand = split_key(key)
         await self._record(
             session_id,
-            HandProvisioned(hand_id=sandbox.id, provider=sandbox.info.provider, cause=cause),
+            HandProvisioned(
+                hand_id=sandbox.id, provider=sandbox.info.provider, cause=cause, hand=hand
+            ),
             turn_id=None,
             trace_id=self._trace_for(session_id),
             event_key=f"hand:{sandbox.id}:provisioned",
         )
 
-    def _hand_isolated(self, session_id: str) -> bool:
-        """Whether the session's sandboxes run in their own container (processes observable)."""
-        recipe = self._hands.recipe(session_id)
+    def _hand_isolated(self, key: str) -> bool:
+        """Whether a hand's sandboxes run in their own container (processes observable)."""
+        recipe = self._hands.recipe(key)
         return recipe is not None and recipe.provider_name in ISOLATING_PROVIDERS
 
     async def checkpoint(self, session_id: str) -> None:
-        """Save what the session's tools changed since the last checkpoint, if anything.
+        """Save what the session's tools changed in each of its hands, if anything.
 
         Runs while the model works on its next step. A failure only means this step
         is not saved: the next step tries again, with everything still pending.
         """
-        sandbox = self._hands.sandbox(session_id)
-        if self._checkpoints is None or sandbox is None or self._checkpoints.due(session_id) is None:
+        if self._checkpoints is None:
             return
-        try:
-            await self._ensure_checkpoint_scope(session_id)
-            await self._checkpoints.checkpoint(session_id, sandbox)
-        except Exception:
-            logger.exception("checkpoint failed session=%s", session_id)
+        for key in self._hands.keys_of(session_id) or [session_id]:
+            sandbox = self._hands.sandbox(key)
+            if sandbox is None or self._checkpoints.due(key) is None:
+                continue
+            try:
+                await self._ensure_checkpoint_scope(key)
+                await self._checkpoints.checkpoint(key, sandbox)
+            except Exception:
+                logger.exception("checkpoint failed hand=%s", key)
 
-    async def _ensure_checkpoint_scope(self, session_id: str) -> None:
-        """The session's checkpoint scope exists and belongs to the session's owner."""
-        scope_id = checkpoint_scope(session_id)
+    async def _ensure_checkpoint_scope(self, key: str) -> None:
+        """A hand's checkpoint scope exists and belongs to the session's owner."""
+        scope_id = checkpoint_scope(key)
         if scope_id in self._checkpoint_scopes:
             return
+        session_id, _ = split_key(key)
         row = await self._get_session_row(session_id)
         owner = row.owner_principal_id or row.tenant_id
         async with self._db() as db:
@@ -516,7 +524,7 @@ class SessionManagerBase:
                         id=scope_id,
                         type="session",
                         owner_principal_id=owner,
-                        name=f"checkpoints of session {session_id}",
+                        name=f"checkpoints of hand {key}",
                     )
                 )
                 await db.commit()
@@ -524,15 +532,17 @@ class SessionManagerBase:
                     await self._grant_store.bootstrap_owner(owner, scope_id)
         self._checkpoint_scopes.add(scope_id)
 
-    async def _has_checkpoint(self, session_id: str) -> bool:
+    async def _has_checkpoint(self, key: str) -> bool:
+        session_id, hand = split_key(key)
         return any(
-            isinstance(e.payload, HandCheckpointed)
+            isinstance(e.payload, HandCheckpointed) and e.payload.hand == hand
             for e in await self._reader.read(session_id, since=-1)
         )
 
     async def _journal_checkpoint(
-        self, session_id: str, sandbox: Sandbox, changes: Changes, processes: frozenset[str]
+        self, key: str, sandbox: Sandbox, changes: Changes, processes: frozenset[str]
     ) -> None:
+        session_id, hand = split_key(key)
         await self._record(
             session_id,
             HandCheckpointed(
@@ -540,6 +550,7 @@ class SessionManagerBase:
                 files=len(changes.written),
                 removed=len(changes.removed),
                 processes=sorted(processes),
+                hand=hand,
             ),
             turn_id=None,
             trace_id=self._trace_for(session_id),
@@ -570,6 +581,8 @@ class SessionManagerBase:
         return [(int(r.seq), r.event_id) for r in rows]
 
     async def session_status(self, session_id: str) -> str | None:
+        """The session's status; a hand's key is its session's (the orphan reaper asks by label)."""
+        session_id, _ = split_key(session_id)
         async with self._db() as db:
             row = await db.get(SessionRow, session_id)
             return None if row is None else str(row.status)
@@ -583,29 +596,32 @@ class _HandHooks:
     def __init__(self, manager: SessionManagerBase) -> None:
         self._m = manager
 
-    async def hydrate(self, session_id: str, sandbox: Sandbox) -> None:
-        """A new sandbox starts empty: load the session's last checkpoint, else its scope."""
+    async def hydrate(self, key: str, sandbox: Sandbox) -> None:
+        """A new sandbox starts empty: load the hand's last checkpoint, else the session's scope.
+
+        Only the default hand mirrors the session's scope; a named hand starts empty.
+        """
         m = self._m
-        state = m._workspace.get(session_id)
-        if m._checkpoints is not None and await m._has_checkpoint(session_id):
-            await m._checkpoints.restore(
-                session_id, sandbox, processes=m._hand_isolated(session_id)
-            )
+        session_id, hand = split_key(key)
+        state = m._workspace.get(session_id) if hand == DEFAULT_HAND else None
+        if m._checkpoints is not None and await m._has_checkpoint(key):
+            await m._checkpoints.restore(key, sandbox, processes=m._hand_isolated(key))
             if state is not None and state.scope_id is not None:
                 state.ready = True  # the checkpoint mirrors the scope's files and the edits since
             return
         if state is not None and state.scope_id is not None:
             await m._workspace_svc.ensure_hydrated(state, sandbox, force=True)
 
-    async def provisioned(self, session_id: str, sandbox: Sandbox, cause: str) -> None:
-        if session_id in self._m._creating:
+    async def provisioned(self, key: str, sandbox: Sandbox, cause: str) -> None:
+        if split_key(key)[0] in self._m._creating:
             return  # announced once the session's journal exists (create)
-        await self._m._announce_hand(session_id, sandbox, cause)
+        await self._m._announce_hand(key, sandbox, cause)
 
-    async def lost(self, session_id: str, sandbox: Sandbox, reason: str) -> None:
+    async def lost(self, key: str, sandbox: Sandbox, reason: str) -> None:
+        session_id, hand = split_key(key)
         await self._m._record(
             session_id,
-            HandLost(hand_id=sandbox.id, provider=sandbox.info.provider, reason=reason),
+            HandLost(hand_id=sandbox.id, provider=sandbox.info.provider, reason=reason, hand=hand),
             turn_id=None,
             trace_id=self._m._trace_for(session_id),
             event_key=f"hand:{sandbox.id}:lost",
