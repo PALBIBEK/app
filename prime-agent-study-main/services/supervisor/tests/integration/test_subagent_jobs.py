@@ -6,6 +6,7 @@ nothing a worker or the session does can lose it or record it twice.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
@@ -76,6 +77,8 @@ async def test_a_job_result_reaches_its_session(
         job_id = await _start(http, sid, await _provider(worker, sid))
         events = await env.wait_for(worker, sid, _ended(job_id))
         job = env.client.get_workflow_handle(job_workflow_id(sid, job_id))
+        # JobEnd is journalled by the job's last activity; the workflow closes just after.
+        await asyncio.wait_for(job.result(), timeout=30)
         assert (await job.describe()).status is WorkflowExecutionStatus.COMPLETED
     assert [j.job_id for j in payloads(events, JobStart)] == [job_id]
     assert _end(events, job_id).stop_reason == "ok"
