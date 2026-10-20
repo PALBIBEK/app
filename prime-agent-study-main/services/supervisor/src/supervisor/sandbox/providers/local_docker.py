@@ -496,6 +496,29 @@ class LocalDockerSandbox(Sandbox):
 
         return await loop.run_in_executor(None, _alive)
 
+    async def logs(self, *, limit_bytes: int = 256_000) -> bytes | None:
+        """The container's state (exit code, OOM kill, error) and the tail of its output."""
+        if self._destroyed:
+            return None
+        loop = asyncio.get_running_loop()
+
+        def _read() -> bytes | None:
+            try:
+                self._container.reload()
+                state = dict(self._container.attrs.get("State") or {})
+                head = (
+                    f"container {self._container.id[:12]} status={state.get('Status')} "
+                    f"exit_code={state.get('ExitCode')} oom_killed={state.get('OOMKilled')} "
+                    f"error={state.get('Error') or '-'} finished_at={state.get('FinishedAt')}\n"
+                ).encode()
+                out = self._container.logs(stdout=True, stderr=True, tail=2000) or b""
+            except Exception:
+                logger.debug("reading the container's logs failed", exc_info=True)
+                return None
+            return head + bytes(out)[-max(limit_bytes - len(head), 0):]
+
+        return await loop.run_in_executor(None, _read)
+
     # -------------------------------------------------------------------------
     # Computer Backup
     # -------------------------------------------------------------------------

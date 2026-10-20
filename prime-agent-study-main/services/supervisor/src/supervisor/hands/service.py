@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["HandEvents", "SessionHands"]
 
+_LOGS_TIMEOUT_S = 10.0
+"""A lost sandbox's logs are read for at most this long; the loss does not wait on a hung provider."""
+
 
 class HandEvents(Protocol):
     """What the session layer does around a sandbox's life (journal, files)."""
@@ -27,7 +30,9 @@ class HandEvents(Protocol):
 
     async def provisioned(self, session_id: str, sandbox: Sandbox, cause: str) -> None: ...
 
-    async def lost(self, session_id: str, sandbox: Sandbox, reason: str) -> None: ...
+    async def lost(self, session_id: str, sandbox: Sandbox, reason: str, logs: bytes | None) -> None:
+        """``sandbox`` died; ``logs`` are what its provider recorded, read before it was destroyed."""
+        ...
 
 
 class SessionHands:
@@ -136,8 +141,9 @@ class SessionHands:
             return False
         self.live.pop(session_id, None)
         self._replaced.add(session_id)
+        logs = await _logs(current, session_id)
         await _destroy(current, session_id)
-        await self._events.lost(session_id, current, reason)
+        await self._events.lost(session_id, current, reason, logs)
         return True
 
     def detach(self, session_id: str) -> Sandbox | None:
@@ -150,6 +156,14 @@ class SessionHands:
         self._locks.pop(session_id, None)
         self._replaced.discard(session_id)
         return self.live.pop(session_id, None)
+
+
+async def _logs(sandbox: Sandbox, session_id: str) -> bytes | None:
+    try:
+        return await asyncio.wait_for(sandbox.logs(), timeout=_LOGS_TIMEOUT_S)
+    except Exception:  # the loss is recorded with or without them
+        logger.warning("reading lost sandbox %s's logs failed session=%s", sandbox.id, session_id, exc_info=True)
+        return None
 
 
 async def _destroy(sandbox: Sandbox, session_id: str) -> None:

@@ -619,11 +619,20 @@ class _HandHooks:
             return  # announced once the session's journal exists (create)
         await self._m._announce_hand(key, sandbox, cause)
 
-    async def lost(self, key: str, sandbox: Sandbox, reason: str) -> None:
+    async def lost(self, key: str, sandbox: Sandbox, reason: str, logs: bytes | None) -> None:
         session_id, hand = split_key(key)
+        ref = None
+        if logs:
+            try:
+                ref = await asyncio.to_thread(self._m._writer.put_blob, logs)
+            except OSError:
+                logger.warning("saving lost hand %s's logs failed session=%s", sandbox.id, session_id, exc_info=True)
         await self._m._record(
             session_id,
-            HandLost(hand_id=sandbox.id, provider=sandbox.info.provider, reason=reason, hand=hand),
+            HandLost(
+                hand_id=sandbox.id, provider=sandbox.info.provider, reason=reason, hand=hand,
+                logs_ref=ref, logs_bytes=len(logs) if ref else 0,
+            ),
             turn_id=None,
             trace_id=self._m._trace_for(session_id),
             event_key=f"hand:{sandbox.id}:lost",

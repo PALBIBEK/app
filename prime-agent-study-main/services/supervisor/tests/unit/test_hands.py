@@ -56,8 +56,9 @@ class Hooks:
     async def provisioned(self, session_id: str, sandbox: Sandbox, cause: str) -> None:
         self.events.append(("up", sandbox.id, cause))
 
-    async def lost(self, session_id: str, sandbox: Sandbox, reason: str) -> None:
+    async def lost(self, session_id: str, sandbox: Sandbox, reason: str, logs: bytes | None) -> None:
         self.events.append(("lost", sandbox.id, reason))
+        self.logs = logs
 
 
 def _hands(tmp_path: Path, hooks: Hooks | None = None) -> tuple[SessionHands, Builds, Hooks]:
@@ -88,6 +89,22 @@ async def test_a_lost_sandbox_is_replaced_by_the_next_need(tmp_path: Path) -> No
     new = await hands.ensure("s")
     assert new is not None and new.id != old.id
     assert hooks.events[1:] == [("lost", old.id, "OOM killed"), ("up", new.id, "replaced")]
+
+
+class Recorded(LocalProcessSandbox):
+    """A sandbox whose provider keeps logs, which go with it when it is destroyed."""
+
+    async def logs(self, *, limit_bytes: int = 256_000) -> bytes | None:
+        return None if self._destroyed else b"exit_code=137 oom_killed=True\n"
+
+
+async def test_a_lost_sandboxs_logs_are_read_before_it_is_destroyed(tmp_path: Path) -> None:
+    hands, provider, hooks = _hands(tmp_path)
+    (tmp_path / "r").mkdir()
+    provider.built.append(sandbox := Recorded(tmp_path / "r", "sbx-logs"))
+    hands.attach("s", sandbox)
+    assert await hands.lose("s", sandbox.id, "OOM killed")
+    assert hooks.logs == b"exit_code=137 oom_killed=True\n"
 
 
 async def test_a_sandbox_without_its_files_never_serves(tmp_path: Path) -> None:

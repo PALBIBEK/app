@@ -557,6 +557,15 @@ class Sandbox(ABC):
         """
         ...
 
+    async def logs(self, *, limit_bytes: int = 256_000) -> bytes | None:
+        """What the provider recorded about this sandbox (its state, its output), last bytes first kept.
+
+        Read when the sandbox is lost, before it is destroyed, so that finding
+        out why needs no shell in a container holding user data. ``None``: the
+        provider keeps nothing. Never raises for a dead sandbox.
+        """
+        return None
+
     # -------------------------------------------------------------------------
     # Workspace Sync (Track B - Optional)
     # -------------------------------------------------------------------------

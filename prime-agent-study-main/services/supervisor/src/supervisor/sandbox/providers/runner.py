@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from typing import Any
+import time
+from collections import deque
+from typing import Any, Final
 
 from supervisor.hands.runners import RunnerHub, RunnerOffline, RunnerRefused, current_hub
 from supervisor.sandbox.base import (
@@ -31,6 +33,10 @@ LABEL_TENANT = "supervisor.tenant_id"
 LABEL_SESSION = "supervisor.session_id"
 
 
+_KEPT: Final = 50
+"""How many of a hand's last commands its ``logs`` recall."""
+
+
 def _sandbox_id(key: str) -> str:
     return "hand-" + hashlib.sha256(key.encode()).hexdigest()[:24]
 
@@ -43,6 +49,7 @@ class RunnerSandbox(Sandbox):
         self._tenant = tenant_id
         self._runner = runner
         self._gone = False
+        self._seen: deque[str] = deque(maxlen=_KEPT)  # what this side saw: the runner may be gone
         self._info = SandboxInfo(
             id=sandbox_id, provider="runner", workdir="/workspace", labels={LABEL_RUNNER: runner}
         )
@@ -54,18 +61,32 @@ class RunnerSandbox(Sandbox):
     async def _call(self, op: str, args: dict[str, Any] | None = None, *, timeout_s: float = 300.0) -> dict[str, Any]:
         if self._gone:
             raise SandboxGone(self.id, "destroyed")
+        started = time.time()
         try:
-            return await self._hub.call(
+            out = await self._hub.call(
                 self._tenant, self._runner, op, args, sandbox_id=self.id, timeout_s=timeout_s
             )
         except RunnerOffline as exc:
+            self._note(started, op, args, f"runner offline: {exc}")
             raise SandboxGone(self.id, str(exc)) from exc
         except RunnerRefused as exc:
+            self._note(started, op, args, f"refused {exc.kind}: {exc}")
             if exc.kind == "FileNotFoundError":
                 raise FileNotFoundError(str(exc)) from exc
             if exc.kind == "SandboxGone":
                 raise SandboxGone(self.id, str(exc)) from exc
             raise
+        self._note(started, op, args, f"exit {out['exit_code']}" if op == "exec" else "ok")
+        return out
+
+    def _note(self, started: float, op: str, args: dict[str, Any] | None, outcome: str) -> None:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
+        what = op
+        if args and op == "exec":
+            what = "exec " + " ".join(str(c) for c in args.get("cmd", []))[:200]
+        elif args and "path" in args:
+            what = f"{op} {args['path']}"
+        self._seen.append(f"{stamp} {what} ({time.time() - started:.1f}s) -> {outcome}")
 
     async def spawn(self, cmd: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None) -> ProcessHandle:
         raise NotImplementedError("a runner hand runs commands to completion (exec), not interactively")
@@ -114,6 +135,21 @@ class RunnerSandbox(Sandbox):
 
     async def is_alive(self) -> bool:
         return not self._gone and await self._hub.online(self._tenant, self._runner)
+
+    async def logs(self, *, limit_bytes: int = 256_000) -> bytes | None:
+        """The runner's last poll and this hand's last commands, as the supervisor saw them."""
+        try:
+            seen_ms = await self._hub.last_seen_ms(self._tenant, self._runner)
+        except Exception:  # noqa: BLE001 — logs never fail the loss they describe
+            seen_ms = None
+        if seen_ms is None:
+            last = "never registered, or removed"
+        elif seen_ms == 0:
+            last = "never polled"
+        else:
+            last = f"last polled {time.time() - seen_ms / 1000:.1f}s ago"
+        lines = [f"runner {self._runner!r} (tenant {self._tenant}): {last}", *self._seen]
+        return "\n".join(lines).encode()[-limit_bytes:] + b"\n"
 
     def as_tree_io(self) -> RunnerTreeIO:
         """The hand's files as a tree (checkpoint restore, scope hydration)."""

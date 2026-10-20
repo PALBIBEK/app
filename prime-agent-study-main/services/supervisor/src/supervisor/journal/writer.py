@@ -254,6 +254,16 @@ class JournalWriter:
         idx.total_cost = float(idx.total_cost or 0) + cost_delta
         idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
+    def put_blob(self, data: bytes) -> str | None:
+        """Store ``data`` content-addressed beside the journal; its ref (SHA-256), ``None`` without a blob dir."""
+        if self._blob_dir is None:
+            return None
+        digest = hashlib.sha256(data).hexdigest()
+        path = self._blob_dir / digest
+        if not path.exists():
+            path.write_bytes(data)
+        return digest
+
     def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
         encoded = encode_event(event)
         raw = json.dumps(encoded, separators=(",", ":"), default=str).encode()

@@ -120,6 +120,12 @@ class RunnerHub:
             row = await db.get(RunnerRow, (tenant_id, name))
         return row is not None and row.last_seen_ms >= _now_ms() - int(LIVE_WITHIN_S * 1000)
 
+    async def last_seen_ms(self, tenant_id: str, name: str) -> int | None:
+        """When the runner last polled (epoch ms; 0: never); ``None`` if it is not registered."""
+        async with self._db() as db:
+            row = await db.get(RunnerRow, (tenant_id, name))
+        return None if row is None else int(row.last_seen_ms)
+
     # --- the runner's side ----------------------------------------------------------
 
     async def next_command(self, tenant_id: str, name: str, *, wait_s: float = 20.0) -> RunnerCommand | None:

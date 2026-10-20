@@ -126,6 +126,11 @@ async def test_a_hand_on_a_tenants_runner(
         await env.sessions.submit(sid, Message("c2", "read it again"))
         second = await env.wait_for(state, sid, run_ended(2), timeout=60)
         status = await state.manager.session_status(sid)
+        # Why it was lost is on record: no shell into anything that held the files.
+        (gone,) = [h for h in payloads(second, HandLost) if h.hand == "office"]
+        assert gone.logs_ref is not None, gone
+        saved = await http.get(f"/v1/sessions/{sid}/hand-logs/{gone.logs_ref}")
+        elsewhere = await http.get(f"/v1/sessions/{sid}/hand-logs/{gone.logs_ref}", headers={"X-Tenant-Id": "t2"})
 
     write, read = payloads(first, ToolEnd)[:2]
     assert not write.is_error and not read.is_error, (write, read)
@@ -137,7 +142,10 @@ async def test_a_hand_on_a_tenants_runner(
 
     lost = payloads(second[len(first):], ToolEnd)[-1]
     assert lost.is_error and lost.result["code"] == "WORKSPACE_RESET", lost
-    assert any(h.hand == "office" for h in payloads(second, HandLost))
+    assert saved.status_code == 200 and elsewhere.status_code == 404, (saved, elsewhere)
+    log = saved.text
+    assert "runner 'office'" in log and "last polled" in log, log  # the failing part, named
+    assert "write /workspace/report.txt (" in log and "-> runner offline" in log, log  # what it did, and where it broke
     assert status == "active"  # the session goes on without that hand
 
 
