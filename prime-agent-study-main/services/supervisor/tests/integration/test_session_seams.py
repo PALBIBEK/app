@@ -164,7 +164,7 @@ async def test_a_resumed_session_adopts_the_sandbox_its_last_worker_left(
     """Its files are there, so it must not start an empty one (F21)."""
     first = await boot()
     sid = await _create(first)
-    left = first.manager._sandboxes[sid]
+    left = await first.manager._hands.ensure(sid)  # a tool call brought one up
 
     fresh = await boot()
     provider = fresh.manager._provider
@@ -178,5 +178,5 @@ async def test_a_resumed_session_adopts_the_sandbox_its_last_worker_left(
     creates = len(provider.create_calls)  # type: ignore[attr-defined]
     await fresh.manager.resume(sid)
     assert asked == [sid]
-    assert fresh.manager._sandboxes[sid] is left
+    assert fresh.manager._hands.sandbox(sid) is left
     assert len(provider.create_calls) == creates  # type: ignore[attr-defined]
