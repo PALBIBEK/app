@@ -116,3 +116,49 @@ async def test_retiring_the_pi_harness_keeps_boot_and_closes_its_sessions(fresh_
         assert comps == {"pi-comp": "deprecated", "shipped-pi": "deprecated", "g": "offered"}
     finally:
         await engine.dispose()
+
+
+def _upgrade_to(connection: Connection, revision: str) -> None:
+    from alembic import command
+
+    from supervisor.db.migrate import alembic_config
+
+    config = alembic_config()
+    config.attributes["connection"] = connection
+    command.upgrade(config, revision)
+
+
+async def test_notebooks_in_the_supervisor_are_kept_when_they_move(fresh_db: str) -> None:
+    """0020: the supervisor's notebook tables go, but rows in them are kept (legacy_*)."""
+    engine = make_engine(fresh_db)
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(_upgrade_to, "0019_runners")
+            await conn.execute(
+                text(
+                    "INSERT INTO memory_notebooks (id, tenant_id, owner_principal_id, agent_pin, "
+                    "name, revision, created_at) VALUES ('nb1', 't1', 'alice', 'p', 'default', 0, 1)"
+                )
+            )
+            await conn.commit()
+        await migrate(engine)
+        async with engine.connect() as conn:
+            kept = (await conn.execute(text("SELECT name FROM legacy_memory_notebooks"))).all()
+            gone = await conn.scalar(text("SELECT to_regclass('memory_notebooks')"))
+        assert [r.name for r in kept] == ["default"]
+        assert gone is None
+    finally:
+        await engine.dispose()
+
+
+async def test_empty_notebook_tables_are_dropped(fresh_db: str) -> None:
+    engine = make_engine(fresh_db)
+    try:
+        await migrate(engine)
+        async with engine.connect() as conn:
+            left = await conn.scalar(
+                text("SELECT count(*) FROM pg_tables WHERE tablename LIKE '%memory_%'")
+            )
+        assert left == 0
+    finally:
+        await engine.dispose()

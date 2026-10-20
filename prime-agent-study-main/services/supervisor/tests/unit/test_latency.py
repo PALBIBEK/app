@@ -27,13 +27,13 @@ def test_ttft_is_start_to_first_assistant_answer_per_run() -> None:
 
 
 async def test_recent_ttft_reads_the_journal(
-    tmp_path: Path, memory_db: async_sessionmaker[AsyncSession]
+    tmp_path: Path, supervisor_db: async_sessionmaker[AsyncSession]
 ) -> None:
     # The Postgres test database is shared: unique ids, and the newest timestamps,
     # so the most recent window is exactly this test's runs.
-    writer = JournalWriter(memory_db, blob_dir=tmp_path)
+    writer = JournalWriter(supervisor_db, blob_dir=tmp_path)
     t0 = 4_000_000_000_000 + uuid4().int % 1_000_000
-    async with memory_db() as db:
+    async with supervisor_db() as db:
         for delay in (100, 200, 300, 400, 5_000):
             sid = uuid4().hex
             await writer.ensure_session(sid)

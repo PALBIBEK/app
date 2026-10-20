@@ -1,24 +1,19 @@
 """The memory service: what recall, tools, capture and the API call (QM's MemoryService).
 
-``NotebookMemory`` is the built-in implementation over ``NotebookStore``. Views
+``NotebookMemory`` is the built-in implementation, over the memory service's notebooks. Views
 (disclosure, classification, semantic ranking, provider routing) wrap a service
 and return another, so callers never see which layers are present.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from supervisor.memory.store import FactTx, NotebookStore
-from supervisor.memory_service.notebooks.errors import MemoryFactsMissing
+from supervisor.memory.client import NotebookClient, UnavailableNotebooks
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
-    edited_text,
-    normalize,
-    parse_fact_id,
     query_facts,
     recent_candidates,
     render_facts,
@@ -28,11 +23,8 @@ from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
     Edit,
     Fact,
-    Provenance,
     RecallContext,
     Revision,
-    capture_provenance,
-    merge_provenance,
 )
 
 type CaptureMode = Literal["explicit", "automatic"]
@@ -101,49 +93,20 @@ class MemoryService(Protocol):
     ) -> None: ...
 
 
-def resolve_ids(facts: Sequence[Fact], ids: Sequence[str]) -> list[Fact]:
-    """The facts ``ids`` name, in order; any unknown id fails the whole operation."""
-    by_id = {f.id: f for f in facts}
-    wanted = [parse_fact_id(i) for i in ids]
-    if missing := list(dict.fromkeys(i for i in wanted if i not in by_id)):
-        raise MemoryFactsMissing(missing)
-    return [by_id[i] for i in wanted]
-
-
-def state_at(revisions: Sequence[Revision], revision: int) -> dict[str, Fact]:
-    """Facts live at ``revision``, each floored by its later history (never declassified).
-
-    A restored or historically read fact keeps the strictest provenance it ever had
-    after that point: a later revision may have learned it was sensitive.
-    """
-    latest: dict[str, Revision] = {}
-    created: dict[str, int] = {}
-    later: defaultdict[str, list[Provenance]] = defaultdict(list)
-    for rev in revisions:
-        created.setdefault(rev.fact_id, rev.at)
-        if rev.revision <= revision:
-            latest[rev.fact_id] = rev
-        else:
-            later[rev.fact_id].append(rev.provenance)
-    out: dict[str, Fact] = {}
-    for fact_id, rev in latest.items():
-        if rev.op == "delete":
-            continue
-        floor = merge_provenance([rev.provenance, *later[fact_id]], rev.provenance.sensitivity)
-        out[fact_id] = Fact(fact_id, rev.text, floor, created[fact_id], rev.at, rev.author)
-    return out
-
-
 class NotebookMemory:
-    """Built-in notebook memory: stable-id facts, deduplicated capture, full history."""
+    """Built-in notebook memory: stable-id facts, deduplicated capture, full history.
+
+    Stored in the memory service; each operation is one call there (see
+    ``supervisor.memory.client``), so its read and dependent write stay together.
+    """
 
     manages = True
 
-    def __init__(self, store: NotebookStore) -> None:
+    def __init__(self, store: NotebookClient | UnavailableNotebooks) -> None:
         self._store = store
 
     @property
-    def store(self) -> NotebookStore:
+    def store(self) -> NotebookClient | UnavailableNotebooks:
         return self._store
 
     async def recall(
@@ -159,32 +122,9 @@ class NotebookMemory:
         author: str | None = None,
         context: CaptureContext | None = None,
     ) -> int:
-        lines = clean_captured(facts)
-        if not lines:
+        if not clean_captured(facts):
             return 0
-        notebook = await self._store.get(notebook_id)
-        provenance = capture_provenance(notebook.home, context)
-
-        async def run(tx: FactTx) -> int:
-            existing = {normalize(f.text): f for f in await tx.current()}
-            added = 0
-            for text in lines:
-                key = normalize(text)
-                if (duplicate := existing.get(key)) is not None:
-                    # A repeat adds no text, but may tighten what we know about it.
-                    merged = merge_provenance(
-                        [duplicate.provenance, provenance], duplicate.provenance.sensitivity
-                    )
-                    if not merged.same_as(duplicate.provenance):
-                        await tx.update(duplicate.id, duplicate.text, merged)
-                        existing[key] = replace(duplicate, provenance=merged)
-                    continue
-                fact_id = await tx.insert(text, provenance)
-                existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, author)
-                added += 1
-            return added
-
-        return await self._store.transact(notebook_id, run, author=author)
+        return await self._store.capture(notebook_id, facts, author=author, context=context)
 
     async def query(
         self, notebook_id: str, q: str, limit: int = 20, context: RecallContext | None = None
@@ -205,63 +145,23 @@ class NotebookMemory:
         author: str | None = None,
         context: CaptureMetadata | None = None,
     ) -> None:
-        notebook = await self._store.get(notebook_id)
-        # Editing from a conversation exposes the fact to that conversation's sources.
-        exposure = capture_provenance(notebook.home, context) if context else None
-
-        async def run(tx: FactTx) -> None:
-            targets = resolve_ids(await tx.current(), [e.id for e in edits])
-            for edit, fact in zip(edits, targets, strict=True):
-                provenance = (
-                    merge_provenance([fact.provenance, exposure], fact.provenance.sensitivity)
-                    if exposure
-                    else fact.provenance
-                )
-                await tx.update(fact.id, edited_text(edit.text), provenance)
-
-        await self._store.transact(notebook_id, run, author=author)
+        await self._store.edit(notebook_id, edits, author=author, context=context)
 
     async def delete(
         self, notebook_id: str, ids: Sequence[str], *, author: str | None = None
     ) -> None:
-        async def run(tx: FactTx) -> None:
-            await tx.remove(resolve_ids(await tx.current(), ids))
-
-        await self._store.transact(notebook_id, run, author=author)
+        await self._store.delete(notebook_id, ids, author=author)
 
     async def clear(self, notebook_id: str, *, author: str | None = None) -> int:
         """Remove every current fact; history keeps them (clearing is not erasure)."""
-
-        async def run(tx: FactTx) -> int:
-            facts = await tx.current()
-            await tx.remove(facts)
-            return len(facts)
-
-        return await self._store.transact(notebook_id, run, author=author)
+        return await self._store.clear(notebook_id, author=author)
 
     async def history(self, notebook_id: str) -> list[Revision]:
         return await self._store.revisions(notebook_id, limit=100_000)
 
     async def facts_at(self, notebook_id: str, revision: int) -> list[Fact]:
-        state = state_at(await self.history(notebook_id), revision)
-        return sorted(state.values(), key=lambda f: int(f.id))
+        return await self._store.facts_at(notebook_id, revision)
 
     async def restore(self, notebook_id: str, revision: int, *, author: str | None = None) -> None:
         """Make the notebook's facts what they were at ``revision`` (as new revisions)."""
-
-        async def run(tx: FactTx) -> None:
-            target = state_at(await self._store.revisions(notebook_id, limit=100_000), revision)
-            current = {f.id: f for f in await tx.current()}
-            await tx.remove([f for i, f in current.items() if i not in target])
-            for fact_id, fact in target.items():
-                live = current.get(fact_id)
-                if live is None:
-                    await tx.revive(fact_id, fact.text, fact.provenance)
-                elif live.text != fact.text or not live.provenance.same_as(fact.provenance):
-                    # The restored text keeps any restriction the fact gained since.
-                    floor = merge_provenance(
-                        [fact.provenance, live.provenance], fact.provenance.sensitivity
-                    )
-                    await tx.update(fact_id, fact.text, floor)
-
-        await self._store.transact(notebook_id, run, author=author)
+        await self._store.restore(notebook_id, revision, author=author)

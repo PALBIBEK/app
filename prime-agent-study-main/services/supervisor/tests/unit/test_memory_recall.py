@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import Envelope, MemoryContext, MemoryInjected, MessageEnd, ToolStart
 from supervisor.memory import boundary, history
 from supervisor.memory.binding import MemoryBinding, Strategy
+from supervisor.memory.client import NotebookClient
 from supervisor.memory.cross import Recalled, recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta, shown_of
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.extraction import Exchange, extract_facts, parse_facts
 from supervisor.memory.service import CaptureContext, NotebookMemory
-from supervisor.memory.store import NotebookStore
 from supervisor.memory.tools import TurnMemory
 from supervisor.memory.turn import dependencies, memory_section, recall_query
 from supervisor.memory_service.notebooks.types import (
@@ -24,7 +23,6 @@ from supervisor.memory_service.notebooks.types import (
 )
 
 pytestmark = pytest.mark.asyncio
-Factory = async_sessionmaker[AsyncSession]
 TRACKED = CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=())
 
 
@@ -44,15 +42,15 @@ def _msg(role: str, text: str) -> MessageEnd:
     return MessageEnd(role=role, content=[{"type": "text", "text": text}])
 
 
-async def _notebooks(memory_db: Factory) -> tuple[NotebookMemory, str, str]:
-    store = NotebookStore(memory_db)
+async def _notebooks(notebooks: NotebookClient) -> tuple[NotebookMemory, str, str]:
+    store = notebooks
     a = await store.ensure(tenant_id="t", owner="alice", agent_pin="p", name="work")
     b = await store.ensure(tenant_id="t", owner="alice", agent_pin="p", name="home")
     return NotebookMemory(store), a.id, b.id
 
 
-async def test_recall_fits_the_budget_with_one_heading_per_notebook(memory_db: Factory) -> None:
-    memory, work, home = await _notebooks(memory_db)
+async def test_recall_fits_the_budget_with_one_heading_per_notebook(notebooks: NotebookClient) -> None:
+    memory, work, home = await _notebooks(notebooks)
     await memory.capture(work, ["Owns billing", "Ships on Fridays"], context=TRACKED)
     await memory.capture(home, ["Prefers tea"], context=TRACKED)
     labels = {work: "work", home: "home"}
@@ -166,8 +164,8 @@ def test_dependencies_include_recalled_provenance_and_untracked_tools() -> None:
     assert dependencies(memory_tool) == (), "memory tools are tracked, not untracked context"
 
 
-async def test_memory_tools_follow_qm_semantics(memory_db: Factory) -> None:
-    memory, work, home = await _notebooks(memory_db)
+async def test_memory_tools_follow_qm_semantics(notebooks: NotebookClient) -> None:
+    memory, work, home = await _notebooks(notebooks)
     await memory.capture(home, ["Prefers tea"], context=TRACKED)
     binding = MemoryBinding(
         owner="alice",

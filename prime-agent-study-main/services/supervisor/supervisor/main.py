@@ -196,6 +196,8 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
         host = os.environ.get("MEMORY_HOST", settings.host)
         port = int(os.environ.get("MEMORY_PORT", "8092"))
         out.append(("memory-service", uvicorn.Config(memory_app(database_url=url), host=host, port=port)))
+        # The API in this process keeps its notebooks there unless told otherwise.
+        os.environ.setdefault("MEMORY_SERVICE_URL", f"http://127.0.0.1:{port}")
     return out
 
 

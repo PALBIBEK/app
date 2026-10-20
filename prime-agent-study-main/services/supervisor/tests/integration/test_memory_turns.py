@@ -30,7 +30,8 @@ from tests.support.githi_env import LS, Env, payloads, run_ended
 from tests.support.scripted import ScriptedGateway
 from tests.support.workflow_histories import replayable_histories
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+# Notebooks live in the memory service: a live one, found as production finds it.
+pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
 
 TRACKED = CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=())
 QUICK = {"capture_quiet_s": 1}
