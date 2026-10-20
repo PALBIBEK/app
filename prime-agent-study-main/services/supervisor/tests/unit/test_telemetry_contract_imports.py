@@ -7,7 +7,6 @@ from pathlib import Path
 
 CONTRACT = (
     Path(__file__).resolve().parents[2]
-    / "src"
     / "supervisor"
     / "telemetry_contract"
 )

@@ -9,7 +9,7 @@ import pytest
 
 
 def _supervisor_src() -> Path:
-    return Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    return Path(__file__).resolve().parents[2] / "supervisor"
 
 
 # --- helpers ---

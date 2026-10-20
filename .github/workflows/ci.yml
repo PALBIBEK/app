@@ -36,9 +36,10 @@ jobs:
       - name: Lint (each service under its own rules)
         run: |
           status=0
-          for svc in supervisor model-gateway memory; do
+          for pair in supervisor:supervisor model-gateway:model_gateway memory:memory_service; do
+            svc=${pair%%:*}; pkg=${pair##*:}
             echo "::group::ruff $svc"
-            (cd "$PROJECT/services/$svc" && ruff check src --output-format github) || status=1
+            (cd "$PROJECT/services/$svc" && ruff check "$pkg" --output-format github) || status=1
             echo "::endgroup::"
           done
           (cd "$PROJECT/e2e" && ruff check . --output-format github) || status=1
@@ -53,7 +54,7 @@ jobs:
         run: |
           set -o pipefail
           mypy | tee mypy.out || {
-            grep -E '^src/.+:[0-9]+: error:' mypy.out | head -40 \
+            grep -E '^supervisor/.+:[0-9]+: error:' mypy.out | head -40 \
               | sed -E 's#^([^:]+):([0-9]+): error: (.*)$#::error file=${{ env.PROJECT }}/services/supervisor/\1,line=\2::\3#'
             exit 1
           }

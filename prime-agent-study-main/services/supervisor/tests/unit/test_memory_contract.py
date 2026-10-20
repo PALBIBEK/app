@@ -71,7 +71,7 @@ def test_mc_u3_compaction_start_end_share_id() -> None:
 
 
 def test_mc_a1_session_journal_api_no_memory_provider_concretes() -> None:
-    src = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    src = Path(__file__).resolve().parents[2] / "supervisor"
     banned = (
         "NullContextMemoryProvider",
         "BasicCompactionProvider",

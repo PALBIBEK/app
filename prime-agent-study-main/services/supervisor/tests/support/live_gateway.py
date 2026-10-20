@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-GATEWAY_SRC = Path(__file__).resolve().parents[3] / "model-gateway" / "src"
+GATEWAY_SRC = Path(__file__).resolve().parents[3] / "model-gateway"
 SERVICE_TOKEN = "gateway-service-token"
 KEY_HEADER = "x-litellm-api-key"
 

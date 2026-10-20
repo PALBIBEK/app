@@ -11,7 +11,7 @@ from starlette.testclient import TestClient
 
 from .conftest import mint_service_jwt
 
-AI_MEMORY_SRC = Path(__file__).resolve().parents[2] / "src" / "memory_service"
+AI_MEMORY_SRC = Path(__file__).resolve().parents[2] / "memory_service"
 
 
 def _memory_source_blob() -> str:

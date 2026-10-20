@@ -85,7 +85,7 @@ async def test_u10_capabilities_for_agrees_with_runtime_get_capabilities() -> No
 def test_c5_session_journal_api_do_not_import_concrete_runtimes() -> None:
     import ast
 
-    base = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    base = Path(__file__).resolve().parents[2] / "supervisor"
     for pkg in ("session", "journal", "api"):
         for path in (base / pkg).rglob("*.py"):
             tree = ast.parse(path.read_text())
@@ -103,7 +103,6 @@ def test_a4_only_factory_names_concrete_runtime_classes() -> None:
 
     factory = (
         Path(__file__).resolve().parents[2]
-        / "src"
         / "supervisor"
         / "agent"
         / "factory.py"

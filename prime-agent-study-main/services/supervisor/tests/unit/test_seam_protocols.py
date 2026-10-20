@@ -7,7 +7,7 @@ from typing import Any
 
 
 def _supervisor_src() -> Path:
-    return Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    return Path(__file__).resolve().parents[2] / "supervisor"
 
 
 def _agent_platform_root() -> Path:
@@ -120,7 +120,7 @@ def test_sp_a04_model_gateway_tree_independent() -> None:
     """QUEUE model-gateway: sibling exists and must not import supervisor."""
     root = _agent_platform_root() / "services" / "model-gateway"
     assert root.is_dir(), "model-gateway sibling service required"
-    src = root / "src"
+    src = root / "model_gateway"
     assert src.is_dir()
     offenders: list[str] = []
     for path in src.rglob("*.py"):

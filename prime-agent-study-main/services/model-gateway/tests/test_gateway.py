@@ -105,7 +105,7 @@ def test_mg_u6_githi_route_resolves_without_key_then_fails_upstream(
 
 
 def test_mg_c2_no_supervisor_imports() -> None:
-    root = Path(__file__).resolve().parents[1] / "src"
+    root = Path(__file__).resolve().parents[1] / "model_gateway"
     offenders: list[str] = []
     for path in root.rglob("*.py"):
         text = path.read_text()

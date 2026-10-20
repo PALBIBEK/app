@@ -270,7 +270,7 @@ async def test_assistant_before_tool_ordering_guard(svc: MemoryService):
 
 
 def test_no_supervisor_imports():
-    root = Path(__file__).resolve().parents[1] / "src"
+    root = Path(__file__).resolve().parents[1] / "memory_service"
     offenders: list[str] = []
     for path in root.rglob("*.py"):
         text = path.read_text(encoding="utf-8")

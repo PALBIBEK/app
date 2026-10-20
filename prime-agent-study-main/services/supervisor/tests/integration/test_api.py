@@ -15,7 +15,7 @@ from tests.support.session_env import make_catalog
 from tests.support.waits import payload_names
 
 HEADERS = {"X-Tenant-Id": "t1"}
-SRC = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+SRC = Path(__file__).resolve().parents[2] / "supervisor"
 
 
 @pytest.mark.asyncio

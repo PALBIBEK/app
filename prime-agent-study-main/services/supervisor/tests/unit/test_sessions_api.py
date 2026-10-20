@@ -237,7 +237,6 @@ async def test_session_detail_exposes_total_cost(api) -> None:
 def test_handlers_import_nothing_from_journal_or_runtimes() -> None:
     path = Path(sessions_router.__file__) if False else (
         Path(__file__).resolve().parents[2]
-        / "src"
         / "supervisor"
         / "api"
         / "sessions.py"

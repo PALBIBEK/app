@@ -200,7 +200,6 @@ async def test_runtime_failure_writes_terminal_event(session_env) -> None:
 def test_manager_module_imports_nothing_from_runtimes() -> None:
     path = (
         Path(__file__).resolve().parents[2]
-        / "src"
         / "supervisor"
         / "session"
         / "manager.py"

@@ -3,12 +3,19 @@
 Supervisor service, the versioned agent catalog, and shared agent contracts.
 
 ```
-agent-platform/
-├── contracts/           # AGENT_CONTRACT + protocol_versions (neither side owns)
-├── services/supervisor  # FastAPI supervisor (agent × sandbox axes)
-├── harness/             # The agent catalog: githi-v1 / kg-v1 manifests and compositions
-├── evals/               # CI evaluation tasks
-└── Experiments/         # scratch (gitignored)
+prime-agent-study-main/
+├── services/
+│   ├── supervisor/      # the supervisor: API, Temporal worker, sessions, hands  (package: supervisor/)
+│   ├── model-gateway/   # the model gateway: routes, keys, wire protocols        (package: model_gateway/)
+│   ├── memory/          # the durable memory service                             (package: memory_service/)
+│   └── shared/          # code the services share                                (package: shared/)
+├── harness/             # the agent catalog: harness versions and compositions
+├── contracts/           # protocol_versions.yaml, read at runtime
+├── deploy/              # staging and Kubernetes manifests
+├── e2e/                 # the end-to-end stack and stages (plus the live real-model stage)
+├── scripts/             # CI gates
+├── frontend/            # the frontend prototype
+└── githi/               # the original githi project
 ```
 
 Two axes in the supervisor:
@@ -25,4 +32,4 @@ sticky vs. stateless-per-turn.
 docker compose up --build
 ```
 
-See `services/supervisor/ARCHITECTURE.md` for why the layout is shaped this way.
+See `services/supervisor/PROGRESS.md` for what is built, how it was verified, and its known gaps.

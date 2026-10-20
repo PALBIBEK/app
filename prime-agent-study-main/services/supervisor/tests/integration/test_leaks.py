@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+SRC = Path(__file__).resolve().parents[2] / "supervisor"
 PI_KEYS = re.compile(
     r"\b(toolCallId|isError|stopReason|cacheRead|cacheWrite|"
     r"isStreaming|isCompacting|pendingMessageCount|sessionId|"

@@ -106,7 +106,7 @@ async def test_many_pending_approvals_do_not_block_create(tmp_path: Path) -> Non
 
 
 def test_policy_leak_checks() -> None:
-    root = Path(__file__).resolve().parents[2] / "src" / "supervisor" / "policy"
+    root = Path(__file__).resolve().parents[2] / "supervisor" / "policy"
     leaks = []
     for path in root.rglob("*.py"):
         for i, line in enumerate(path.read_text().splitlines(), 1):
@@ -116,7 +116,7 @@ def test_policy_leak_checks() -> None:
                 leaks.append(f"{path.name}:{i}:{line.strip()}")
     assert leaks == []
     # extension_ui_request only in translate.py (membrane)
-    src = Path(__file__).resolve().parents[2] / "src" / "supervisor"
+    src = Path(__file__).resolve().parents[2] / "supervisor"
     for path in src.rglob("*.py"):
         if path.name == "translate.py":
             continue
