@@ -63,6 +63,9 @@ from supervisor.session.modes import SessionMode, mode_for_manifest
 from supervisor.session.recovery import ResumeState
 from supervisor.session.workspaces import session_workspace
 
+_BRAINS_KEPT = 256
+"""Brains (sessions run elsewhere) a worker keeps built; each holds seams and an HTTP client."""
+
 logger = logging.getLogger(__name__)
 
 
@@ -437,6 +440,70 @@ class SessionManager(UpkeepOps):
                 "session %s: gateway key renewed but its runtime cannot take it", session_id
             )
         return True
+
+    async def brain(self, session_id: str) -> Any:
+        """The session's brain for a model step: on this worker, whoever holds its sandbox.
+
+        Where this worker runs the session it is that runtime. Elsewhere it is the
+        same runtime built from the session's pins and its gateway key from the vault,
+        never started and given no sandbox: a model step needs the seams, the model,
+        the prompt and the tool schemas, not the hands. Brains are cached (LRU).
+        """
+        live = self._registry.get(session_id)
+        if live is not None:
+            return live
+        if (cached := self._brains.get(session_id)) is not None:
+            self._brains.move_to_end(session_id)
+            return cached
+        await self._require_active(session_id)
+        row = await self._get_session_row(session_id)
+        manifest = self._pinned_manifest(row)
+        pins: SessionPins | None = None
+        memory_profile = None
+        if row.composition_pins and self._composition_catalog is not None:
+            pins = SessionPins.from_dict(dict(row.composition_pins))
+            await sync_composition(
+                self._composition_catalog, self._db, pins.composition_id, pins.composition_digest
+            )
+            memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
+        principal = Principal(id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id)
+        model = session_model(manifest, pins)
+        owner, agent = self._long_term.setdefault(
+            session_id,
+            (
+                principal.id,
+                long_term_agent(
+                    composition_id=pins.composition_id if pins is not None else None,
+                    harness_version=manifest.harness_version,
+                ),
+            ),
+        )
+        token = await self._gateway_key(
+            session_id,
+            tenant_id=row.tenant_id,
+            principal=principal,
+            model=model,
+            summarizer_model=_summarizer_model(memory_profile),
+            # The key is scoped like the owner's; this state is only the mint's input.
+            ws_state=SessionWorkspaceState(
+                scope_id=row.scope_id, principal=principal if row.scope_id else None
+            ),
+        )
+        seams = self._bind_seams(pins, gateway_token=token, session_id=session_id, model=model)
+        if live := self._registry.get(session_id):  # resumed here meanwhile
+            return live
+        brain = create_runtime(row.runtime, seams=seams, model=model, session_id=session_id)
+        set_identity = getattr(brain, "set_identity", None)
+        if callable(set_identity):
+            set_identity(owner=owner, agent=agent)
+        if seams is not None:
+            self._seams[session_id] = seams
+        self._brains[session_id] = brain
+        while len(self._brains) > _BRAINS_KEPT:
+            evicted, _ = self._brains.popitem(last=False)
+            if self._registry.get(evicted) is None:
+                self._seams.pop(evicted, None)
+        return brain
 
     def _bind_seams(
         self,

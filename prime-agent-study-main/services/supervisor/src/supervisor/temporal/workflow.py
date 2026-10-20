@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -109,6 +110,9 @@ _MODEL_CALL = timedelta(minutes=10)
 # Patch id (workflow.patched): histories recorded before lost calls were closed
 # ahead of adoption replay without the extra activity.
 _CLOSE_LOST_BEFORE_ADOPT = "close-lost-call-before-adopt"
+# Histories from before model steps ran on any worker (with CHECKPOINT on the
+# sandbox's worker beside them) replay with the step on the session's worker.
+_BRAIN_ANYWHERE = "brain-anywhere"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -336,14 +340,7 @@ class AgentSessionWorkflow:
 
         try:
             for step in range(plan.max_steps):
-                result = await self._session_activity(
-                    Activity.MODEL_STEP,
-                    StepRequest(self._session_id, plan.run_id, step),
-                    StepResult,
-                    start_to_close=_MODEL_CALL,
-                    heartbeat=True,
-                    track=True,
-                )
+                result = await self._model_step(StepRequest(self._session_id, plan.run_id, step))
                 if result.final:
                     return await end(result.stop_reason)
                 for call in result.calls:
@@ -387,6 +384,47 @@ class AgentSessionWorkflow:
                 kind, detail = _failure(err)
                 return await end("error", error_class=kind, detail=detail)
             raise
+
+    async def _model_step(self, req: StepRequest) -> StepResult:
+        """The brain thinks on any worker while the sandbox's worker checkpoints.
+
+        A model step needs no sandbox, so it goes to the shared queue: no worker
+        holding sandboxes is a bottleneck for thinking, and a session whose worker
+        died keeps thinking while it is adopted. The checkpoint of what the last
+        tools changed runs beside it on the sandbox's worker; both finish before
+        the next tool starts (Crab's barrier, without making the model wait).
+        """
+        if not workflow.patched(_BRAIN_ANYWHERE):
+            return await self._session_activity(
+                Activity.MODEL_STEP,
+                req,
+                StepResult,
+                start_to_close=_MODEL_CALL,
+                heartbeat=True,
+                track=True,
+            )
+        saving = asyncio.ensure_future(
+            self._session_activity(Activity.CHECKPOINT, req.session_id, type(None))
+        )
+        thinking = workflow.start_activity(
+            Activity.MODEL_STEP,
+            dataclasses.replace(req, checkpoint=False),
+            result_type=StepResult,
+            task_queue=workflow.info().task_queue,
+            start_to_close_timeout=_MODEL_CALL,
+            heartbeat_timeout=self._heartbeat,
+            retry_policy=_RETRY,
+            cancellation_type=workflow.ActivityCancellationType.TRY_CANCEL,
+        )
+        self._turn = thinking
+        try:
+            return await thinking
+        finally:
+            try:
+                await saving
+            except ActivityError as err:
+                # A lost checkpoint costs a reset's restore, never the turn.
+                workflow.logger.warning("checkpoint failed: %s", err)
 
     async def _call_tool(self, run_id: str, call: PlannedCall, *, denied: bool) -> None:
         once = call.retry is RetryMode.ONCE and not denied

@@ -127,12 +127,20 @@ class Env:
         return events
 
     async def activity_types(self, sid: str) -> list[str]:
-        history = await self.client.get_workflow_handle(workflow_id(sid)).fetch_history()
-        return [
-            e.activity_task_scheduled_event_attributes.activity_type.name
-            for e in history.events
-            if e.HasField("activity_task_scheduled_event_attributes")
-        ]
+        """Every activity the session's workflow scheduled, across continue-as-new runs."""
+        names: list[str] = []
+        run_id: str | None = None
+        while True:
+            handle = self.client.get_workflow_handle(workflow_id(sid), run_id=run_id)
+            history = await handle.fetch_history()
+            names[:0] = [
+                e.activity_task_scheduled_event_attributes.activity_type.name
+                for e in history.events
+                if e.HasField("activity_task_scheduled_event_attributes")
+            ]
+            started = history.events[0].workflow_execution_started_event_attributes
+            if not (run_id := started.continued_execution_run_id or None):
+                return names
 
 
 @pytest_asyncio.fixture(loop_scope="session")

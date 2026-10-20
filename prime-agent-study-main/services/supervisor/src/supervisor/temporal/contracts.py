@@ -51,6 +51,8 @@ class Activity(StrEnum):
     # Workflow-driven (stepped) turns: one model call or one tool call per activity.
     BEGIN_RUN = "session.begin_run"
     MODEL_STEP = "session.model_step"
+    # Save what the last tools changed in the sandbox; on the worker holding it.
+    CHECKPOINT = "session.checkpoint"
     TOOL_CALL = "session.tool_call"
     REQUEST_APPROVAL = "session.request_approval"
     RESOLVE_APPROVAL = "session.resolve_approval"
@@ -248,6 +250,9 @@ class StepRequest:
     session_id: str
     run_id: str
     step: int
+    # Histories from before the brain ran anywhere ask the model step to checkpoint
+    # too (it ran beside the sandbox); now the workflow runs CHECKPOINT itself.
+    checkpoint: bool = True
 
 
 @dataclass(frozen=True, slots=True)

@@ -291,12 +291,15 @@ class GithiSteps:
     # --- model ---------------------------------------------------------------
 
     async def model_step(self, req: StepRequest) -> StepResult:
-        """One model call, with the sandbox checkpointed while the model works.
+        """One model call: the session's brain, on whichever worker picked it up.
 
-        The checkpoint saves what the previous tools changed; the step returns only
-        once it is done, so the next tool never runs ahead of it (Crab's barrier,
-        without making the model wait).
+        Older histories run it beside the sandbox and checkpoint while the model
+        works (``req.checkpoint``); the step returns only once that is done, so the
+        next tool never runs ahead of it (Crab's barrier, without making the model
+        wait). Newer ones run CHECKPOINT on the sandbox's worker alongside.
         """
+        if not req.checkpoint:
+            return await self._model_step(req)
         saving = asyncio.create_task(self._manager.checkpoint(req.session_id))
         try:
             return await self._model_step(req)
@@ -310,7 +313,7 @@ class GithiSteps:
             state = await self._manager._budget.check(sid)
             if state.exceeded:
                 return await self._budget_stop(sid, state.exceeded_reason)
-            runtime = await self._runtime(sid)
+            runtime = await self._brain(sid)
             loop = runtime.loop()
             await self._record(sid, run_id, f"{req.step}:turn", TurnStart())
             run = await self._reader.read_turn(sid, run_id)
@@ -516,9 +519,17 @@ class GithiSteps:
         return isinstance(runtime, GithiRuntime) and gateway is not None
 
     async def _runtime(self, session_id: str) -> GithiRuntime:
+        """The session's runtime, resumed here if cold: for work beside its sandbox."""
         await self._manager.ensure_ready(session_id)
-        await self._manager.renew_gateway_key(session_id)
+        await self._manager.renew_gateway_key(session_id)  # its subagents call the model too
         runtime = self._manager._registry.get(session_id)
+        assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
+        return runtime
+
+    async def _brain(self, session_id: str) -> GithiRuntime:
+        """What a model step needs (seams, model, prompt, tool schemas), on any worker."""
+        runtime = await self._manager.brain(session_id)
+        await self._manager.renew_gateway_key(session_id)
         assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
         return runtime
 

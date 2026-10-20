@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -194,6 +195,8 @@ class SessionManagerBase:
         self._session_keys = SessionKeys(vault) if vault is not None else None
         self._key_mints: dict[str, Callable[[], MintedVirtualKey]] = {}
         self._key_expiry: dict[str, float] = {}  # this worker's key, by session: when it expires
+        # Brains of sessions whose sandbox another worker holds (model steps run anywhere).
+        self._brains: OrderedDict[str, Any] = OrderedDict()
         self._browser = browser
         self._run_traces: dict[str, str] = {}
         self._tool_outbox = ToolOutbox(session_factory, writer)
