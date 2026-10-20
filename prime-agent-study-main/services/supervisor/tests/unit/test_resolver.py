@@ -81,7 +81,7 @@ def test_load_real_yaml_files() -> None:
     root = Path(__file__).resolve().parents[4] / "harness" / "versions"
     if not root.is_dir():
         root = Path(__file__).resolve().parents[5] / "harness" / "versions"
-    coding = load_manifest((root / "coding-v1.yaml").read_text())
-    assert coding.requires_sandbox is True
+    githi = load_manifest((root / "githi-v1.yaml").read_text())
+    assert githi.requires_sandbox is True and githi.runtime == "githi"
     kg = load_manifest((root / "kg-v1.yaml").read_text())
     assert kg.requires_sandbox is False

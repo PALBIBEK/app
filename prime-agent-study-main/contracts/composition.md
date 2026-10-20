@@ -78,8 +78,8 @@ SessionPins {
 Persisted on `sessions.composition_pins` JSON. Resume re-binds from these digests
 (`V-6`) — it must **not** re-resolve a floating catalog tip.
 
-Harness binders materialize `.yal/` files from these pins — see
-[`harness_binders.md`](./harness_binders.md).
+The supervisor binds the session's seams (prompt, tools, gateway, memory) from these
+pins in process; nothing is written for the agent to read.
 
 ## CompositionCatalog
 

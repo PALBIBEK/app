@@ -18,8 +18,6 @@ from supervisor.harness.core.types import (
     HarnessManifest,
     RecoveryPolicy,
     RuntimeCapabilities,
-    SessionFilesPaths,
-    SpawnPlan,
     SubagentsSpec,
     ToolSpec,
     default_recovery_policy,
@@ -185,24 +183,6 @@ class TestHarnessManifest:
         assert manifest.max_subagent_depth == 5
 
 
-class TestSpawnPlan:
-    """Tests for SpawnPlan dataclass."""
-
-    def test_creation(self) -> None:
-        """Test creating a spawn plan."""
-        plan = SpawnPlan(
-            argv=("cli", "--mode", "rpc"),
-            env={"KEY": "value"},
-        )
-        assert plan.argv == ("cli", "--mode", "rpc")
-        assert plan.env == {"KEY": "value"}
-
-    def test_argv_is_tuple(self) -> None:
-        """Test argv is immutable tuple."""
-        plan = SpawnPlan(argv=("a", "b", "c"))
-        assert isinstance(plan.argv, tuple)
-
-
 class TestRuntimeCapabilities:
     """Tests for RuntimeCapabilities dataclass."""
 
@@ -217,17 +197,3 @@ class TestRuntimeCapabilities:
         assert "prompt" in caps.commands
         assert caps.supports_approvals is True
 
-
-class TestSessionFilesPaths:
-    """Tests for SessionFilesPaths dataclass."""
-
-    def test_creation(self) -> None:
-        """Test creating paths."""
-        paths = SessionFilesPaths(
-            root="/path/.yal",
-            pins_json="/path/.yal/pins.json",
-            system_prompt_txt="/path/.yal/system_prompt.txt",
-            tools_json="/path/.yal/tools.json",
-        )
-        assert paths.root == "/path/.yal"
-        assert paths.sandbox_profile_json is None  # optional

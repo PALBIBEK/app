@@ -8,7 +8,7 @@
 | Role | Artifact |
 |---|---|
 | **Definition** | `AgentRuntime` Protocol (`base.py`) + `AgentState` + envelope events + `Capabilities` / `get_capabilities` |
-| **Provider(s)** | `EchoRuntime`, `HarnessRuntime` under `agent/runtimes/` — registered **only** via `create_runtime` / `known_runtime_names` in `factory.py` |
+| **Provider(s)** | `GithiRuntime`, `EchoRuntime` under `agent/runtimes/` — registered **only** via `create_runtime` / `known_runtime_names` in `factory.py` |
 | **Consumer(s)** | `session/manager.py`, harness `compat.check`, policy/budget observers of events |
 
 Session / journal / API bind by runtime **name** (+ harness pin), never by concrete provider classes (`P-3`, `P-6`, `C-2`).
@@ -33,7 +33,7 @@ Session create **may** inject non-None `RuntimeSeams` from composition digests
 `resolve_composition` → `bind_runtime_seams` → `create_runtime(..., seams=)`.
 Omit composition → `seams=None` (backward compatible).
 
-Harness YAML `model:` is a **route hint** forwarded into harness runtime construction — not a private model catalog inside agent-core (`G-2`). Gateway routing uses `.yal/plug_bindings.json`. See [`seams.md`](./seams.md).
+Harness YAML `model:` is a **route hint** for the session's model — not a private model catalog inside agent-core (`G-2`). Gateway routing comes from the composition's plug bindings. See [`seams.md`](./seams.md).
 
 ## Fail-loud
 

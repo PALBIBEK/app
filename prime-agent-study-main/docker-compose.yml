@@ -98,7 +98,7 @@ services:
     volumes: &supervisor-volumes
       - ./harness:/harness:ro
       - ./contracts:/contracts:ro
-      # Needed when SANDBOX_PROVIDER=local_docker (coding-v1 requires_sandbox).
+      # Needed when SANDBOX_PROVIDER=local_docker (githi-v1 runs its tools in a sandbox).
       - /var/run/docker.sock:/var/run/docker.sock
 
   # Runs every session workflow and holds the live runtimes and sandboxes.

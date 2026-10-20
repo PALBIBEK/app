@@ -117,32 +117,13 @@ Same type API → storage. No conversion DTO.
 
 ## Phase 2 — Pi / YAL harness adapter
 
-**Placement:** `harness/src/extensions/memory/durable/`  
-**Bind:** `.yal/memory_service.json` (materialized when `MEMORY_SERVICE_URL` is set)
-
-```json
-{
-  "base_url": "http://memory:8090",
-  "session_id": "<supervisor-session-id>",
-  "scope": { "tenant": "...", "subject": "...", "namespace": "facts" },
-  "lease_owner": "optional-pod-id"
-}
-```
-
-| Method | Role |
-|---|---|
-| `start()` | `createSession` / attach + optional lease (awaited) |
-| `pushEvent(type, data)` | **Sync** local buffer only — no HTTP |
-| `flush()` | `events:buffer` + `flush` (awaited checkpoint) |
-| `resume()` | `load` → repaired transcript |
-
-`registerDurableMemory(api)` wires `session_start` / `session_flush` when the bind file exists.  
-**Not** the same as ContextMemory `.yal/memory_rpc.json` (compaction/recall).
+Removed with the Pi harness: githi sessions use the supervisor's memory
+platform in process (`supervisor/memory`).
 
 ## Phase 4 — Second adapter (agent-independence)
 
 **Placement:** `services/memory/src/memory_service/adapters/simple_loop.py`  
-**Adapter #2:** `SimpleLoopAdapter` — minimal Python loop (no Pi, no `.yal`).
+**Adapter #2:** `SimpleLoopAdapter` — minimal Python loop.
 
 | Method | Role |
 |---|---|

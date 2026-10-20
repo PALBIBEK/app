@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from supervisor.agent.base import AgentPhase
-from supervisor.agent.runtimes.harness.state import from_get_state
 from supervisor.catalog.core.errors import DigestMissing
 from supervisor.catalog.loading.loader import load_composition_catalog
 from supervisor.config import TemporalSettings
@@ -31,23 +29,6 @@ def test_temporal_settings_default_to_a_local_server(monkeypatch: pytest.MonkeyP
         "default",
         "supervisor-sessions",
     )
-
-
-@pytest.mark.parametrize(
-    ("flags", "phase"),
-    [
-        ({}, AgentPhase.READY),
-        ({"isStreaming": True}, AgentPhase.EXECUTING),
-        ({"isStreaming": True, "isCompacting": True}, AgentPhase.COMPACTING),
-    ],
-)
-def test_harness_state_maps_its_flags_to_a_phase(flags: dict[str, bool], phase: AgentPhase) -> None:
-    """``get_state()`` passed ``is_busy=`` to AgentState, which has no such field."""
-    state = from_get_state({"sessionId": "s1", "pendingMessageCount": 0, **flags})
-    assert state.phase is phase
-    assert state.is_busy is (phase is AgentPhase.EXECUTING)
-    assert state.is_compacting is (phase is AgentPhase.COMPACTING)
-    assert state.settled is (phase is AgentPhase.READY)
 
 
 def test_a_composition_naming_an_unknown_artifact_is_digest_missing(tmp_path: Path) -> None:
@@ -77,3 +58,20 @@ def test_a_manifest_budget_limits_cost_exactly() -> None:
     assert at_limit.max_cost_usd == Decimal("0.3") and not at_limit.exceeded
     over = tracker._evaluate("s", cost=Decimal("0.31"), tokens=0)
     assert over.exceeded and over.exceeded_reason is not None
+
+
+async def test_a_stored_version_on_a_retired_runtime_does_not_stop_boot(tmp_path: Path) -> None:
+    from supervisor.db.engine import open_db
+    from supervisor.db.models import HarnessVersionRow
+    from supervisor.harness import HarnessCatalog
+    from supervisor.harness.repository import hydrate_harness_catalog
+
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'h.db'}") as (_, factory):
+        async with factory() as db:
+            db.add(HarnessVersionRow(harness_version="my-pi", protocol_version=1, runtime="harness",
+                                     manifest={"harness_version": "my-pi", "protocol_version": 1,
+                                               "runtime": "harness", "requires_sandbox": False,
+                                               "recovery": {"default": "fail"}}))
+            await db.commit()
+        catalog = HarnessCatalog({})
+        assert await hydrate_harness_catalog(catalog, factory) == 0

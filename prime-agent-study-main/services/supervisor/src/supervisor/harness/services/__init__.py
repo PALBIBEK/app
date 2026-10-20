@@ -4,7 +4,6 @@ This module provides the main service classes:
 - HarnessResolver: Version resolution with caching
 - HarnessCatalog: In-memory catalog for testing
 - CompatibilityChecker: Runtime compatibility validation
-- SpawnPlanner: Subprocess spawn plan building
 """
 
 from __future__ import annotations
@@ -17,10 +16,6 @@ from supervisor.harness.services.resolver import (
     HarnessCatalog,
     HarnessResolver,
 )
-from supervisor.harness.services.spawn_planner import (
-    SpawnPlanner,
-    build_spawn_plan,
-)
 
 __all__ = [
     # Compatibility
@@ -28,8 +23,5 @@ __all__ = [
     # Resolver
     "HarnessCatalog",
     "HarnessResolver",
-    # Spawn
-    "SpawnPlanner",
-    "build_spawn_plan",
     "load_supported_protocol_versions",
 ]

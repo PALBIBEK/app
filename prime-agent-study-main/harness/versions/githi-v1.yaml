@@ -6,7 +6,7 @@ image_digest: buildpack-deps@sha256:8ea58fbc817960cd62d512044956ff00cb94865e549e
 mode: sticky
 model: anthropic/claude-sonnet-4
 # tools: recovery classification only — NOT the production ToolSet catalog.
-# Production tools come from composition digests → .yal/tools.json (see contracts/harness_binders.md).
+# Production tools come from the composition's ToolSet digest (harness/tool_sets/).
 # Must be a subset of harness/tool_sets/githi-tools.json.
 tools:
   read: { class: pure }

@@ -17,11 +17,10 @@ logger = logging.getLogger(__name__)
 class RuntimeNames:
     """Well-known runtime identifiers."""
     ECHO = "echo"
-    HARNESS = "harness"
     GITHI = "githi"
 
 
-_KNOWN_RUNTIMES = frozenset({RuntimeNames.ECHO, RuntimeNames.HARNESS, RuntimeNames.GITHI})
+_KNOWN_RUNTIMES = frozenset({RuntimeNames.ECHO, RuntimeNames.GITHI})
 
 
 def known_runtime_names() -> frozenset[str]:
@@ -44,15 +43,6 @@ def create_runtime(
     if runtime_name == RuntimeNames.ECHO:
         from supervisor.agent.runtimes.echo.runtime import EchoRuntime
         return EchoRuntime(seams=seams, session_id=session_id, **kwargs)
-
-    if runtime_name == RuntimeNames.HARNESS:
-        from supervisor.agent.runtimes.harness.runtime import HarnessRuntime
-        kw: dict[str, Any] = {"seams": seams, "session_id": session_id, **kwargs}
-        if model:
-            kw["model"] = model
-        if provider:
-            kw["provider"] = provider
-        return HarnessRuntime(**kw)
 
     if runtime_name == RuntimeNames.GITHI:
         from supervisor.agent.runtimes.githi.runtime import GithiRuntime

@@ -38,10 +38,6 @@ Resume reloads profile from pins (`V-6`) — no floating re-resolve.
 | `!requires_sandbox` + profile with real provider | `IncompatibleHarness` |
 | Missing provider / image when sandbox required | `RuntimeError` at create |
 
-## Harness materialization
-
-When pinned, session workspace gets `.yal/sandbox_profile.json` (metadata for extensions).
-
 ## Provider network / egress (D10)
 
 | Provider | Network model | Operator expectations |

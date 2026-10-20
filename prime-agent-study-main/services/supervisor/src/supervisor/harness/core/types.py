@@ -31,8 +31,6 @@ __all__ = [
     "HarnessManifest",
     "RecoveryPolicy",
     "RuntimeCapabilities",
-    "SessionFilesPaths",
-    "SpawnPlan",
     "SubagentsSpec",
     "ToolSpec",
 ]
@@ -264,21 +262,6 @@ class HarnessManifest:
 
 
 @dataclass(frozen=True, slots=True)
-class SpawnPlan:
-    """CLI arguments and environment for harness subprocess.
-
-    Attributes:
-        argv: Command line arguments (immutable tuple)
-        env: Environment variables to set
-        working_dir: Working directory for subprocess
-    """
-
-    argv: tuple[str, ...]
-    env: dict[str, str] = field(default_factory=dict)
-    working_dir: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class RuntimeCapabilities:
     """Declared capabilities of a harness runtime.
 
@@ -297,39 +280,6 @@ class RuntimeCapabilities:
     supports_fork: bool = False
     supports_history: bool = True
     supports_approvals: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class SessionFilesPaths:
-    """Paths to materialized session files in .yal/ directory.
-
-    Attributes:
-        root: Root .yal directory path
-        pins_json: Path to pins.json
-        system_prompt_txt: Path to system_prompt.txt
-        tools_json: Path to tools.json
-        tool_invoke_json: Path to tool_invoke.json (optional)
-        sandbox_profile_json: Path to sandbox_profile.json (optional)
-        memory_profile_json: Path to memory_profile.json (optional)
-        memory_rpc_json: Path to memory_rpc.json (optional)
-        memory_service_json: Path to memory_service.json (optional)
-        subagent_rpc_json: Path to subagent_rpc.json (optional)
-        plug_bindings_json: Path to plug_bindings.json (optional)
-        launch_json: Path to launch.json (optional)
-    """
-
-    root: str
-    pins_json: str
-    system_prompt_txt: str
-    tools_json: str
-    tool_invoke_json: str | None = None
-    sandbox_profile_json: str | None = None
-    memory_profile_json: str | None = None
-    memory_rpc_json: str | None = None
-    memory_service_json: str | None = None
-    subagent_rpc_json: str | None = None
-    plug_bindings_json: str | None = None
-    launch_json: str | None = None
 
 
 def default_recovery_policy() -> RecoveryPolicy:

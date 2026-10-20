@@ -99,7 +99,7 @@ def bootstrap_composition_catalog(
 
     Fail-closed only when catalog is required (``fail_on_verify=True``) and **zero**
     offered compositions remain after soft-skip. Incomplete WIP fixtures must not
-    brick supervisor boot when valid compositions (e.g. coding-v1) are present.
+    brick supervisor boot when valid compositions (e.g. githi-v1) are present.
     """
     root = resolve_catalog_dir(catalog_dir)
     catalog = load_composition_catalog(root)

@@ -393,6 +393,26 @@ On `feat/bh-phase2-brain` (workstreams BH4, BH5).
   by the vault while the secret is in no journal event, no prompt, no file or
   environment variable in the sandbox, and no secrets-API response.
 
+### 17. One runtime: githi (the Pi harness is removed)
+On `feat/bh-phase3-brain`, by decision: the supervisor runs githi, its own
+runtime, and `echo` for lightweight sessions; the external Pi agent and its
+harness are gone.
+- **Removed:** the `harness` runtime (Pi's subprocess RPC: runtime, framing,
+  translation, state), the spawn planner, the `.yal/` session-file binds (Pi's
+  extensions read them; githi binds its seams in process), Pi's TypeScript
+  extensions and image, the `coding-v1` manifest, the `coding-v1` and
+  `coding-durable-v1` compositions and the `coding-docker-v1` sandbox profile,
+  the `harness_binders` contract, and the tests and fixtures that served only
+  Pi. `githi/reference/pi/` stays: it is the reference githi was built from.
+- **Kept:** the manifest and catalog layer (githi-v1 is a harness version), and
+  every generic catalog artifact (`coding-prompt` and `coding-tools`, which
+  githi compositions and the e2e stages use; the durable memory profiles).
+- **Existing data:** migration 0017 deletes harness versions registered on the
+  retired runtime (loading one would fail boot), marks open sessions on it
+  failed (they cannot resume), and deprecates compositions on it. Boot also
+  skips, with a warning, any stored version it cannot load.
+- Supervisor suite: 804 passing (the Pi-only tests are gone).
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -471,10 +491,13 @@ Open:
 - **One intermittent hang.** `test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session`
   hit its 300 s timeout once in CI and passed 6 of 6 runs locally; CI now
   annotates a hung test's stack, so the next occurrence names its cause.
+- **An intermittent workflow-task failure in background subagents.** About one
+  run in six of `test_githi_pinned.py` + `test_subagent_jobs.py` fails a
+  background-subagent test with "unable to perform workflow execution update due
+  to unexpected workflow task failure"; it reproduces on `main` after Phase 2
+  and passes alone. Its cause is not found yet.
 - **No real-model CI run.** Every automated turn uses the gateway's echo model;
   a real-model job needs a `MODEL_E2E_API_KEY` secret.
-- **The coding-v1 Pi harness** needs its image pushed to a registry and the
-  external Pi agent; not done.
 
 ---
 
@@ -612,17 +635,17 @@ also fixed nine real bugs that type checking and the stricter tests found.
 It isn't 10 because:
 - the staging compose file and the Kubernetes manifests still can't run a
   session (no Temporal or worker);
-- no automated run has used a real model;
-- the coding-v1 Pi harness isn't done.
+- no automated run has used a real model.
 The first is the one that matters for shipping.
 
 ---
 
 ## Next step
 
-0. **Brain and hands, Phase 3** (BH6 Pi harness loop on the worker, BH7 the
-   session as a context object), then Phase 4 (BH8 many hands) and BH9's log
-   capture.
+0. **Brain and hands, Phase 3:** BH7, the session as a context object for
+   githi (an `events` tool over the journal; compaction that cites the range it
+   replaced). BH6 (Pi's loop) is dropped with Pi. Then Phase 4 (BH8 many hands)
+   and BH9's log capture.
 1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
    `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
    `docker-compose.yml`, and run the staging stack in CI the way compose smoke

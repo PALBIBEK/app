@@ -12,9 +12,8 @@ __pycache__/
 dist/
 build/
 
-# Node / harness
+# Node
 node_modules/
-harness/dist/
 
 # Env / secrets
 .env

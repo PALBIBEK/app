@@ -29,9 +29,6 @@ def check(name: str, ok: bool, detail: object = "") -> bool:
 
 
 skipped: list[tuple[str, str]] = []
-# The "harness" runtime (coding-v1) runs the Pi coding agent inside its own image; only a
-# deployment that built and pinned that image can start it (see harness/images/Dockerfile).
-PI_HARNESS = bool(os.environ.get("E2E_PI_HARNESS"))
 
 
 def skip(name: str, why: str) -> None:
@@ -73,11 +70,8 @@ def create(comp: str, digest: str, harness: str = "githi-v1", user: User = u) ->
 # --- 1. shipped harnesses, as they come ------------------------------------------
 print("\n## 1. Use a shipped harness as-is")
 shipped = {a["artifact_id"]: a for a in u.get("/v1/catalog/compositions").json()}
-for name in ("githi-v1", "githi-tools-v1", "coding-v1", "coding-durable-v1"):
+for name in ("githi-v1", "githi-tools-v1"):
     harness = json.loads((HARNESS / "compositions" / f"{name}.json").read_text())["harness_version"]
-    if harness == "coding-v1" and not PI_HARNESS:
-        skip(f"shipped composition {name} ({harness}) starts a session", "needs the Pi harness image")
-        continue
     code, body = create(name, shipped[name]["digest"], harness)
     check(f"shipped composition {name} ({harness}) starts a session", code == 201, f"{code} {body}")
 
@@ -225,13 +219,9 @@ for cname, change in combos.items():
     STATE["combos"][cname] = {"digest": c["digest"], "session": s.get("session_id")}
 
 # other harness runtimes over the same seams
-for harness, name in (("coding-v1", "my-coding"), ("kg-v1", "my-kg")):
-    body = base | {"name": name, "harness_version": harness}
-    if harness == "kg-v1":  # needs no sandbox, so it pins none (pinning one is refused)
-        body = {k: v for k, v in body.items() if k != "sandbox_profile"}
-    if harness == "coding-v1" and not PI_HARNESS:
-        skip(f"session from {name} ({harness}) starts", "needs the Pi harness image")
-        continue
+for harness, name in (("kg-v1", "my-kg"),):
+    # kg-v1 needs no sandbox, so it pins none (pinning one is refused)
+    body = {k: v for k, v in (base | {"name": name, "harness_version": harness}).items() if k != "sandbox_profile"}
     code, c = publish("composition", body)
     if check(f"publish {name} on harness {harness}", code == 200, c):
         code, s = create(name, c["digest"], harness)
@@ -241,7 +231,7 @@ for harness, name in (("coding-v1", "my-coding"), ("kg-v1", "my-kg")):
 print("\n## 5. Pinning, deprecation, invalid input")
 check("floating ref 'latest' is refused", create("my-githi", "latest")[0] in (400, 404, 409, 422))
 check("another composition's digest is refused", create("my-githi", shipped["githi-v1"]["digest"])[0] == 404)
-code, body = create("my-githi", mine["digest"], harness="coding-v1")
+code, body = create("my-githi", mine["digest"], harness="kg-v1")
 check("harness_version mismatch is refused", code in (400, 409, 422), f"{code} {body}")
 forged = prompt2 | {"digest": p2["digest"], "persona": "evil"}
 code, body = publish("prompt_pack", forged)

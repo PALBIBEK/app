@@ -11,25 +11,18 @@ Reference: catalog/core/protocols.py pattern.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from supervisor.agent.seams import RuntimeSeams
-    from supervisor.catalog.core.types import MemoryProfile, SandboxProfile, SessionPins
     from supervisor.harness.core.types import (
         HarnessManifest,
         RuntimeCapabilities,
-        SessionFilesPaths,
-        SpawnPlan,
     )
 
 __all__ = [
     "CompatibilityCheckerProtocol",
     "HarnessResolverProtocol",
     "ManifestParserProtocol",
-    "SessionFilesBinderProtocol",
-    "SpawnPlannerProtocol",
 ]
 
 
@@ -131,81 +124,6 @@ class CompatibilityCheckerProtocol(Protocol):
 
         Raises:
             IncompatibleHarness: If runtime unknown
-        """
-        ...
-
-
-@runtime_checkable
-class SpawnPlannerProtocol(Protocol):
-    """Interface for building harness spawn plans.
-
-    Implementations must build CLI arguments and environment
-    for harness subprocess execution.
-    """
-
-    def build(
-        self,
-        *,
-        session_dir: str | None,
-        model: str | None,
-        provider: str | None,
-        seams: RuntimeSeams | None,
-    ) -> SpawnPlan:
-        """Build spawn plan for harness subprocess.
-
-        Args:
-            session_dir: Session directory path
-            model: Model name override
-            provider: Provider name override
-            seams: Runtime seams for gateway binding
-
-        Returns:
-            Spawn plan with argv and env
-
-        Raises:
-            MissingHarnessCli: If CLI not configured
-            InvalidGatewayConfig: If gateway config invalid
-        """
-        ...
-
-
-@runtime_checkable
-class SessionFilesBinderProtocol(Protocol):
-    """Interface for materializing session files.
-
-    Implementations must create .yal/ directory with all
-    necessary configuration files.
-    """
-
-    def materialize(
-        self,
-        session_dir: Path | str,
-        pins: SessionPins,
-        seams: RuntimeSeams,
-        *,
-        cwd: str | None = None,
-        sandbox_profile: SandboxProfile | None = None,
-        memory_profile: MemoryProfile | None = None,
-        session_id: str | None = None,
-        tenant_id: str | None = None,
-    ) -> SessionFilesPaths:
-        """Materialize .yal/ session files.
-
-        Args:
-            session_dir: Root session directory
-            pins: Session artifact pins
-            seams: Runtime seams for prompt/tools
-            cwd: Working directory override
-            sandbox_profile: Optional sandbox profile
-            memory_profile: Optional memory profile
-            session_id: Session identifier
-            tenant_id: Tenant identifier
-
-        Returns:
-            Paths to created files
-
-        Raises:
-            PathTraversalAttempt: If path traversal detected
         """
         ...
 

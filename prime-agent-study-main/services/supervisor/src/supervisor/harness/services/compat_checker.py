@@ -132,18 +132,6 @@ def capabilities_for(runtime_name: str) -> RuntimeCapabilities:
             supports_approvals=True,
         )
 
-    if runtime_name == "harness":
-        return RuntimeCapabilities(
-            protocol_versions=frozenset({1, 2}),
-            commands=frozenset(
-                _REQUIRED_COMMANDS | {"set_auto_retry", "extension_ui_response"}
-            ),
-            emits_settled_event=False,
-            supports_fork=False,
-            supports_history=True,
-            supports_approvals=True,
-        )
-
     if runtime_name == "githi":
         return RuntimeCapabilities(
             protocol_versions=frozenset({1, 2}),
