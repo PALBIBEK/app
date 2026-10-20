@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -62,6 +63,7 @@ from supervisor.seams.services import (
     WorkspaceConflictError,
     WorkspaceStore,
 )
+from supervisor.seams.services.virtual_keys import MintedVirtualKey
 from supervisor.session.errors import (
     SessionAwaitingApproval,
     SessionNotFound,
@@ -72,6 +74,8 @@ from supervisor.session.modes import SessionMode
 from supervisor.session.recovery import Recovery, ResumeState
 from supervisor.session.registry import SessionRegistry
 from supervisor.session.tool_outbox import ToolOutbox
+from supervisor.vault import Vault
+from supervisor.vault.session_keys import SessionKeys
 
 logger = logging.getLogger(__name__)
 _LIVE_QUEUE_MAX = 256
@@ -148,6 +152,7 @@ class SessionManagerBase:
         memory: MemoryPlatform | None = None,
         browser: BrowserAccess | None = None,
         workspace_store: WorkspaceStore | None = None,
+        vault: Vault | None = None,
     ) -> None:
         self._db = session_factory
         self._writer = writer
@@ -185,6 +190,10 @@ class SessionManagerBase:
             hydrator=getattr(sandbox_provider, "_hydrator", None),
         )
         self._vk_client = virtual_key_client
+        # Each session's gateway key lives in the vault, so every worker shares it.
+        self._session_keys = SessionKeys(vault) if vault is not None else None
+        self._key_mints: dict[str, Callable[[], MintedVirtualKey]] = {}
+        self._key_expiry: dict[str, float] = {}  # this worker's key, by session: when it expires
         self._browser = browser
         self._run_traces: dict[str, str] = {}
         self._tool_outbox = ToolOutbox(session_factory, writer)

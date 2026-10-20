@@ -20,6 +20,8 @@ dependencies = [
   "temporalio>=1.34,<2",
   # The schema: migrations applied at boot (supervisor.db.migrate).
   "alembic>=1.13",
+  # The vault seals secrets with AES-256-GCM (supervisor.vault).
+  "cryptography>=43",
 ]
 
 [project.optional-dependencies]

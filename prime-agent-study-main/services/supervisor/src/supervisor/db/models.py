@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -347,3 +348,25 @@ class MemoryFactRevisionRow(Base):
     source_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False)
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
     at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class VaultSecretRow(Base):
+    """One sealed secret (AES-256-GCM, bound to its owner and name); see ``supervisor.vault``."""
+
+    __tablename__ = "vault_secrets"
+    __table_args__ = (
+        UniqueConstraint("owner_kind", "owner_id", "name", name="uq_vault_secrets_owner_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

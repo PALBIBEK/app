@@ -219,6 +219,13 @@ class UpkeepOps(ChildOps):
                 self._vk_client.revoke_session(session_id)
             except Exception:
                 logger.exception("virtual key revoke failed session=%s", session_id)
+        self._key_mints.pop(session_id, None)
+        self._key_expiry.pop(session_id, None)
+        if self._session_keys is not None:
+            try:
+                await self._session_keys.forget(session_id)
+            except Exception:
+                logger.exception("vault cleanup failed session=%s", session_id)
         runtime = self._registry.remove(session_id)
         task = self._fanout.pop(session_id, None)
         if task is not None:

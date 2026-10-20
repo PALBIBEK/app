@@ -1,5 +1,6 @@
 # Phase 1 staging — shared Postgres + two supervisor replicas (cold-resume SLO).
 # Usage (from repo root):
+#   export VAULT_KEYS=k1:$(python3 -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())")
 #   docker compose -f deploy/staging/docker-compose.staging.yml up --build
 #
 # Both replicas share journal state; warm sessions are per-replica (in-process registry).
@@ -109,6 +110,9 @@ services:
       - "8080:8080"
     environment:
       ENV: staging
+      # The vault's keys (key_id:base64 of 32 random bytes; first one seals). Every
+      # replica needs the same list. Generate: python -c "import base64,os;print('k1:'+base64.b64encode(os.urandom(32)).decode())"
+      VAULT_KEYS: ${VAULT_KEYS:?set VAULT_KEYS (see the comment above)}
       AUTH_REQUIRED: "true"
       SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-staging-service-jwt-secret}
       SERVICE_JWT_ISSUER: ${SERVICE_JWT_ISSUER:-prime-agent-api}
@@ -167,6 +171,9 @@ services:
       - "8081:8080"
     environment:
       ENV: staging
+      # The vault's keys (key_id:base64 of 32 random bytes; first one seals). Every
+      # replica needs the same list. Generate: python -c "import base64,os;print('k1:'+base64.b64encode(os.urandom(32)).decode())"
+      VAULT_KEYS: ${VAULT_KEYS:?set VAULT_KEYS (see the comment above)}
       AUTH_REQUIRED: "true"
       SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-staging-service-jwt-secret}
       SERVICE_JWT_ISSUER: ${SERVICE_JWT_ISSUER:-prime-agent-api}

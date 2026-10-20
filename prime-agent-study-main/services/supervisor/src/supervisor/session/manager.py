@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -52,6 +54,7 @@ from supervisor.seams.services import (
     SessionWorkspaceState,
     resolve_memory_scope,
 )
+from supervisor.seams.services.virtual_keys import MintedVirtualKey
 from supervisor.session.access import session_visibility, visible_to
 from supervisor.session.errors import (
     RecoveryBlocked,
@@ -297,7 +300,7 @@ class SessionManager(UpkeepOps):
                 ),
             ),
         )
-        token = self._mint_gateway_key(
+        token = await self._gateway_key(
             session_id,
             tenant_id=tenant_id,
             principal=principal,
@@ -341,7 +344,7 @@ class SessionManager(UpkeepOps):
             await runtime.start(await self._hands.ensure(session_id, cause="eager"), session_dir)
         return runtime
 
-    def _mint_gateway_key(
+    async def _gateway_key(
         self,
         session_id: str,
         *,
@@ -368,17 +371,72 @@ class SessionManager(UpkeepOps):
         def group(name: str) -> str:
             return (router.target_for(name) if router is not None else None) or name
 
-        allowed = list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
-        minted = self._vk_client.mint(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            principal_id=principal.id,
-            allowed_models=allowed,
-            scope_id=ws_state.scope_id,
+        allowed = (
+            list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
         )
-        ws_state.virtual_key_token = minted.token
-        ws_state.virtual_key_id = minted.key_id
-        return minted.token
+        client = self._vk_client
+
+        def mint() -> MintedVirtualKey:
+            minted = client.mint(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                principal_id=principal.id,
+                allowed_models=allowed,
+                scope_id=ws_state.scope_id,
+            )
+            ws_state.virtual_key_id = minted.key_id
+            self._key_expiry[session_id] = minted.expires_at
+            return minted
+
+        self._key_mints[session_id] = mint
+        if self._session_keys is None:
+            token = (await asyncio.to_thread(mint)).token
+        else:
+            token = await self._current_key(session_id, mint)
+        ws_state.virtual_key_token = token
+        return token
+
+    async def _current_key(self, session_id: str, mint: Callable[[], MintedVirtualKey]) -> str:
+        assert self._session_keys is not None
+        token, _ = await self._session_keys.current(session_id, mint)
+        stored = await self._session_keys.stored(session_id)
+        if stored is not None and stored.expires_at is not None:
+            self._key_expiry[session_id] = stored.expires_at.timestamp()
+        return token
+
+    async def renew_gateway_key(self, session_id: str) -> bool:
+        """Before a model call: swap in a fresh key when this worker's is near its end.
+
+        The vault holds the session's key; when it is near expiry the first worker
+        to notice mints the next one and every other worker picks that one up. The
+        live gateway client (shared by the summarizer and subagents) is rekeyed in
+        place. Returns whether the key changed.
+        """
+        from supervisor.vault.session_keys import RENEW_BEFORE_S
+
+        mint = self._key_mints.get(session_id)
+        expiry = self._key_expiry.get(session_id)
+        if mint is None or expiry is None or expiry - time.time() > RENEW_BEFORE_S:
+            return False
+        ws_state = self._workspace.get(session_id)
+        old = ws_state.virtual_key_token if ws_state is not None else None
+        if self._session_keys is None:
+            token = (await asyncio.to_thread(mint)).token
+        else:
+            token = await self._current_key(session_id, mint)
+        if token == old:
+            return False
+        if ws_state is not None:
+            ws_state.virtual_key_token = token
+        seams = self._seams.get(session_id)
+        rekey = getattr(getattr(seams, "model_gateway", None), "rekey", None)
+        if callable(rekey):
+            rekey(token)
+        else:
+            logger.warning(
+                "session %s: gateway key renewed but its runtime cannot take it", session_id
+            )
+        return True
 
     def _bind_seams(
         self,

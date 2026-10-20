@@ -54,6 +54,10 @@ class HttpModelGatewayClient:
         """The key this client calls with (the session's virtual key, when it has one)."""
         return self._token
 
+    def rekey(self, token: str) -> None:
+        """Call with ``token`` from now on (the session's key was renewed)."""
+        self._token = token
+
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self._token:

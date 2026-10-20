@@ -165,6 +165,10 @@ class RoutedModelClient:
     _http: httpx.Client | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
+    def rekey(self, token: str) -> None:
+        """Call with ``token`` from now on (the session's key was renewed)."""
+        self.api_key = token
+
     def _client(self) -> httpx.Client:
         with self._lock:
             if self._http is None:

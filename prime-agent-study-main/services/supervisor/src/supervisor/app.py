@@ -23,6 +23,7 @@ from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.seams.services import AuthzService, WorkspaceStore
 from supervisor.session import SessionManager, SessionRegistry
+from supervisor.vault import Keyring, Vault
 
 if TYPE_CHECKING:
     from supervisor.temporal.sessions import SessionWorkflows
@@ -82,6 +83,7 @@ def build_supervisor(
     virtual_key_client: object | None = None,
     workspace_store: WorkspaceStore | None = None,
     browser: BrowserAccess | None = None,
+    vault: Vault | None = None,
 ) -> SupervisorState:
     writer = JournalWriter(session_factory, blob_dir=blob_dir)
     reader = JournalReader(session_factory, blob_dir=blob_dir)
@@ -113,6 +115,7 @@ def build_supervisor(
         memory=memory,
         browser=browser,
         workspace_store=workspace_store,
+        vault=vault or Vault(session_factory, Keyring.from_env()),
     )
 
     async def check_db() -> bool:

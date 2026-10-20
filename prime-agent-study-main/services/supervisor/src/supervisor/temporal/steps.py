@@ -517,6 +517,7 @@ class GithiSteps:
 
     async def _runtime(self, session_id: str) -> GithiRuntime:
         await self._manager.ensure_ready(session_id)
+        await self._manager.renew_gateway_key(session_id)
         runtime = self._manager._registry.get(session_id)
         assert isinstance(runtime, GithiRuntime), "stepped turns need the githi runtime"
         return runtime
