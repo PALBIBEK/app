@@ -354,6 +354,8 @@ class HarnessResolver:
         """
         from supervisor.db.models import HarnessVersionRow
 
+        if self._db is None:  # the caller checks; this keeps the types honest
+            return None
         async with self._db() as db:
             row = await db.get(HarnessVersionRow, harness_version)
             if row is None:

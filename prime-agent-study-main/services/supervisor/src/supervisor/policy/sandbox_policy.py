@@ -323,9 +323,6 @@ class SandboxPolicy:
         return self.config_for(session_id).approval_default == ApprovalDefault.ALWAYS
 
 
-# Backward compatibility alias
-SandboxPolicy.DEFAULT = DEFAULT_CONFIG
-
 
 def _value(enum_or_str: Any) -> str:
     return str(getattr(enum_or_str, "value", enum_or_str))

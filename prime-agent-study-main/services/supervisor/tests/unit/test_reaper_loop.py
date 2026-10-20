@@ -11,6 +11,7 @@ from supervisor.agent.events import Envelope, RunStart
 from supervisor.obs.projector import JournalProjector
 from supervisor.obs.reaper import ReaperConfig, SpanReaper, run_reaper_loop
 from supervisor.telemetry_contract.fakes import FakeSpanSink
+from tests.support.waits import until
 
 
 @pytest.mark.asyncio
@@ -27,7 +28,12 @@ async def test_reaper_loop_survives_tick_failure(caplog: pytest.LogCaptureFixtur
     stop = asyncio.Event()
     with caplog.at_level(logging.ERROR):
         task = asyncio.create_task(run_reaper_loop(reaper, 0.05, stop))
-        await asyncio.sleep(0.18)
+
+        async def failures() -> int:
+            return sum("span_reaper tick failed" in r.message for r in caplog.records)
+
+        # The loop survives a failing tick and keeps sweeping: wait for a second one.
+        await until(failures, lambda n: n >= 2)
         stop.set()
         await asyncio.wait_for(task, timeout=2)
     assert any("span_reaper tick failed" in r.message for r in caplog.records)
@@ -42,7 +48,7 @@ async def test_reaper_loop_stops_promptly() -> None:
     reaper = SpanReaper(projector=proj, config=ReaperConfig())
     stop = asyncio.Event()
     task = asyncio.create_task(run_reaper_loop(reaper, 60.0, stop))
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0)  # let the loop start its first 60 s wait
     stop.set()
     await asyncio.wait_for(task, timeout=2)
 

@@ -20,8 +20,9 @@ from supervisor.agent.events import Envelope, RunStart
 from supervisor.api.events import iter_sse
 from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
-from supervisor.session.live import is_dropped_sentinel
+from supervisor.session.live import Dropped
 from tests.support.session_env import make_catalog
+from tests.support.waits import payload_names
 
 _DATA_RE = re.compile(r"^data: (.+)$", re.MULTILINE)
 _ID_RE = re.compile(r"^id: (\d+)$", re.MULTILINE)
@@ -85,7 +86,7 @@ async def _seed_echo_turn(state) -> str:
         tenant_id="t1", harness_version="kg-v1", runtime_name="echo"
     )
     await state.manager.send(sid, "hi", command_id="c1")
-    await asyncio.sleep(0.1)
+    await payload_names(state.manager, sid, lambda names: "RunEnd" in names)
     return sid
 
 
@@ -220,15 +221,12 @@ async def test_slow_consumer_dropped_session_continues(env) -> None:
             ),
         )
     assert sub.dropped is True
-    try:
-        item = sub.queue.get_nowait()
-        assert is_dropped_sentinel(item) or True
-    except asyncio.QueueEmpty:
-        pass
+    queued = [sub.queue.get_nowait() for _ in range(sub.queue.qsize())]
+    assert isinstance(queued[-1], Dropped), "a dropped subscriber is told so, last"
 
+    # The session itself is unaffected: its turn still runs to the end.
     await env.manager.send(sid, "still", command_id="c-slow")
-    await asyncio.sleep(0.1)
-    assert await env.manager.event_payloads(sid)
+    await payload_names(env.manager, sid, lambda names: "RunEnd" in names)
 
 
 @pytest.mark.asyncio
@@ -252,8 +250,7 @@ async def test_client_disconnect_does_not_abort_session(env) -> None:
 
     await asyncio.wait_for(partial(), timeout=2)
     await env.manager.send(sid, "after", command_id="c1")
-    await asyncio.sleep(0.1)
-    assert "RunEnd" in await env.manager.event_payloads(sid)
+    await payload_names(env.manager, sid, lambda names: "RunEnd" in names)
 
 
 @pytest.mark.asyncio

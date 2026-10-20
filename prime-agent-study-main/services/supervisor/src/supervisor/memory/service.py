@@ -166,7 +166,7 @@ class NotebookMemory:
         provenance = capture_provenance(notebook.home, context)
 
         async def run(tx: FactTx) -> int:
-            existing = {normalize(f.text): f for f in await tx.list()}
+            existing = {normalize(f.text): f for f in await tx.current()}
             added = 0
             for text in lines:
                 key = normalize(text)
@@ -210,7 +210,7 @@ class NotebookMemory:
         exposure = capture_provenance(notebook.home, context) if context else None
 
         async def run(tx: FactTx) -> None:
-            targets = resolve_ids(await tx.list(), [e.id for e in edits])
+            targets = resolve_ids(await tx.current(), [e.id for e in edits])
             for edit, fact in zip(edits, targets, strict=True):
                 provenance = (
                     merge_provenance([fact.provenance, exposure], fact.provenance.sensitivity)
@@ -225,7 +225,7 @@ class NotebookMemory:
         self, notebook_id: str, ids: Sequence[str], *, author: str | None = None
     ) -> None:
         async def run(tx: FactTx) -> None:
-            await tx.remove(resolve_ids(await tx.list(), ids))
+            await tx.remove(resolve_ids(await tx.current(), ids))
 
         await self._store.transact(notebook_id, run, author=author)
 
@@ -233,7 +233,7 @@ class NotebookMemory:
         """Remove every current fact; history keeps them (clearing is not erasure)."""
 
         async def run(tx: FactTx) -> int:
-            facts = await tx.list()
+            facts = await tx.current()
             await tx.remove(facts)
             return len(facts)
 
@@ -251,7 +251,7 @@ class NotebookMemory:
 
         async def run(tx: FactTx) -> None:
             target = state_at(await self._store.revisions(notebook_id, limit=100_000), revision)
-            current = {f.id: f for f in await tx.list()}
+            current = {f.id: f for f in await tx.current()}
             await tx.remove([f for i, f in current.items() if i not in target])
             for fact_id, fact in target.items():
                 live = current.get(fact_id)

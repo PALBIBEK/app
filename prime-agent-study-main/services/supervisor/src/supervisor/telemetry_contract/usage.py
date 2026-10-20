@@ -12,11 +12,16 @@ from typing import Protocol
 
 
 class UsageLike(Protocol):
-    input_tokens: int
-    output_tokens: int
-    cache_read: int
-    cache_write: int
-    cost_total: float
+    @property
+    def input_tokens(self) -> int: ...
+    @property
+    def output_tokens(self) -> int: ...
+    @property
+    def cache_read(self) -> int: ...
+    @property
+    def cache_write(self) -> int: ...
+    @property
+    def cost_total(self) -> float: ...
 
 
 def to_genai_tokens(u: UsageLike) -> dict[str, int]:

@@ -34,7 +34,6 @@ __all__ = [
     "AuditAction",
     "AuditEvent",
     # Dataclasses
-    "BudgetSpec",
     "BudgetState",
     "CommandAction",
     "CommandDecision",
@@ -188,13 +187,6 @@ class RateDecisionStatus(StrEnum):
 # =============================================================================
 # Budget Types
 # =============================================================================
-
-@dataclass(frozen=True, slots=True)
-class BudgetSpec:
-    """Budget limits specification from manifest."""
-    max_cost_per_session: Decimal | None = None
-    max_tokens_per_turn: int | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class BudgetState:

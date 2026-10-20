@@ -177,7 +177,6 @@ from supervisor.policy.types import (
     AuditAction,
     AuditEvent,
     # Dataclasses
-    BudgetSpec,
     BudgetState,
     CommandAction,
     CommandDecision,
@@ -236,7 +235,6 @@ __all__ = [
     "AuditEvent",
     "AuditLoggerProtocol",
     "BudgetExceeded",
-    "BudgetSpec",
     "BudgetState",
     "BudgetTracker",
     "BudgetTrackerProtocol",

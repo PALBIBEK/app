@@ -1,9 +1,9 @@
 # Supervisor: progress log
 
 Where the supervisor stood when this work began, what has been done since, and
-what comes next. `fix/supervisor-boot` and `feat/agent-pipeline-stages` are
-merged into `main`; `chore/clean-supervisor` (stale tests and docs removed) and
-`feat/tool-registry` (sections 9 and 10) build on it.
+what comes next. Everything through `hardening/ten` (PRs #1–#7: sections 1–14
+and workstreams W1–W7) is merged into `main`; W8 and W9 were finished on
+`hardening/w8-w9`.
 
 The goal throughout: the supervisor runs composable agents (catalog →
 composition → session pins → runtime seams → runtime → journal and policy), and
@@ -319,44 +319,27 @@ The full report, with every finding (F1–F35) and the fix plan, is the
 - **Tools a composition adds** that the manifest doesn't classify fall back to
   `recovery.default` (`fail` for githi), so they run at most once and are never
   automatically re-run.
-- **Test suite: 684 passing, 0 failing** (from 228 passing at the start); the
-  model gateway's own suite: 81 passing. Two tests are intermittent and are run
-  separately: `test_memory_histories_replay_deterministically` (times out under
-  full-suite load) and `test_reconnect_mid_stream_no_gaps_no_dupes` (SQLite
-  "database is locked" in its 100-round loop). Temporal-backed tests need
-  `TEMPORAL_CLI_PATH` where the dev-server download is blocked.
-- **Three user goals are not met yet:** registering or reading a harness through
-  the API, long-term memory across sessions, and keeping one user's sessions
-  away from another user in the same tenant.
+- **Tests: 824 in the supervisor, all passing** on Postgres and Temporal (from
+  228 at the start), 81 in the model gateway, 79 in the memory service; every
+  CI job green (see W9). Temporal-backed tests need `TEMPORAL_CLI_PATH` where
+  the dev-server download is blocked.
+- The three user goals the live test found unmet (harnesses through the API,
+  long-term memory across sessions, one user's sessions kept from another's)
+  were closed by W3–W5.
 
 ---
 
 ## Known gaps
 
-Found by the live tests (numbers as in the report):
-- **Security and audit.** The catalog has no tenant ownership (F10). Strict
-  multi-tenant mode is bypassed by a local_process sandbox profile, and a
-  missing e2b package falls back to local_process (F19). Session access is
-  tenant-wide; the stored owner is never checked (F29). Approvals record no
-  responder (F30).
-- **Long-term memory doesn't work** (F27): recall always returns 404, and facts
-  are scoped per session.
-- **Harnesses can't be read or registered through the API** (F5, F6); no list
-  APIs for harnesses or tools (F4, F12).
-- **No runnable default.** The shipped githi-v1 and coding-v1 pin a placeholder
-  image (F3); API and worker race to create the schema (F1); compose has no
-  memory service (F2); the default memory profile's summarizer is unserved and
-  its sizes don't fit small windows (F24–F26).
-- **Sandboxes.** Concurrent scope writes overwrite each other (F20); a session
-  without a scope loses its files when its worker dies (F21).
-- **Publish accepts configs that can never work** (F11, F17, F28). One loop-guard
-  trip fails the whole session (F32).
+The live-test findings listed here before (F1–F6, F10–F12, F17, F19–F21,
+F24–F30, F32) were fixed by W3–W7 below and are verified by CI's e2e job.
 
-Earlier:
-- **Two parallel session error hierarchies.** `session/core/errors.py` and
-  `session/manager.py` both define `SessionNotFound`, `RecoveryBlocked` and
-  others. The workflow paths match errors by name, so they're unaffected, but
-  the remaining in-process code paths still catch the wrong class.
+Open:
+- **Staging and Kubernetes don't run Temporal.** `deploy/staging/` and
+  `deploy/k8s/` have no Temporal server and no `supervisor-worker`, and
+  `/readyz` requires Temporal, so the staging supervisors would never report
+  healthy. The root `docker-compose.yml` is complete (CI's compose smoke runs
+  it). Neither manifest has been run here (no Docker or cluster).
 - **Continuable subagents** (`start_continuable`, child messages) still hold
   live state in the provider. No built-in provider supports them except ACP,
   whose state lives on the remote server.
@@ -364,9 +347,6 @@ Earlier:
   review on resume (the existing design).
 - **The per-turn token limit** is counted in the worker's memory, so a worker
   restart mid-turn resets it. The cost limit is exact.
-- **Deployment.** The staging compose files and Kubernetes manifests don't
-  include Temporal yet. `docker compose` itself hasn't been run in this
-  environment (no Docker here).
 - **Gateway routes without a window.** A route configured without
   `context_window` makes compaction fall back to 200,000 tokens, and is not
   discoverable (QM admits only groups with limits and prices); set them on
@@ -379,11 +359,17 @@ Earlier:
 - **The gateway's virtual-key store and QM's model-call audit are in-process.**
   One gateway replica, and the audit resets on restart (the journal is the
   durable record of every call).
-- ~~**Two intermittent tests** need a real fix, not a retry.~~ Fixed at their causes (W2 below).
+- **One intermittent hang.** `test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session`
+  hit its 300 s timeout once in CI and passed 6 of 6 runs locally; CI now
+  annotates a hung test's stack, so the next occurrence names its cause.
+- **No real-model CI run.** Every automated turn uses the gateway's echo model;
+  a real-model job needs a `MODEL_E2E_API_KEY` secret.
+- **The coding-v1 Pi harness** needs its image pushed to a registry and the
+  external Pi agent; not done.
 
 ---
 
-## Hardening to 10/10 (branch `hardening/ten`)
+## Hardening to 10/10 (branches `hardening/ten`, then `hardening/w8-w9`)
 
 The honest review rated the system 5/10. The plan to reach 10 is in the doc
 "Supervisor Review and 10/10 Plan": ten machine-checked gates, closed by nine
@@ -400,8 +386,8 @@ workstreams (W1 to W9), one commit per item on `hardening/ten`.
 | W5 | Harness management through the API; publish refuses configs that can never work | Done |
 | W6 | A deployable default: migrations, a runnable bundled harness, the memory service in compose | Done |
 | W7 | Robustness: scope write conflicts, sandbox files on worker loss, loop guard, idempotency, error shapes | Done |
-| W8 | Code health: lint 0, types 0, structure, complexity | In progress |
-| W9 | Re-verify everything, re-measure, final rating | Not started |
+| W8 | Code health: lint 0, types 0, structure, complexity, no fixed sleeps | Done |
+| W9 | Re-verify everything, re-measure, final rating | Done |
 
 ### What W7 fixed (all verified on the live stack)
 
@@ -427,7 +413,7 @@ workstreams (W1 to W9), one commit per item on `hardening/ten`.
   `githi-coding-tools`, and a test fails if any shipped composition does not
   verify at boot.
 
-### What W8 has done so far
+### What W8 did
 
 - Line endings normalized repo-wide (`.gitattributes`, 185 files were CRLF).
 - About 20,000 lines of dead or duplicated code deleted: an abandoned rewrite
@@ -444,45 +430,94 @@ workstreams (W1 to W9), one commit per item on `hardening/ten`.
 - Every `except Exception` now logs its traceback, is narrowed, or states why
   it is reported in-band. The logger is `logger` everywhere.
 - The three model transports refactored into small stream accumulators.
+- **Migrations match the models.** The tables whose models went with the dead
+  code (`sandbox_routes`, `catalog_errors`, `catalog_usage`) are dropped by
+  `0015`, so `alembic check` and the drift test pass; this was what failed CI's
+  supervisor and e2e jobs.
+- **mypy 73 → 0, and the real bugs behind it** (each pinned in
+  `tests/unit/test_typed_contracts.py`):
+  - `TemporalSettings.from_env()` without `TEMPORAL_*` returned slot
+    descriptors instead of `localhost:7233` / `default` / `supervisor-sessions`;
+  - the harness runtime's `get_state()` always raised `TypeError`;
+  - a composition naming an unknown artifact raised `TypeError`, not
+    `DigestMissing`;
+  - the in-process budget abort read a field that doesn't exist;
+  - two `BudgetSpec` types (float and Decimal): one now, money compared as
+    Decimal;
+  - `WorkspaceTreeIO` lacked the `clear()` every hydrate calls;
+  - the harness materializer dereferenced optional seams.
+  Also: one projector type and a `Reapable` protocol, a typed live-stream
+  sentinel, typed catalog lookups (`get_as`), and the unused
+  `sandbox/routing` package (743 lines) deleted.
+- **A corrected approval answer was refused as the old one.** Every answer to
+  an approval shared one Temporal update id, so after a refused answer the
+  user's correction got the stored refusal back. The id is now per choice
+  (found by CI).
+- **No fixed sleeps in tests.** `tests/support/waits.py` (supervisor) and
+  `ctl()` / `eventually()` (e2e) wait for the condition a test needs; a check
+  that something did *not* happen waits for a barrier (a later message, or
+  terminate, which flushes pending memory capture). Two weak assertions became
+  real ones (the duplicate-command test, the slow-subscriber test). What
+  remains polls a condition or simulates a slow tool or model on purpose.
+- **Tests that broke when CI was slow:** three API test modules signed their
+  JWTs at import with a five-minute life, so after a slow run every later
+  request got 401 (one helper now, `tests/support/auth.py`, signs per request);
+  a job test read the workflow's status a moment before it closed.
+- The memory service's 39 routes moved out of `create_app` (complexity 40) onto
+  a module router; its one mypy error fixed.
 
-### Gates now
+### Gates, measured at the end of W9
 
-| Gate | Start of W8 | Now | Target |
+| Gate | Start of W8 | End of W9 | Target |
 |---|---|---|---|
-| ruff, supervisor | 767 | 0 | 0 |
-| ruff, model-gateway | 12 | 3 | 0 |
-| ruff, memory | 32 | 12 | 0 |
-| mypy, supervisor | 105 | 73 | 0 |
-| Largest supervisor module | 2,147 lines | 794 | under 1,000 |
-| Functions above complexity 20 | 4 | 0 | 0 |
-| Supervisor tests | 730 passing | 795 passing, 22 skipped without a Postgres URL | all pass |
-| Live e2e stages (local) | 2 failing | all pass except stage 2's Docker check, which passes in CI | all pass |
-| CI jobs | lint-and-types failing | only lint-and-types failing | all green |
+| ruff: supervisor, model-gateway, memory, e2e | 767, 12, 32, – | 0, 0, 0, 0 | 0 |
+| mypy, supervisor (CI gate) | 105 | 0 | 0 |
+| mypy, model-gateway / memory (not gated) | – | 0 / 0 | 0 |
+| Largest supervisor module | 2,147 lines | 871 (`sandbox/base.py`) | under 1,000 |
+| Functions above complexity 20 (all three services) | 4 | 0 | 0 |
+| Migrations vs models (`alembic check`) | drifted | clean | clean |
+| Fixed sleeps in tests (supervisor + e2e) | about 30 | 0 | 0 |
+| Supervisor tests (Postgres + Temporal) | 730 passing | 824 passing, 0 failing | all pass |
+| Model gateway / memory tests | – | 81 / 79 passing | all pass |
+| Live e2e stages, local | 2 failing | all pass; stage 2's Docker check runs only in CI | all pass |
+| CI jobs (lint-and-types, three test suites, e2e, compose smoke) | 3 of 6 failing | 6 of 6 green | all green |
 
-The transport refactor that takes ruff and complexity to zero is committed;
-the full suite passes on it (795).
+### W9: re-verified
 
-### What is left
+- CI on `hardening/w8-w9`: all six jobs green, including e2e against the full
+  stack and the docker-compose smoke test.
+- Locally against the e2e stack (processes, no Docker): stage 2 82/83 (Docker
+  check skipped), 3 48/48, 4 31/31, 6 23/23, 7 47/47, 7q 4/4.
+- The tests whose sleeps were replaced passed 3 runs of 3 against Temporal.
+- The plan doc's ten gates could not be opened from this session, so the table
+  above measures each gate CI enforces plus the structural ones PROGRESS
+  tracked.
 
-**W8 (code health):**
-1. ruff to zero in model-gateway (3) and memory (12).
-2. mypy to zero in the supervisor (73 errors in 31 files; many are real
-   type mismatches, e.g. two `BudgetSpec` types, a `JournalProjector` call
-   with arguments it does not take).
-3. Audit the fixed sleeps in tests and replace them with waits on events.
-4. CI's lint-and-types job green.
+### Final rating: 9/10
 
-**W9 (re-verify):**
-1. Every e2e stage green locally and in CI.
-2. Re-measure every gate; update the plan doc's statuses and this file.
-3. A final honest rating against the ten gates.
-4. Optional: a real-model CI job (needs a `MODEL_E2E_API_KEY` secret).
-5. Stretch: the coding-v1 Pi harness runtime (needs its image pushed to a
-   registry and the external Pi agent). Report honestly if not done.
+Everything a machine can check is green: lint and types at zero across the
+services, every suite passing on Postgres and Temporal, the e2e stages and the
+compose smoke in CI, no schema drift, and no test that waits on the clock. W8
+also fixed nine real bugs that type checking and the stricter tests found.
+
+It isn't 10 because:
+- the staging compose file and the Kubernetes manifests still can't run a
+  session (no Temporal or worker);
+- no automated run has used a real model;
+- the coding-v1 Pi harness isn't done.
+The first is the one that matters for shipping.
 
 ---
 
 ## Next step
 
-Finish W8 (items above), then W9. After that, per the roadmap: the backend,
-then the frontend.
+1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
+   `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
+   `docker-compose.yml`, and run the staging stack in CI the way compose smoke
+   runs.
+2. **Session memory, phases 4–7** (consolidation, embeddings, providers, the
+   per-manifest session list with read, resume and fork), on a branch from
+   `main`, under the same gates.
+3. Optional: a real-model CI job once a `MODEL_E2E_API_KEY` secret exists.
+
+After that, per the roadmap: the backend, then the frontend.

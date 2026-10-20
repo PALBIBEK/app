@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from supervisor.api import deps
 from supervisor.api.wire import envelope_to_wire
 from supervisor.journal.reader import JournalReader
-from supervisor.session import LiveSubscription, SessionManager, is_dropped_sentinel
+from supervisor.session import Dropped, LiveSubscription, SessionManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
@@ -78,7 +78,7 @@ async def iter_sse(
             except TimeoutError:
                 yield _sse_comment("ping")
                 continue
-            if is_dropped_sentinel(item):
+            if isinstance(item, Dropped):
                 return
             env = item  # type: ignore[assignment]
             if env.seq <= live_cursor:

@@ -20,7 +20,7 @@ from temporalio.exceptions import ApplicationError
 from supervisor.agent.events import ErrorEvent, RunEnd, ToolStart, TurnEnd
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
-from supervisor.session import SessionManager, is_dropped_sentinel
+from supervisor.session import Dropped, SessionManager
 from supervisor.session.dispatch import run_operation
 from supervisor.temporal.contracts import (
     Activity,
@@ -154,8 +154,8 @@ class SessionActivities:
                         if send.done() and (exc := send.exception()) is not None:
                             raise exc from None
                         continue
-                    if is_dropped_sentinel(item):
-                        raise RuntimeError("live event subscription dropped")
+                    if isinstance(item, Dropped):
+                        raise RuntimeError("live event subscription dropped")  # noqa: TRY004
                     tools_started += isinstance(item.payload, ToolStart)
                     activity.heartbeat(tools_started)
                     if _is_terminal(item.payload):

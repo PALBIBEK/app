@@ -80,8 +80,7 @@ class DurableStore:
     ) -> int:
         """Persist events (+ optional outbox rows) in one transaction. Returns last seq."""
         if not events:
-            row = await self.get_session_row(session_id)
-            return row.last_seq
+            return (await self.get_session_row(session_id)).last_seq
         async with self._factory() as db:
             async with db.begin():
                 row = await db.get(MemorySessionRow, session_id, with_for_update=True)

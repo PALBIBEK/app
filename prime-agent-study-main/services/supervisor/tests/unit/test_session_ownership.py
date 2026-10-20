@@ -8,11 +8,8 @@ Approvals record who answered them, in the API and in the journal.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
-import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -20,33 +17,14 @@ from supervisor.agent.events import ApprovalResolved
 from supervisor.app import SupervisorState, build_supervisor
 from supervisor.db.engine import open_db
 from supervisor.main import create_app
+from tests.support.auth import SECRET, ServiceAuth
 from tests.support.session_env import make_catalog
 
-SECRET = "ai-service-jwt-secret-at-least-32-bytes!!"
 TENANT = "t1"
 
 
-def _headers(principal_id: str, tenant_id: str = TENANT) -> dict[str, str]:
-    now = datetime.now(UTC)
-    token = jwt.encode(
-        {
-            "sub": "prime-agent-bff",
-            "iss": "prime-agent-api",
-            "aud": "yal-supervisor",
-            "type": "service",
-            "tenant_id": tenant_id,
-            "principal_id": principal_id,
-            "iat": now,
-            "exp": now + timedelta(minutes=5),
-            "jti": str(uuid4()),
-        },
-        SECRET,
-        algorithm="HS256",
-    )
-    return {"Authorization": f"Bearer {token}"}
-
-
-ALICE, BOB, TENANT_SERVICE = _headers("alice"), _headers("bob"), _headers(TENANT)
+ALICE, BOB = ServiceAuth(TENANT, "alice"), ServiceAuth(TENANT, "bob")
+TENANT_SERVICE = ServiceAuth(TENANT)
 
 
 @pytest.fixture

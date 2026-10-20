@@ -16,7 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionIndexRow
-from supervisor.policy.types import BudgetSpec, BudgetState
+from supervisor.harness.core.types import BudgetSpec
+from supervisor.policy.types import BudgetState
 
 if TYPE_CHECKING:
     from supervisor.policy.protocols import AuditLoggerProtocol
@@ -39,7 +40,7 @@ class BudgetTracker:
 
         # Configure limits from manifest
         tracker.configure("sess_123", BudgetSpec(
-            max_cost_per_session=Decimal("10.00"),
+            max_cost_per_session=10.0,
             max_tokens_per_turn=100_000,
         ))
 
@@ -156,7 +157,12 @@ class BudgetTracker:
     ) -> BudgetState:
         """Evaluate budget state against limits."""
         spec = self._session_limits.get(session_id)
-        max_cost = spec.max_cost_per_session if spec else None
+        # The manifest states USD as a float; money is compared as Decimal.
+        max_cost = (
+            Decimal(str(spec.max_cost_per_session))
+            if spec and spec.max_cost_per_session is not None
+            else None
+        )
         max_tokens = spec.max_tokens_per_turn if spec else None
 
         exceeded = False

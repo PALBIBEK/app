@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request, Response
 
@@ -18,7 +19,7 @@ async def healthz() -> dict[str, str]:
 
 
 @router.get("/readyz")
-async def readyz(request: Request, response: Response) -> dict[str, str]:
+async def readyz(request: Request, response: Response) -> dict[str, Any]:
     """Readiness: DB reachable, sandbox provider if needed, not draining.
 
     Must not call runtime.get_state() — one bad session is not a dead pod.

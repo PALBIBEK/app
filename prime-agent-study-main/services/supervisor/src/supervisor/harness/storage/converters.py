@@ -136,12 +136,15 @@ def manifest_to_dict(manifest: HarnessManifest) -> dict[str, Any]:
 
 def tool_spec_from_dict(data: str | dict[str, Any]) -> ToolSpec:
     """Parse tool spec from dict or string."""
+    cls_name: object
     if isinstance(data, str):
         cls_name = data
     elif isinstance(data, dict):
         cls_name = data.get("class") or data.get("tool_class")
     else:
         raise ManifestValidationError("tool", "invalid spec format")
+    if not isinstance(cls_name, str):
+        raise ManifestValidationError("tool", "a tool spec needs a class")
 
     try:
         tool_class = ToolClass(cls_name)

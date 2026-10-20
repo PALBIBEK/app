@@ -30,6 +30,7 @@ from supervisor.temporal.sessions import SessionCommandError, SessionWorkflows
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.platform import boot_platform
+from tests.support.waits import settled
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -120,7 +121,7 @@ async def test_duplicate_messages_run_once(platform: Platform) -> None:
     again = await platform.sessions.submit(sid, Message("same", "hello"))
     assert first.command_id == again.command_id
     await platform.wait_for(sid, _count("RunEnd", 1))
-    await asyncio.sleep(1)
+    await settled(platform.sessions, sid, 1)
     assert _types(await platform.events(sid)).count("RunStart") == 1
 
 

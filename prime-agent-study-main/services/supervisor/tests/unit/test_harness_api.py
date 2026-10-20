@@ -7,13 +7,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
 
-import jwt
 import pytest
 import yaml
 from httpx import ASGITransport, AsyncClient
@@ -25,24 +22,14 @@ from supervisor.db.engine import open_db
 from supervisor.harness.repository import hydrate_harness_catalog
 from supervisor.main import create_app
 from supervisor.models import ModelUnavailable, reset_model_router, use_model_router
+from tests.support.auth import SECRET, ServiceAuth
 from tests.support.platform import all_variants, shipped_harness_catalog
 from tests.support.session_env import TrackingProvider
 
-SECRET = "ai-service-jwt-secret-at-least-32-bytes!!"
 VERSIONS = Path(__file__).resolve().parents[4] / "harness" / "versions"
 
 
-def _as(tenant_id: str) -> dict[str, str]:
-    now = datetime.now(UTC)
-    claims = {
-        "sub": "bff", "iss": "prime-agent-api", "aud": "yal-supervisor", "type": "service",
-        "tenant_id": tenant_id, "principal_id": tenant_id, "iat": now,
-        "exp": now + timedelta(minutes=5), "jti": str(uuid4()),
-    }
-    return {"Authorization": f"Bearer {jwt.encode(claims, SECRET, algorithm='HS256')}"}
-
-
-T1, T2 = _as("t1"), _as("t2")
+T1, T2 = ServiceAuth("t1"), ServiceAuth("t2")
 
 
 def _kg(version: str, **changes: Any) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from tests.support.session_env import make_catalog
+from tests.support.waits import payload_names
 
 HEADERS = {"X-Tenant-Id": "t1"}
 
@@ -94,15 +95,18 @@ async def test_duplicate_command_id_returns_stored_and_sends_once(api) -> None:
         headers=HEADERS,
     )
     assert r3.status_code == 409
-    import asyncio
+    # Barrier, once the first turn is over (in-process sessions run one turn at a time):
+    # a new message's turn comes after any second turn the duplicates could have started.
+    await payload_names(state.manager, sid, lambda names: "RunEnd" in names)
+    r4 = await client.post(
+        f"/v1/sessions/{sid}/messages",
+        json={"text": "barrier", "command_id": "after-conflict"},
+        headers=HEADERS,
+    )
+    assert r4.status_code == 202
+    payloads = await payload_names(state.manager, sid, lambda n: n.count("RunEnd") >= 2)
+    assert payloads.count("RunEnd") == 2, "the duplicate and the conflict never ran"
 
-    for _ in range(100):  # wait for the one turn to finish, then make sure there is no second
-        if "RunEnd" in await state.manager.event_payloads(sid):
-            break
-        await asyncio.sleep(0.02)
-    await asyncio.sleep(0.1)
-    payloads = await state.manager.event_payloads(sid)
-    assert payloads.count("RunEnd") == 1
 
 
 @pytest.mark.asyncio
@@ -151,9 +155,7 @@ async def test_fork_returns_new_id_original_unchanged(api) -> None:
         json={"text": "hi", "command_id": "c1"},
         headers=HEADERS,
     )
-    import asyncio
-
-    await asyncio.sleep(0.1)
+    await payload_names(state.manager, sid, lambda names: "RunEnd" in names)
     before = await state.manager.snapshot_events(sid)
     r = await client.post(f"/v1/sessions/{sid}/fork", headers=HEADERS)
     assert r.status_code == 201

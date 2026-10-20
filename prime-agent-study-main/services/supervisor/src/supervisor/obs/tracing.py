@@ -11,7 +11,7 @@ from supervisor.obs.projector import JournalProjector, SpanSink
 from supervisor.telemetry_contract.spans import SpanRecord
 
 logger = logging.getLogger(__name__)
-_projector: ProjectorHub | JournalProjector | None = None
+_projector: ProjectorHub | None = None
 _provider: Any = None
 _shared_sink: SpanSink | None = None
 _default_tenant: str = "default"
@@ -213,7 +213,7 @@ def setup_tracing(
     return _projector
 
 
-def get_projector() -> ProjectorHub | JournalProjector | None:
+def get_projector() -> ProjectorHub | None:
     return _projector
 
 

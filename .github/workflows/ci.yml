@@ -99,6 +99,13 @@ jobs:
           set -o pipefail
           pytest -q -rfE 2>&1 | tee pytest.out || {
             grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/'
+            # A hung test's stack (pytest-timeout) as one annotation: job logs are not always at hand.
+            if grep -q 'Timeout (>' pytest.out; then
+              stack=$(awk '/^[+][+][+][+][+].* Timeout .*[+][+][+][+][+]$/{on=1} on{print}' pytest.out | tail -c 6000)
+              [ -n "$stack" ] || stack=$(grep -B60 'Timeout (>' pytest.out | head -c 6000)
+              stack=${stack//'%'/'%25'}; stack=${stack//$'\n'/'%0A'}
+              echo "::error title=hung test stack::$stack"
+            fi
             exit 1
           }
 

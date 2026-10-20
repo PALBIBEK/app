@@ -421,22 +421,21 @@ class SessionManagerBase:
             proj = get_projector()
             if proj is None:
                 return
-            if hasattr(proj, "ensure_session"):
-                row = await self._get_session_row(session_id)
-                harness_ver = getattr(row, "harness_version", None) or "unknown"
-                # Prefer the composition id when pinned; else the harness version.
-                pins = getattr(row, "composition_pins", None)
-                harness_id = (
-                    str(pins["composition_id"])
-                    if isinstance(pins, dict) and pins.get("composition_id")
-                    else harness_ver
-                )
-                proj.ensure_session(
-                    session_id,
-                    tenant_id=getattr(row, "tenant_id", None),
-                    harness_id=harness_id,
-                    harness_version=harness_ver,
-                )
+            row = await self._get_session_row(session_id)
+            harness_ver = getattr(row, "harness_version", None) or "unknown"
+            # Prefer the composition id when pinned; else the harness version.
+            pins = getattr(row, "composition_pins", None)
+            harness_id = (
+                str(pins["composition_id"])
+                if isinstance(pins, dict) and pins.get("composition_id")
+                else harness_ver
+            )
+            proj.ensure_session(
+                session_id,
+                tenant_id=getattr(row, "tenant_id", None),
+                harness_id=harness_id,
+                harness_version=harness_ver,
+            )
             proj.project(envelope)
         except Exception:
             logger.exception("span projection failed session=%s", session_id)

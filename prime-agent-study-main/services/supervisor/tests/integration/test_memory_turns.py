@@ -22,7 +22,7 @@ from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.service import CaptureContext
 from supervisor.memory.types import Fact, Sensitivity, personal_source
 from supervisor.seams.core.types import ChatMessage
-from supervisor.temporal.contracts import Message
+from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
@@ -185,7 +185,9 @@ async def test_agent_only_sessions_are_never_captured(
         sid = await env.create(state, memory={"strategy": "agent-only", "capture_quiet_s": 0.5})
         await env.sessions.submit(sid, Message("c1", "hello"))
         await env.wait_for(state, sid, run_ended())
-        await asyncio.sleep(2)
+        # Barrier: terminating flushes any pending capture before the session closes.
+        await env.sessions.terminate(sid)
+    assert Activity.CAPTURE_MEMORY.value not in await env.activity_types(sid)
     assert await _facts(state, sid) == []
     assert not [k for k, _ in gateway.one_shots if k.startswith("You extract")]
 

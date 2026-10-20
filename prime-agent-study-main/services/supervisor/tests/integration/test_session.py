@@ -10,6 +10,7 @@ import pytest
 
 from supervisor.agent.events import RunEnd, ToolEnd, ToolStart
 from supervisor.session.recovery import ResumeState
+from tests.support.waits import counted, journalled
 
 
 async def _drain_to_run_end(m, sid: str) -> None:
@@ -27,8 +28,7 @@ async def test_level1_echo_full_lifecycle_seq_continues(session_env) -> None:
     sid = await m.create(tenant_id="t1", harness_version="kg-v1", runtime_name="echo")
     await m.send(sid, "one", command_id="c1")
     await _drain_to_run_end(m, sid)
-    await asyncio.sleep(0.05)
-    first = await reader.read(sid, since=-1)
+    first = await journalled(reader, sid, counted("RunEnd"))
     last = first[-1].seq
 
     # Drop warm runtime without terminating the durable session (cold path).
@@ -38,8 +38,7 @@ async def test_level1_echo_full_lifecycle_seq_continues(session_env) -> None:
 
     await m.send(sid, "two", command_id="c2")
     await _drain_to_run_end(m, sid)
-    await asyncio.sleep(0.05)
-    all_events = await reader.read(sid, since=-1)
+    all_events = await journalled(reader, sid, counted("RunEnd", 2))
     seqs = [e.seq for e in all_events]
     assert seqs == list(range(len(seqs)))
     assert all_events[len(first)].seq == last + 1
@@ -93,10 +92,10 @@ async def test_level3_fork_independent_prefix_copy(session_env) -> None:
     sid = await m.create(tenant_id="t1", harness_version="kg-v1", runtime_name="echo")
     await m.send(sid, "one", command_id="c1")
     await _drain_to_run_end(m, sid)
-    await asyncio.sleep(0.05)
+    await journalled(reader, sid, counted("RunEnd"))
     await m.send(sid, "two", command_id="c2")
     await _drain_to_run_end(m, sid)
-    await asyncio.sleep(0.05)
+    await journalled(reader, sid, counted("RunEnd", 2))
 
     original_before = await m.snapshot_events(sid)
     # Fork at end of first turn (last seq of first RunEnd).

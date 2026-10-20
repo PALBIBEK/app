@@ -137,7 +137,9 @@ class SessionWorkflows:
             await self._handle(session_id).execute_update(
                 AgentSessionWorkflow.respond_approval,
                 ApprovalChoice(approval_id, choice, responded_by),
-                id=f"approval:{approval_id}",
+                # Per choice: a retry of the same answer runs once, but a corrected
+                # answer is a new request, not the stored outcome of the refused one.
+                id=f"approval:{approval_id}:{choice}",
             )
 
     async def abort(self, session_id: str) -> None:
