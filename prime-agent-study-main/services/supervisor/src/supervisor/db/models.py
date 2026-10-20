@@ -370,3 +370,22 @@ class VaultSecretRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class HandLeaseRow(Base):
+    """Who holds a session's hand, if anyone besides its session (``supervisor.hands.leases``).
+
+    ``token`` only grows: each new lease of the hand gets the next one, and a
+    holder's calls carry theirs, so a holder whose lease ended (expired, or
+    taken back) is refused even if it never learnt that (a fencing token).
+    """
+
+    __tablename__ = "hand_leases"
+
+    hand_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    holder: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    token: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expires_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

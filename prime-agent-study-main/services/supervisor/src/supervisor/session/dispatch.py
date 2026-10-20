@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any, Final
 
+from supervisor.hands.leases import Borrower
 from supervisor.seams import CompactionPreparation, SubagentRequest
 from supervisor.session.manager import SessionManager
 from supervisor.temporal.contracts import Op, SessionOp, job_ids
@@ -37,6 +38,7 @@ async def _invoke_tool(m: SessionManager, op: SessionOp) -> Result:
         name=op.args["name"],
         arguments=op.args.get("arguments") or {},
         tool_call_id=op.op_id,
+        borrower=Borrower.from_dict(op.args.get("lease")),
     )
     result = outcome.result
     return {

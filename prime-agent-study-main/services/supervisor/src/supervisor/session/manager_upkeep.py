@@ -243,6 +243,10 @@ class UpkeepOps(ChildOps):
             except Exception:
                 logger.exception("stop failed session=%s", session_id)
         for key in self._hands.keys_of(session_id) or [session_id]:
+            try:
+                await self._leases.take_back(key)  # a lent hand ends with its session
+            except Exception:
+                logger.exception("taking back a lent hand failed hand=%s", key)
             sandbox = self._hands.release(key)
             if self._checkpoints is not None:
                 self._checkpoints.forget(key)

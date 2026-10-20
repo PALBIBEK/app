@@ -43,6 +43,11 @@ class ScriptedGateway:
     window: int | None = None
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     tools_seen: list[list[dict[str, Any]]] = dataclasses.field(default_factory=list)
+    # A background subagent working in a borrowed hand (``temporal.hand_jobs``): what it
+    # asks for, its answer, and an event it waits on before its first call.
+    child_calls: list[tuple[str, dict[str, Any]]] = dataclasses.field(default_factory=list)
+    child_answer: str = "the job is done"
+    child_gate: threading.Event | None = None
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
@@ -51,6 +56,8 @@ class ScriptedGateway:
     ) -> Completion:
         if (answer := self._one_shot(messages)) is not None:
             return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
+        if messages and messages[0].content.startswith("You are a background subagent"):
+            return self._child(messages)
         with self._lock:
             self.seen.append(list(messages))
             self.tools_seen.append(list(tools))
@@ -76,6 +83,18 @@ class ScriptedGateway:
         ]
         message = ChatMessage("assistant", "", tool_calls=calls)
         return Completion(message, model="scripted", usage=usage, tool_calls=calls)
+
+    def _child(self, messages: list[ChatMessage]) -> Completion:
+        if self.child_gate is not None and not self.child_gate.wait(timeout=60):
+            raise TimeoutError("the child's gate was never opened")
+        done = sum(1 for m in messages if m.role == "tool")
+        if done < len(self.child_calls):
+            name, args = self.child_calls[done]
+            calls = [{"id": f"child-{done}", "type": "function",
+                      "function": {"name": name, "arguments": json.dumps(args)}}]
+            return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted",
+                              usage={}, tool_calls=calls)
+        return Completion(ChatMessage("assistant", self.child_answer), model="scripted", usage={})
 
     def _one_shot(self, messages: list[ChatMessage]) -> str | None:
         system = messages[0].content if messages and messages[0].role == "system" else ""

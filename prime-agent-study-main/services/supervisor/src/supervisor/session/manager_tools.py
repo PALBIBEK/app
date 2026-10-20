@@ -16,6 +16,7 @@ from supervisor.agent.events import (
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
 from supervisor.hands.keys import hand_key, split_key, take_hand
+from supervisor.hands.leases import Borrower
 from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.seams import (
     ModelGatewayClient,
@@ -56,11 +57,18 @@ class ToolOps(ApprovalOps):
         return [split_key(key)[1] for key in self._hands.keys_of(session_id)]
 
     async def hand_for_call(
-        self, session_id: str, name: str, provider: ToolProvider | None, hand: str | None = None
+        self,
+        session_id: str,
+        name: str,
+        provider: ToolProvider | None,
+        hand: str | None = None,
+        borrower: Borrower | None = None,
     ) -> HandForCall:
         """Before a tool runs: a sandbox for it if it needs one, built now if none serves.
 
         ``hand`` names which of the session's hands (default: its default one).
+        A lent hand serves only its holder (``borrower``, fenced by its token);
+        the session's own calls on it are refused until it comes back.
         Runs on the supervisor's loop (building and hydrating touch the database);
         the tool itself then runs on its own. A sandbox that cannot be built is the
         model's to read (``WORKSPACE_UNAVAILABLE``), never a lost tool outcome.
@@ -77,6 +85,8 @@ class ToolOps(ApprovalOps):
                     code="UNKNOWN_HAND",
                 )
             )
+        if (refused := await self._lease_refusal(key, borrower)) is not None:
+            return HandForCall(unavailable=refused)
         try:
             sandbox = await self._hands.ensure(key)
         except Exception as exc:
@@ -91,6 +101,28 @@ class ToolOps(ApprovalOps):
         if key == session_id and (ws := self._workspace.get(session_id)) is not None:
             self._workspace_svc.assert_ready(ws)
         return HandForCall(hand_id=sandbox.id if sandbox is not None else None, key=key)
+
+    async def _lease_refusal(self, key: str, borrower: Borrower | None) -> ToolResult | None:
+        """Why a call may not use the hand now (it is lent elsewhere, or the lease ended)."""
+        live = await self._leases.current(key)
+        if borrower is None:
+            if live is None:
+                return None
+            hand = split_key(key)[1]
+            return ToolResult(
+                ok=False,
+                error=f"your {hand!r} hand is lent to {live.holder}; it comes back when that "
+                "job ends. Use another hand, or wait for the job.",
+                code="HAND_LENT",
+            )
+        if live is None or live.holder != borrower.holder or live.token != borrower.token:
+            return ToolResult(
+                ok=False,
+                error="the lease on this hand has ended; the hand is back with its session",
+                code="LEASE_ENDED",
+            )
+        await self._leases.renew(live)  # acting keeps the lease alive
+        return None
 
     def hand_workspace(self, key: str) -> HandWorkspace:
         """Where a tool acts in one of a session's hands (follows that hand's sandbox)."""
@@ -194,7 +226,9 @@ class ToolOps(ApprovalOps):
         name: str,
         arguments: dict[str, Any],
         tool_call_id: str | None = None,
+        borrower: Borrower | None = None,
     ) -> ToolInvokeOutcome:
+        """Run one tool call in the session (``borrower``: on a hand it lent, by its holder)."""
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
@@ -260,8 +294,11 @@ class ToolOps(ApprovalOps):
                     f"session awaiting approval id={session_id!r} tool={name!r}"
                 )
 
-        arguments, which = take_hand(arguments, self.hand_names(session_id))
-        hand = await self.hand_for_call(session_id, name, seams.tool_provider, which)
+        if borrower is not None:
+            which: str | None = borrower.hand
+        else:
+            arguments, which = take_hand(arguments, self.hand_names(session_id))
+        hand = await self.hand_for_call(session_id, name, seams.tool_provider, which, borrower)
         ctx = ToolInvokeContext(
             trace_id=call_id, extra=self.tool_context(session_id, tenant_id, key=hand.key)
         )
