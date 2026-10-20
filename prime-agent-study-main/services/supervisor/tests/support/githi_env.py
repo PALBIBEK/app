@@ -19,7 +19,9 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer
 
 from supervisor.agent.events import Envelope
 from supervisor.app import SupervisorState
@@ -28,7 +30,9 @@ from supervisor.config import TemporalSettings
 from supervisor.db.engine import open_db
 from supervisor.temporal.client import connect
 from supervisor.temporal.contracts import CreateSession, Timing, workflow_id
+from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.sessions import SessionWorkflows
+from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.platform import boot_platform
 from tests.support.scripted import ScriptedGateway, scripted_model
 
@@ -186,3 +190,29 @@ async def spawn_worker(env: Env, spec: dict) -> tuple[asyncio.subprocess.Process
             if not line:
                 raise RuntimeError("worker process exited before it was ready")
     return proc, line.split()[1]
+
+
+async def replay_recorded(client: Client) -> int:
+    """Replay every session and job history the server has recorded; returns how many.
+
+    Run this against production histories before deploying workflow changes. A
+    workflow that has not completed its first workflow task yet (just started) has
+    nothing to replay and is skipped; the Replayer would wait forever for one.
+    """
+    replayer = Replayer(
+        workflows=[AgentSessionWorkflow, SubagentJobWorkflow],
+        data_converter=pydantic_data_converter,
+    )
+    replayed = 0
+    for kind in ("AgentSession", "SubagentJob"):
+        async for run in client.list_workflows(f"WorkflowType = '{kind}'"):
+            handle = client.get_workflow_handle(run.id, run_id=run.run_id)
+            history = await handle.fetch_history()
+            if not any(
+                e.HasField("workflow_task_completed_event_attributes") for e in history.events
+            ):
+                continue
+            result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
+            assert result.replay_failure is None, (run.id, result.replay_failure)
+            replayed += 1
+    return replayed

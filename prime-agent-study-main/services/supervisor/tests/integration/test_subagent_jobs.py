@@ -12,17 +12,20 @@ from contextlib import asynccontextmanager
 import pytest
 from httpx import ASGITransport, AsyncClient
 from temporalio.client import WorkflowExecutionStatus
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.worker import Replayer
 
 from supervisor.agent.events import JobEnd, JobStart, SubagentEnd
 from supervisor.app import SupervisorState
 from supervisor.main import create_app
 from supervisor.temporal.contracts import Message, job_workflow_id, workflow_id
-from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
-from supervisor.temporal.workflow import AgentSessionWorkflow
-from tests.support.githi_env import Env, has_event, payloads, run_ended, spawn_worker
+from tests.support.githi_env import (
+    Env,
+    has_event,
+    payloads,
+    replay_recorded,
+    run_ended,
+    spawn_worker,
+)
 from tests.support.scripted import ScriptedGateway, slow_subagent
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -179,17 +182,4 @@ async def test_a_job_outlives_its_sessions_continue_as_new(
 
 
 async def test_job_and_session_histories_replay_deterministically(env: Env) -> None:
-    replayer = Replayer(
-        workflows=[AgentSessionWorkflow, SubagentJobWorkflow],
-        data_converter=pydantic_data_converter,
-    )
-    replayed = 0
-    for kind in ("AgentSession", "SubagentJob"):
-        async for run in env.client.list_workflows(f"WorkflowType = '{kind}'"):
-            history = await env.client.get_workflow_handle(
-                run.id, run_id=run.run_id
-            ).fetch_history()
-            result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
-            assert result.replay_failure is None, (kind, result.replay_failure)
-            replayed += 1
-    assert replayed >= 1
+    assert await replay_recorded(env.client) >= 1

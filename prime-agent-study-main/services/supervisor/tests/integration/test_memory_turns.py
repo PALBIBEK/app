@@ -12,8 +12,6 @@ import uuid
 from collections.abc import Callable
 
 import pytest
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.worker import Replayer
 
 from supervisor.agent.events import MemoryContext, MemoryInjected, ToolEnd
 from supervisor.app import SupervisorState
@@ -23,10 +21,8 @@ from supervisor.memory.service import CaptureContext
 from supervisor.memory.types import Fact, Sensitivity, personal_source
 from supervisor.seams.core.types import ChatMessage
 from supervisor.temporal.contracts import Message
-from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
-from supervisor.temporal.workflow import AgentSessionWorkflow
-from tests.support.githi_env import LS, Env, payloads, run_ended
+from tests.support.githi_env import LS, Env, payloads, replay_recorded, run_ended
 from tests.support.scripted import ScriptedGateway
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -238,11 +234,4 @@ async def test_the_history_tool_searches_this_conversation(
 
 
 async def test_memory_histories_replay_deterministically(env: Env) -> None:
-    replayer = Replayer(
-        workflows=[AgentSessionWorkflow, SubagentJobWorkflow],
-        data_converter=pydantic_data_converter,
-    )
-    async for run in env.client.list_workflows("WorkflowType = 'AgentSession'"):
-        history = await env.client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
-        result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
-        assert result.replay_failure is None, result.replay_failure
+    assert await replay_recorded(env.client) >= 1

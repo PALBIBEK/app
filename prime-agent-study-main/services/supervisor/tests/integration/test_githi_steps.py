@@ -12,8 +12,6 @@ from collections.abc import AsyncIterator, Callable
 
 import pytest
 from temporalio.client import Client, WorkflowHistory
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.worker import Replayer
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -40,6 +38,7 @@ from tests.support.githi_env import (
     event_types,
     has_event,
     payloads,
+    replay_recorded,
     run_ended,
     spawn_worker,
 )
@@ -338,11 +337,4 @@ async def test_stepped_histories_replay_deterministically(
         await env.sessions.respond_approval(sid, await _await_approval(env, state, sid), "allow")
         await env.wait_for(state, sid, run_ended())
         await env.sessions.terminate(sid)
-
-    replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)
-    replayed = 0
-    async with replayer.workflow_replay_iterator(_histories(env.client)) as results:
-        async for result in results:
-            assert result.replay_failure is None, result.replay_failure
-            replayed += 1
-    assert replayed >= 1
+    assert await replay_recorded(env.client) >= 1

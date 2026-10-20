@@ -13,8 +13,6 @@ from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.worker import Replayer
 
 from supervisor.agent.events import MessageEnd, ToolEnd
 from supervisor.app import SupervisorState
@@ -22,7 +20,6 @@ from supervisor.main import create_app
 from supervisor.temporal.contracts import Activity, CreateSession, Message, Op, SessionOp
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.worker import session_worker
-from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
     FAST,
     LS,
@@ -30,6 +27,7 @@ from tests.support.githi_env import (
     event_types,
     has_event,
     payloads,
+    replay_recorded,
     run_ended,
     spawn_worker,
 )
@@ -200,11 +198,4 @@ async def test_fork_copy_is_safe_to_retry(env: Env, model: Callable[..., Scripte
 
 
 async def test_session_op_histories_replay_deterministically(env: Env) -> None:
-    replayer = Replayer(workflows=[AgentSessionWorkflow], data_converter=pydantic_data_converter)
-    histories = [
-        await env.client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
-        async for run in env.client.list_workflows("WorkflowType = 'AgentSession'")
-    ]
-    for history in histories:
-        result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
-        assert result.replay_failure is None, result.replay_failure
+    assert await replay_recorded(env.client) >= 1
