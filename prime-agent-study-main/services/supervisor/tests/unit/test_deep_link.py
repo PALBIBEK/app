@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from supervisor.agent.events import Envelope, MessageEnd, RunEnd, RunStart, TurnEnd, TurnStart, Usage
+from supervisor.agent.events import (
+    Envelope,
+    MessageEnd,
+    RunEnd,
+    RunStart,
+    TurnEnd,
+    TurnStart,
+    Usage,
+)
 from supervisor.obs.projector import JournalProjector
 from supervisor.telemetry_contract.fakes import FakeSpanSink
 

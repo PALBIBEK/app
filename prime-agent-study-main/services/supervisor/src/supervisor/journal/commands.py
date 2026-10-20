@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -9,6 +10,26 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import CommandRow
+
+
+class CommandConflict(Exception):
+    """A command id already used for a different payload: an idempotency key is one request."""
+
+    def __init__(self, command_id: str) -> None:
+        super().__init__(f"command_id {command_id!r} was already used with a different message")
+        self.command_id = command_id
+
+
+def fingerprint(payload: str) -> str:
+    """What a command id is bound to: a retry must carry the same payload."""
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def check_same_payload(command_id: str, stored: dict[str, Any], payload_fingerprint: str | None) -> None:
+    """Raise ``CommandConflict`` if ``stored`` was recorded for a different payload."""
+    recorded = stored.get("fingerprint")
+    if payload_fingerprint and recorded and recorded != payload_fingerprint:
+        raise CommandConflict(command_id)
 
 
 class CommandStore:
@@ -21,13 +42,17 @@ class CommandStore:
         command_id: str,
         *,
         turn_id: str | None = None,
+        payload_fingerprint: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Insert API response before send.
 
-        Returns ``(True, response)`` on first claim, ``(False, stored)`` on duplicate.
+        Returns ``(True, response)`` on first claim, ``(False, stored)`` on duplicate;
+        raises ``CommandConflict`` when the duplicate carried a different payload.
         """
         tid = turn_id or uuid4().hex
         response: dict[str, Any] = {"turn_id": tid, "status": "accepted"}
+        if payload_fingerprint:
+            response["fingerprint"] = payload_fingerprint
         row = CommandRow(
             session_id=session_id,
             command_id=command_id,
@@ -43,6 +68,7 @@ class CommandStore:
                 existing = await db.get(CommandRow, (session_id, command_id))
                 if existing is None:
                     raise
+                check_same_payload(command_id, dict(existing.response), payload_fingerprint)
                 return False, dict(existing.response)
         return True, response
 

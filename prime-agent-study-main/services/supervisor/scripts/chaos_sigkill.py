@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import multiprocessing as mp
 import os
@@ -32,6 +33,7 @@ def _wait_port(port: int, timeout: float = 15.0) -> None:
 def _run_child(db_path: str, blob_dir: str, port: int, err_path: str) -> None:
     try:
         import uvicorn
+
         from supervisor.app import build_supervisor
         from supervisor.db.engine import open_db
         from supervisor.main import create_app
@@ -52,7 +54,7 @@ def _run_child(db_path: str, blob_dir: str, port: int, err_path: str) -> None:
                 await server.serve()
 
         asyncio.run(_serve())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         Path(err_path).write_text(repr(exc))
         raise
 
@@ -133,21 +135,21 @@ async def phase_prepare_and_kill(db_path: Path, blob_dir: Path, port: int) -> di
         )
 
     from sqlalchemy import select
+
     from supervisor.db.models import EventRow, SessionRow
 
-    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (_, factory):
-        async with factory() as db:
-            rows = (
-                await db.execute(
-                    select(EventRow.session_id, EventRow.seq).order_by(
-                        EventRow.session_id, EventRow.seq
-                    )
+    async with open_db(f"sqlite+aiosqlite:///{db_path}") as (_, factory), factory() as db:
+        rows = (
+            await db.execute(
+                select(EventRow.session_id, EventRow.seq).order_by(
+                    EventRow.session_id, EventRow.seq
                 )
-            ).all()
-            statuses = {
-                r.id: r.status
-                for r in (await db.execute(select(SessionRow))).scalars()
-            }
+            )
+        ).all()
+        statuses = {
+            r.id: r.status
+            for r in (await db.execute(select(SessionRow))).scalars()
+        }
 
     pre_seqs: dict[str, list[int]] = {}
     for sid, seq in rows:
@@ -169,15 +171,16 @@ async def phase_prepare_and_kill(db_path: Path, blob_dir: Path, port: int) -> di
 
 
 async def phase_restart_and_check(db_path: Path, blob_dir: Path, planted: dict) -> dict:
+    from supervisor.sandbox.local_docker import LABEL_SESSION, LocalDockerProvider
+    from tests.unit.test_docker import FakeDockerClient
+
     from supervisor.app import build_supervisor
     from supervisor.db.engine import open_db
     from supervisor.journal.reader import JournalReader
     from supervisor.policy.approvals import ApprovalBroker
-    from supervisor.sandbox.local_docker import LABEL_SESSION, LocalDockerProvider
     from supervisor.sandbox.reaper import reap_orphans
     from supervisor.session.recovery import Recovery, ResumeState
     from tests.support.session_env import make_catalog
-    from tests.unit.test_docker import FakeDockerClient
 
     report: dict = {"cases": {}}
 
@@ -190,17 +193,17 @@ async def phase_restart_and_check(db_path: Path, blob_dir: Path, planted: dict) 
         )
         reader = JournalReader(factory, blob_dir=blob_dir)
         recovery = Recovery(
-            registry=state.manager._registry,  # noqa: SLF001
+            registry=state.manager._registry,
             reader=reader,
             catalog=catalog,
         )
 
         sid = planted["sid_turn"]
-        row = await state.manager._get_session_row(sid)  # noqa: SLF001
+        row = await state.manager._get_session_row(sid)
         decision = await recovery.decide(sid, session_row=row)
         envs = await reader.read(sid, since=-1)
         seqs = [e.seq for e in envs]
-        gaps = [a + 1 for a, b in zip(seqs, seqs[1:]) if b != a + 1]
+        gaps = [a + 1 for a, b in itertools.pairwise(seqs) if b != a + 1]
         types = [type(e.payload).__name__ for e in envs]
         report["cases"]["mid_turn"] = {
             "resume_state": decision.state.value,
@@ -213,7 +216,7 @@ async def phase_restart_and_check(db_path: Path, blob_dir: Path, planted: dict) 
         }
 
         sid = planted["sid_tool"]
-        row = await state.manager._get_session_row(sid)  # noqa: SLF001
+        row = await state.manager._get_session_row(sid)
         decision = await recovery.decide(sid, session_row=row)
         unpaired = await reader.unpaired_tool_starts(sid)
         report["cases"]["mid_tool"] = {

@@ -18,7 +18,7 @@ dependencies = [
 dev = [
   "pytest>=8.3",
   "httpx>=0.28",
-  "ruff>=0.8",
+  "ruff==0.17.1",  # pinned: newer releases enable more rules by default
 ]
 
 [build-system]

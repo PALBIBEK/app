@@ -13,46 +13,45 @@ Reference: FastAPI best practices, Pydantic v2 patterns.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from enum import StrEnum, auto
+from enum import StrEnum
 from typing import Any, Final, Literal
 
-
 __all__ = [
-    # Enums
-    "ApprovalStatus",
-    "ApprovalScope",
-    "GuardAction",
-    "GuardDetector",
-    "StallSignal",
-    "FileEffects",
-    "ApprovalDefault",
-    "CommandAction",
-    "CommandPolicyMode",
-    "AuditAction",
-    "RateDecisionStatus",
-    # Dataclasses
-    "BudgetSpec",
-    "BudgetState",
-    "GuardConfig",
-    "GuardVerdict",
-    "Approval",
-    "ApprovalGrant",
-    "ApprovalContext",
-    "CommandRule",
-    "CommandDecision",
-    "RateDecision",
-    "AuditEvent",
-    "QuotaLimits",
-    "QuotaState",
-    "StallState",
     # Constants
     "ALLOW_CHOICES",
-    "is_allow_choice",
     "DEFAULT_APPROVAL_TIMEOUT_S",
     "DEFAULT_RATE_WINDOW_MS",
     "DEFAULT_STALL_ITERATIONS",
+    "Approval",
+    "ApprovalContext",
+    "ApprovalDefault",
+    "ApprovalGrant",
+    "ApprovalScope",
+    # Enums
+    "ApprovalStatus",
+    "AuditAction",
+    "AuditEvent",
+    # Dataclasses
+    "BudgetSpec",
+    "BudgetState",
+    "CommandAction",
+    "CommandDecision",
+    "CommandPolicyMode",
+    "CommandRule",
+    "FileEffects",
+    "GuardAction",
+    "GuardConfig",
+    "GuardDetector",
+    "GuardVerdict",
+    "QuotaLimits",
+    "QuotaState",
+    "RateDecision",
+    "RateDecisionStatus",
+    "StallSignal",
+    "StallState",
+    "is_allow_choice",
 ]
 
 
@@ -277,6 +276,8 @@ class Approval:
     timeout_s: int
     created_at_ms: int
     harness_request_id: str | None = None
+    responded_by: str | None = None
+    responded_at_ms: int | None = None
 
     @property
     def is_pending(self) -> bool:

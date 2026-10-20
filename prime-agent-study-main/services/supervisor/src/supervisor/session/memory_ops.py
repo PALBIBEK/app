@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Literal
@@ -10,13 +11,13 @@ from typing import Literal
 from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
 from supervisor.journal.writer import JournalWriter
 from supervisor.seams import (
-    CompactionDecision,
     CompactionPreparation,
-    CompactionResult,
     ContextMemoryProvider,
     MemoryInvokeContext,
     RecallBlock,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,7 @@ class MemoryOps:
                 user_prompt=user_prompt,
             )
         except Exception:
+            logger.warning("memory recall failed; the turn goes on without it", exc_info=True)
             block = None
 
         if block is None or not (block.text or "").strip():

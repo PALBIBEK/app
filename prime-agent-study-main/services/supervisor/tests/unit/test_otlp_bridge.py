@@ -82,7 +82,7 @@ def test_echo_shaped_run_in_memory_otlp() -> None:
 
     turn_span = by_name["yal.turn"]
     chat = by_name["chat"]
-    tool = next(s for s in spans if s.name.startswith("execute_tool"))
+    next(s for s in spans if s.name.startswith("execute_tool"))
 
     assert turn_span.parent is not None
     assert turn_span.parent.span_id == root.context.span_id

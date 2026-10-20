@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from supervisor.harness.config import get_settings, HarnessSettings
+from supervisor.harness.config import HarnessSettings, get_settings
 from supervisor.harness.core.errors import (
     ApprovalsNotSupported,
     IncompatibleHarness,
@@ -105,6 +105,7 @@ def load_supported_protocol_versions(
         logger.warning(
             "Failed to load protocol versions",
             extra={"path": str(path), "error": str(exc)},
+            exc_info=True,
         )
         return settings.default_protocol_versions
 

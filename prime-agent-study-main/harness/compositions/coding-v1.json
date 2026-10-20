@@ -1,8 +1,8 @@
 {
-  "digest": "sha256:7306fb337525f9c27e5a6223460cf799ed62ec3d859b17cc2e1cd7a3bad6847d",
+  "digest": "sha256:91be3e0b2a1397a5dbb20c77ad4ad542b3e36776e69bca40289d00433acb7b83",
   "harness_version": "coding-v1",
   "memory_profile": {
-    "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
+    "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
     "id": "default"
   },
   "name": "coding-v1",

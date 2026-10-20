@@ -46,6 +46,57 @@ Package: `supervisor.seams` under
 - Session memory + compaction: [`memory.md`](./memory.md)
 - Out-of-process MCP + ACP adapters: [`mcp_acp.md`](./mcp_acp.md)
 
+## Tools: registry → seam → catalog
+
+| Layer | Where | Role |
+|---|---|---|
+| Implementations | `supervisor/tools/builtin/<tool>.py` | One `async def tool(args, ctx)` per tool, registered with `@tool(tool_class=...)` |
+| Registry | `supervisor.tools.default_registry()` | Name → `ToolSpec`; schema derived from the args model, description from the docstring |
+| Seam | `RegistryToolProvider` | Offers exactly the pinned tools; every failure is a typed `ToolResult.code` |
+| Catalog | `bind_tool_set` / `require_implemented` | A ToolSet may only pin registered tools: refused at publish (422) and at bind |
+
+- The model sees the **pinned** descriptor (what was digested); the registry supplies the code.
+- Tools act on a `Workspace` (host directory or sandbox `WorkspaceTreeIO`), never on raw paths;
+  every model-supplied path is confined to the workspace.
+- Identity (`session_id`, `tenant_id`) comes only from `ToolInvokeContext`; control-plane keys
+  in model arguments are dropped.
+- Runtimes do not build tool providers. A githi runtime created without a tool seam gets the
+  file tools from `build_standalone_tool_provider()` (composition root).
+
+Tool result codes: `TOOL_NOT_FOUND`, `TOOL_NOT_IMPLEMENTED`, `BAD_ARGS`, `PATH_ESCAPE`,
+`FILE_NOT_FOUND`, `TOOL_TIMEOUT`, `UNSUPPORTED_CAPABILITY`, `WORKSPACE_UNAVAILABLE`,
+`TOOL_ERROR`, `TOOL_INTERNAL`.
+
+## What a githi session takes from its pins
+
+Every githi model turn runs step by step under the session workflow
+(`temporal.steps`); there is no other path for a turn with a model. Each turn uses:
+
+| Pin | Used for |
+|---|---|
+| Prompt pack | The system message of every model call (`AgentLoop.messages_for_model`) |
+| Tool set | The tools offered and run (`RegistryToolProvider`), plus platform tools |
+| Plug bindings: gateway | Every model call (`model_gateway` seam): the routed client when the pinned URL is the configured `MODEL_GATEWAY_URL` gateway (or nothing is pinned), else the pinned gateway's chat-completions client (`model_routing.md`) |
+| Plug bindings: model route | The model every call names (`session_model`: route, else the manifest's model) — a `gateway/<group>`, a native model id, or a legacy route id |
+| Plug bindings: subagents | `subagent` / `subagent_result` tools on the transport's default provider; finished background jobs announced at the next run (`BackgroundResults`) |
+| Memory profile | Compaction between turns past `min(window − reserve, window × pressure)`, keeping `keep_recent_tokens`; recall on the first model step. `window`: the profile's `context_window`, else the gateway's report for the session's model (`ModelCatalog`), else 200,000 |
+| Sandbox (harness + profile) | Where every tool acts (`SandboxWorkspace`: files and commands in the sandbox) and the `file_effects` policy on every tool call; a read-only profile makes the session strict (no browser model capability) |
+| Harness manifest | Recovery class per tool, guards, budget, approvals, subagent depth and background |
+
+Create and resume build the runtime through one routine (`SessionManager._start_runtime`),
+so a resumed session gets exactly what it was created with. Seams are bound once per
+session, after its gateway key is minted: the agent's gateway, the compaction summarizer
+and nested-session subagents all call the composition's pinned gateway with that key, and
+every session path (turns, direct tool invokes, memory and subagent operations) uses the
+runtime's own seams.
+
+An assistant `ChatMessage` from the routed client also carries `parts` — its ordered
+`text` / `reasoning` / `tool_call` parts, with the provider's signed or encrypted
+reasoning — and the `model` that wrote it. The stepped turn journals those parts as the
+assistant `MessageEnd` content and hands them back on later calls, so the model sees its
+own reasoning again; chat-completions clients read only `content` and `tool_calls`.
+A tool call's commands get the turn's `ToolContext.env` (the browse runner's model access).
+
 ## Catalog digests
 
 PromptPack / ToolSet / AgentComposition digests and session pin handshake are

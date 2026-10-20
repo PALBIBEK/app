@@ -39,6 +39,15 @@ class Strategy(StrEnum):
     AGENT_ONLY = "agent-only"
 
 
+def long_term_agent(*, composition_id: str | None, harness_version: str) -> str:
+    """The agent a long-term fact belongs to: its composition's name, else its harness version.
+
+    Unlike ``agent_pin`` (one exact version), the name survives new versions, so
+    editing an agent keeps what it learned about its users.
+    """
+    return composition_id or harness_version
+
+
 def agent_pin(
     *,
     harness_version: str,

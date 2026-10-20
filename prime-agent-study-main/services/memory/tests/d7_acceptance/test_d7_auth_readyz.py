@@ -6,7 +6,6 @@ import pytest
 from starlette.testclient import TestClient
 
 from memory_service.app import create_app
-from .conftest import TOKEN, headers
 
 
 def test_t1_no_bearer_401_on_mutating_and_reading_routes(authed: TestClient) -> None:

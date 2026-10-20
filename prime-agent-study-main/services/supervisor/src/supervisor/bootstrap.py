@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,20 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.app import SupervisorState, build_supervisor
 from supervisor.catalog.loading.bootstrap import (
-    agent_platform_root,
     bootstrap_composition_catalog,
-    resolve_catalog_dir,
 )
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.config import Settings
-from supervisor.db.engine import create_all, make_engine, session_factory
+from supervisor.db.engine import make_engine, session_factory
+from supervisor.db.migrate import migrate
 from supervisor.harness import HarnessCatalog, load_manifest
+from supervisor.harness.repository import hydrate_harness_catalog
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
 from supervisor.policy.quotas import TenantQuotaEnforcer, TenantQuotaLimits
 from supervisor.policy.rate_limit import MemoryRateLimiter
 from supervisor.sandbox.factory import create_sandbox_provider
 from supervisor.sandbox.security.guards import assert_multi_tenant_sandbox_provider
+
+logger = logging.getLogger(__name__)
 
 
 def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
@@ -43,13 +47,20 @@ async def bootstrap_supervisor(
 ) -> SupervisorState:
     """Build fully wired supervisor state for production or integration tests."""
     settings.require_auth_configured()
+    # A half-set or invalid MODEL_GATEWAY_* configuration fails boot, not a turn.
+    from supervisor.models import model_router
+    from supervisor.models.browser import BrowserAccess
+
+    model_router()
 
     if session_maker is None:
         engine = make_engine(settings.database_url)
-        await create_all(engine)
+        await migrate(engine)
         session_maker = session_factory(engine)
 
     harness_catalog = bootstrap_harness_catalog(settings.harness_versions_dir)
+    # Versions tenants registered through the API (shipped ones come from the directory).
+    await hydrate_harness_catalog(harness_catalog, session_maker)
     if composition_catalog is None and settings.load_composition_catalog:
         composition_catalog = bootstrap_composition_catalog(settings.resolved_catalog_dir())
 
@@ -88,10 +99,20 @@ async def bootstrap_supervisor(
         sandbox = create_sandbox_provider(
             settings.sandbox_provider, hydrator=workspace_hydrator
         )
-    except ModuleNotFoundError:
-        # Optional provider dep missing (docker/e2b) — keep process up for /readyz.
-        # Session create soft-resolves via resolve_sandbox_create when a deploy
-        # provider is available; here fall back to local_process for demo.
+    except ModuleNotFoundError as exc:
+        if settings.multi_tenant_strict:
+            # Falling back to host processes would silently drop tenant isolation.
+            raise RuntimeError(
+                f"SANDBOX_PROVIDER={settings.sandbox_provider!r} is unavailable ({exc}); "
+                "MULTI_TENANT_STRICT forbids falling back to local_process"
+            ) from exc
+        # Optional provider dep missing (docker/e2b) — keep process up for /readyz,
+        # on local processes, and say so: this is a development fallback.
+        logger.warning(
+            "SANDBOX_PROVIDER=%r is unavailable (%s); falling back to local_process",
+            settings.sandbox_provider,
+            exc,
+        )
         sandbox = create_sandbox_provider("local_process", hydrator=workspace_hydrator)
     grant_store = create_grant_store(session_factory=session_maker)
     authz = create_authz_service(store=grant_store)
@@ -139,4 +160,5 @@ async def bootstrap_supervisor(
         grant_store=grant_store,
         virtual_key_client=vk_client,
         workspace_store=workspace_store,
+        browser=BrowserAccess.from_env(os.environ),
     )

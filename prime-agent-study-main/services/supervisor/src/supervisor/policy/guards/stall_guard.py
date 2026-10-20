@@ -18,14 +18,13 @@ from typing import Final
 
 from supervisor.policy.types import StallSignal, StallState
 
-
 __all__ = [
-    "StallGuard",
-    "EnhancedStallGuard",
-    "DEFAULT_RUN_STALL_BUDGET_MS",
-    "DEFAULT_STALL_ROUND_LIMIT",
     "DEFAULT_HEARTBEAT_INTERVAL_MS",
     "DEFAULT_QUIET_THRESHOLD_MS",
+    "DEFAULT_RUN_STALL_BUDGET_MS",
+    "DEFAULT_STALL_ROUND_LIMIT",
+    "EnhancedStallGuard",
+    "StallGuard",
 ]
 
 
@@ -104,11 +103,11 @@ class EnhancedStallGuard:
     """
 
     __slots__ = (
-        "_states",
-        "_stall_budget_ms",
-        "_round_limit",
         "_heartbeat_ms",
         "_quiet_ms",
+        "_round_limit",
+        "_stall_budget_ms",
+        "_states",
     )
 
     def __init__(

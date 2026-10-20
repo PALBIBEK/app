@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from supervisor.seams.core.errors import SeamError
 
 __all__ = [
     "CasConflict",
-    "WorkspaceFileRecord",
     "ChecksumMismatch",
     "HydrateIncomplete",
+    "WorkspaceBase",
+    "WorkspaceFileRecord",
     "WorkspacePathEscape",
     "WorkspaceStore",
     "WorkspaceStoreError",
@@ -77,6 +79,10 @@ class WorkspaceFileRecord:
     deleted: bool = False
 
 
+type WorkspaceBase = dict[str, tuple[int, str]]
+"""What a session's tree started from: path -> (version, sha256) in the scope."""
+
+
 @dataclass(frozen=True)
 class WorkspaceSyncReport:
     scope_id: str
@@ -84,6 +90,8 @@ class WorkspaceSyncReport:
     removed: tuple[str, ...]
     conflicts: tuple[str, ...]
     bytes_transferred: int
+    base: Mapping[str, tuple[int, str]] = field(default_factory=dict)
+    """The tree's base after this hydrate or sync: pass it to the next sync."""
 
 
 @runtime_checkable
@@ -113,12 +121,20 @@ class WorkspaceStore(Protocol):
         expected_version: int | None = None,
     ) -> WorkspaceFileRecord: ...
 
-    async def soft_delete(self, scope_id: str, path: str) -> None: ...
+    async def soft_delete(
+        self, scope_id: str, path: str, *, expected_version: int | None = None
+    ) -> None: ...
 
     async def hydrate(
         self, scope_id: str, tree: WorkspaceTreeIO
     ) -> WorkspaceSyncReport: ...
 
     async def sync(
-        self, scope_id: str, tree: WorkspaceTreeIO
-    ) -> WorkspaceSyncReport: ...
+        self,
+        scope_id: str,
+        tree: WorkspaceTreeIO,
+        *,
+        base: Mapping[str, tuple[int, str]] | None = None,
+    ) -> WorkspaceSyncReport:
+        """Commit what the tree changed since ``base`` (see providers.workspace.sync)."""
+        ...

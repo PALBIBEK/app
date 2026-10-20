@@ -27,13 +27,12 @@ from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
 from supervisor.maintenance import approval_sweeper, idle_reaper
-from supervisor.session import drain_for_deploy
 from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.workflow import AgentSessionWorkflow
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # In-flight activities get this long to finish on shutdown before being cancelled;
 # a cancelled turn is retried or adopted by another worker.
@@ -87,9 +86,9 @@ async def _reap_orphan_sandboxes(state: SupervisorState) -> None:
             lookup_session=state.manager.session_status,
             reattach=reattach,
         )
-        _log.info("orphan reaper: %s", stats)
+        logger.info("orphan reaper: %s", stats)
     except Exception:
-        _log.exception("orphan reaper failed")
+        logger.exception("orphan reaper failed")
 
 
 async def run(settings: Settings, stop: asyncio.Event) -> None:
@@ -97,7 +96,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
     client = await connect(settings.temporal)
     await _reap_orphan_sandboxes(state)
     async with session_worker(client, state, task_queue=settings.temporal.task_queue) as activities:
-        _log.info(
+        logger.info(
             "session worker up queue=%s home=%s",
             settings.temporal.task_queue,
             activities.home_queue,
@@ -115,12 +114,12 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
                 )
             )
         await stop.wait()
-        _log.info("shutting down: finishing in-flight activities")
+        logger.info("shutting down: finishing in-flight activities")
         for loop in loops:
             loop.cancel()
         await asyncio.gather(*loops, return_exceptions=True)
     # Workers have stopped taking work; park the runtimes this process still holds.
-    await drain_for_deploy(state.manager, timeout_seconds=state.drain_grace_s)
+    await state.manager.drain(timeout_seconds=state.drain_grace_s)
 
 
 def main() -> None:

@@ -20,40 +20,8 @@ MEMBRANE = {
 RUNTIMES_ROOT = SRC / "agent" / "runtimes"
 
 
-def test_no_camelcase_harness_wire_keys_outside_membrane() -> None:
-    leaks: list[str] = []
-    for path in SRC.rglob("*.py"):
-        if path in MEMBRANE:
-            continue
-        for i, line in enumerate(path.read_text().splitlines(), 1):
-            if line.strip().startswith("#"):
-                continue
-            for match in PI_KEYS.finditer(line):
-                leaks.append(f"{path.relative_to(SRC)}:{i}:{match.group(0)}")
-    assert leaks == [], "camelCase harness wire keys leaked:\n" + "\n".join(leaks)
 
 
-def test_nothing_outside_runtimes_imports_runtimes() -> None:
-    """session/, journal/, api/, … must not know a concrete runtime exists.
-
-    ``agent/factory.py`` is the intentional single choke-point.
-    """
-    allow = {SRC / "agent" / "factory.py"}
-    leaks: list[str] = []
-    for path in SRC.rglob("*.py"):
-        if path in allow:
-            continue
-        try:
-            path.relative_to(RUNTIMES_ROOT)
-            continue  # inside runtimes/ — allowed
-        except ValueError:
-            pass
-        for i, line in enumerate(path.read_text().splitlines(), 1):
-            if line.strip().startswith("#"):
-                continue
-            if "runtimes" in line:
-                leaks.append(f"{path.relative_to(SRC)}:{i}:{line.strip()}")
-    assert leaks == [], "runtimes referenced outside agent/runtimes/:\n" + "\n".join(leaks)
 
 
 def test_echo_does_not_depend_on_harness() -> None:

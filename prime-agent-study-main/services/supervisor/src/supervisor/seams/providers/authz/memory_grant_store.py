@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from supervisor.seams.services.authz import ALL_GRANTS, Grant, GrantStore
+from supervisor.seams.services.authz import ALL_GRANTS, Grant
 
 
 @dataclass
@@ -64,5 +64,3 @@ class MemoryGrantStore:
             await self.grant(principal_id, scope_id, g)
 
 
-def as_grant_store(store: MemoryGrantStore) -> GrantStore:
-    return store

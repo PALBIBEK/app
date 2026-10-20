@@ -31,9 +31,7 @@ def _bullets_from_markdown(text: str) -> list[str]:
     lines: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
-        if line.startswith("- "):
-            lines.append(line[2:].strip())
-        elif line.startswith("* "):
+        if line.startswith(("- ", "* ")):
             lines.append(line[2:].strip())
     return lines
 

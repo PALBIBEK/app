@@ -92,7 +92,7 @@ def test_openai_completion_normalizes_upstream_usage(
 
     transport = httpx.MockTransport(handler)
     with TestClient(app) as c:
-        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(
             api_key="sk-test",
             base_url="https://api.openai.com/v1",
             transport=transport,

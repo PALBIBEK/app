@@ -1,8 +1,8 @@
 {
-  "digest": "sha256:4fe1bc7f699299d594465da40761f02b9272828fcdf42353f7f2e7823795cb63",
+  "digest": "sha256:035992b4145d0a3c610dc01cb5cc32a7ac83dac410d0b6c96b2e4db04948da42",
   "harness_version": "githi-v1",
   "memory_profile": {
-    "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
+    "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
     "id": "default"
   },
   "name": "githi-tools-v1",
@@ -16,13 +16,13 @@
   },
   "protocol_version": 1,
   "sandbox_profile": {
-    "digest": "sha256:b2ef6ff9146285f849f68d09e581f3058222089be426820c4835e111b79b1431",
+    "digest": "sha256:f31d062a8a12b20df2bcb6467399210830ab74b93547ead08f9aad6391e8e837",
     "id": "githi-docker-v1"
   },
   "semver": "1.0.0",
   "status": "offered",
   "tool_set": {
-    "digest": "sha256:d49abd6d6bbf6230ee084c01dd8cee6301f19aecbe1b64afe18d28ea9259b124",
-    "id": "githi-tools"
+    "digest": "sha256:4ab279428f9409fa3da147d03f01cd2e6a3da21ae6db95920e4e1eb602ae3d3f",
+    "id": "githi-coding-tools"
   }
 }

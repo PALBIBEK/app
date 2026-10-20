@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from supervisor.obs.projector import JournalProjector
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _env_ms(name: str, default_ms: int) -> int:
@@ -67,7 +67,7 @@ class SpanReaper:
             return "session_terminal"
 
         if age > self.config.span_max_age_ms:
-            _log.error(
+            logger.error(
                 "span max_age fired run_id=%s age_ms=%s — closure path bug",
                 proj.open_run_id,
                 age,
@@ -97,9 +97,9 @@ async def run_reaper_loop(
         try:
             closed_by = reaper.tick()
             if closed_by:
-                _log.info("span_reaper closed run closed_by=%s", closed_by)
+                logger.info("span_reaper closed run closed_by=%s", closed_by)
         except Exception:
-            _log.exception("span_reaper tick failed")
+            logger.exception("span_reaper tick failed")
 
 
 def otlp_export_enabled() -> bool:

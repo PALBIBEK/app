@@ -130,11 +130,13 @@ class SessionWorkflows:
             )
         return result.body
 
-    async def respond_approval(self, session_id: str, approval_id: str, choice: str) -> None:
+    async def respond_approval(
+        self, session_id: str, approval_id: str, choice: str, *, responded_by: str | None = None
+    ) -> None:
         async with _commands():
             await self._handle(session_id).execute_update(
                 AgentSessionWorkflow.respond_approval,
-                ApprovalChoice(approval_id, choice),
+                ApprovalChoice(approval_id, choice, responded_by),
                 id=f"approval:{approval_id}",
             )
 
@@ -157,5 +159,5 @@ class SessionWorkflows:
     async def check_reachable(self) -> bool:
         try:
             return await self._client.service_client.check_health()
-        except Exception:  # a readiness probe reports failure, it never raises
+        except Exception:  # noqa: BLE001 - a readiness probe reports failure, it never raises
             return False

@@ -34,7 +34,7 @@ from supervisor.memory.types import (
 )
 from supervisor.memory.view import MemoryView
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 type IsMember = Callable[[str, str], Awaitable[bool]]
 
@@ -78,8 +78,8 @@ class _Policy:
     async def _safe(key: tuple[str, ...], decide: Callable[[], Awaitable[bool]]) -> bool:
         try:
             return await decide()
-        except Exception:  # noqa: BLE001 - disclosure fails closed on any lookup error
-            _log.warning("memory disclosure lookup failed %s", key, exc_info=True)
+        except Exception:  # disclosure fails closed on any lookup error
+            logger.warning("memory disclosure lookup failed %s", key, exc_info=True)
             return False
 
     def entitled(self, person: str, source: str) -> Awaitable[bool]:

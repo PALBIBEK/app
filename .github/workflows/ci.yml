@@ -1,0 +1,179 @@
+name: ci
+
+# The quality gates of the agent platform (prime-agent-study-main/), on every push and PR:
+# lint, types, every service's test suite, the end-to-end suite against a real stack
+# (Postgres, Temporal, gateway, memory service, API and worker as separate processes),
+# and a docker-compose smoke test. A live model turn runs when MODEL_E2E_API_KEY is set.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PROJECT: prime-agent-study-main
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint-and-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the supervisor with its dev tools
+        run: pip install -e "$PROJECT/services/supervisor[dev,postgres,s3]"
+      - name: Lint (each service under its own rules)
+        run: |
+          status=0
+          for svc in supervisor model-gateway memory; do
+            echo "::group::ruff $svc"
+            (cd "$PROJECT/services/$svc" && ruff check src --output-format github) || status=1
+            echo "::endgroup::"
+          done
+          (cd "$PROJECT/e2e" && ruff check . --output-format github) || status=1
+          exit $status
+      - name: Shipped catalog digests are current
+        run: python "$PROJECT/harness/scripts/recompute-digests.py" --check
+      - name: Types (supervisor)
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: |
+          set -o pipefail
+          mypy | tee mypy.out || {
+            grep -E '^src/.+:[0-9]+: error:' mypy.out | head -40 \
+              | sed -E 's#^([^:]+):([0-9]+): error: (.*)$#::error file=${{ env.PROJECT }}/services/supervisor/\1,line=\2::\3#'
+            exit 1
+          }
+
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:  # the supervisor's migration tests run against it
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [supervisor, model-gateway, memory]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
+        run: |
+          case "${{ matrix.service }}" in
+            supervisor) pip install -e ".[dev,postgres,s3]" ;;
+            memory)     pip install -e ".[dev,postgres]" ;;
+            *)          pip install -e ".[dev]" ;;
+          esac
+      - name: Temporal CLI (the supervisor's workflow tests start a dev server)
+        if: matrix.service == 'supervisor'
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "TEMPORAL_CLI_PATH=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+      - name: Test
+        working-directory: ${{ env.PROJECT }}/services/${{ matrix.service }}
+        run: |
+          set -o pipefail
+          pytest -q -rfE 2>&1 | tee pytest.out || {
+            grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/'
+            exit 1
+          }
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: supervisor
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yal -d supervisor"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: One virtualenv per service, as each is deployed
+        working-directory: ${{ env.PROJECT }}/services
+        run: |
+          python -m venv supervisor/.venv && supervisor/.venv/bin/pip install -q -e "supervisor[dev,postgres,s3]"
+          python -m venv model-gateway/.venv && model-gateway/.venv/bin/pip install -q -e "model-gateway[dev]"
+          python -m venv memory/.venv && memory/.venv/bin/pip install -q -e "memory[dev,postgres]"
+      - name: Temporal CLI
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "TEMPORAL_CLI=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+      - name: Databases and service hostnames
+        run: |
+          PGPASSWORD=yal psql -h 127.0.0.1 -p 5433 -U yal -d supervisor -c "create database memory"
+          echo "127.0.0.1 model-gateway acp temporal memory-service" | sudo tee -a /etc/hosts
+      - name: Start the stack
+        run: $PROJECT/e2e/stack/up.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
+      - name: The migrated schema matches the models
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: DATABASE_URL=postgresql+asyncpg://yal:yal@127.0.0.1:5433/supervisor .venv/bin/alembic check
+      - name: End-to-end stages
+        run: $PROJECT/e2e/run.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-logs
+          path: ${{ env.PROJECT }}/e2e/.run/logs/
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and start the compose stack
+        working-directory: ${{ env.PROJECT }}
+        run: docker compose up -d --build
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: A session runs a turn through the compose stack
+        working-directory: ${{ env.PROJECT }}/e2e
+        run: |
+          pip install -q httpx PyJWT
+          python compose_smoke.py
+      - name: Compose logs
+        if: failure()
+        working-directory: ${{ env.PROJECT }}
+        run: |
+          docker compose ps -a
+          # The supervisor first: a step keeps only its first ten error annotations.
+          for svc in supervisor supervisor-worker $(docker compose config --services | grep -vx 'supervisor\|supervisor-worker'); do
+            tail=$(docker compose logs --no-color --tail 25 "$svc" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=compose $svc::${tail:0:3500}"
+          done

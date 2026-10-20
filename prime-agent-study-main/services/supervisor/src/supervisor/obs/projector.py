@@ -37,7 +37,7 @@ from supervisor.telemetry_contract.run_id import resolve_run_id
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
 from supervisor.telemetry_contract.usage import to_genai_tokens, to_yal_cost
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Every AgentEvent → how it is projected (Phase1 §3.2). Values are documentation keys.
 PROJECTION_TABLE: dict[str, str] = {
@@ -57,6 +57,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "MemoryRecall": "search_memory",
     "MemoryInjected": "event_on_turn",
     "MemoryContext": "event_on_turn",
+    "BackgroundResults": "event_on_turn",
     "SubagentStart": "nested_invoke",
     "SubagentEnd": "close_nested",
     "JobStart": "platform_span",
@@ -99,7 +100,7 @@ class JournalProjector:
             self._project(env)
             self._flush()
         except Exception:
-            _log.exception("projector failed seq=%s; continuing", env.seq)
+            logger.exception("projector failed seq=%s; continuing", env.seq)
 
     def project_many(self, envs: list[Envelope]) -> None:
         for env in envs:
@@ -159,7 +160,7 @@ class JournalProjector:
         try:
             self.sink.export(batch)
         except Exception:
-            _log.exception("span export failed; dropping %s spans", len(batch))
+            logger.exception("span export failed; dropping %s spans", len(batch))
 
     def _base_attrs(self, env: Envelope, run_id: str) -> dict[str, Any]:
         return {

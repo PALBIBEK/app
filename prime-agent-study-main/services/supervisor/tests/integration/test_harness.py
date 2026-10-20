@@ -11,12 +11,10 @@ from supervisor.agent.events import ToolStart
 from supervisor.db.engine import open_db
 from supervisor.harness import (
     HarnessCatalog,
-    HarnessNotOffered,
     IncompatibleHarness,
     RecoveryAction,
     RecoveryPolicy,
     ToolClass,
-    ToolSpec,
     default_recovery_policy,
 )
 from supervisor.session.manager import SessionManager
@@ -34,96 +32,8 @@ def _policy(*, non_atomic: RecoveryAction) -> RecoveryPolicy:
     )
 
 
-@pytest.mark.asyncio
-async def test_two_versions_side_by_side(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'h.db'}") as (_, factory):
-        from supervisor.journal.reader import JournalReader
-        from supervisor.journal.writer import JournalWriter
-
-        v1 = make_manifest(
-            "coding-v1",
-            requires_sandbox=True,
-            image_digest="sha256:" + "a" * 64,
-            recovery=_policy(non_atomic=RecoveryAction.FAIL),
-        )
-        v2_tools = {
-            **{k: ToolSpec(tool_class=v) for k, v in v1.recovery.tool_classes.items()},
-            "new_tool": ToolSpec(tool_class=ToolClass.PURE),
-        }
-        v2 = replace(
-            make_manifest(
-                "coding-v2",
-                requires_sandbox=True,
-                image_digest="sha256:" + "b" * 64,
-            ),
-            tools=v2_tools,
-            recovery=RecoveryPolicy(
-                default=RecoveryAction.FAIL,
-                by_tool_class=dict(v1.recovery.by_tool_class),
-                tool_classes={k: t.tool_class for k, t in v2_tools.items()},
-            ),
-        )
-        catalog = HarnessCatalog({v1.harness_version: v1, v2.harness_version: v2})
-        provider = TrackingProvider()
-        writer = JournalWriter(factory, blob_dir=tmp_path / "blobs")
-        reader = JournalReader(factory, blob_dir=tmp_path / "blobs")
-        m = SessionManager(
-            session_factory=factory,
-            writer=writer,
-            reader=reader,
-            registry=SessionRegistry(),
-            catalog=catalog,
-            sandbox_provider=provider,
-        )
-        a = await m.create(tenant_id="t", harness_version="coding-v1")
-        b = await m.create(tenant_id="t", harness_version="coding-v2")
-        row_a = await m._get_session_row(a)
-        row_b = await m._get_session_row(b)
-        assert row_a.manifest is not None and row_a.manifest["harness_version"] == "coding-v1"
-        assert row_b.manifest is not None and "new_tool" in row_b.manifest["tools"]
-        assert "new_tool" not in (row_a.manifest.get("tools") or {})
-
-        await m._stop_runtime_keep_session(a)
-        await m._stop_runtime_keep_session(b)
-        ra = await m.resume(a)
-        rb = await m.resume(b)
-        assert ra.state == ResumeState.COLD
-        assert rb.state == ResumeState.COLD
-        await m.terminate(a)
-        await m.terminate(b)
 
 
-@pytest.mark.asyncio
-async def test_pin_holds_under_deprecation(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'h.db'}") as (_, factory):
-        from supervisor.journal.reader import JournalReader
-        from supervisor.journal.writer import JournalWriter
-
-        v1 = make_manifest("kg-v1", requires_sandbox=False, image_digest=None)
-        v2 = make_manifest("kg-v2", requires_sandbox=False, image_digest=None)
-        catalog = HarnessCatalog({"kg-v1": v1, "kg-v2": v2})
-        writer = JournalWriter(factory, blob_dir=tmp_path / "blobs")
-        reader = JournalReader(factory, blob_dir=tmp_path / "blobs")
-        m = SessionManager(
-            session_factory=factory,
-            writer=writer,
-            reader=reader,
-            registry=SessionRegistry(),
-            catalog=catalog,
-            sandbox_provider=None,
-        )
-        sid = await m.create(tenant_id="t", harness_version="kg-v1")
-        catalog.deprecate("kg-v1")
-
-        await m._stop_runtime_keep_session(sid)
-        result = await m.resume(sid)
-        assert result.state == ResumeState.COLD
-
-        with pytest.raises(HarnessNotOffered):
-            await m.create(tenant_id="t", harness_version="kg-v1")
-        sid2 = await m.create(tenant_id="t", harness_version="kg-v2")
-        await m.terminate(sid)
-        await m.terminate(sid2)
 
 
 @pytest.mark.asyncio

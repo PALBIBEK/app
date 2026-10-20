@@ -17,7 +17,7 @@ from supervisor.journal.writer import JournalWriter, OversizedPayloadError
 
 @pytest.fixture
 async def writer(tmp_path: Path):
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         yield w
@@ -38,7 +38,7 @@ async def test_append_returns_increasing_seq_from_zero(writer: JournalWriter) ->
 
 @pytest.mark.asyncio
 async def test_concurrent_appends_no_duplicate_seq(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'c.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'c.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
 
@@ -52,7 +52,7 @@ async def test_concurrent_appends_no_duplicate_seq(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_different_sessions_do_not_interfere(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'd.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'd.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("a", runtime="echo")
         await w.ensure_session("b", runtime="echo")
@@ -63,7 +63,7 @@ async def test_different_sessions_do_not_interfere(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_duplicate_session_seq_raises(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'dup.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'dup.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         await w.append("s1", RunStart(), turn_id=None, trace_id=None)
@@ -86,7 +86,7 @@ async def test_duplicate_session_seq_raises(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_start_durable_before_append_returns(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'dur.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'dur.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         seq = await w.append(
@@ -108,7 +108,7 @@ async def test_tool_start_durable_before_append_returns(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_batch_append_atomic_all_or_nothing(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'batch.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'batch.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         last = await w.append_batch(
@@ -132,7 +132,7 @@ async def test_batch_append_atomic_all_or_nothing(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_batch_append_rolls_back_on_failure(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'batch2.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'batch2.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         await w.append("s1", RunStart(), turn_id=None, trace_id=None)
@@ -171,7 +171,7 @@ async def test_batch_append_rolls_back_on_failure(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_oversized_payload_offloaded_row_holds_reference(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'blob.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'blob.db'}") as (_engine, factory):
         blobs = tmp_path / "blobs"
         w = JournalWriter(factory, blob_dir=blobs, blob_threshold=64)
         await w.ensure_session("s1", runtime="echo")
@@ -197,7 +197,7 @@ async def test_oversized_payload_offloaded_row_holds_reference(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_run_end_updates_session_index(tmp_path: Path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'idx.db'}") as (engine, factory):
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'idx.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
         await w.append(

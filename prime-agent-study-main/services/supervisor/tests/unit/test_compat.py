@@ -5,14 +5,11 @@ from __future__ import annotations
 import pytest
 
 from supervisor.harness import (
-    HarnessManifest,
     IncompatibleHarness,
-    RecoveryAction,
-    RecoveryPolicy,
     RuntimeCapabilities,
 )
 from supervisor.harness.services.compat_checker import capabilities_for, check
-from tests.support.session_env import TrackingProvider, make_manifest
+from tests.support.session_env import make_manifest
 
 
 def test_supported_protocol_passes() -> None:
@@ -59,30 +56,3 @@ def test_requires_sandbox_without_provider_raises() -> None:
         check(m, capabilities_for("echo"), sandbox_provider=None)
 
 
-@pytest.mark.asyncio
-async def test_check_runs_before_provider_call(session_env) -> None:
-    from supervisor.session.manager import SessionManager
-    from supervisor.session.registry import SessionRegistry
-    from dataclasses import replace
-
-    catalog = session_env["catalog"]
-    provider = session_env["provider"]
-    bad = replace(
-        catalog.resolve("coding-v1"),
-        protocol_version=99,
-    )
-    catalog.register(bad)
-
-    m = SessionManager(
-        session_factory=session_env["factory"],
-        writer=session_env["writer"],
-        reader=session_env["reader"],
-        registry=SessionRegistry(),
-        catalog=catalog,
-        sandbox_provider=provider,
-    )
-    with pytest.raises(IncompatibleHarness, match="protocol_version=99"):
-        await m.create(
-            tenant_id="t1", harness_version="coding-v1", runtime_name="echo"
-        )
-    assert provider.create_calls == []

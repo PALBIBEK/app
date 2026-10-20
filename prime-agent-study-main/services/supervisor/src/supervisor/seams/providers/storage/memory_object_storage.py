@@ -9,7 +9,6 @@ from supervisor.seams.services.object_storage import (
     HeadResult,
     ObjectIntegrityError,
     ObjectNotFound,
-    ObjectStorage,
     ObjectTransient,
     PresignedUrl,
     PutResult,
@@ -94,5 +93,3 @@ class MemoryObjectStorage:
         )
 
 
-def as_object_storage(store: MemoryObjectStorage) -> ObjectStorage:
-    return store

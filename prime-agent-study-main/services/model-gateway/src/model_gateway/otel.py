@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _provider: Any | None = None
 
 
@@ -48,13 +48,13 @@ def setup_tracing(service_name: str = "yal-model-gateway") -> None:
         )
         trace.set_tracer_provider(provider)
         _provider = provider
-        _log.info(
+        logger.info(
             "model-gateway OTLP configured endpoint=%s sample_ratio=%s",
             endpoint,
             sample_ratio,
         )
     except Exception:
-        _log.exception("model-gateway OTLP setup failed; continuing without export")
+        logger.exception("model-gateway OTLP setup failed; continuing without export")
         _provider = None
 
 
@@ -66,5 +66,5 @@ def shutdown_tracing() -> None:
         _provider.force_flush(timeout_millis=5000)
         _provider.shutdown()
     except Exception:
-        _log.exception("model-gateway tracer provider shutdown failed")
+        logger.exception("model-gateway tracer provider shutdown failed")
     _provider = None

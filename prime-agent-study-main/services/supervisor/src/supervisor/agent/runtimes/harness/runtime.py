@@ -14,14 +14,14 @@ from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.events import Envelope, RunEnd
 from supervisor.agent.runtimes.harness import commands
 from supervisor.agent.runtimes.harness.framing import read_frames
-from supervisor.harness import build_spawn_plan
 from supervisor.agent.runtimes.harness.state import from_get_state
 from supervisor.agent.runtimes.harness.translate import translate
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.agent.stream import EventStream
+from supervisor.harness import build_spawn_plan
 from supervisor.sandbox.base import ProcessHandle, Sandbox
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class HarnessRuntime:
@@ -184,7 +184,7 @@ class HarnessRuntime:
             chunk = await self._proc.stderr.read(65536)
             if not chunk:
                 return
-            _log.debug("harness stderr: %s", chunk[:500])
+            logger.debug("harness stderr: %s", chunk[:500])
 
     def _fail_pending(self, exc: BaseException) -> None:
         for fut in list(self._pending.values()):

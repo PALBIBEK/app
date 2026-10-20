@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
-from supervisor.seams.core.errors import BadArgs, ProviderConflict, ProviderMissing, UnsupportedCapability
+from supervisor.seams.core.errors import (
+    BadArgs,
+    ProviderConflict,
+    ProviderMissing,
+    UnsupportedCapability,
+)
 from supervisor.seams.core.types import (
     ChildHandle,
     ChildInfo,
@@ -156,6 +162,12 @@ class SubagentTransportImpl:
 
     def register_provider(self, name: str, provider: Any) -> Disposer:
         return self._registry.register(name, provider)
+
+    @property
+    def default_provider(self) -> str | None:
+        """The provider a request that names none goes to: as wired, else the first registered."""
+        names = self._registry.names()
+        return self._default_provider or (names[0] if names else None)
 
     def _provider(self, name: str) -> Any:
         return self._registry.get(name)

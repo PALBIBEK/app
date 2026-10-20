@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 
 from supervisor.api import deps
 from supervisor.seams.services import (
@@ -44,13 +44,8 @@ class PresignDownloadOut(BaseModel):
     content_sha256: str
 
 
-class PutFileMeta(BaseModel):
-    mime_type: str | None = None
-    expected_version: int | None = Field(default=None)
-
-
 def _workspace_store(request: Request) -> WorkspaceStore:
-    store = getattr(deps._state(request), "workspace_store", None)  # noqa: SLF001
+    store = getattr(deps._state(request), "workspace_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="workspace store not configured")
     return store

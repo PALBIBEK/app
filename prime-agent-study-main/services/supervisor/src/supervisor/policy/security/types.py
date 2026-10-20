@@ -14,22 +14,21 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
-from enum import StrEnum, auto
-from typing import Any, Final
-
+from enum import StrEnum
+from typing import Final
 
 __all__ = [
-    # Enums
-    "ThreatLevel",
-    "ClassifierType",
-    "ContentType",
-    # Dataclasses
-    "SecurityVerdict",
-    "QuarantinedContent",
-    "PatternMatch",
+    "DEFAULT_QUARANTINE_RETENTION_MS",
     # Constants
     "DEFAULT_THREAT_THRESHOLD",
-    "DEFAULT_QUARANTINE_RETENTION_MS",
+    "ClassifierType",
+    "ContentType",
+    "PatternMatch",
+    "QuarantinedContent",
+    # Dataclasses
+    "SecurityVerdict",
+    # Enums
+    "ThreatLevel",
 ]
 
 
@@ -193,8 +192,3 @@ class QuarantinedContent:
         )
 
 
-def _truncate_preview(content: str, max_len: int = 100) -> str:
-    """Truncate content for preview, redacting sensitive parts."""
-    if len(content) <= max_len:
-        return content
-    return content[:max_len] + "..."

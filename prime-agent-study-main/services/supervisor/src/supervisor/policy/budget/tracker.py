@@ -58,8 +58,8 @@ class BudgetTracker:
     """
 
     __slots__ = (
-        "_db",
         "_audit",
+        "_db",
         "_session_limits",
         "_tokens_this_turn",
     )

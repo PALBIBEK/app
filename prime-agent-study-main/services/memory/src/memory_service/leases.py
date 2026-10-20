@@ -23,22 +23,21 @@ class LeaseManager:
     async def acquire(self, session_id: str, owner: str) -> int:
         """Acquire or renew lease. Returns fence token. Raises LeaseHeld if another owner."""
         now = int(time.time() * 1000)
-        async with self._factory() as db:
-            async with db.begin():
-                row = await db.get(MemorySessionRow, session_id, with_for_update=True)
-                if row is None:
-                    raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
-                expired = row.lease_until_ms is None or row.lease_until_ms < now
-                same = row.lease_owner == owner
-                if not expired and not same:
-                    raise LeaseHeld(
-                        f"LEASE_HELD: owner={row.lease_owner}",
-                        code="LEASE_HELD",
-                    )
-                row.lease_owner = owner
-                row.lease_until_ms = now + self._ttl_ms
-                row.fence = int(row.fence) + 1
-                return int(row.fence)
+        async with self._factory() as db, db.begin():
+            row = await db.get(MemorySessionRow, session_id, with_for_update=True)
+            if row is None:
+                raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
+            expired = row.lease_until_ms is None or row.lease_until_ms < now
+            same = row.lease_owner == owner
+            if not expired and not same:
+                raise LeaseHeld(
+                    f"LEASE_HELD: owner={row.lease_owner}",
+                    code="LEASE_HELD",
+                )
+            row.lease_owner = owner
+            row.lease_until_ms = now + self._ttl_ms
+            row.fence = int(row.fence) + 1
+            return int(row.fence)
 
     async def assert_fence(self, session_id: str, fence: int | None) -> None:
         """Reject stale writers. fence=None allowed only when no lease held/expired."""

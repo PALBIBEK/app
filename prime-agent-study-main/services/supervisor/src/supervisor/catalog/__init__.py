@@ -50,63 +50,20 @@ Example:
 from __future__ import annotations
 
 # =============================================================================
-# Types
-# =============================================================================
-from supervisor.catalog.core.types import (
-    # Enums
-    ArtifactKind,
-    ArtifactStatus,
-    SandboxProviderName,
-    FileEffects,
-    ApprovalDefault,
-    RecallBackend,
-    CatalogGrant,
-    CatalogAction,
-    # Metadata
-    ArtifactMetadata,
-    ArtifactUsageRecord,
-    ArtifactUsageStats,
-    # Artifact types
-    PromptSection,
-    PromptPack,
-    ToolDefinition,
-    ToolSet,
-    DigestRef,
-    PlugBindings,
-    AgentComposition,
-    SandboxProfile,
-    MemoryProfile,
-    SessionPins,
-    # Type alias
-    Artifact,
-)
-
-# =============================================================================
 # Errors
 # =============================================================================
 from supervisor.catalog.core.errors import (
-    # Base
     CatalogError,
-    # Integrity
+    CatalogOwnershipRequired,
+    CompositionDigestRequired,
+    CompositionIncomplete,
     DigestMismatch,
     DigestMissing,
-    InvalidDigest,
-    # Status
-    NotOffered,
-    ImmutableArtifact,
     FloatingRef,
-    # Composition
-    CompositionIncomplete,
-    CompositionDigestRequired,
     HarnessVersionMismatch,
-    # Permission
-    CatalogPermissionDenied,
-    CatalogOwnershipRequired,
-    # Storage
-    CatalogStorageError,
-    CatalogConnectionError,
-    # Validation
     InvalidArtifact,
+    InvalidDigest,
+    NotOffered,
 )
 
 # =============================================================================
@@ -114,145 +71,129 @@ from supervisor.catalog.core.errors import (
 # =============================================================================
 from supervisor.catalog.core.protocols import (
     ArtifactStoreProtocol,
-    UsageStoreProtocol,
+    CatalogAnalyticsProtocol,
+    CatalogAuthzProtocol,
     CatalogServiceProtocol,
     CompositionResolverProtocol,
     RuntimeBinderProtocol,
-    CatalogAuthzProtocol,
-    CatalogAnalyticsProtocol,
+    UsageStoreProtocol,
 )
 
 # =============================================================================
-# Converters
+# Types
 # =============================================================================
-from supervisor.catalog.storage.converters import (
-    # From dict
-    prompt_pack_from_dict,
-    tool_set_from_dict,
-    composition_from_dict,
-    sandbox_profile_from_dict,
-    memory_profile_from_dict,
-    session_pins_from_dict,
-    metadata_from_dict,
-    artifact_from_dict,
-    # To dict
-    prompt_pack_to_dict,
-    tool_set_to_dict,
-    composition_to_dict,
-    sandbox_profile_to_dict,
-    memory_profile_to_dict,
-    session_pins_to_dict,
-    metadata_to_dict,
-    artifact_to_dict,
-    # Helpers
-    kind_of,
-    with_digest,
-    with_status,
-    with_metadata,
-)
-
-# =============================================================================
-# Repositories
-# =============================================================================
-from supervisor.catalog.storage import (
-    InMemoryArtifactStore,
-    InMemoryUsageStore,
-    PostgresArtifactStore,
-    PostgresUsageStore,
-    reject_floating_ref,
-    validate_digest_format,
+from supervisor.catalog.core.types import (
+    AgentComposition,
+    ApprovalDefault,
+    Artifact,
+    ArtifactKind,
+    ArtifactMetadata,
+    ArtifactStatus,
+    ArtifactUsageRecord,
+    ArtifactUsageStats,
+    CatalogGrant,
+    DigestRef,
+    FileEffects,
+    MemoryProfile,
+    PlugBindings,
+    PromptPack,
+    PromptSection,
+    RecallBackend,
+    SandboxProfile,
+    SandboxProviderName,
+    SessionPins,
+    ToolDefinition,
+    ToolSet,
 )
 
 # =============================================================================
 # Services
 # =============================================================================
-from supervisor.catalog.services import (
-    CatalogService,
-    CatalogAuthz,
-    CompositionResolver,
+# =============================================================================
+# Repositories
+# =============================================================================
+from supervisor.catalog.storage import reject_floating_ref, validate_digest_format
+
+# =============================================================================
+# Converters
+# =============================================================================
+from supervisor.catalog.storage.converters import (
+    artifact_from_dict,
+    artifact_to_dict,
+    composition_from_dict,
+    composition_to_dict,
+    kind_of,
+    memory_profile_from_dict,
+    memory_profile_to_dict,
+    metadata_from_dict,
+    metadata_to_dict,
+    prompt_pack_from_dict,
+    prompt_pack_to_dict,
+    sandbox_profile_from_dict,
+    sandbox_profile_to_dict,
+    tool_set_from_dict,
+    tool_set_to_dict,
+    with_digest,
+    with_status,
 )
 
-
 __all__ = [
-    # Types - Enums
-    "ArtifactKind",
-    "ArtifactStatus",
-    "SandboxProviderName",
-    "FileEffects",
+    "AgentComposition",
     "ApprovalDefault",
-    "RecallBackend",
-    "CatalogGrant",
-    "CatalogAction",
-    # Types - Metadata/Analytics
+    "Artifact",
+    "ArtifactKind",
     "ArtifactMetadata",
+    "ArtifactStatus",
+    "ArtifactStoreProtocol",
     "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    # Types - Artifacts
-    "PromptSection",
-    "PromptPack",
-    "ToolDefinition",
-    "ToolSet",
-    "DigestRef",
-    "PlugBindings",
-    "AgentComposition",
-    "SandboxProfile",
-    "MemoryProfile",
-    "SessionPins",
-    "Artifact",
-    # Errors
+    "CatalogAnalyticsProtocol",
+    "CatalogAuthzProtocol",
     "CatalogError",
+    "CatalogGrant",
+    "CatalogOwnershipRequired",
+    "CatalogServiceProtocol",
+    "CompositionDigestRequired",
+    "CompositionIncomplete",
+    "CompositionResolverProtocol",
     "DigestMismatch",
     "DigestMissing",
-    "InvalidDigest",
-    "NotOffered",
-    "ImmutableArtifact",
+    "DigestRef",
+    "FileEffects",
     "FloatingRef",
-    "CompositionIncomplete",
-    "CompositionDigestRequired",
     "HarnessVersionMismatch",
-    "CatalogPermissionDenied",
-    "CatalogOwnershipRequired",
-    "CatalogStorageError",
-    "CatalogConnectionError",
     "InvalidArtifact",
-    # Protocols
-    "ArtifactStoreProtocol",
-    "UsageStoreProtocol",
-    "CatalogServiceProtocol",
-    "CompositionResolverProtocol",
+    "InvalidDigest",
+    "MemoryProfile",
+    "NotOffered",
+    "PlugBindings",
+    "PromptPack",
+    "PromptSection",
+    "RecallBackend",
     "RuntimeBinderProtocol",
-    "CatalogAuthzProtocol",
-    "CatalogAnalyticsProtocol",
-    # Converters
-    "prompt_pack_from_dict",
-    "tool_set_from_dict",
-    "composition_from_dict",
-    "sandbox_profile_from_dict",
-    "memory_profile_from_dict",
-    "session_pins_from_dict",
-    "metadata_from_dict",
+    "SandboxProfile",
+    "SandboxProviderName",
+    "SessionPins",
+    "ToolDefinition",
+    "ToolSet",
+    "UsageStoreProtocol",
     "artifact_from_dict",
-    "prompt_pack_to_dict",
-    "tool_set_to_dict",
-    "composition_to_dict",
-    "sandbox_profile_to_dict",
-    "memory_profile_to_dict",
-    "session_pins_to_dict",
-    "metadata_to_dict",
     "artifact_to_dict",
+    "composition_from_dict",
+    "composition_to_dict",
     "kind_of",
+    "memory_profile_from_dict",
+    "memory_profile_to_dict",
+    "metadata_from_dict",
+    "metadata_to_dict",
+    "prompt_pack_from_dict",
+    "prompt_pack_to_dict",
+    "reject_floating_ref",
+    "sandbox_profile_from_dict",
+    "sandbox_profile_to_dict",
+    "tool_set_from_dict",
+    "tool_set_to_dict",
+    "validate_digest_format",
     "with_digest",
     "with_status",
-    "with_metadata",
-    # Repositories
-    "InMemoryArtifactStore",
-    "InMemoryUsageStore",
-    "PostgresArtifactStore",
-    "PostgresUsageStore",
-    "reject_floating_ref",
-    "validate_digest_format",
-    # Services
-    "CatalogService",
-    "CatalogAuthz",
-    "CompositionResolver",
 ]

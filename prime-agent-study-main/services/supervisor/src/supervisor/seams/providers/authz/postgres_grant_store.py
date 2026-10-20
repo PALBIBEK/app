@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import ScopeGrantRow, ScopeMembershipRow
-from supervisor.seams.services.authz import ALL_GRANTS, Grant, GrantStore
+from supervisor.seams.services.authz import ALL_GRANTS, Grant
 
 
 class PostgresGrantStore:
@@ -149,5 +149,3 @@ class PostgresGrantStore:
             await self.grant(principal_id, scope_id, g)
 
 
-def as_grant_store(store: PostgresGrantStore) -> GrantStore:
-    return store

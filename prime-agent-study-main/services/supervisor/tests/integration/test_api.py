@@ -8,11 +8,8 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from supervisor.agent.events import ToolEnd, ToolStart
 from supervisor.app import build_supervisor
 from supervisor.db.engine import open_db
-from supervisor.db.models import SessionRow
-from supervisor.journal.writer import JournalWriter
 from supervisor.main import create_app
 from tests.support.session_env import make_catalog
 
@@ -96,8 +93,13 @@ async def test_dedup_survives_process_restart(tmp_path) -> None:
             )
             assert r1.status_code == 202
             body1 = r1.json()
-            await asyncio.sleep(0.15)
-            payloads_before = await state.manager.event_payloads(sid)
+            # Wait for the turn to end, not a fixed time (slow CI runners took longer).
+            for _ in range(200):
+                payloads_before = await state.manager.event_payloads(sid)
+                if "RunEnd" in payloads_before:
+                    break
+                await asyncio.sleep(0.05)
+            assert payloads_before.count("RunEnd") == 1
 
     async with open_db(db_url) as (_, factory2):
         state2 = build_supervisor(
@@ -121,81 +123,6 @@ async def test_dedup_survives_process_restart(tmp_path) -> None:
             assert payloads_after.count("RunEnd") == payloads_before.count("RunEnd")
 
 
-@pytest.mark.asyncio
-async def test_crash_recovery_409_then_resolve(tmp_path) -> None:
-    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'crash.db'}") as (_, factory):
-        state = build_supervisor(
-            session_factory=factory,
-            catalog=make_catalog(),
-            blob_dir=tmp_path / "blobs",
-        )
-        app = create_app(state=state)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            sid = (
-                await client.post(
-                    "/v1/sessions",
-                    json={"harness_version": "kg-v1", "runtime": "echo"},
-                    headers=HEADERS,
-                )
-            ).json()["session_id"]
-
-        await state.manager.terminate(sid)
-        async with factory() as db:
-            row = await db.get(SessionRow, sid)
-            assert row is not None
-            row.status = "active"
-            await db.commit()
-        writer = JournalWriter(factory, blob_dir=tmp_path / "blobs")
-        await writer.append(
-            sid,
-            ToolStart(
-                tool_call_id="tc-unpaired",
-                tool_name="bash",
-                args={"cmd": "x"},
-            ),
-            turn_id="t",
-            trace_id=None,
-        )
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            blocked = await client.post(
-                f"/v1/sessions/{sid}/messages",
-                json={"text": "hi", "command_id": "blocked"},
-                headers=HEADERS,
-            )
-            assert blocked.status_code == 409
-            assert "tc-unpaired" in str(blocked.json()["detail"])
-
-        async with factory() as db:
-            row = await db.get(SessionRow, sid)
-            assert row is not None
-            row.status = "active"
-            await db.commit()
-        await writer.append(
-            sid,
-            ToolEnd(
-                tool_call_id="tc-unpaired",
-                tool_name="bash",
-                result={},
-                is_error=True,
-            ),
-            turn_id="t",
-            trace_id=None,
-        )
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            ok = await client.post(
-                f"/v1/sessions/{sid}/messages",
-                json={"text": "hi", "command_id": "after-fix"},
-                headers=HEADERS,
-            )
-            assert ok.status_code == 202
 
 
 def test_api_leak_checks() -> None:

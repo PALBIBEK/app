@@ -10,6 +10,13 @@ This module provides the foundational types for the harness subsystem:
 
 from __future__ import annotations
 
+from supervisor.harness.core.digests import (
+    DIGEST_PATTERN,
+    canonical_json_bytes,
+    content_digest,
+    validate_digest_format,
+    verify_digest,
+)
 from supervisor.harness.core.enums import (
     ApprovalOnTimeout,
     GuardBehavior,
@@ -17,6 +24,31 @@ from supervisor.harness.core.enums import (
     RecoveryAction,
     RuntimeMode,
     ToolClass,
+)
+from supervisor.harness.core.errors import (
+    HarnessError,
+    HarnessNotOffered,
+    IncompatibleHarness,
+    InvalidDigest,
+    InvalidEnvironmentValue,
+    InvalidGatewayConfig,
+    ManifestError,
+    ManifestParseError,
+    ManifestValidationError,
+    MissingHarnessCli,
+    MissingRuntimeCapability,
+    PathTraversalAttempt,
+    SandboxRequired,
+    SpawnError,
+    UnknownHarness,
+    UnsupportedProtocol,
+)
+from supervisor.harness.core.protocols import (
+    CompatibilityCheckerProtocol,
+    HarnessResolverProtocol,
+    ManifestParserProtocol,
+    SessionFilesBinderProtocol,
+    SpawnPlannerProtocol,
 )
 from supervisor.harness.core.types import (
     ApprovalSpec,
@@ -30,83 +62,51 @@ from supervisor.harness.core.types import (
     SubagentsSpec,
     ToolSpec,
 )
-from supervisor.harness.core.errors import (
-    HarnessError,
-    HarnessNotOffered,
-    IncompatibleHarness,
-    InvalidDigest,
-    InvalidEnvironmentValue,
-    ManifestError,
-    ManifestParseError,
-    ManifestValidationError,
-    MissingHarnessCli,
-    MissingRuntimeCapability,
-    PathTraversalAttempt,
-    SandboxRequired,
-    SpawnError,
-    InvalidGatewayConfig,
-    UnknownHarness,
-    UnsupportedProtocol,
-)
-from supervisor.harness.core.protocols import (
-    CompatibilityCheckerProtocol,
-    HarnessResolverProtocol,
-    ManifestParserProtocol,
-    SessionFilesBinderProtocol,
-    SpawnPlannerProtocol,
-)
-from supervisor.harness.core.digests import (
-    DIGEST_PATTERN,
-    canonical_json_bytes,
-    content_digest,
-    validate_digest_format,
-    verify_digest,
-)
 
 __all__ = [
+    # Digests
+    "DIGEST_PATTERN",
     # Enums
     "ApprovalOnTimeout",
-    "GuardBehavior",
-    "HarnessStatus",
-    "RecoveryAction",
-    "RuntimeMode",
-    "ToolClass",
     # Types
     "ApprovalSpec",
     "BudgetSpec",
+    # Protocols
+    "CompatibilityCheckerProtocol",
+    "GuardBehavior",
     "GuardSpec",
-    "HarnessManifest",
-    "RecoveryPolicy",
-    "RuntimeCapabilities",
-    "SessionFilesPaths",
-    "SpawnPlan",
-    "SubagentsSpec",
-    "ToolSpec",
     # Errors
     "HarnessError",
+    "HarnessManifest",
     "HarnessNotOffered",
+    "HarnessResolverProtocol",
+    "HarnessStatus",
     "IncompatibleHarness",
     "InvalidDigest",
     "InvalidEnvironmentValue",
     "InvalidGatewayConfig",
     "ManifestError",
     "ManifestParseError",
+    "ManifestParserProtocol",
     "ManifestValidationError",
     "MissingHarnessCli",
     "MissingRuntimeCapability",
     "PathTraversalAttempt",
+    "RecoveryAction",
+    "RecoveryPolicy",
+    "RuntimeCapabilities",
+    "RuntimeMode",
     "SandboxRequired",
+    "SessionFilesBinderProtocol",
+    "SessionFilesPaths",
     "SpawnError",
+    "SpawnPlan",
+    "SpawnPlannerProtocol",
+    "SubagentsSpec",
+    "ToolClass",
+    "ToolSpec",
     "UnknownHarness",
     "UnsupportedProtocol",
-    # Protocols
-    "CompatibilityCheckerProtocol",
-    "HarnessResolverProtocol",
-    "ManifestParserProtocol",
-    "SessionFilesBinderProtocol",
-    "SpawnPlannerProtocol",
-    # Digests
-    "DIGEST_PATTERN",
     "canonical_json_bytes",
     "content_digest",
     "validate_digest_format",

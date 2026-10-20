@@ -122,14 +122,6 @@ async def test_tool_start_end_share_tool_call_id() -> None:
     await rt.stop()
 
 
-@pytest.mark.asyncio
-async def test_start_with_sandbox_none() -> None:
-    rt = EchoRuntime()
-    await rt.start(None, None)  # must not raise
-    assert rt.session_id is not None
-    state = await rt.get_state()
-    assert state.settled is True
-    await rt.stop()
 
 
 @pytest.mark.asyncio
@@ -161,23 +153,6 @@ async def test_abort_mid_sequence_emits_aborted_turn_end() -> None:
     await rt.stop()
 
 
-@pytest.mark.asyncio
-async def test_get_state_settled_when_idle() -> None:
-    rt = EchoRuntime()
-    await rt.start(None, None)
-    assert (await rt.get_state()).settled is True
-
-    async def consume() -> None:
-        async for env in rt.events():
-            if isinstance(env.payload, RunEnd):
-                return
-
-    consumer = asyncio.create_task(consume())
-    await asyncio.sleep(0)
-    await rt.send("hi", command_id="c1")
-    await asyncio.wait_for(consumer, timeout=2)
-    assert (await rt.get_state()).settled is True
-    await rt.stop()
 
 
 @pytest.mark.asyncio

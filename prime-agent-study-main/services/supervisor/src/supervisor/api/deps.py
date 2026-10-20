@@ -3,27 +3,25 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from supervisor.auth.service_jwt import ServiceJwtVerifier
-from supervisor.journal.commands import CommandStore
+from supervisor.journal.commands import (
+    CommandConflict,
+    CommandStore,
+    check_same_payload,
+    fingerprint,
+)
 from supervisor.journal.reader import JournalReader
 from supervisor.seams.services import (
     AuthzService,
-    ForbiddenError,
-    Grant,
-    GrantDenied,
     GrantStore,
-    NotScopeMember,
     Principal,
-    UnauthorizedError,
 )
 from supervisor.session import SessionManager
-
 
 if TYPE_CHECKING:
     from supervisor.temporal.sessions import SessionWorkflows
@@ -170,35 +168,12 @@ def get_grant_store(request: Request) -> GrantStore:
     return store  # type: ignore[return-value]
 
 
-def require_grant(
-    grant: Grant | str,
-) -> Callable[..., Coroutine[Any, Any, Principal]]:
-    """Normative FastAPI dep: ``require_grant(scope_id, grant) -> Principal``."""
-    needed = Grant(grant) if not isinstance(grant, Grant) else grant
-
-    async def _dep(
-        scope_id: str,
-        request: Request,
-        principal: Principal | None = None,
-        authorization: str | None = Header(default=None),
-        x_tenant_id: str | None = Header(default=None),
-        x_principal_id: str | None = Header(default=None),
-    ) -> Principal:
-        resolved = principal or await current_principal(
-            request,
-            authorization=authorization,
-            x_tenant_id=x_tenant_id,
-            x_principal_id=x_principal_id,
-        )
-        authz = get_authz(request)
-        try:
-            return await authz.require(resolved, scope_id, needed)
-        except UnauthorizedError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        except (GrantDenied, NotScopeMember, ForbiddenError) as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-    return _dep
+def request_principal_id(request: Request, tenant_id: str) -> str:
+    """The calling principal: the verified claim, else ``X-Principal-Id``, else the tenant itself."""
+    claimed = _resolve_service_identity(_state(request), request.headers.get("authorization"))
+    if claimed is not None:
+        return claimed[1]
+    return (request.headers.get("x-principal-id") or tenant_id).strip() or tenant_id
 
 
 async def require_session_access(
@@ -206,9 +181,14 @@ async def require_session_access(
     session_id: str,
     request: Request,
 ) -> None:
-    """Every session query filters by tenant — raise 404 on miss or mismatch."""
+    """The session is in the caller's tenant and visible to the caller — else 404.
+
+    Visibility is ``supervisor.session.access``: a user's sessions are their own;
+    tenant-owned sessions and tenant-level callers are tenant-wide.
+    """
     manager = get_manager(request)
-    info = await manager.get(session_id, tenant_id=tenant_id)
+    principal_id = request_principal_id(request, tenant_id)
+    info = await manager.get(session_id, tenant_id=tenant_id, principal_id=principal_id)
     if info is None:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -225,7 +205,7 @@ def get_composition_catalog(request: Request):
 
 
 def get_session_factory(request: Request) -> async_sessionmaker:
-    return _state(request).manager._db  # noqa: SLF001
+    return _state(request).manager._db
 
 
 def get_reader(request: Request) -> JournalReader:
@@ -234,6 +214,35 @@ def get_reader(request: Request) -> JournalReader:
 
 def get_commands(request: Request) -> CommandStore:
     return _state(request).commands
+
+
+async def recorded_command(
+    request: Request, session_id: str, command_id: str, text: str
+) -> dict[str, Any] | None:
+    """The response already given to ``command_id``, or None if it is new.
+
+    A command id is an idempotency key: reused with a different message it is a
+    409, not a silent replay of the first message's answer (F33).
+    """
+    stored = await get_commands(request).get(session_id, command_id)
+    if stored is not None:
+        try:
+            check_same_payload(command_id, stored, fingerprint(text))
+        except CommandConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return stored
+
+
+async def claim_command(
+    request: Request, session_id: str, command_id: str, text: str
+) -> tuple[bool, dict[str, Any]]:
+    """Claim ``command_id`` for this message: (claimed, response); 409 if it names another."""
+    try:
+        return await get_commands(request).claim(
+            session_id, command_id, payload_fingerprint=fingerprint(text)
+        )
+    except CommandConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def get_workflows(request: Request) -> SessionWorkflows | None:

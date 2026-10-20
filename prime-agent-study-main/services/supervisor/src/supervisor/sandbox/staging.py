@@ -24,24 +24,25 @@ from __future__ import annotations
 import logging
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
-    "StagedBlob",
-    "StageOutResult",
+    "BLOB_TRANSFER_TIMEOUT_S",
+    "BLOB_TRANSFER_TTL_MS",
     "BlobStagingConfig",
     "BlobStagingError",
     "BlobStagingOps",
     "CapabilityTokenMinter",
+    "StageOutResult",
+    "StagedBlob",
     "create_exec_blob_staging",
-    "BLOB_TRANSFER_TTL_MS",
-    "BLOB_TRANSFER_TIMEOUT_S",
 ]
 
 
@@ -241,7 +242,7 @@ class ExecBlobStaging(BlobStagingOps):
     - Uploads: compute SHA256, curl POST with verification header
     """
 
-    __slots__ = ("_exec_fn", "_config", "_token_minter", "_actor_id", "_scope_id")
+    __slots__ = ("_actor_id", "_config", "_exec_fn", "_scope_id", "_token_minter")
 
     def __init__(
         self,
@@ -342,7 +343,7 @@ class ExecBlobStaging(BlobStagingOps):
         sha256 = lines[0] if lines else ""
         size_bytes = int(lines[1]) if len(lines) > 1 else 0
 
-        _log.debug(
+        logger.debug(
             "staged blob %s to %s (%d bytes, sha256=%s...)",
             blob_id,
             dest_path,
@@ -440,7 +441,7 @@ class ExecBlobStaging(BlobStagingOps):
                 retryable=False,
             )
 
-        _log.debug(
+        logger.debug(
             "staged out %s as blob %s (%d bytes, sha256=%s...)",
             source_path,
             blob_id,

@@ -19,6 +19,7 @@ from supervisor.agent.events import (
     AgentEvent,
     ApprovalRequired,
     ApprovalResolved,
+    BackgroundResults,
     CompactionEnd,
     CompactionStart,
     ErrorEvent,
@@ -81,6 +82,7 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "MemoryRecall": MemoryRecall,
     "MemoryInjected": MemoryInjected,
     "MemoryContext": MemoryContext,
+    "BackgroundResults": BackgroundResults,
 }
 
 # Reverse mapping for validation
@@ -191,7 +193,7 @@ def decode_event(data: dict[str, Any]) -> AgentEvent:
         ) from exc
 
 
-def _construct_event(event_cls: type[T], payload: dict[str, Any]) -> T:
+def _construct_event[T: AgentEvent](event_cls: type[T], payload: dict[str, Any]) -> T:
     """Construct an event, handling nested dataclasses.
 
     Args:
@@ -211,22 +213,3 @@ def _construct_event(event_cls: type[T], payload: dict[str, Any]) -> T:
     return event_cls(**payload)  # type: ignore[return-value]
 
 
-def is_known_event_type(type_name: str) -> bool:
-    """Check if a type name corresponds to a registered event.
-
-    Args:
-        type_name: The `_type` discriminator string.
-
-    Returns:
-        True if the type is registered.
-    """
-    return type_name in _EVENT_TYPES
-
-
-def registered_event_types() -> list[str]:
-    """Get all registered event type names.
-
-    Returns:
-        Sorted list of type discriminator strings.
-    """
-    return sorted(_EVENT_TYPES.keys())

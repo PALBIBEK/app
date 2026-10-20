@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         CommandDecision,
         GuardConfig,
         GuardVerdict,
-        QuotaLimits,
         QuotaState,
         RateDecision,
         StallState,
@@ -41,17 +40,17 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "BudgetTrackerProtocol",
-    "CostEstimatorProtocol",
     "ApprovalBrokerProtocol",
     "ApprovalGrantStoreProtocol",
     "ApprovalRecoveryProtocol",
-    "LoopGuardProtocol",
-    "StallGuardProtocol",
-    "RateLimiterProtocol",
-    "QuotaEnforcerProtocol",
-    "CommandPolicyProtocol",
     "AuditLoggerProtocol",
+    "BudgetTrackerProtocol",
+    "CommandPolicyProtocol",
+    "CostEstimatorProtocol",
+    "LoopGuardProtocol",
+    "QuotaEnforcerProtocol",
+    "RateLimiterProtocol",
+    "StallGuardProtocol",
 ]
 
 
@@ -142,7 +141,9 @@ class ApprovalBrokerProtocol(Protocol):
         """Create pending approval, return approval_id."""
         ...
 
-    async def respond(self, approval_id: str, choice: str) -> Approval:
+    async def respond(
+        self, approval_id: str, choice: str, *, responded_by: str | None = None
+    ) -> Approval:
         """Respond to approval with choice."""
         ...
 

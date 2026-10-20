@@ -11,7 +11,7 @@ from uuid import uuid4
 from supervisor.agent.events import AgentEvent, Envelope, RunEnd, RunStart, TurnEnd, TurnStart
 from supervisor.obs.trace_context import format_traceparent, new_trace_id, set_outbound_traceparent
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 _SENTINEL = object()
 _QUEUE_MAX = 10_000
 
@@ -19,7 +19,7 @@ _QUEUE_MAX = 10_000
 class EventStream:
     """Wraps AgentEvent payloads into Envelopes with contiguous seq, turn_id, trace_id."""
 
-    __slots__ = ("session_id", "_seq", "_turn_id", "_trace_id", "_seeded_trace_id", "_queue", "_closed")
+    __slots__ = ("_closed", "_queue", "_seeded_trace_id", "_seq", "_trace_id", "_turn_id", "session_id")
 
     def __init__(self, *, session_id: str = "", queue_max: int = _QUEUE_MAX) -> None:
         self.session_id = session_id
@@ -76,7 +76,7 @@ class EventStream:
         try:
             self._queue.put_nowait(env)
         except asyncio.QueueFull:
-            _log.warning("event queue full; dropping seq=%s type=%s", env.seq, type(payload).__name__)
+            logger.warning("event queue full; dropping seq=%s type=%s", env.seq, type(payload).__name__)
             return None
         return env
 

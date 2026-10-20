@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+import logging
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
 from supervisor.obs.trace_context import current_outbound_traceparent
 from supervisor.seams.core.types import ChatMessage, Completion, StreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 def _map_tool_calls(raw: Any) -> list[dict[str, Any]] | None:
@@ -39,6 +43,16 @@ class HttpModelGatewayClient:
         self._default_model = default_model
         self._client = httpx.Client(timeout=timeout)
         self._closed = False
+        self._windows: dict[str, int | None] = {}
+
+    @property
+    def base_url(self) -> str:
+        return self._base
+
+    @property
+    def token(self) -> str | None:
+        """The key this client calls with (the session's virtual key, when it has one)."""
+        return self._token
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -54,7 +68,7 @@ class HttpModelGatewayClient:
 
                 inject(headers)
             except Exception:
-                pass
+                logger.debug("trace header propagation failed", exc_info=True)
         return headers
 
     def complete(
@@ -77,9 +91,7 @@ class HttpModelGatewayClient:
             headers=self._headers(),
         )
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"model gateway error {resp.status_code}: {resp.text}"
-            )
+            raise RuntimeError(f"model gateway error {resp.status_code}: {resp.text}")
         data = resp.json()
         choice = data["choices"][0]
         msg = choice["message"]
@@ -96,6 +108,26 @@ class HttpModelGatewayClient:
             usage=data.get("usage"),
             tool_calls=tool_calls,
         )
+
+    def context_window(self, model: str) -> int | None:
+        """The route's context window as the gateway reports it (``ModelCatalog``).
+
+        Asked once per route per client: a route's model does not change under a
+        running session. An unreachable gateway or an unknown route answers None,
+        and is asked again next time.
+        """
+        if model in self._windows:
+            return self._windows[model]
+        try:
+            resp = self._client.get(f"{self._base}/v1/routes/{model}", headers=self._headers())
+        except httpx.HTTPError:
+            logger.warning("model gateway unreachable for route %r metadata", model, exc_info=True)
+            return None
+        if resp.status_code != 200:
+            return None
+        window = resp.json().get("context_window")
+        self._windows[model] = window if isinstance(window, int) and window > 0 else None
+        return self._windows[model]
 
     def stream(
         self,

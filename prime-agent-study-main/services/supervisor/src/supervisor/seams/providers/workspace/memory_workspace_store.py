@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from supervisor.seams.providers.workspace.sync import base_of, three_way_sync
 from supervisor.seams.services.object_storage import ObjectStorage
 from supervisor.seams.services.workspace_store import (
     CasConflict,
@@ -13,7 +15,6 @@ from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
     WorkspaceFileRecord,
     WorkspacePathEscape,
-    WorkspaceStore,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
@@ -29,8 +30,7 @@ def _object_key(digest: str) -> str:
 
 def normalize_workspace_path(path: str) -> str:
     raw = path.strip().replace("\\", "/")
-    if raw.startswith("/"):
-        raw = raw[1:]
+    raw = raw.removeprefix("/")
     parts: list[str] = []
     for part in raw.split("/"):
         if part in ("", "."):
@@ -135,8 +135,11 @@ class MemoryWorkspaceStore:
         object_key = _object_key(digest)
         await self.objects.put(object_key, data, content_sha256=digest)
 
-        if existing is None or existing.deleted:
+        if existing is None:
             version = 1
+            file_id = uuid.uuid4().hex
+        elif existing.deleted:  # versions keep counting through a delete
+            version = existing.version + 1
             file_id = uuid.uuid4().hex
         else:
             version = existing.version + 1
@@ -156,9 +159,15 @@ class MemoryWorkspaceStore:
         self._rows[key] = row
         return row.to_record()
 
-    async def soft_delete(self, scope_id: str, path: str) -> None:
+    async def soft_delete(
+        self, scope_id: str, path: str, *, expected_version: int | None = None
+    ) -> None:
         path = normalize_workspace_path(path)
         row = self._rows.get((scope_id, path))
+        live = row is not None and not row.deleted
+        actual = row.version if live and row is not None else 0
+        if expected_version is not None and actual != expected_version:
+            raise CasConflict(path, expected_version, actual)
         if row is None or row.deleted:
             return
         row.deleted = True
@@ -168,9 +177,10 @@ class MemoryWorkspaceStore:
     ) -> WorkspaceSyncReport:
         written: list[str] = []
         bytes_n = 0
+        records = await self.list_files(scope_id)
         try:
             await tree.clear()
-            for rec in await self.list_files(scope_id):
+            for rec in records:
                 data = await self.objects.get(rec.object_key)
                 actual = _sha256(data)
                 if actual != rec.content_sha256:
@@ -188,53 +198,19 @@ class MemoryWorkspaceStore:
             removed=(),
             conflicts=(),
             bytes_transferred=bytes_n,
+            base=base_of(records),
         )
 
     async def sync(
-        self, scope_id: str, tree: WorkspaceTreeIO
+        self,
+        scope_id: str,
+        tree: WorkspaceTreeIO,
+        *,
+        base: Mapping[str, tuple[int, str]] | None = None,
     ) -> WorkspaceSyncReport:
-        written: list[str] = []
-        removed: list[str] = []
-        conflicts: list[str] = []
-        bytes_n = 0
-        durable = {r.path: r for r in await self.list_files(scope_id)}
-        tree_paths = set(await tree.list_paths())
-
-        for path in sorted(tree_paths):
-            data = await tree.read_bytes(path)
-            digest = _sha256(data)
-            rec = durable.get(path)
-            if rec is None:
-                await self.commit_blob(scope_id, path, data, expected_version=0)
-                written.append(path)
-                bytes_n += len(data)
-            elif rec.content_sha256 != digest:
-                if self.before_sync_cas is not None:
-                    await self.before_sync_cas(scope_id, path)  # type: ignore[operator]
-                try:
-                    await self.commit_blob(
-                        scope_id, path, data, expected_version=rec.version
-                    )
-                    written.append(path)
-                    bytes_n += len(data)
-                except CasConflict:
-                    conflicts.append(path)
-
-        for path in sorted(set(durable) - tree_paths):
-            await self.soft_delete(scope_id, path)
-            removed.append(path)
-
-        return WorkspaceSyncReport(
-            scope_id=scope_id,
-            written=tuple(written),
-            removed=tuple(removed),
-            conflicts=tuple(conflicts),
-            bytes_transferred=bytes_n,
+        return await three_way_sync(
+            self, scope_id, tree, base, before_cas=self.before_sync_cas  # type: ignore[arg-type]
         )
-
-
-def as_workspace_store(store: MemoryWorkspaceStore) -> WorkspaceStore:
-    return store
 
 
 def as_tree_io(tree: MemoryTreeIO) -> WorkspaceTreeIO:

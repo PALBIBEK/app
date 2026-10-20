@@ -179,7 +179,11 @@ class SessionActivities:
     async def respond_approval(self, req: ApprovalRequest) -> None:
         with _as_application_error():
             await self._manager.ensure_ready(req.session_id)
-            await self._manager.respond_approval(req.approval.approval_id, req.approval.choice)
+            await self._manager.respond_approval(
+                req.approval.approval_id,
+                req.approval.choice,
+                responded_by=req.approval.responded_by,
+            )
 
     @activity.defn(name=Activity.TERMINATE)
     async def terminate(self, session_id: str) -> None:

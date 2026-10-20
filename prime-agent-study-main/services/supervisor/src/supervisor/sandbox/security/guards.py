@@ -16,18 +16,17 @@ Reference:
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Final
 
 __all__ = [
-    "assert_multi_tenant_provider",
-    "is_placeholder_image_digest",
-    "validate_image_digest",
-    "ImageDigestError",
     "MultiTenantViolation",
     "SecurityCheckResult",
+    "assert_multi_tenant_provider",
+    "is_placeholder_image_digest",
 ]
 
 
@@ -51,24 +50,6 @@ class MultiTenantViolation(ValueError):
         self.provider = provider
 
 
-class ImageDigestError(ValueError):
-    """Raised when image digest fails validation.
-
-    Common causes:
-        - Placeholder strings (sha256:PLACEHOLDER, REPLACE_ME)
-        - Fixture digests (sha256:aaaa...aaaa, sha256:0000...0000)
-        - Missing or empty digests
-    """
-
-    def __init__(self, digest: str | None, reason: str) -> None:
-        super().__init__(
-            f"invalid image digest {digest!r}: {reason}; "
-            "build the harness image and pin the real digest (D14)"
-        )
-        self.digest = digest
-        self.reason = reason
-
-
 # =============================================================================
 # Multi-Tenant Provider Guard
 # =============================================================================
@@ -88,6 +69,11 @@ _SAFE_PROVIDERS: Final[frozenset[str]] = frozenset({
     "none",
     "firecracker",  # Future: VM-based isolation
 })
+
+
+def multi_tenant_strict_enabled() -> bool:
+    """``MULTI_TENANT_STRICT``: tenants share this deployment, so sandboxes must isolate them."""
+    return os.environ.get("MULTI_TENANT_STRICT", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def assert_multi_tenant_provider(
@@ -215,112 +201,8 @@ def is_placeholder_image_digest(digest: str | None) -> bool:
         return False
 
     # Check for fixture patterns (all same character)
-    hex_part = match.group(1).lower()
-    if len(set(hex_part)) == 1:
-        # e.g., sha256:aaaa...aaaa or sha256:0000...0000
-        return True
-
-    return False
-
-
-def validate_image_digest(digest: str | None) -> SecurityCheckResult:
-    """Validate image digest for security and correctness.
-
-    Performs comprehensive validation:
-        1. Non-empty check
-        2. Placeholder detection
-        3. Format validation (sha256:hex64)
-        4. Fixture pattern detection
-
-    Args:
-        digest: Image digest to validate.
-
-    Returns:
-        SecurityCheckResult with validation outcome.
-
-    Example:
-        >>> result = validate_image_digest("sha256:abc123...")
-        >>> result.passed
-        True
-        >>> result = validate_image_digest("sha256:PLACEHOLDER")
-        >>> result.passed
-        False
-        >>> result.status
-        DigestStatus.PLACEHOLDER
-    """
-    if not digest:
-        return SecurityCheckResult.fail(
-            DigestStatus.EMPTY,
-            "image digest is required"
-        )
-
-    d = digest.strip()
-    if not d:
-        return SecurityCheckResult.fail(
-            DigestStatus.EMPTY,
-            "image digest cannot be empty"
-        )
-
-    upper = d.upper()
-
-    # Check for placeholder markers
-    for marker in _PLACEHOLDER_MARKERS:
-        if marker in upper:
-            return SecurityCheckResult.fail(
-                DigestStatus.PLACEHOLDER,
-                f"contains placeholder marker '{marker}'"
-            )
-
-    # Validate format
-    match = _SHA256_PATTERN.match(d)
-    if not match:
-        return SecurityCheckResult.fail(
-            DigestStatus.MALFORMED,
-            "must match format sha256:<64 hex chars>"
-        )
-
-    # Check for fixture patterns
-    hex_part = match.group(1).lower()
-    if len(set(hex_part)) == 1:
-        return SecurityCheckResult.fail(
-            DigestStatus.FIXTURE,
-            "fixture digest (all identical characters)"
-        )
-
-    # Check for other suspicious patterns
-    if hex_part == "0" * 64 or hex_part == "f" * 64:
-        return SecurityCheckResult.fail(
-            DigestStatus.FIXTURE,
-            "likely test fixture (all zeros or all f's)"
-        )
-
-    return SecurityCheckResult.ok()
-
-
-def assert_valid_image_digest(digest: str | None) -> str:
-    """Assert image digest is valid, raising on failure.
-
-    Convenience wrapper around validate_image_digest that raises.
-
-    Args:
-        digest: Image digest to validate.
-
-    Returns:
-        The validated digest string (stripped).
-
-    Raises:
-        ImageDigestError: If validation fails.
-
-    Example:
-        >>> digest = assert_valid_image_digest("sha256:abc...")
-        >>> assert_valid_image_digest(None)
-        # Raises ImageDigestError
-    """
-    result = validate_image_digest(digest)
-    if not result.passed:
-        raise ImageDigestError(digest, result.message)
-
-    return digest.strip() if digest else ""
+    # e.g., sha256:aaaa...aaaa or sha256:0000...0000
+    return len(set(match.group(1).lower())) == 1
 
 
 # =============================================================================

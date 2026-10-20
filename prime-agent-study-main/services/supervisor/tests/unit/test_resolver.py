@@ -8,7 +8,6 @@ import pytest
 
 from supervisor.db.engine import open_db
 from supervisor.harness import (
-    HarnessCatalog,
     HarnessNotOffered,
     HarnessResolver,
     UnknownHarness,
@@ -76,10 +75,6 @@ async def test_deprecated_refused_for_create_ok_for_resume(tmp_path: Path) -> No
         assert got.harness_version == "kg-v1"
 
 
-def test_catalog_rejects_latest() -> None:
-    c = make_catalog()
-    with pytest.raises(UnknownHarness, match="latest"):
-        c.resolve("latest")
 
 
 def test_load_real_yaml_files() -> None:

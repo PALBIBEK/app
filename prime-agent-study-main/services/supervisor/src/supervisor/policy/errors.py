@@ -15,44 +15,27 @@ Design principles:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from supervisor.policy.types import BudgetState, QuotaLimits
+    from supervisor.policy.types import BudgetState
 
 
 __all__ = [
-    # Base
-    "PolicyError",
-    # Budget
-    "BudgetExceeded",
-    "BudgetCostExceeded",
-    "BudgetTokensExceeded",
-    # Quota
-    "QuotaExceeded",
-    "SessionQuotaExceeded",
-    "SandboxQuotaExceeded",
-    "CostQuotaExceeded",
-    # Approval
+    "ApprovalAlreadyResponded",
     "ApprovalError",
     "ApprovalNotFound",
-    "ApprovalAlreadyResponded",
     "ApprovalTimedOut",
-    "InvalidApprovalChoice",
-    "ApprovalRecoveryFailed",
-    # Command
+    "BudgetExceeded",
     "CommandDenied",
     "CommandRequiresApproval",
-    # Rate Limiting
-    "RateLimitExceeded",
-    # Guard
-    "GuardTripped",
-    "LoopDetected",
-    "StallDetected",
-    # Audit
-    "AuditWriteFailed",
+    "CostQuotaExceeded",
+    "InvalidApprovalChoice",
+    "PolicyError",
+    "QuotaExceeded",
+    "SandboxQuotaExceeded",
+    "SessionQuotaExceeded",
 ]
 
 
@@ -136,46 +119,6 @@ class BudgetExceeded(PolicyError):
             limit_cost=state.max_cost_usd,
             current_tokens=state.tokens_this_turn,
             limit_tokens=state.max_tokens_per_turn,
-        )
-
-
-class BudgetCostExceeded(BudgetExceeded):
-    """Session cost limit exceeded."""
-
-    error_code = "BUDGET_COST_EXCEEDED"
-
-    def __init__(
-        self,
-        session_id: str,
-        current_cost: Decimal,
-        limit_cost: Decimal,
-    ) -> None:
-        super().__init__(
-            f"max_cost_per_session exceeded: cost={current_cost} limit={limit_cost}",
-            session_id=session_id,
-            current_cost=current_cost,
-            limit_cost=limit_cost,
-        )
-
-
-class BudgetTokensExceeded(BudgetExceeded):
-    """Per-turn token limit exceeded."""
-
-    error_code = "BUDGET_TOKENS_EXCEEDED"
-
-    def __init__(
-        self,
-        session_id: str,
-        current_tokens: int,
-        limit_tokens: int,
-        current_cost: Decimal = Decimal("0"),
-    ) -> None:
-        super().__init__(
-            f"max_tokens_per_turn exceeded: tokens={current_tokens} limit={limit_tokens}",
-            session_id=session_id,
-            current_cost=current_cost,
-            current_tokens=current_tokens,
-            limit_tokens=limit_tokens,
         )
 
 
@@ -358,25 +301,6 @@ class InvalidApprovalChoice(ApprovalError):
         self.options = options
 
 
-class ApprovalRecoveryFailed(ApprovalError):
-    """Failed to recover approval context after restart."""
-
-    error_code = "APPROVAL_RECOVERY_FAILED"
-    retryable = True
-
-    def __init__(
-        self,
-        approval_id: str,
-        reason: str,
-    ) -> None:
-        super().__init__(
-            f"failed to recover approval {approval_id!r}: {reason}",
-            detail={"approval_id": approval_id, "reason": reason},
-        )
-        self.approval_id = approval_id
-        self.reason = reason
-
-
 # =============================================================================
 # Command Errors
 # =============================================================================
@@ -433,128 +357,11 @@ class CommandRequiresApproval(PolicyError):
 # Rate Limiting Errors
 # =============================================================================
 
-class RateLimitExceeded(PolicyError):
-    """Rate limit hit."""
-
-    error_code = "RATE_LIMIT_EXCEEDED"
-    retryable = True
-
-    def __init__(
-        self,
-        principal_id: str,
-        retry_after_ms: int,
-        *,
-        limit: int | None = None,
-        window_ms: int | None = None,
-    ) -> None:
-        super().__init__(
-            f"rate limit exceeded for {principal_id!r}, retry after {retry_after_ms}ms",
-            detail={
-                "principal_id": principal_id,
-                "retry_after_ms": retry_after_ms,
-                "limit": limit,
-                "window_ms": window_ms,
-            },
-        )
-        self.principal_id = principal_id
-        self.retry_after_ms = retry_after_ms
-        self.limit = limit
-        self.window_ms = window_ms
-
-
 # =============================================================================
 # Guard Errors
 # =============================================================================
-
-class GuardTripped(PolicyError):
-    """Base for guard-triggered errors."""
-
-    error_code = "GUARD_TRIPPED"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        session_id: str,
-        detector: str,
-        tool_name: str | None = None,
-        call_hash: str | None = None,
-    ) -> None:
-        super().__init__(
-            message,
-            detail={
-                "session_id": session_id,
-                "detector": detector,
-                "tool_name": tool_name,
-                "call_hash": call_hash,
-            },
-        )
-        self.session_id = session_id
-        self.detector = detector
-        self.tool_name = tool_name
-        self.call_hash = call_hash
-
-
-class LoopDetected(GuardTripped):
-    """Loop pattern detected (repetition or oscillation)."""
-
-    error_code = "LOOP_DETECTED"
-
-    def __init__(
-        self,
-        session_id: str,
-        detector: str,
-        tool_name: str,
-        call_hash: str,
-        detail_msg: str,
-    ) -> None:
-        super().__init__(
-            detail_msg,
-            session_id=session_id,
-            detector=detector,
-            tool_name=tool_name,
-            call_hash=call_hash,
-        )
-
-
-class StallDetected(GuardTripped):
-    """Stall detected — no progress for too many iterations."""
-
-    error_code = "STALL_DETECTED"
-
-    def __init__(
-        self,
-        session_id: str,
-        iterations: int,
-        tool_name: str | None = None,
-    ) -> None:
-        super().__init__(
-            f"stall: no progress for {iterations} tool iterations",
-            session_id=session_id,
-            detector="stall",
-            tool_name=tool_name,
-        )
-        self.iterations = iterations
-
 
 # =============================================================================
 # Audit Errors
 # =============================================================================
 
-class AuditWriteFailed(PolicyError):
-    """Failed to write audit event."""
-
-    error_code = "AUDIT_WRITE_FAILED"
-    retryable = True
-
-    def __init__(
-        self,
-        event_id: str,
-        reason: str,
-    ) -> None:
-        super().__init__(
-            f"failed to write audit event {event_id!r}: {reason}",
-            detail={"event_id": event_id, "reason": reason},
-        )
-        self.event_id = event_id
-        self.reason = reason

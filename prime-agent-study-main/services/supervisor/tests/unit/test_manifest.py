@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from supervisor.harness import (
@@ -10,7 +12,6 @@ from supervisor.harness import (
     load_manifest,
     validate_and_freeze,
 )
-
 
 VALID = """
 harness_version: coding-v1
@@ -120,7 +121,7 @@ def test_unknown_top_level_key_ignored() -> None:
 
 def test_manifest_immutable() -> None:
     m = load_manifest(VALID)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         m.harness_version = "nope"  # type: ignore[misc]
 
 

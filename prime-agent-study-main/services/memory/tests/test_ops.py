@@ -66,7 +66,7 @@ async def test_forget_writes_audit(svc: MemoryService):
         reason="user request",
     )
     assert n == 1
-    audit = await svc._erase.list_audit("t1")  # noqa: SLF001
+    audit = await svc._erase.list_audit("t1")
     assert audit
     assert audit[0]["actor"] == "admin@yal"
     assert audit[0]["reason"] == "user request"

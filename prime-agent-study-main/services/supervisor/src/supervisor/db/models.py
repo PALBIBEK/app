@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     BigInteger,
@@ -22,7 +22,7 @@ from sqlalchemy.types import JSON
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -62,7 +62,6 @@ class SessionRow(Base):
 class EventRow(Base):
     __tablename__ = "events"
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_events_session_seq"),
         # Idempotent appends look events up by their deterministic id.
         Index("ix_events_session_event_id", "session_id", "event_id"),
     )
@@ -117,6 +116,8 @@ class HarnessVersionRow(Base):
     manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The tenant that registered it through the API; None for shipped versions.
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CatalogArtifactRow(Base):
@@ -127,7 +128,6 @@ class CatalogArtifactRow(Base):
 
     __tablename__ = "catalog_artifacts"
     __table_args__ = (
-        UniqueConstraint("kind", "artifact_id", "digest", name="uq_catalog_artifact"),
         Index("ix_catalog_artifacts_created_by", "created_by"),
         Index("ix_catalog_artifacts_owner_id", "owner_id"),
         Index("ix_catalog_artifacts_status", "status"),
@@ -168,6 +168,9 @@ class ApprovalRow(Base):
     timeout_s: Mapped[float] = mapped_column(Numeric(18, 3), nullable=False, default=300)
     harness_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Who settled it and when: a principal id, or None for a timeout or the sweeper.
+    responded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ToolOutboxRow(Base):
@@ -271,77 +274,6 @@ class ScopeGrantRow(Base):
     principal_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     grant: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
-
-class SandboxRouteRow(Base):
-    """Dynamic sandbox routing — maps scopes to backend providers.
-
-    Enables per-scope backend selection with migration tracking.
-    Reference: QM's sandbox-routing.ts pattern.
-    """
-
-    __tablename__ = "sandbox_routes"
-
-    scope_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    backend: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    image_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    migrated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    migrated_from: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    migration_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    capabilities_lost: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
-
-class CatalogUsageRow(Base):
-    """Catalog artifact usage records for analytics.
-
-    Tracks all artifact resolution, binding, and session start events.
-    Supports usage analytics dashboards and popular artifacts queries.
-    """
-
-    __tablename__ = "catalog_usage"
-    __table_args__ = (
-        Index("ix_catalog_usage_artifact", "kind", "artifact_id", "digest"),
-        Index("ix_catalog_usage_session", "session_id"),
-        Index("ix_catalog_usage_principal", "principal_id"),
-        Index("ix_catalog_usage_timestamp", "timestamp_ms"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    kind: Mapped[str] = mapped_column(Text, nullable=False)
-    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
-    digest: Mapped[str] = mapped_column(Text, nullable=False)
-    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    principal_id: Mapped[str] = mapped_column(Text, nullable=False)
-    operation: Mapped[str] = mapped_column(Text, nullable=False)  # resolved, bound, session_started
-    timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
-
-
-class CatalogErrorRow(Base):
-    """Catalog error records for analytics.
-
-    Tracks artifact-related errors for error rate calculation
-    and debugging analytics.
-    """
-
-    __tablename__ = "catalog_errors"
-    __table_args__ = (
-        Index("ix_catalog_errors_artifact", "kind", "artifact_id", "digest"),
-        Index("ix_catalog_errors_code", "error_code"),
-        Index("ix_catalog_errors_timestamp", "timestamp_ms"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    kind: Mapped[str] = mapped_column(Text, nullable=False)
-    artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
-    digest: Mapped[str] = mapped_column(Text, nullable=False)
-    error_code: Mapped[str] = mapped_column(Text, nullable=False)
-    principal_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 # =============================================================================

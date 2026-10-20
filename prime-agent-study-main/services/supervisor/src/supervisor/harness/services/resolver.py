@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,9 +23,6 @@ from supervisor.harness.storage.converters import (
     manifest_from_dict,
     manifest_to_dict,
 )
-
-if TYPE_CHECKING:
-    from supervisor.db.models import HarnessVersionRow
 
 __all__ = [
     "HarnessCatalog",
@@ -106,6 +102,10 @@ class HarnessCatalog:
                     "status": status.value,
                 },
             )
+
+    def has(self, version: str) -> bool:
+        """Whether this catalog knows ``version`` (any status)."""
+        return version in self._versions
 
     def register_sync(
         self,
@@ -225,9 +225,7 @@ class HarnessCatalog:
         async with self._lock:
             out = []
             for v, st in self._status.items():
-                if st == HarnessStatus.ACTIVE:
-                    out.append(v)
-                elif include_deprecated and st == HarnessStatus.DEPRECATED:
+                if st == HarnessStatus.ACTIVE or include_deprecated and st == HarnessStatus.DEPRECATED:
                     out.append(v)
             return sorted(out)
 

@@ -24,24 +24,23 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Final
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from supervisor.sandbox.base import ExecResult
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 __all__ = [
-    "LayerManifest",
-    "MaterializationResult",
-    "LayerMaterializationError",
-    "LayerOps",
-    "create_exec_layers",
-    "MANIFEST_FILENAME",
     "LAYERS_TIMEOUT_S",
+    "MANIFEST_FILENAME",
+    "LayerManifest",
+    "LayerOps",
+    "MaterializationResult",
+    "create_exec_layers",
 ]
 
 
@@ -57,27 +56,6 @@ LAYERS_TIMEOUT_S: Final[float] = 120.0
 # =============================================================================
 # Errors
 # =============================================================================
-
-
-class LayerMaterializationError(Exception):
-    """Read-only layer materialization failed.
-
-    Attributes:
-        message: Error description.
-        manifest_sha: SHA256 of the manifest being materialized.
-        retryable: Whether the operation can be retried.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        manifest_sha: str | None = None,
-        retryable: bool = True,
-    ) -> None:
-        super().__init__(message)
-        self.manifest_sha = manifest_sha
-        self.retryable = retryable
 
 
 # =============================================================================
@@ -238,7 +216,7 @@ class ExecLayers(LayerOps):
     - Single atomic tar extraction
     """
 
-    __slots__ = ("_exec_fn", "_read_fn", "_write_fn", "_config")
+    __slots__ = ("_config", "_exec_fn", "_read_fn", "_write_fn")
 
     def __init__(
         self,
@@ -270,6 +248,7 @@ class ExecLayers(LayerOps):
                 return None
             return data.decode("utf-8").strip()
         except Exception:
+            logger.debug("reading a layer marker failed", exc_info=True)
             return None
 
     async def materialize_ro_layers(
@@ -287,7 +266,7 @@ class ExecLayers(LayerOps):
         if not force:
             current_sha = await self.current_manifest_sha()
             if current_sha == manifest.sha256:
-                _log.debug(
+                logger.debug(
                     "layers unchanged (sha=%s...), short-circuiting",
                     manifest.sha256[:16],
                 )
@@ -301,7 +280,6 @@ class ExecLayers(LayerOps):
         # Build tar with all layer files
         # In a real implementation, this would fetch blobs and create tar
         # For now, we create a manifest-only approach
-        tar_path = f"{self._config.workspace_dir}/{self._config.tar_filename}"
         manifest_path = f"{self._config.workspace_dir}/{self._config.manifest_filename}"
 
         # Write manifest
@@ -313,7 +291,7 @@ class ExecLayers(LayerOps):
 
         duration_ms = int(time.time() * 1000) - start_ms
 
-        _log.debug(
+        logger.debug(
             "materialized %d layers (sha=%s...) in %dms",
             layer_count,
             manifest.sha256[:16],

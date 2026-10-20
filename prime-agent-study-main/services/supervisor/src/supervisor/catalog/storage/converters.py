@@ -23,55 +23,46 @@ from typing import Any
 from supervisor.catalog.core.digests import content_digest, is_unset_digest
 from supervisor.catalog.core.errors import DigestMismatch
 from supervisor.catalog.core.types import (
-    # Enums
-    ArtifactKind,
-    ArtifactStatus,
-    SandboxProviderName,
-    FileEffects,
-    ApprovalDefault,
-    RecallBackend,
-    # Dataclasses
-    ArtifactMetadata,
-    PromptSection,
-    PromptPack,
-    ToolDefinition,
-    ToolSet,
-    DigestRef,
-    PlugBindings,
     AgentComposition,
-    SandboxProfile,
-    MemoryProfile,
-    SessionPins,
+    ApprovalDefault,
     # Type alias
     Artifact,
+    # Enums
+    ArtifactKind,
+    # Dataclasses
+    ArtifactMetadata,
+    ArtifactStatus,
+    DigestRef,
+    FileEffects,
+    MemoryProfile,
+    PlugBindings,
+    PromptPack,
+    PromptSection,
+    RecallBackend,
+    SandboxProfile,
+    SandboxProviderName,
+    ToolDefinition,
+    ToolSet,
 )
 
-
 __all__ = [
-    # From dict converters
-    "prompt_pack_from_dict",
-    "tool_set_from_dict",
-    "composition_from_dict",
-    "sandbox_profile_from_dict",
-    "memory_profile_from_dict",
-    "session_pins_from_dict",
-    "metadata_from_dict",
-    # To dict converters
-    "prompt_pack_to_dict",
-    "tool_set_to_dict",
-    "composition_to_dict",
-    "sandbox_profile_to_dict",
-    "memory_profile_to_dict",
-    "session_pins_to_dict",
-    "metadata_to_dict",
-    # Artifact helpers
-    "kind_of",
-    "with_digest",
-    "with_status",
-    "with_metadata",
-    # Generic
     "artifact_from_dict",
     "artifact_to_dict",
+    "composition_from_dict",
+    "composition_to_dict",
+    "kind_of",
+    "memory_profile_from_dict",
+    "memory_profile_to_dict",
+    "metadata_from_dict",
+    "metadata_to_dict",
+    "prompt_pack_from_dict",
+    "prompt_pack_to_dict",
+    "sandbox_profile_from_dict",
+    "sandbox_profile_to_dict",
+    "tool_set_from_dict",
+    "tool_set_to_dict",
+    "with_digest",
+    "with_status",
 ]
 
 
@@ -400,6 +391,7 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         approval_default=approval_default,
         sticky_eligible=bool(data.get("sticky_eligible", True)),
         image_digest=data.get("image_digest"),
+        browser_model=bool(data.get("browser_model", False)),
         metadata=metadata_from_dict(data.get("metadata")),
     )
 
@@ -424,6 +416,7 @@ def sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         "approval_default": profile.approval_default.value if isinstance(profile.approval_default, ApprovalDefault) else profile.approval_default,
         "sticky_eligible": profile.sticky_eligible,
         "image_digest": profile.image_digest,
+        "browser_model": profile.browser_model,
         "metadata": metadata_to_dict(profile.metadata),
     }
 
@@ -460,6 +453,11 @@ def memory_profile_from_dict(data: dict[str, Any]) -> MemoryProfile:
         reserve_tokens=int(compaction.get("reserve_tokens", 16_384)),
         keep_recent_tokens=int(compaction.get("keep_recent_tokens", 20_000)),
         pressure_ratio=float(compaction.get("pressure_ratio", 0.8)),
+        context_window=(
+            int(compaction["context_window"])
+            if compaction.get("context_window") is not None
+            else None
+        ),
         summarization_model=compaction.get("summarization_model"),
         recall_enabled=bool(recall.get("enabled", False)),
         recall_backend=recall_backend,
@@ -488,6 +486,7 @@ def memory_profile_to_dict(profile: MemoryProfile) -> dict[str, Any]:
             "reserve_tokens": profile.reserve_tokens,
             "keep_recent_tokens": profile.keep_recent_tokens,
             "pressure_ratio": profile.pressure_ratio,
+            "context_window": profile.context_window,
             "summarization_model": profile.summarization_model,
         },
         "recall": {
@@ -502,16 +501,6 @@ def memory_profile_to_dict(profile: MemoryProfile) -> dict[str, Any]:
 # =============================================================================
 # SessionPins Converters
 # =============================================================================
-
-def session_pins_from_dict(data: dict[str, Any]) -> SessionPins:
-    """Parse SessionPins from dict (delegates to the dataclass, the single source of truth)."""
-    return SessionPins.from_dict(data)
-
-
-def session_pins_to_dict(pins: SessionPins) -> dict[str, Any]:
-    """Serialize SessionPins to dict (delegates to the dataclass, the single source of truth)."""
-    return pins.to_dict()
-
 
 # =============================================================================
 # Artifact Helpers
@@ -578,36 +567,9 @@ def with_digest(artifact: Artifact, digest: str) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, digest=digest)
     if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, digest=digest)
     if isinstance(artifact, AgentComposition):
         return AgentComposition(
             name=artifact.name,
@@ -662,36 +624,9 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
             metadata=artifact.metadata,
         )
     if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, status=status)
     if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=artifact.metadata,
-        )
+        return replace(artifact, status=status)
     if isinstance(artifact, AgentComposition):
         return AgentComposition(
             name=artifact.name,
@@ -706,90 +641,6 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
             memory_profile=artifact.memory_profile,
             plug_bindings=artifact.plug_bindings,
             metadata=artifact.metadata,
-        )
-    raise TypeError(f"unknown artifact type {type(artifact)!r}")
-
-
-def with_metadata(artifact: Artifact, metadata: ArtifactMetadata) -> Artifact:
-    """Create a copy of artifact with new metadata.
-
-    Since artifacts are frozen, this creates a new instance.
-
-    Args:
-        artifact: Source artifact
-        metadata: New metadata value
-
-    Returns:
-        New artifact with updated metadata
-    """
-    if isinstance(artifact, PromptPack):
-        return PromptPack(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            persona=artifact.persona,
-            sections=artifact.sections,
-            vars=artifact.vars,
-            metadata=metadata,
-        )
-    if isinstance(artifact, ToolSet):
-        return ToolSet(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            tools=artifact.tools,
-            definitions=artifact.definitions,
-            metadata=metadata,
-        )
-    if isinstance(artifact, SandboxProfile):
-        return SandboxProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            provider=artifact.provider,
-            file_effects=artifact.file_effects,
-            approval_default=artifact.approval_default,
-            sticky_eligible=artifact.sticky_eligible,
-            image_digest=artifact.image_digest,
-            metadata=metadata,
-        )
-    if isinstance(artifact, MemoryProfile):
-        return MemoryProfile(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            compaction_enabled=artifact.compaction_enabled,
-            reserve_tokens=artifact.reserve_tokens,
-            keep_recent_tokens=artifact.keep_recent_tokens,
-            pressure_ratio=artifact.pressure_ratio,
-            summarization_model=artifact.summarization_model,
-            recall_enabled=artifact.recall_enabled,
-            recall_backend=artifact.recall_backend,
-            recall_mcp_server_url=artifact.recall_mcp_server_url,
-            metadata=metadata,
-        )
-    if isinstance(artifact, AgentComposition):
-        return AgentComposition(
-            name=artifact.name,
-            semver=artifact.semver,
-            digest=artifact.digest,
-            protocol_version=artifact.protocol_version,
-            status=artifact.status,
-            harness_version=artifact.harness_version,
-            prompt_pack=artifact.prompt_pack,
-            tool_set=artifact.tool_set,
-            sandbox_profile=artifact.sandbox_profile,
-            memory_profile=artifact.memory_profile,
-            plug_bindings=artifact.plug_bindings,
-            metadata=metadata,
         )
     raise TypeError(f"unknown artifact type {type(artifact)!r}")
 

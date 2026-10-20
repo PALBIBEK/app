@@ -12,8 +12,11 @@ Hot path: note() is synchronous (local buffer only).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 class HttpClient(Protocol):
@@ -83,8 +86,8 @@ class SimpleLoopAdapter:
                     self._fence = int(lease["fence"])
                 self._started = True
                 return self.session_id
-            except Exception:
-                pass  # create below with fixed id
+            except Exception:  # no such session yet: create it below with this id
+                logger.debug("resuming memory session %s failed; creating it", self.session_id, exc_info=True)
 
         body: dict[str, Any] = {"scope": self.scope}
         if self.session_id:
@@ -168,9 +171,8 @@ class SimpleLoopAdapter:
         # Starlette TestClient is sync — wrap via run_in? Prefer AsyncClient.
         if hasattr(client, "post"):
             r = client.post(path, json=json_body)
-            if hasattr(r, "raise_for_status"):
-                if r.status_code >= 400:
-                    raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
+            if hasattr(r, "raise_for_status") and r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
             return r.json()
         raise TypeError("client must support post()")
 

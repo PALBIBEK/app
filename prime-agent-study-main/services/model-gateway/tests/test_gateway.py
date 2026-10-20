@@ -134,3 +134,44 @@ def test_auth_required_without_token_returns_503(monkeypatch: pytest.MonkeyPatch
         )
         assert r.status_code == 503
         assert r.json()["detail"]["error"]["code"] == "AUTH_UNCONFIGURED"
+
+
+def test_routes_report_their_context_window(client: TestClient) -> None:
+    rows = {row["id"]: row for row in client.get("/v1/routes").json()["routes"]}
+    assert rows["githi"]["context_window"] == 200_000
+
+
+def test_one_route_is_readable_by_id(client: TestClient) -> None:
+    r = client.get("/v1/routes/githi")
+    assert r.status_code == 200
+    assert r.json() == {
+        "id": "githi",
+        "provider": "openrouter",
+        "upstream_model": "anthropic/claude-sonnet-4",
+        "context_window": 200_000,
+    }
+    missing = client.get("/v1/routes/nope")
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["error"]["code"] == "ROUTE_UNKNOWN"
+
+
+def test_a_configured_route_may_omit_its_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MODEL_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv("MODEL_GATEWAY_ROUTES_JSON", '{"a": {"provider": "echo", "upstream_model": "x"}}')
+    with TestClient(app) as c:
+        assert c.get("/v1/routes/a").json()["context_window"] is None
+
+
+def test_a_mistyped_route_table_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MODEL_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "MODEL_GATEWAY_ROUTES_JSON",
+        '{"a": {"provider": "echo", "upstream_model": "x"},'
+        ' "b": {"provider": "echo", "upstream_model": "y", "context_window": "big"}}',
+    )
+    with TestClient(app) as c:
+        assert c.get("/v1/readyz").json() == {"status": "not_ready", "reason": "routes"}
+        r = c.get("/v1/routes/a")
+        assert r.status_code == 500
+        assert r.json()["detail"]["error"]["code"] == "ROUTES_INVALID"
+        assert "context_window" in r.json()["detail"]["error"]["message"]

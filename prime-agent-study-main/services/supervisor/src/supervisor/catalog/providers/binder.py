@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from supervisor.agent.seams import RuntimeSeams
-from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
-from supervisor.catalog.providers.catalog_prompt import CatalogPromptAssembler
-from supervisor.catalog.providers.catalog_tools import CatalogToolProvider
-from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import AgentComposition, PromptPack, SessionPins, ToolSet
+from supervisor.catalog.providers.catalog_prompt import CatalogPromptAssembler
+from supervisor.catalog.providers.catalog_tools import bind_tool_set
+from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
+from supervisor.catalog.storage import CompositionCatalog
 from supervisor.seams import build_runtime_seams
 from supervisor.seams.core.factory import build_context_memory_from_profile
 
@@ -15,8 +15,18 @@ from supervisor.seams.core.factory import build_context_memory_from_profile
 def bind_runtime_seams(
     pins: SessionPins,
     catalog: CompositionCatalog,
+    *,
+    gateway_token: str | None = None,
+    session_id: str | None = None,
+    model: str | None = None,
 ) -> RuntimeSeams:
-    """Materialize catalog + plug bindings from pinned digests (single bind path)."""
+    """Materialize catalog + plug bindings from pinned digests (single bind path).
+
+    ``gateway_token`` is the session's gateway key and ``session_id`` its gateway
+    affinity id. Every seam that calls the model (the agent's gateway, the
+    compaction summarizer, nested-session subagents) is built on the one gateway
+    client that carries them, defaulting to the session's ``model``.
+    """
     pack = catalog.get(
         "prompt_pack",
         pins.prompt_pack_id,
@@ -40,9 +50,12 @@ def bind_runtime_seams(
 
     # Build gateway first so MemoryProfile can share the same client instance.
     seams = build_runtime_seams(
-        tool_provider=CatalogToolProvider(tools),
+        tool_provider=bind_tool_set(tools),
         prompt_assembler=CatalogPromptAssembler(pack),
         gateway_base_url=gateway_url,
+        gateway_token=gateway_token,
+        session_id=session_id,
+        default_model=model,
         mcp_server_url=mcp_url,
         acp_base_url=acp_url,
         register_acp=bool(acp_url),

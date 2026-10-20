@@ -101,11 +101,11 @@ from supervisor.sandbox.base import (
     ByteWriter,
     ExecResult,
     ProcessHandle,
-    ProvisionError,
     Sandbox,
     SandboxError,
     SandboxGone,
     SandboxInfo,
+    SandboxPathEscape,
     SandboxProvider,
     SandboxStatus,
     SandboxTimeout,
@@ -114,40 +114,28 @@ from supervisor.sandbox.base import (
 )
 
 # Factory
+# Factory additions
 from supervisor.sandbox.factory import (
     ProviderName,
     UnknownProviderError,
     create_sandbox_provider,
-    get_default_provider_name,
-    is_isolation_provider,
     resolve_provider_name,
+)
+from supervisor.sandbox.providers.local_process import (
+    LocalProcessProvider,
+    LocalProcessSandbox,
 )
 
 # Providers
-from supervisor.sandbox.providers.none import NoneSandbox, NoneProvider
-from supervisor.sandbox.providers.local_process import (
-    LocalProcessSandbox,
-    LocalProcessProvider,
-)
+from supervisor.sandbox.providers.none import NoneProvider, NoneSandbox
 
-# Security - Environment
-from supervisor.sandbox.security.env import (
-    EnvSanitizer,
-    is_allowed_gateway_inject,
-    is_denied_env_key,
-    sanitize_sandbox_env,
-)
-
-# Security - Guards
-from supervisor.sandbox.security.guards import (
-    DigestStatus,
-    ImageDigestError,
-    MultiTenantViolation,
-    SecurityCheckResult,
-    assert_multi_tenant_provider,
-    assert_multi_tenant_sandbox_provider,
-    is_placeholder_image_digest,
-    validate_image_digest,
+# Lifecycle
+from supervisor.sandbox.reaper import (
+    ReapStats,
+    SandboxReattach,
+    SessionLookup,
+    SessionStatus,
+    reap_orphans,
 )
 
 # Resolution
@@ -161,164 +149,95 @@ from supervisor.sandbox.resolve import (
     assert_sandbox_profile_compatible,
     load_pinned_sandbox_profile,
     resolve_sandbox_create,
-    resolve_sandbox_create_full,
-)
-
-# Lifecycle
-from supervisor.sandbox.reaper import (
-    ReapStats,
-    SandboxReattach,
-    SessionLookup,
-    SessionStatus,
-    reap_orphans,
-)
-
-# Routes
-from supervisor.sandbox.routing.routes import (
-    RouteNotFoundError,
-    RouteStore,
-    SandboxRoute,
-)
-
-# Route Stores
-from supervisor.sandbox.routing.route_store import (
-    MemoryRouteStore,
-    PostgresRouteStore,
 )
 
 # Advisory Locks
-from supervisor.sandbox.routing.advisory_lock import (
-    AdvisoryLock,
-    AdvisoryLockProtocol,
-    MemoryAdvisoryLock,
-)
+from supervisor.sandbox.routing.advisory_lock import AdvisoryLockProtocol
 
 # Capabilities
-from supervisor.sandbox.routing.capabilities import (
-    PROVIDER_CAPABILITIES,
-    SandboxCapability,
-    aggregate_capabilities,
-    capabilities_lost_for_backends,
-    capabilities_lost_moving_to,
-    detect_capabilities,
-    detect_provider_capabilities,
-)
+from supervisor.sandbox.routing.capabilities import PROVIDER_CAPABILITIES, SandboxCapability
+
+# Route Stores
+from supervisor.sandbox.routing.route_store import MemoryRouteStore
 
 # Router
-from supervisor.sandbox.routing.router import (
-    BackendUnavailableError,
-    CapabilityUnsupportedError,
-    RouterError,
-    SandboxRouter,
-    SandboxRouterImpl,
-    create_sandbox_router,
-)
+from supervisor.sandbox.routing.router import SandboxRouter
+
+# Routes
+from supervisor.sandbox.routing.routes import RouteStore, SandboxRoute
 
 # Migration
-from supervisor.sandbox.routing.sandbox_migration import (
-    MigrationBlockedError,
-    MigrationResult,
-    SandboxMigrationRunner,
+from supervisor.sandbox.routing.sandbox_migration import MigrationResult
+
+# Security - Environment
+from supervisor.sandbox.security.env import (
+    is_allowed_gateway_inject,
+    is_denied_env_key,
+    sanitize_sandbox_env,
 )
 
-# Factory additions
-from supervisor.sandbox.factory import (
-    create_migration_runner,
-    create_router,
-    discover_backends,
+# Security - Guards
+from supervisor.sandbox.security.guards import (
+    DigestStatus,
+    MultiTenantViolation,
+    SecurityCheckResult,
+    assert_multi_tenant_provider,
+    assert_multi_tenant_sandbox_provider,
+    is_placeholder_image_digest,
 )
 
 __all__ = [
-    # Core abstractions
-    "Sandbox",
-    "SandboxProvider",
-    "SandboxInfo",
-    "SandboxStatus",
-    "SandboxError",
-    "SandboxGone",
-    "SandboxTimeout",
-    "SnapshotUnsupported",
-    "WorkspaceSyncUnsupported",
-    "ProvisionError",
-    "ProcessHandle",
+    "PROVIDER_CAPABILITIES",
+    "AdvisoryLockProtocol",
     "ByteReader",
     "ByteWriter",
+    "DigestStatus",
     "ExecResult",
-    # Factory
-    "create_sandbox_provider",
-    "resolve_provider_name",
-    "get_default_provider_name",
-    "is_isolation_provider",
-    "ProviderName",
-    "UnknownProviderError",
-    # Providers
-    "NoneProvider",
-    "NoneSandbox",
+    "IncompatibleProfile",
     "LocalProcessProvider",
     "LocalProcessSandbox",
-    # Security - Environment
-    "sanitize_sandbox_env",
-    "is_denied_env_key",
-    "is_allowed_gateway_inject",
-    "EnvSanitizer",
-    # Security - Guards
-    "assert_multi_tenant_provider",
-    "assert_multi_tenant_sandbox_provider",
-    "is_placeholder_image_digest",
-    "validate_image_digest",
-    "DigestStatus",
-    "SecurityCheckResult",
-    "MultiTenantViolation",
-    "ImageDigestError",
-    # Resolution
-    "load_pinned_sandbox_profile",
-    "assert_sandbox_profile_compatible",
-    "resolve_sandbox_create",
-    "resolve_sandbox_create_full",
-    "SandboxResolution",
-    "ResolutionError",
-    "IncompatibleProfile",
+    "MemoryRouteStore",
+    "MigrationResult",
     "MissingImageDigest",
     "MissingProviderError",
+    "MultiTenantViolation",
+    "NoneProvider",
+    "NoneSandbox",
     "PlaceholderImageError",
-    # Lifecycle
-    "reap_orphans",
+    "ProcessHandle",
+    "ProviderName",
     "ReapStats",
-    "SessionStatus",
-    "SessionLookup",
-    "SandboxReattach",
-    # Routes
-    "SandboxRoute",
+    "ResolutionError",
     "RouteStore",
-    "RouteNotFoundError",
-    # Route Stores
-    "MemoryRouteStore",
-    "PostgresRouteStore",
-    # Advisory Locks
-    "AdvisoryLock",
-    "AdvisoryLockProtocol",
-    "MemoryAdvisoryLock",
-    # Capabilities
+    "Sandbox",
     "SandboxCapability",
-    "PROVIDER_CAPABILITIES",
-    "detect_capabilities",
-    "detect_provider_capabilities",
-    "capabilities_lost_moving_to",
-    "capabilities_lost_for_backends",
-    "aggregate_capabilities",
-    # Router
+    "SandboxError",
+    "SandboxGone",
+    "SandboxInfo",
+    "SandboxPathEscape",
+    "SandboxProvider",
+    "SandboxReattach",
+    "SandboxResolution",
+    "SandboxRoute",
     "SandboxRouter",
-    "SandboxRouterImpl",
-    "create_sandbox_router",
-    "RouterError",
-    "BackendUnavailableError",
-    "CapabilityUnsupportedError",
-    # Migration
-    "SandboxMigrationRunner",
-    "MigrationResult",
-    "MigrationBlockedError",
-    # Factory additions
-    "create_router",
-    "create_migration_runner",
-    "discover_backends",
+    "SandboxStatus",
+    "SandboxTimeout",
+    "SecurityCheckResult",
+    "SessionLookup",
+    "SessionStatus",
+    "SnapshotUnsupported",
+    "UnknownProviderError",
+    "WorkspaceSyncUnsupported",
+    "assert_multi_tenant_provider",
+    "assert_multi_tenant_sandbox_provider",
+    "assert_sandbox_profile_compatible",
+    "create_sandbox_provider",
+    "is_allowed_gateway_inject",
+    "is_denied_env_key",
+    "is_placeholder_image_digest",
+    "load_pinned_sandbox_profile",
+    "reap_orphans",
+    "resolve_provider_name",
+    "resolve_sandbox_create",
+    "sanitize_sandbox_env",
 ]

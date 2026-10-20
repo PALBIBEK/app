@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import time
-from datetime import datetime, timezone
+from collections.abc import Coroutine
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -121,61 +124,75 @@ class JournalWriter:
         *,
         event_ids: list[str | None] | None = None,
     ) -> int:
-        """Atomically append n events. Returns the last allocated seq."""
+        """Atomically append n events. Returns the last allocated seq.
+
+        The write runs to completion even if the caller is cancelled (a session
+        terminating cancels its event pump): abandoned mid-transaction, the
+        connection would keep the database's write lock until it was collected,
+        and on SQLite every other writer would time out behind it.
+        """
         if not events:
             raise ValueError("append_batch requires at least one event")
+        return await _run_to_completion(self._append_batch(session_id, events, event_ids=event_ids))
+
+    async def _append_batch(
+        self,
+        session_id: str,
+        events: list[tuple[AgentEvent, str | None, str | None]],
+        *,
+        event_ids: list[str | None] | None,
+    ) -> int:
         n = len(events)
 
-        async with self._factory() as db:
-            async with db.begin():
-                # Serialize allocators under SQLite.
-                await db.execute(
-                    text("SELECT id FROM sessions WHERE id = :id"),
-                    {"id": session_id},
-                )
-                result = await db.execute(
-                    text(
-                        "UPDATE sessions SET last_seq = last_seq + :n, updated_at = :now "
-                        "WHERE id = :id RETURNING last_seq"
-                    ),
-                    {
-                        "n": n,
-                        "id": session_id,
-                        "now": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-                last_seq = result.scalar_one()
-                first = int(last_seq) - n + 1
-                now_ms = int(time.time() * 1000)
-                index_update: RunEnd | None = None
-                cost_delta = 0.0
-                for i, (event, turn_id, trace_id) in enumerate(events):
-                    seq = first + i
-                    payload = self._store_payload(event)
-                    db.add(
-                        EventRow(
-                            session_id=session_id,
-                            seq=seq,
-                            event_id=(event_ids[i] if event_ids else None) or uuid4().hex,
-                            turn_id=turn_id,
-                            type=event_type_name(event),
-                            payload=payload,
-                            ts_ms=now_ms,
-                            trace_id=trace_id,
-                        )
-                    )
-                    if isinstance(event, RunEnd):
-                        index_update = event
-                    if isinstance(event, MessageEnd) and event.usage is not None:
-                        cost_delta += float(event.usage.cost_total)
-                if index_update is not None or cost_delta:
-                    await self._touch_index(
-                        db,
-                        session_id,
-                        run_end=index_update,
-                        cost_delta=cost_delta,
+        async with self._factory() as db, db.begin():
+            # Serialize allocators under SQLite.
+            await db.execute(
+                text("SELECT id FROM sessions WHERE id = :id"),
+                {"id": session_id},
+            )
+            result = await db.execute(
+                text(
+                    "UPDATE sessions SET last_seq = last_seq + :n, updated_at = :now "
+                    "WHERE id = :id RETURNING last_seq"
+                ),
+                {
+                    "n": n,
+                    "id": session_id,
+                    "now": datetime.now(UTC),
+                },
+            )
+            last_seq = result.scalar_one()
+            first = int(last_seq) - n + 1
+            now_ms = int(time.time() * 1000)
+            index_update: RunEnd | None = None
+            cost_delta = 0.0
+            for i, (event, turn_id, trace_id) in enumerate(events):
+                seq = first + i
+                payload = self._store_payload(event)
+                db.add(
+                    EventRow(
+                        session_id=session_id,
+                        seq=seq,
+                        event_id=(event_ids[i] if event_ids else None) or uuid4().hex,
+                        turn_id=turn_id,
+                        type=event_type_name(event),
+                        payload=payload,
                         ts_ms=now_ms,
+                        trace_id=trace_id,
                     )
+                )
+                if isinstance(event, RunEnd):
+                    index_update = event
+                if isinstance(event, MessageEnd) and event.usage is not None:
+                    cost_delta += float(event.usage.cost_total)
+            if index_update is not None or cost_delta:
+                await self._touch_index(
+                    db,
+                    session_id,
+                    run_end=index_update,
+                    cost_delta=cost_delta,
+                    ts_ms=now_ms,
+                )
         return int(last_seq)
 
     async def append_in_session(
@@ -199,7 +216,7 @@ class JournalWriter:
             ),
             {
                 "id": session_id,
-                "now": datetime.now(timezone.utc).isoformat(),
+                "now": datetime.now(UTC),
             },
         )
         seq = int(result.scalar_one())
@@ -235,7 +252,7 @@ class JournalWriter:
         if run_end is not None:
             idx.message_count = len(run_end.messages)
         idx.total_cost = float(idx.total_cost or 0) + cost_delta
-        idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
     def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
         encoded = encode_event(event)
@@ -252,3 +269,18 @@ class JournalWriter:
         if not path.exists():
             path.write_bytes(raw)
         return {"_type": event_type_name(event), "_blob_ref": digest}
+
+
+async def _run_to_completion[T](work: Coroutine[Any, Any, T]) -> T:
+    """Await ``work``; if the caller is cancelled, ``work`` still finishes (and its error is logged)."""
+    task = asyncio.ensure_future(work)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(_log_failure)
+        raise
+
+
+def _log_failure(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        logging.getLogger(__name__).error("journal write failed after cancellation", exc_info=exc)

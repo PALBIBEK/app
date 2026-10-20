@@ -10,18 +10,18 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from supervisor.seams.interfaces.subagent_transport import (
-    CAP_BACKGROUND,
-    CAP_DEPTH_LIMIT,
-    CAP_FORK,
-    CAP_SPAWN,
-)
 from supervisor.seams.core.types import (
     ChatMessage,
     ChildInfo,
     JobHandle,
     SubagentRequest,
     SubagentRunResult,
+)
+from supervisor.seams.interfaces.subagent_transport import (
+    CAP_BACKGROUND,
+    CAP_DEPTH_LIMIT,
+    CAP_FORK,
+    CAP_SPAWN,
 )
 
 NESTED_SESSION_PROVIDER = "nested_session"
@@ -98,7 +98,7 @@ class NestedSessionSubagentProvider:
         self.started = True
         cid = self._child_id(request, "nested")
         jid = f"job-{uuid.uuid4().hex[:10]}"
-        text = self._complete(request)
+        self._complete(request)
         self._children[cid] = ChildInfo(
             id=cid, status="done", description=request.description
         )

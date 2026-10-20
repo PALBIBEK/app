@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import tempfile
 import time
@@ -44,19 +45,21 @@ from supervisor.sandbox.base import (
     Sandbox,
     SandboxGone,
     SandboxInfo,
+    SandboxPathEscape,
     SandboxProvider,
     SandboxStatus,
     SandboxTimeout,
     SnapshotUnsupported,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.status import (
     ComputerStatus,
     MachineState,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 
 if TYPE_CHECKING:
+    from supervisor.seams.services import WorkspaceTreeIO
     from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
 
@@ -101,6 +104,14 @@ class AsyncProcessHandle(ProcessHandle):
         self._proc.kill()
 
 
+_LABELS_DIR = ".labels"
+_SESSION_LABEL = "supervisor.session_id"
+
+
+def _labels_file(root: Path) -> Path:
+    return root.parent / _LABELS_DIR / f"{root.name}.json"
+
+
 class LocalProcessSandbox(Sandbox):
     """Sandbox backed by a local directory with asyncio process execution.
 
@@ -110,7 +121,7 @@ class LocalProcessSandbox(Sandbox):
     Workspace sync is supported via an optional WorkspaceHydrator.
     """
 
-    __slots__ = ("_root", "_hydrator", "_info", "_destroyed")
+    __slots__ = ("_destroyed", "_hydrator", "_info", "_root")
 
     def __init__(
         self,
@@ -190,7 +201,7 @@ class LocalProcessSandbox(Sandbox):
                 proc.communicate(),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             raise SandboxTimeout(
@@ -229,7 +240,7 @@ class LocalProcessSandbox(Sandbox):
         try:
             resolved.relative_to(self._root)
         except ValueError:
-            raise ValueError(f"path escapes sandbox: {path}")
+            raise SandboxPathEscape(path, provider="local_process") from None
 
         return resolved
 
@@ -276,6 +287,7 @@ class LocalProcessSandbox(Sandbox):
 
         if self._root.exists():
             await asyncio.to_thread(shutil.rmtree, self._root, ignore_errors=True)
+        _labels_file(self._root).unlink(missing_ok=True)
 
     async def is_alive(self) -> bool:
         return not self._destroyed and self._root.exists()
@@ -289,21 +301,21 @@ class LocalProcessSandbox(Sandbox):
     # Workspace Sync (Track B)
     # -------------------------------------------------------------------------
 
+    def as_tree_io(self) -> WorkspaceTreeIO:
+        """The sandbox directory as the scope workspace's file tree (hydrate / sync target)."""
+        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
+
+        return LocalFsTreeIO(self._root)
+
     async def hydrate_workspace(self, scope_id: str) -> WorkspaceSyncReport:
         if self._hydrator is None:
             raise WorkspaceSyncUnsupported("local_process")
-
-        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
-        tree_io = LocalFsTreeIO(self._root)
-        return await self._hydrator.hydrate(scope_id, tree_io)
+        return await self._hydrator.hydrate(scope_id, self.as_tree_io())
 
     async def sync_workspace(self, scope_id: str) -> WorkspaceSyncReport:
         if self._hydrator is None:
             raise WorkspaceSyncUnsupported("local_process")
-
-        from supervisor.sandbox.workspace_tree import LocalFsTreeIO
-        tree_io = LocalFsTreeIO(self._root)
-        return await self._hydrator.sync(scope_id, tree_io)
+        return await self._hydrator.sync(scope_id, self.as_tree_io())
 
     # -------------------------------------------------------------------------
     # Computer Status (basic)
@@ -349,6 +361,20 @@ class LocalProcessProvider(SandboxProvider):
     def name(self) -> str:
         return "local_process"
 
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """The session's directory, if a worker on this host made one and it is still there."""
+        for path in sorted((self._base / _LABELS_DIR).glob("*.json")):
+            try:
+                labels = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            root = self._base / path.stem
+            if labels.get(_SESSION_LABEL) == session_id and root.is_dir():
+                sandbox = LocalProcessSandbox(root, path.stem, hydrator=self._hydrator)
+                self._sandboxes[path.stem] = sandbox
+                return sandbox
+        return None
+
     async def create(
         self,
         *,
@@ -361,6 +387,9 @@ class LocalProcessProvider(SandboxProvider):
         sandbox_id = uuid4().hex
         root = self._base / sandbox_id
         root.mkdir(parents=True, exist_ok=True)
+        if labels:  # kept beside the workspace, not in it: the agent cannot edit them
+            _labels_file(root).parent.mkdir(exist_ok=True)
+            _labels_file(root).write_text(json.dumps(labels))
 
         sandbox = LocalProcessSandbox(
             root,
@@ -380,9 +409,10 @@ class LocalProcessProvider(SandboxProvider):
         return self._sandboxes.get(sandbox_id)
 
     async def close(self) -> None:
-        # Clean up all sandboxes
+        # A session's sandbox outlives this worker (another adopts it); the rest go.
         for sandbox in list(self._sandboxes.values()):
-            await sandbox.destroy()
+            if not _labels_file(sandbox.root).exists():
+                await sandbox.destroy()
         self._sandboxes.clear()
 
     async def health_check(self) -> bool:

@@ -17,7 +17,7 @@ from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.types import CaptureMetadata, Edit, Sensitivity, stricter
 from supervisor.memory.view import MemoryView
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # (system prompt, user content) -> model text. Blocking callers wrap this in a thread.
 type OneShot = Callable[[str, str], Awaitable[str]]
@@ -59,8 +59,8 @@ async def classify(one_shot: OneShot, texts: Sequence[str]) -> Sensitivity:
             f"{SENSITIVITY_PROMPT}\nOutput ONLY one label for the entire list.",
             json.dumps(list(texts)),
         )
-    except Exception:  # noqa: BLE001 - a failed estimate is "unknown", never a crash
-        _log.warning("memory classification failed", exc_info=True)
+    except Exception:  # a failed estimate is "unknown", never a crash
+        logger.warning("memory classification failed", exc_info=True)
         return Sensitivity.UNKNOWN
     return Sensitivity.parse(answer)
 

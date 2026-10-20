@@ -7,6 +7,7 @@ Hydrate/sync policy lives on WorkspaceStore (Modal reload/commit semantics).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from supervisor.seams.services.workspace_store import (
@@ -18,7 +19,6 @@ from supervisor.seams.services.workspace_store import (
 __all__ = [
     "StoreWorkspaceHydrator",
     "WorkspaceHydrator",
-    "as_workspace_hydrator",
 ]
 
 
@@ -31,7 +31,11 @@ class WorkspaceHydrator(Protocol):
     ) -> WorkspaceSyncReport: ...
 
     async def sync(
-        self, scope_id: str, tree: WorkspaceTreeIO
+        self,
+        scope_id: str,
+        tree: WorkspaceTreeIO,
+        *,
+        base: Mapping[str, tuple[int, str]] | None = None,
     ) -> WorkspaceSyncReport: ...
 
 
@@ -56,11 +60,13 @@ class StoreWorkspaceHydrator:
             return await self._store.hydrate(scope_id, tree)
 
     async def sync(
-        self, scope_id: str, tree: WorkspaceTreeIO
+        self,
+        scope_id: str,
+        tree: WorkspaceTreeIO,
+        *,
+        base: Mapping[str, tuple[int, str]] | None = None,
     ) -> WorkspaceSyncReport:
         async with self._lock_for(scope_id):
-            return await self._store.sync(scope_id, tree)
+            return await self._store.sync(scope_id, tree, base=base)
 
 
-def as_workspace_hydrator(store: WorkspaceStore) -> WorkspaceHydrator:
-    return StoreWorkspaceHydrator(store)

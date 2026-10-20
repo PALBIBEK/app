@@ -7,31 +7,23 @@ Each provider implements the SandboxProvider ABC from sandbox.base:
     - E2BProvider: E2B cloud sandboxes (production-cloud)
 """
 
-from supervisor.sandbox.providers.none import NoneSandbox, NoneProvider
+# Docker's and e2b's SDKs are imported when a provider is built, so these
+# modules import everywhere.
+from supervisor.sandbox.providers.e2b import E2BProvider, E2BSandbox
+from supervisor.sandbox.providers.local_docker import LocalDockerProvider, LocalDockerSandbox
 from supervisor.sandbox.providers.local_process import (
-    LocalProcessSandbox,
     LocalProcessProvider,
+    LocalProcessSandbox,
 )
+from supervisor.sandbox.providers.none import NoneProvider, NoneSandbox
 
 __all__ = [
-    "NoneProvider",
-    "NoneSandbox",
+    "E2BProvider",
+    "E2BSandbox",
+    "LocalDockerProvider",
+    "LocalDockerSandbox",
     "LocalProcessProvider",
     "LocalProcessSandbox",
+    "NoneProvider",
+    "NoneSandbox",
 ]
-
-# Optional providers (may not be installed)
-try:
-    from supervisor.sandbox.providers.local_docker import (
-        LocalDockerSandbox,
-        LocalDockerProvider,
-    )
-    __all__.extend(["LocalDockerProvider", "LocalDockerSandbox"])
-except ImportError:
-    pass
-
-try:
-    from supervisor.sandbox.providers.e2b import E2BSandbox, E2BProvider
-    __all__.extend(["E2BProvider", "E2BSandbox"])
-except ImportError:
-    pass

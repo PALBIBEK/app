@@ -33,6 +33,9 @@ def job_ids(op_id: str) -> tuple[str, str]:
 # Signal a job's workflow sends its session's when it ends.
 JOB_FINISHED_SIGNAL = "job_finished"
 
+# Sent by a session's own tool step to run a background subagent it just journalled.
+START_JOB_SIGNAL = "start_job"
+
 
 class Activity(StrEnum):
     """Activity names. The workflow calls activities by name so it never imports their code."""
@@ -159,6 +162,7 @@ class Accepted:
 class ApprovalChoice:
     approval_id: str
     choice: str
+    responded_by: str | None = None  # the principal answering; recorded for audit
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +281,7 @@ class ApprovalDecision:
     approval_id: str
     choice: str
     timed_out: bool = False
+    responded_by: str | None = None
 
 
 LOST_WORKER = "the worker running this tool was lost"
@@ -313,6 +318,14 @@ class SessionOp:
     kind: Op
     tenant_id: str
     args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class StartJob:
+    """A journalled START_BACKGROUND op and the provider it was validated against."""
+
+    op: SessionOp
+    provider: str
 
 
 @dataclass(frozen=True, slots=True)

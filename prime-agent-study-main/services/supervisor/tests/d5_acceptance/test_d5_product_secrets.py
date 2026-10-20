@@ -61,10 +61,12 @@ def test_d_settings_ui_does_not_claim_mock_keys_drive_chat() -> None:
     settings_hits: list[str] = []
     for path in _iter_product_files():
         rel = str(path.relative_to(REPO))
-        if "setting" not in rel.lower() and "api-key" not in rel.lower() and "apikey" not in rel.lower():
-            # Still scan placeholders / i18n that mention API keys.
-            if path.suffix not in {".tsx", ".ts", ".jsx", ".js"}:
-                continue
+        # Still scan placeholders / i18n that mention API keys.
+        if (
+            "setting" not in rel.lower() and "api-key" not in rel.lower() and "apikey" not in rel.lower()
+            and path.suffix not in {".tsx", ".ts", ".jsx", ".js"}
+        ):
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

@@ -8,18 +8,25 @@ published through the API survive a restart.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.catalog.core.types import ArtifactKind, ArtifactStatus
 from supervisor.catalog.storage import CompositionCatalog
+from supervisor.catalog.storage.composition import SYSTEM_OWNER
 from supervisor.catalog.storage.converters import artifact_from_dict, artifact_to_dict
 from supervisor.db.models import CatalogArtifactRow
 
-__all__ = ["artifact_summary", "hydrate_composition_catalog", "persist_deprecate", "persist_offer"]
+__all__ = [
+    "artifact_summary",
+    "hydrate_composition_catalog",
+    "persist_deprecate",
+    "persist_offer",
+    "sync_composition",
+]
 
 # Referenced artifacts must be offered before the compositions that pin them.
 _HYDRATE_ORDER: dict[str, int] = {
@@ -31,7 +38,7 @@ _HYDRATE_ORDER: dict[str, int] = {
 }
 
 
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 def _kind_str(kind: ArtifactKind | str) -> str:
@@ -76,6 +83,28 @@ async def persist_offer(
             row.deprecated_at = None
 
 
+async def persisted_owner(
+    factory: async_sessionmaker[AsyncSession], kind: ArtifactKind | str, artifact_id: str
+) -> str | None:
+    """The tenant that owns ``artifact_id`` according to the database, if it was ever published.
+
+    Every replica decides ownership from here, so a stale in-memory catalog on
+    one process cannot hand a name to a second tenant.
+    """
+    async with factory() as db:
+        owner = (
+            await db.execute(
+                select(CatalogArtifactRow.owner_id)
+                .where(
+                    CatalogArtifactRow.kind == _kind_str(kind),
+                    CatalogArtifactRow.artifact_id == artifact_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    return owner
+
+
 async def persist_deprecate(
     factory: async_sessionmaker[AsyncSession],
     kind: ArtifactKind | str,
@@ -91,7 +120,7 @@ async def persist_deprecate(
             return
         row.status = ArtifactStatus.DEPRECATED.value
         row.deprecated_by = deprecated_by
-        row.deprecated_at = datetime.now(timezone.utc)
+        row.deprecated_at = datetime.now(UTC)
 
 
 async def hydrate_composition_catalog(
@@ -104,14 +133,85 @@ async def hydrate_composition_catalog(
 
     rows = sorted(rows, key=lambda r: (_HYDRATE_ORDER.get(r.kind, 1), r.created_at or _EPOCH))
     for row in rows:
-        artifact = artifact_from_dict(row.kind, dict(row.body))
-        offered = catalog.offer(artifact)
-        if row.status == ArtifactStatus.DEPRECATED.value:
-            catalog.deprecate(row.kind, offered.name, offered.digest)
+        _reconcile(catalog, row)
     return len(rows)
 
 
-def artifact_summary(artifact: Any) -> dict[str, str]:
+_REFERENCES: tuple[tuple[str, str], ...] = (
+    ("prompt_pack", ArtifactKind.PROMPT_PACK.value),
+    ("tool_set", ArtifactKind.TOOL_SET.value),
+    ("sandbox_profile", ArtifactKind.SANDBOX_PROFILE.value),
+    ("memory_profile", ArtifactKind.MEMORY_PROFILE.value),
+)
+"""Composition body field → kind of the artifact it pins."""
+
+
+async def sync_composition(
+    catalog: CompositionCatalog,
+    factory: async_sessionmaker[AsyncSession],
+    composition_id: str,
+    digest: str | None = None,
+) -> None:
+    """Bring one composition, and every artifact it pins, up to date from the database.
+
+    The database is the catalog's source of truth; each process's in-memory
+    catalog is a cache of it. Another process (an API replica, or the API when
+    this is a worker) may have published or deprecated an artifact since this
+    process hydrated, so anything about to resolve a session's pins syncs them
+    first: missing artifacts are loaded, and statuses follow the database.
+    """
+    async with factory() as db:
+        query = select(CatalogArtifactRow).where(
+            CatalogArtifactRow.kind == ArtifactKind.COMPOSITION.value,
+            CatalogArtifactRow.artifact_id == composition_id,
+        )
+        if digest is not None:
+            query = query.where(CatalogArtifactRow.digest == digest)
+        compositions = list((await db.execute(query)).scalars())
+        pinned = {
+            (kind, ref["id"], ref["digest"])
+            for row in compositions
+            for field, kind in _REFERENCES
+            if isinstance(ref := row.body.get(field), dict) and ref.get("id") and ref.get("digest")
+        }
+        references = (
+            list(
+                (
+                    await db.execute(
+                        select(CatalogArtifactRow).where(
+                            tuple_(
+                                CatalogArtifactRow.kind,
+                                CatalogArtifactRow.artifact_id,
+                                CatalogArtifactRow.digest,
+                            ).in_(sorted(pinned))
+                        )
+                    )
+                ).scalars()
+            )
+            if pinned
+            else []
+        )
+    for row in (*references, *compositions):  # what a composition pins, before it
+        _reconcile(catalog, row)
+
+
+def _reconcile(catalog: CompositionCatalog, row: CatalogArtifactRow) -> None:
+    """Make the cached artifact match its database row (content is digest-addressed)."""
+    offered = catalog.offer(
+        artifact_from_dict(row.kind, dict(row.body)), owner=row.owner_id or SYSTEM_OWNER
+    )
+    if row.status == ArtifactStatus.DEPRECATED.value:
+        catalog.deprecate(row.kind, offered.name, offered.digest)
+
+
+class ArtifactSummary(TypedDict):
+    artifact_id: str
+    digest: str
+    status: str
+    semver: str
+
+
+def artifact_summary(artifact: Any) -> ArtifactSummary:
     """Fields shared by every artifact kind, shaped for ``CatalogArtifactOut``."""
     return {
         "artifact_id": artifact.name,

@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from supervisor.harness.core.enums import (
+    RECOVERY_ACTION_ALIASES,
     ApprovalOnTimeout,
     GuardBehavior,
     HarnessStatus,
     RecoveryAction,
     RuntimeMode,
     ToolClass,
-    RECOVERY_ACTION_ALIASES,
 )
 
 

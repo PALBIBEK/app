@@ -1,8 +1,8 @@
 {
-  "digest": "sha256:a160616efced10fb0147d859033352fdff0de6fd5778916479d42f4e72d6306c",
+  "digest": "sha256:f7cf7489beab22391a2a219c933ca1119c309e2ccd460f5c094ec5ca74fd246c",
   "harness_version": "githi-v1",
   "memory_profile": {
-    "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
+    "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
     "id": "default"
   },
   "name": "githi-v1",

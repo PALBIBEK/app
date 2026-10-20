@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import yaml
-
 from supervisor.harness.storage.converters import load_manifest
 
 

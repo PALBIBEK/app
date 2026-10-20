@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.digests import content_digest
-from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import AgentComposition
+from supervisor.catalog.services import require_implemented
+from supervisor.catalog.storage import CompositionCatalog
 
 
 def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) -> list[str]:
@@ -16,17 +17,20 @@ def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) ->
     problems: list[str] = []
     try:
         catalog.get("prompt_pack", comp.prompt_pack.id, comp.prompt_pack.digest, require_offered=True)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: prompt_pack {comp.prompt_pack.id}@{comp.prompt_pack.digest}: {exc}")
     try:
-        catalog.get("tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True)
-    except Exception as exc:
+        tool_set = catalog.get(
+            "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
+        )
+        require_implemented(tool_set)
+    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: tool_set {comp.tool_set.id}@{comp.tool_set.digest}: {exc}")
     if comp.sandbox_profile is not None:
         sp = comp.sandbox_profile
         try:
             catalog.get("sandbox_profile", sp.id, sp.digest, require_offered=True)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
             problems.append(f"{comp.name}: sandbox_profile {sp.id}@{sp.digest}: {exc}")
     if comp.status != "offered":
         problems.append(f"{comp.name}: status={comp.status!r} (not offered)")
@@ -70,7 +74,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
         if digest and not digest.startswith("sha256:REPLACE"):
             try:
                 comp = catalog.get("composition", name, digest, require_offered=True)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
                 problems.append(f"{path.name}: fixture digest mismatch: {exc}")
                 continue
             problems.extend(composition_problems(catalog, comp))
@@ -78,7 +82,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
             # No pinned composition digest in fixture — find offered row by name.
             offered = [
                 art
-                for (kind, art_name, _), art in catalog._by_key.items()  # noqa: SLF001
+                for (kind, art_name, _), art in catalog._by_key.items()
                 if kind == "composition" and art_name == name and art.status == "offered"
             ]
             if not offered:
@@ -91,18 +95,22 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
                 # Fixture child digests must match offered children when present.
                 pp = raw.get("prompt_pack") or {}
                 ts = raw.get("tool_set") or {}
-                if pp.get("digest") and not str(pp["digest"]).startswith("sha256:REPLACE"):
-                    if pp["digest"] != comp.prompt_pack.digest:
-                        problems.append(
-                            f"{path.name}: prompt_pack digest fixture {pp['digest']!r} "
-                            f"!= offered {comp.prompt_pack.digest!r}"
-                        )
-                if ts.get("digest") and not str(ts["digest"]).startswith("sha256:REPLACE"):
-                    if ts["digest"] != comp.tool_set.digest:
-                        problems.append(
-                            f"{path.name}: tool_set digest fixture {ts['digest']!r} "
-                            f"!= offered {comp.tool_set.digest!r}"
-                        )
+                if (
+                    pp.get("digest") and not str(pp["digest"]).startswith("sha256:REPLACE")
+                    and pp["digest"] != comp.prompt_pack.digest
+                ):
+                    problems.append(
+                        f"{path.name}: prompt_pack digest fixture {pp['digest']!r} "
+                        f"!= offered {comp.prompt_pack.digest!r}"
+                    )
+                if (
+                    ts.get("digest") and not str(ts["digest"]).startswith("sha256:REPLACE")
+                    and ts["digest"] != comp.tool_set.digest
+                ):
+                    problems.append(
+                        f"{path.name}: tool_set digest fixture {ts['digest']!r} "
+                        f"!= offered {comp.tool_set.digest!r}"
+                    )
 
     return problems
 
@@ -110,7 +118,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
 def list_catalog_problems(catalog: CompositionCatalog) -> list[str]:
     """List problems for all offered compositions in memory."""
     problems: list[str] = []
-    for (kind, _name, _digest), art in catalog._by_key.items():  # noqa: SLF001
+    for (kind, _name, _digest), art in catalog._by_key.items():
         if kind != "composition" or not isinstance(art, AgentComposition):
             continue
         if art.status != "offered":
@@ -122,7 +130,7 @@ def list_catalog_problems(catalog: CompositionCatalog) -> list[str]:
 def dump_composition_catalog(catalog: CompositionCatalog) -> dict[str, Any]:
     """Canonical dump of offered artifacts (for CLI / startup audit)."""
     rows: list[dict[str, Any]] = []
-    for (kind, name, digest), art in sorted(catalog._by_key.items()):  # noqa: SLF001
+    for (kind, name, digest), art in sorted(catalog._by_key.items()):
         body = art.body_for_digest()
         actual = content_digest(body)
         rows.append(

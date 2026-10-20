@@ -24,6 +24,7 @@ from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import Env, has_event, payloads, run_ended, spawn_worker
 from tests.support.scripted import ScriptedGateway, slow_subagent
+from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -185,10 +186,7 @@ async def test_job_and_session_histories_replay_deterministically(env: Env) -> N
     )
     replayed = 0
     for kind in ("AgentSession", "SubagentJob"):
-        async for run in env.client.list_workflows(f"WorkflowType = '{kind}'"):
-            history = await env.client.get_workflow_handle(
-                run.id, run_id=run.run_id
-            ).fetch_history()
+        async for history in replayable_histories(env.client, f"WorkflowType = '{kind}'"):
             result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
             assert result.replay_failure is None, (kind, result.replay_failure)
             replayed += 1

@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from memory_service.models import OutboxRow, SessionEventRow
 from memory_service.types import SessionEvent, SessionNotFound
 
-
 Executor = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 
@@ -74,13 +73,12 @@ class Outbox:
         pending = await self.pending(session_id)
         for item in pending:
             # Re-check status inside txn for race safety
-            async with self._factory() as db:
-                async with db.begin():
-                    row = await db.get(OutboxRow, item.id, with_for_update=True)
-                    if row is None or row.status == "done":
-                        if row and row.result is not None:
-                            results.append(dict(row.result))
-                        continue
+            async with self._factory() as db, db.begin():
+                row = await db.get(OutboxRow, item.id, with_for_update=True)
+                if row is None or row.status == "done":
+                    if row and row.result is not None:
+                        results.append(dict(row.result))
+                    continue
                     # Execute outside? For exactly-once we execute then commit.
                     # Pattern: mark processing... simpler MVP: execute then write result in same begin
                     # after await — keep executor sync or await before long critical section.
@@ -89,41 +87,40 @@ class Outbox:
                 outcome = await outcome  # type: ignore[misc]
             assert isinstance(outcome, dict)
 
-            async with self._factory() as db:
-                async with db.begin():
-                    row = await db.get(OutboxRow, item.id, with_for_update=True)
-                    if row is None:
-                        raise SessionNotFound(f"outbox missing {item.id}")
-                    if row.status == "done":
-                        results.append(dict(row.result or outcome))
-                        continue
-                    # Allocate next seq
-                    from memory_service.models import MemorySessionRow
+            async with self._factory() as db, db.begin():
+                row = await db.get(OutboxRow, item.id, with_for_update=True)
+                if row is None:
+                    raise SessionNotFound(f"outbox missing {item.id}")
+                if row.status == "done":
+                    results.append(dict(row.result or outcome))
+                    continue
+                # Allocate next seq
+                from memory_service.models import MemorySessionRow
 
-                    sess = await db.get(MemorySessionRow, session_id, with_for_update=True)
-                    if sess is None:
-                        raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
-                    next_seq = sess.last_seq + 1
-                    call_id = item.payload.get("call_id")
-                    result_data = {
-                        "call_id": call_id,
-                        "status": "ok",
-                        "result": outcome,
-                        "idempotency_key": row.idempotency_key,
-                    }
-                    db.add(
-                        SessionEventRow(
-                            session_id=session_id,
-                            seq=next_seq,
-                            type="tool/result",
-                            time=int(time.time() * 1000),
-                            data=result_data,
-                        )
+                sess = await db.get(MemorySessionRow, session_id, with_for_update=True)
+                if sess is None:
+                    raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
+                next_seq = sess.last_seq + 1
+                call_id = item.payload.get("call_id")
+                result_data = {
+                    "call_id": call_id,
+                    "status": "ok",
+                    "result": outcome,
+                    "idempotency_key": row.idempotency_key,
+                }
+                db.add(
+                    SessionEventRow(
+                        session_id=session_id,
+                        seq=next_seq,
+                        type="tool/result",
+                        time=int(time.time() * 1000),
+                        data=result_data,
                     )
-                    sess.last_seq = next_seq
-                    row.status = "done"
-                    row.result = outcome
-                    results.append(outcome)
+                )
+                sess.last_seq = next_seq
+                row.status = "done"
+                row.result = outcome
+                results.append(outcome)
         return results
 
     async def count_effects_by_key(self, idempotency_key: str) -> int:

@@ -22,7 +22,7 @@ type Handler = Callable[[SessionManager, SessionOp], Awaitable[Result]]
 
 def _subagent(op: SessionOp) -> dict[str, Any]:
     args = dict(op.args)
-    provider = args.pop("provider", "memory")
+    provider = args.pop("provider", None)  # None: the session's pinned default
     return {
         "tenant_id": op.tenant_id,
         "provider": provider,
@@ -84,19 +84,24 @@ async def _fork_child(m: SessionManager, op: SessionOp) -> Result:
 
 
 async def _start_background(m: SessionManager, op: SessionOp) -> Result:
-    """Validate and journal the job; the session's workflow then runs it durably."""
+    """Validate and journal the job; the session's workflow then runs it durably.
+
+    The provider is resolved here (the workflow cannot see the session's seams)
+    and returned, so the job runs on exactly the provider that was validated.
+    """
     job_id, run_id = job_ids(op.op_id)
-    handle = await m.begin_subagent_background(
-        op.session_id, **_subagent(op), job_id=job_id, run_id=run_id
-    )
-    return {"job_id": handle.job_id}
+    args = _subagent(op)
+    args["provider"] = await m.resolve_subagent_provider(op.session_id, args["provider"])
+    handle = await m.begin_subagent_background(op.session_id, **args, job_id=job_id, run_id=run_id)
+    return {"job_id": handle.job_id, "provider": args["provider"]}
 
 
 async def run_job_inline(m: SessionManager, op: SessionOp) -> None:
     """In-process mode only (no workflows): run a started job to its end, here and now."""
     job_id, run_id = job_ids(op.op_id)
     args = _subagent(op)
-    request, provider = args["request"], args["provider"]
+    request = args["request"]
+    provider = await m.resolve_subagent_provider(op.session_id, args["provider"])
     ops = await m.subagent_job_ops(op.session_id, request)
     try:
         result = await asyncio.to_thread(ops.run_background, provider, request)

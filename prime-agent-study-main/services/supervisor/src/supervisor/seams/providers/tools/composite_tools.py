@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from supervisor.seams.interfaces.tool_provider import ToolProvider
 from supervisor.seams.core.types import ToolDescriptor, ToolInvokeContext, ToolResult
+from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 
 class CompositeToolProvider:
@@ -26,6 +26,13 @@ class CompositeToolProvider:
                 seen.add(tool.name)
                 out.append(tool)
         return out
+
+    def tool_class(self, name: str) -> str | None:
+        """The class reported by the first provider that offers ``name`` and can classify."""
+        for provider in self._providers:
+            if name in {t.name for t in provider.list_tools()}:
+                return provider.tool_class(name) if isinstance(provider, ToolClassifier) else None
+        return None
 
     def invoke(
         self,

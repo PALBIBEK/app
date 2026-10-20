@@ -6,9 +6,9 @@ import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from supervisor.seams.providers.authz.memory_grant_store import MemoryGrantStore
 from supervisor.seams.services.authz import AuthzService, GrantStore
 from supervisor.seams.services.authz_service import StoreAuthzService
-from supervisor.seams.providers.authz.memory_grant_store import MemoryGrantStore
 
 
 def create_grant_store(

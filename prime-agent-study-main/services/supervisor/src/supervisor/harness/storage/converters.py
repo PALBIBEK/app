@@ -15,12 +15,12 @@ import yaml
 
 from supervisor.harness.core.digests import assert_digest
 from supervisor.harness.core.enums import (
+    RECOVERY_ACTION_ALIASES,
     ApprovalOnTimeout,
     GuardBehavior,
     RecoveryAction,
     RuntimeMode,
     ToolClass,
-    RECOVERY_ACTION_ALIASES,
 )
 from supervisor.harness.core.errors import (
     ManifestParseError,
@@ -37,25 +37,25 @@ from supervisor.harness.core.types import (
 )
 
 __all__ = [
-    # To dict
-    "approval_spec_to_dict",
-    "budget_spec_to_dict",
-    "guard_spec_to_dict",
-    "manifest_to_dict",
-    "recovery_policy_to_dict",
-    "subagents_spec_to_dict",
-    "tool_spec_to_dict",
     # From dict
     "approval_spec_from_dict",
+    # To dict
+    "approval_spec_to_dict",
     "budget_spec_from_dict",
+    "budget_spec_to_dict",
     "guard_spec_from_dict",
-    "manifest_from_dict",
-    "recovery_policy_from_dict",
-    "subagents_spec_from_dict",
-    "tool_spec_from_dict",
+    "guard_spec_to_dict",
     # Parsing
     "load_manifest",
+    "manifest_from_dict",
+    "manifest_to_dict",
     "parse_yaml",
+    "recovery_policy_from_dict",
+    "recovery_policy_to_dict",
+    "subagents_spec_from_dict",
+    "subagents_spec_to_dict",
+    "tool_spec_from_dict",
+    "tool_spec_to_dict",
     "validate_and_freeze",
 ]
 

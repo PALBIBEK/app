@@ -20,7 +20,6 @@ __all__ = [
     "GrantStore",
     "NotScopeMember",
     "Principal",
-    "ScopeNotFound",
     "UnauthorizedError",
 ]
 
@@ -63,12 +62,6 @@ class NotScopeMember(ForbiddenError):
             code="AUTHZ_NOT_SCOPE_MEMBER",
         )
         self.principal_id = principal_id
-        self.scope_id = scope_id
-
-
-class ScopeNotFound(SeamError):
-    def __init__(self, scope_id: str) -> None:
-        super().__init__(f"scope not found: {scope_id!r}", "AUTHZ_SCOPE_NOT_FOUND")
         self.scope_id = scope_id
 
 

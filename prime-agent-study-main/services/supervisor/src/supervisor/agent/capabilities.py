@@ -110,18 +110,6 @@ def require(have: Capabilities, need: Capabilities) -> None:
         )
 
 
-def require_capability(caps: Capabilities, capability: str, reason: str | None = None) -> None:
-    """Require a single capability. Raises CapabilityError if unsupported."""
-    if caps.supports(capability):
-        return
-
-    available = [c for c in _CAP_TO_ATTR if caps.supports(c)]
-    available.extend(caps.extras)
-
-    msg = f"Capability not supported: {capability}"
-    raise CapabilityError(message=f"{msg} ({reason})" if reason else msg, required=capability, available=available)
-
-
 # Standard profiles
 MINIMAL_CAPABILITIES = Capabilities(
     protocol_version="1.0",

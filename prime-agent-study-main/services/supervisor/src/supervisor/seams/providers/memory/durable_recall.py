@@ -11,12 +11,12 @@ from supervisor.seams.interfaces.context_memory import (
     MemoryInvokeContext,
     RecallBlock,
 )
+from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 from supervisor.seams.services.memory_service_client import (
     memory_service_base_url,
     recall_memory_items,
     resolve_memory_scope,
 )
-from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 
 
 class DurableRecallProvider:
@@ -67,13 +67,17 @@ class DurableRecallProvider:
             session_id=ctx.session_id,
             tenant_id=ctx.tenant_id,
             namespace=self._namespace,
+            owner=ctx.owner or None,
+            agent=ctx.agent or None,
         )
         try:
+            # No log_session_id: that names one of the memory service's own logical
+            # sessions, which supervisor sessions are not (sending ours made every
+            # recall a 404).
             result = recall_memory_items(
                 query=query,
                 scope=scope,
                 max_tokens=self._max_tokens,
-                log_session_id=ctx.session_id or None,
                 base_url=self._base_url,
                 service_token=self._service_token,
                 timeout=self._timeout,

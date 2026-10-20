@@ -28,11 +28,11 @@ from supervisor.sandbox.base import (
     SandboxProvider,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.status import (
     ComputerStatus,
     MachineState,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.seams.providers.workspace import normalize_workspace_path
 from supervisor.seams.services import (
     WorkspaceHydrator,
@@ -41,7 +41,7 @@ from supervisor.seams.services import (
     WorkspaceTreeIO,
 )
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 LABEL_SESSION = "supervisor.session_id"
 LABEL_HARNESS = "supervisor.harness_version"
@@ -129,7 +129,7 @@ async def _demux_docker_socket(
                 await stderr_q.put(payload)
             # 0 = stdin echo — ignore
     except Exception:
-        _log.exception("docker demux failed")
+        logger.exception("docker demux failed")
     finally:
         await stdout_q.put(None)
         await stderr_q.put(None)
@@ -201,7 +201,7 @@ class DockerProcessHandle(ProcessHandle):
 class DockerWorkspaceTreeIO:
     """WorkspaceTreeIO over a Docker sandbox ``/workspace`` (Stage 5 / D10)."""
 
-    def __init__(self, sandbox: "LocalDockerSandbox") -> None:
+    def __init__(self, sandbox: LocalDockerSandbox) -> None:
         self._sb = sandbox
         self._root = (sandbox.info.workdir or "/workspace").rstrip("/") or "/workspace"
 
@@ -216,7 +216,7 @@ class DockerWorkspaceTreeIO:
         return await self._sb.read_file(self._abs(path))
 
     async def list_paths(self) -> list[str]:
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             return sorted(
@@ -234,14 +234,14 @@ class DockerWorkspaceTreeIO:
 
     async def delete_path(self, path: str) -> None:
         abs_path = self._abs(path)
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         if isinstance(files, dict):
             files.pop(abs_path, None)
             return
         await self._sb.exec(["rm", "-f", "--", abs_path], timeout=30)
 
     async def clear(self) -> None:
-        files = getattr(self._sb._container, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._container, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             for key in list(files):
@@ -358,7 +358,7 @@ class LocalDockerSandbox(Sandbox):
             else:
                 try:
                     code = await asyncio.wait_for(handle.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await handle.kill()
                     raise TimeoutError(
                         f"exec timed out after {timeout}s: {cmd!r}"
@@ -435,6 +435,7 @@ class LocalDockerSandbox(Sandbox):
         except WorkspacePathEscape:
             raise
         except Exception:
+            logger.debug("docker exists check failed", exc_info=True)
             return False
 
     async def hydrate_workspace(self, scope_id: str) -> WorkspaceSyncReport:
@@ -474,11 +475,11 @@ class LocalDockerSandbox(Sandbox):
             try:
                 self._container.kill()
             except Exception:
-                pass
+                logger.debug("killing the container failed (it may have exited)", exc_info=True)
             try:
                 self._container.remove(force=True)
             except Exception:
-                pass
+                logger.warning("removing the container failed", exc_info=True)
 
         await loop.run_in_executor(None, _rm)
 
@@ -490,6 +491,7 @@ class LocalDockerSandbox(Sandbox):
                 self._container.reload()
                 return self._container.status == "running"
             except Exception:
+                logger.debug("docker liveness check failed", exc_info=True)
                 return False
 
         return await loop.run_in_executor(None, _alive)
@@ -639,10 +641,7 @@ class LocalDockerProvider(SandboxProvider):
             except Exception as exc:
                 raise SandboxGone(f"snapshot missing: {snapshot_id!r}") from exc
 
-        try:
-            container = await loop.run_in_executor(None, _run)
-        except SandboxGone:
-            raise
+        container = await loop.run_in_executor(None, _run)
         info = SandboxInfo(
             id=container.id,
             provider=self.name,
@@ -662,6 +661,7 @@ class LocalDockerProvider(SandboxProvider):
             try:
                 return client.containers.get(sandbox_id)
             except Exception:
+                logger.debug("no container with that id", exc_info=True)
                 return None
 
         container = await loop.run_in_executor(None, _get)
@@ -674,6 +674,38 @@ class LocalDockerProvider(SandboxProvider):
             image=None,
             supports_snapshot=True,
             labels=labels,
+        )
+        return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
+
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """The session's container, started again if it stopped (its files are kept)."""
+        client = self._ensure_client()
+        loop = asyncio.get_running_loop()
+
+        def _find() -> Any | None:
+            found = client.containers.list(
+                all=True, filters={"label": [f"{LABEL_MANAGED}=1", f"{LABEL_SESSION}={session_id}"]}
+            )
+            if not found:
+                return None
+            container = found[0]  # the newest
+            if getattr(container, "status", "running") != "running":
+                container.start()
+                container.reload()
+            return container
+
+        try:
+            container = await loop.run_in_executor(None, _find)
+        except Exception:  # no container to adopt: start afresh
+            logger.warning("adopting the sandbox of session=%s failed", session_id, exc_info=True)
+            return None
+        if container is None:
+            return None
+        info = SandboxInfo(
+            id=container.id,
+            provider=self.name,
+            supports_snapshot=True,
+            labels=dict(getattr(container, "labels", None) or {}),
         )
         return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
 

@@ -8,11 +8,10 @@ import time
 
 from memory_service.bank import MemoryBank, _row_to_item
 from memory_service.embed import Embedder, HashingEmbedder, cosine
-from memory_service.models import MemoryItemRow
 from memory_service.tier2_types import MemoryItem, RecallResult, TokenBudget, estimate_tokens
 from memory_service.types import Scope
 
-_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.I)
+_TOKEN = re.compile(r"[a-z0-9_./:-]+", re.IGNORECASE)
 
 
 def _tokens(text: str) -> set[str]:
@@ -92,10 +91,8 @@ class HybridRecall:
             cost = estimate_tokens(row.content)
             if tokens + cost > budget.max_tokens and packed:
                 break
-            if tokens + cost > budget.max_tokens and not packed:
-                # Always allow at least one if it alone overflows? skip if huge
-                if cost > budget.max_tokens:
-                    continue
+            if tokens + cost > budget.max_tokens and not packed and cost > budget.max_tokens:
+                continue  # a single row larger than the whole budget is skipped
             packed.append(_row_to_item(row))
             tokens += cost
             if tokens >= budget.max_tokens:

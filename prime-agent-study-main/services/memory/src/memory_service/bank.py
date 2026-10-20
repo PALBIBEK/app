@@ -8,8 +8,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from memory_service.embed import Embedder, content_hash
 from memory_service.cost import CachingEmbedder
+from memory_service.embed import Embedder, content_hash
 from memory_service.metrics import METRICS
 from memory_service.models import MemoryItemRow
 from memory_service.tenant import require_scope

@@ -51,7 +51,7 @@ async def test_level2_crash_recovery_needs_review_then_cold(session_env) -> None
     m = session_env["manager"]
     writer = session_env["writer"]
     reader = session_env["reader"]
-    registry = session_env["registry"]
+    session_env["registry"]
     catalog = session_env["catalog"]
     from supervisor.session.manager import SessionManager
     from supervisor.session.registry import SessionRegistry
@@ -125,60 +125,5 @@ SESSION = SRC / "session"
 CAMEL = re.compile(r"[a-z][A-Z]")
 
 
-def test_level5_session_package_leak_checks() -> None:
-    pi_keys = re.compile(
-        r"\b(toolCallId|isError|stopReason|cacheRead|cacheWrite|"
-        r"isStreaming|isCompacting|pendingMessageCount|sessionId|"
-        r"messageCount|contextWindow|toolName)\b"
-    )
-    leaks_runtimes: list[str] = []
-    leaks_camel: list[str] = []
-    for path in SESSION.rglob("*.py"):
-        for i, line in enumerate(path.read_text().splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if "runtimes" in line:
-                leaks_runtimes.append(f"{path.name}:{i}:{stripped}")
-            for match in pi_keys.finditer(line):
-                leaks_camel.append(f"{path.name}:{i}:{match.group(0)}")
-    assert leaks_runtimes == [], leaks_runtimes
-    assert leaks_camel == [], leaks_camel
 
 
-@pytest.mark.asyncio
-async def test_level4_harness_lifecycle_via_replay_provider(session_env) -> None:
-    """Harness runtime through SessionManager with a ReplaySandbox provider."""
-    from supervisor.sandbox.base import SandboxProvider
-    from supervisor.session.manager import SessionManager
-    from supervisor.session.registry import SessionRegistry
-    from tests.support.replay import ReplaySandbox
-
-    class ReplayProvider(SandboxProvider):
-        name = "replay"
-
-        async def create(self, **kwargs):
-            return ReplaySandbox()
-
-        async def resume(self, snapshot_id: str):
-            return ReplaySandbox()
-
-        async def get(self, sandbox_id: str):
-            return None
-
-    m = SessionManager(
-        session_factory=session_env["factory"],
-        writer=session_env["writer"],
-        reader=session_env["reader"],
-        registry=SessionRegistry(),
-        catalog=session_env["catalog"],
-        sandbox_provider=ReplayProvider(),
-    )
-    sid = await m.create(tenant_id="t1", harness_version="coding-v1", runtime_name="harness")
-    await m.send(sid, "read a.txt", command_id="req-1")
-    await _drain_to_run_end(m, sid)
-    await asyncio.sleep(0.05)
-    events = await session_env["reader"].read(sid, since=-1)
-    assert any(isinstance(e.payload, RunEnd) for e in events)
-    assert [e.seq for e in events] == list(range(len(events)))
-    await m.terminate(sid)

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from supervisor.catalog.core.digests import content_digest, is_unset_digest
 from supervisor.catalog.core.errors import (
+    CatalogOwnershipRequired,
     DigestMismatch,
     NotOffered,
 )
@@ -27,7 +28,14 @@ from supervisor.catalog.storage.converters import kind_of, with_digest, with_sta
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
 
-__all__ = ["CompositionCatalog"]
+__all__ = ["SYSTEM_OWNER", "CompositionCatalog"]
+
+SYSTEM_OWNER = "system"
+"""Owner of shipped artifacts: every tenant may use them, none may change them."""
+
+
+def _kind_key(kind: ArtifactKind | str) -> str:
+    return kind.value if isinstance(kind, ArtifactKind) else str(kind)
 
 
 class CompositionCatalog:
@@ -59,8 +67,29 @@ class CompositionCatalog:
         self._by_name: dict[tuple[ArtifactKind | str, str], list[str]] = defaultdict(list)
         # Reverse lookup: digest -> (kind, name)
         self._by_digest: dict[str, tuple[ArtifactKind | str, str]] = {}
+        # Tenancy: (kind, name) -> owning tenant (SYSTEM_OWNER for shipped artifacts)
+        self._owners: dict[tuple[str, str], str] = {}
 
-    def offer(self, artifact: Artifact) -> Artifact:
+    # --- tenancy -------------------------------------------------------------
+
+    def owner(self, kind: ArtifactKind | str, name: str) -> str | None:
+        """The tenant that owns ``name`` (``SYSTEM_OWNER`` for shipped ones), if known."""
+        return self._owners.get((_kind_key(kind), name))
+
+    def claim(self, kind: ArtifactKind | str, name: str, owner: str) -> None:
+        """Record ``owner`` for ``name``; a name owned by anyone else is refused."""
+        key = (_kind_key(kind), name)
+        current = self._owners.setdefault(key, owner)
+        if current != owner:
+            raise CatalogOwnershipRequired(
+                principal_id=owner, artifact_kind=key[0], artifact_id=name, owner_id=current
+            )
+
+    def visible_to(self, kind: ArtifactKind | str, name: str, tenant_id: str) -> bool:
+        """Whether ``tenant_id`` may see and use ``name``: shipped, or its own."""
+        return self.owner(kind, name) in (SYSTEM_OWNER, tenant_id, None)
+
+    def offer(self, artifact: Artifact, *, owner: str = SYSTEM_OWNER) -> Artifact:
         """Publish an artifact to the catalog.
 
         Computes digest if not present, sets status to OFFERED,
@@ -74,9 +103,11 @@ class CompositionCatalog:
 
         Raises:
             DigestMismatch: If artifact has digest that doesn't match content.
+            CatalogOwnershipRequired: If another owner already holds the name.
         """
         kind = kind_of(artifact)
         name = artifact.name
+        self.claim(kind, name, owner)
 
         # A digest is a proof of content: sessions pin by it, so a claimed digest
         # that does not hash to this body would let anyone rewrite pinned content.

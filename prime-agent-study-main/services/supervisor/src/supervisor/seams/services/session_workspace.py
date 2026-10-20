@@ -5,11 +5,12 @@ Authz stays outside WorkspaceHydrator — callers use authorized_* helpers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from supervisor.sandbox.base import Sandbox, WorkspaceSyncUnsupported
-from supervisor.seams.services.authz import AuthzService, Grant, Principal
 from supervisor.seams.services.authorized_workspace import authorized_hydrate, authorized_sync
+from supervisor.seams.services.authz import AuthzService, Grant, Principal
 from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
@@ -28,6 +29,8 @@ class SessionWorkspaceState:
     virtual_key_id: str | None = None
     last_sync: WorkspaceSyncReport | None = None
     conflicts: tuple[str, ...] = field(default_factory=tuple)
+    base: Mapping[str, tuple[int, str]] | None = None
+    """What the sandbox's tree started from (the last hydrate or sync); None: unknown."""
 
 
 class WorkspaceConflictError(RuntimeError):
@@ -70,6 +73,11 @@ class SessionWorkspaceService:
         self._authz = authz
         self._hydrator = hydrator
 
+    @property
+    def hydrator(self) -> WorkspaceHydrator | None:
+        """The deployment's workspace hydrator (every sandbox provider must use it)."""
+        return self._hydrator
+
     def assert_ready(self, state: SessionWorkspaceState) -> None:
         """Refuse tools while hydrate incomplete (R8). No-op if no scope bound."""
         if state.scope_id is None:
@@ -109,6 +117,7 @@ class SessionWorkspaceService:
             state.ready = False
             raise
         state.ready = True
+        state.base = report.base
         return report
 
     def mark_dirty(self, state: SessionWorkspaceState) -> None:
@@ -140,8 +149,10 @@ class SessionWorkspaceService:
             state.principal,
             state.scope_id,
             tree,
+            base=state.base,
         )
         state.last_sync = report
+        state.base = report.base
         if report.conflicts:
             state.conflicts = report.conflicts
             raise WorkspaceConflictError(state.scope_id, report.conflicts)

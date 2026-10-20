@@ -36,8 +36,10 @@ from supervisor.catalog.storage import CompositionCatalog
 from supervisor.db.engine import open_db
 from supervisor.harness import HarnessCatalog, load_manifest
 from supervisor.main import create_app
-from supervisor.seams.core.types import PromptBindings
+from supervisor.seams.core.types import PromptBindings, ToolInvokeContext
 from supervisor.session.manager import SessionManager
+from supervisor.session.workspaces import session_workspace
+from supervisor.tools import default_registry
 from tests.support.session_env import TrackingProvider
 
 HARNESS = "githi-v1"
@@ -124,7 +126,7 @@ async def test_session_pins_exact_digests_from_composition(pipeline: Pipeline) -
         composition_digest=digest,
     )
 
-    row = await pipeline.manager._get_session_row(sid)  # noqa: SLF001
+    row = await pipeline.manager._get_session_row(sid)
     pins = SessionPins.from_dict(row.composition_pins)
     comp = pipeline.compositions.get("composition", COMPOSITION, digest)
     assert pins.composition_digest == digest
@@ -137,14 +139,14 @@ async def test_session_pins_exact_digests_from_composition(pipeline: Pipeline) -
     assert pins.to_dict() == SessionPins.from_dict(pins.to_dict()).to_dict()  # lossless
     assert pipeline.sandboxes.create_calls[-1]["image"] == MOCK_IMAGE
     # The agent persists history under this id; it must be the supervisor's, or resume loses it.
-    assert pipeline.manager._registry.get(sid).session_id == sid  # noqa: SLF001
+    assert pipeline.manager._registry.get(sid).session_id == sid
 
 
 async def test_id_only_create_pins_the_latest_offered_digest(pipeline: Pipeline) -> None:
     sid = await pipeline.manager.create(
         tenant_id="t1", harness_version=HARNESS, composition_id=COMPOSITION
     )
-    row = await pipeline.manager._get_session_row(sid)  # noqa: SLF001
+    row = await pipeline.manager._get_session_row(sid)
     assert row.composition_pins["composition_digest"] == pipeline.digest_of(COMPOSITION)
 
 
@@ -198,6 +200,11 @@ WEATHER_TOOL = {
 }
 
 
+def _registry_tool(name: str, **override: str) -> dict:
+    """A tool definition as the registry publishes it, optionally re-described."""
+    return default_registry()[name].definition() | override
+
+
 async def _publish_user_composition(client: AsyncClient, pipeline: Pipeline) -> str:
     """A user's own githi agent: new prompt, new tool set, memory profile, ACP subagents."""
 
@@ -212,7 +219,11 @@ async def _publish_user_composition(client: AsyncClient, pipeline: Pipeline) -> 
         "sections": [{"id": "s1", "order": 1, "text": "You are MY analyst.", "complete": True}],
     })
     tools = await publish("tool_set", common | {
-        "name": "my-tools", "definitions": {"weather": WEATHER_TOOL},
+        "name": "my-tools",
+        "definitions": {
+            "read": _registry_tool("read"),
+            "edit": _registry_tool("edit", description="Edit a file the user named"),
+        },
     })
     memory = pipeline.compositions.list_versions("memory_profile", "default")[-1]
     return await publish("composition", common | {
@@ -234,13 +245,13 @@ async def _create(client: AsyncClient, digest: str) -> str:
 
 
 def _assert_user_seams(pipeline: Pipeline, session_id: str) -> None:
-    runtime = pipeline.manager._registry.get(session_id)  # noqa: SLF001
+    runtime = pipeline.manager._registry.get(session_id)
     seams = runtime.seams
     assert type(runtime).__name__ == "GithiRuntime"  # from the manifest, not an API default
     assert "You are MY analyst." in seams.prompt_assembler.assemble(PromptBindings()).text
-    assert [t.name for t in seams.tool_provider.list_tools()] == ["weather"]
-    assert seams.model_gateway._base == "http://gateway:8090"  # noqa: SLF001
-    assert seams.subagent_transport._provider("acp") is not None  # noqa: SLF001
+    assert [t.name for t in seams.tool_provider.list_tools()] == ["edit", "read"]
+    assert seams.model_gateway._base == "http://gateway:8090"
+    assert seams.subagent_transport._provider("acp") is not None
     assert seams.context_memory is not None
 
 
@@ -248,6 +259,33 @@ async def test_user_composed_agent_runs_with_its_own_seams(pipeline: Pipeline) -
     async with pipeline.client() as client:
         session_id = await _create(client, await _publish_user_composition(client, pipeline))
     _assert_user_seams(pipeline, session_id)
+
+
+async def test_user_tools_run_from_the_registry(pipeline: Pipeline) -> None:
+    async with pipeline.client() as client:
+        session_id = await _create(client, await _publish_user_composition(client, pipeline))
+    tools = pipeline.manager._registry.get(session_id).seams.tool_provider
+    ctx = ToolInvokeContext(extra={"session_id": session_id})
+
+    edit = next(t for t in tools.list_tools() if t.name == "edit")
+    assert edit.description == "Edit a file the user named"  # the pinned text, not the registry's
+    session_workspace(session_id).joinpath("notes.txt").write_text("colour: red\n")
+    assert tools.invoke(ctx, "edit", {"path": "notes.txt", "old_text": "red", "new_text": "blue"}).ok
+    assert tools.invoke(ctx, "read", {"file_path": "notes.txt"}).payload == "colour: blue\n"
+
+    shell = tools.invoke(ctx, "bash", {"command": "id"})  # registered, but not in this tool set
+    assert (shell.ok, shell.code) == (False, "TOOL_NOT_FOUND")
+
+
+async def test_tool_set_naming_an_unimplemented_tool_is_refused(pipeline: Pipeline) -> None:
+    async with pipeline.client() as client:
+        resp = await client.post("/v1/catalog/tool_set/publish", json={
+            "name": "weather-tools", "semver": "1.0.0", "protocol_version": 1,
+            "status": "offered", "definitions": {"weather": WEATHER_TOOL},
+        })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "INVALID_ARTIFACT"
+    assert "weather" in resp.json()["detail"]["message"]
 
 
 async def test_user_compositions_and_sessions_survive_restart(boot: Boot) -> None:

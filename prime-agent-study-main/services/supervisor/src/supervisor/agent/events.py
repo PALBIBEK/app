@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 
 
 class EventCategory(Enum):
@@ -203,20 +203,26 @@ class CompactionStart:
 
 @dataclass(frozen=True)
 class CompactionEnd:
+    """``messages``: the compacted conversation, the checkpoint later turns build on."""
+
     compaction_id: str
     stop_reason: str  # ok | error | cancelled | deferred
     tokens_after: int | None = None
     summary_digest: str | None = None
+    messages: list[dict[str, Any]] | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
 @dataclass(frozen=True)
 class MemoryRecall:
+    """``text``: what was recalled for the run and shown to the model, when injected."""
+
     block_id: str
     source: str  # semantic | branch | custom
     token_estimate: int
     injected: bool
     relevance_score: float | None = None
+    text: str | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
@@ -249,6 +255,20 @@ class MemoryContext:
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
+@dataclass(frozen=True)
+class BackgroundResults:
+    """Background subagents that finished since the model last heard about them.
+
+    Recorded at the start of the next run and shown to the model ahead of that
+    run's user message, so a background job's outcome reaches the agent without
+    it having to ask. ``results``: ``{job_id, status, text}`` per finished job.
+    """
+
+    run_id: str
+    results: list[dict[str, Any]] = field(default_factory=list)
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
 # ── Meta Events ────────────────────────────────────────────────────────────────
 
 
@@ -269,15 +289,29 @@ class ErrorEvent:
 # ── Union & Envelope ───────────────────────────────────────────────────────────
 
 
-AgentEvent = Union[
-    RunStart, RunEnd, TurnStart, TurnEnd,
-    MessageEnd,
-    ToolStart, ToolEnd,
-    ApprovalRequired, ApprovalResolved,
-    SubagentStart, SubagentEnd, JobStart, JobEnd,
-    CompactionStart, CompactionEnd, MemoryRecall, MemoryInjected, MemoryContext,
-    Settled, ErrorEvent,
-]
+AgentEvent = (
+    RunStart
+    | RunEnd
+    | TurnStart
+    | TurnEnd
+    | MessageEnd
+    | ToolStart
+    | ToolEnd
+    | ApprovalRequired
+    | ApprovalResolved
+    | SubagentStart
+    | SubagentEnd
+    | JobStart
+    | JobEnd
+    | CompactionStart
+    | CompactionEnd
+    | MemoryRecall
+    | MemoryInjected
+    | MemoryContext
+    | BackgroundResults
+    | Settled
+    | ErrorEvent
+)
 
 
 @dataclass(frozen=True)
@@ -326,19 +360,3 @@ _LIFECYCLE = (RunStart, RunEnd, TurnStart, TurnEnd)
 _TERMINAL = (RunEnd, TurnEnd, ToolEnd, SubagentEnd, JobEnd, CompactionEnd)
 
 
-def is_lifecycle_event(event: AgentEvent) -> bool:
-    return isinstance(event, _LIFECYCLE)
-
-
-def is_terminal_event(event: AgentEvent) -> bool:
-    return isinstance(event, _TERMINAL)
-
-
-def is_error_event(event: AgentEvent) -> bool:
-    if isinstance(event, ErrorEvent):
-        return True
-    if isinstance(event, ToolEnd) and event.is_error:
-        return True
-    if isinstance(event, TurnEnd) and event.stop_reason == "error":
-        return True
-    return False

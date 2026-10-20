@@ -19,6 +19,8 @@ services:
       retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # First start only: a database for the memory service.
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
 
   # D13 local demo: Jaeger all-in-one (OTLP gRPC 4317 + UI 16686).
   jaeger:
@@ -79,6 +81,9 @@ services:
       WORKSPACE_STORE: ${WORKSPACE_STORE:-postgres}
       OBJECT_STORAGE: seaweed
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/${POSTGRES_DB:-supervisor}
+      # Long-term memory (remember, durable recall); calls carry a service JWT.
+      MEMORY_SERVICE_URL: http://memory-service:8092
+      MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-dev-local-memory-token}
     depends_on:
       postgres:
         condition: service_healthy
@@ -202,6 +207,29 @@ services:
       OTEL_SERVICE_NAME: yal-model-gateway
     depends_on:
       - jaeger
+
+  # Long-term memory: facts a user's sessions remember across sessions.
+  memory-service:
+    build:
+      context: .
+      dockerfile: services/memory/Dockerfile
+    ports:
+      - "8092:8092"
+    environment:
+      ENV: ${ENV:-development}
+      MEMORY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/memory
+      # Verifies the supervisor's service JWTs (same secret as the supervisor).
+      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-dev-local-service-jwt-secret-32b!!}
+      MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-dev-local-memory-token}
+      MEMORY_ALLOW_STATIC_TOKEN: ${MEMORY_ALLOW_STATIC_TOKEN:-1}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/v1/readyz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Track B WP-M1: S3-compatible object store. App uses ObjectStorage Protocol only.
   seaweed-master:

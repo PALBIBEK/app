@@ -12,43 +12,33 @@ Reference: policy/types.py pattern.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from decimal import Decimal
-from enum import StrEnum, auto
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Final
 
-
 __all__ = [
-    # Enums
-    "ArtifactKind",
-    "ArtifactStatus",
-    "CatalogAction",
-    "CatalogGrant",
-    "SandboxProviderName",
-    "FileEffects",
-    "ApprovalDefault",
-    "RecallBackend",
-    # Base types
-    "ArtifactMetadata",
-    "DigestRef",
-    # Artifacts
-    "PromptSection",
-    "PromptPack",
-    "ToolDefinition",
-    "ToolSet",
-    "SandboxProfile",
-    "MemoryProfile",
-    "PlugBindings",
+    "DEFAULT_PROTOCOL_VERSION",
     "AgentComposition",
-    # Session types
-    "SessionPins",
-    # Usage analytics
+    "ApprovalDefault",
+    "Artifact",
+    "ArtifactKind",
+    "ArtifactMetadata",
+    "ArtifactStatus",
     "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    # Union type
-    "Artifact",
-    # Constants
-    "DEFAULT_PROTOCOL_VERSION",
+    "CatalogGrant",
+    "DigestRef",
+    "FileEffects",
+    "MemoryProfile",
+    "PlugBindings",
+    "PromptPack",
+    "PromptSection",
+    "RecallBackend",
+    "SandboxProfile",
+    "SandboxProviderName",
+    "SessionPins",
+    "ToolDefinition",
+    "ToolSet",
 ]
 
 
@@ -79,18 +69,6 @@ class ArtifactStatus(StrEnum):
     DRAFT = "draft"
     OFFERED = "offered"
     DEPRECATED = "deprecated"
-
-
-class CatalogAction(StrEnum):
-    """Actions logged to audit trail."""
-
-    ARTIFACT_PUBLISHED = "artifact_published"
-    ARTIFACT_DEPRECATED = "artifact_deprecated"
-    ARTIFACT_RESOLVED = "artifact_resolved"
-    COMPOSITION_BOUND = "composition_bound"
-    SESSION_STARTED = "session_started"
-    PERMISSION_DENIED = "permission_denied"
-    ARTIFACT_ACCESSED = "artifact_accessed"
 
 
 class CatalogGrant(StrEnum):
@@ -145,7 +123,7 @@ class RecallBackend(StrEnum):
 
 def _now() -> datetime:
     """Current UTC datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +375,10 @@ class SandboxProfile:
         approval_default: Default approval behavior
         sticky_eligible: Can sessions stick to this sandbox
         image_digest: Optional container image digest
+        browser_model: Commands may call the session's model through the
+            browser endpoint (they get a short-lived capability for it). Off
+            unless a profile asks: a token every shell can read is one a
+            prompt injection can send away.
         metadata: Creator and ownership info
     """
 
@@ -410,6 +392,7 @@ class SandboxProfile:
     approval_default: ApprovalDefault = ApprovalDefault.ASK
     sticky_eligible: bool = True
     image_digest: str | None = None
+    browser_model: bool = False
     metadata: ArtifactMetadata | None = None
 
     def body_for_digest(self) -> dict[str, Any]:
@@ -425,6 +408,8 @@ class SandboxProfile:
         }
         if self.image_digest is not None:
             body["image_digest"] = self.image_digest
+        if self.browser_model:  # only when set, so profiles without it keep their digests
+            body["browser_model"] = True
         return body
 
 
@@ -448,6 +433,7 @@ class MemoryProfile:
         reserve_tokens: Tokens to reserve for output
         keep_recent_tokens: Recent tokens to preserve
         pressure_ratio: Compaction trigger threshold
+        context_window: Tokens the pinned model accepts (None: platform default)
         summarization_model: Model for summarization
         recall_enabled: Enable memory recall
         recall_backend: Recall backend type
@@ -464,6 +450,7 @@ class MemoryProfile:
     reserve_tokens: int = 16_384
     keep_recent_tokens: int = 20_000
     pressure_ratio: float = 0.8
+    context_window: int | None = None
     summarization_model: str | None = None
     recall_enabled: bool = False
     recall_backend: RecallBackend = RecallBackend.NONE
@@ -489,6 +476,8 @@ class MemoryProfile:
         }
         if self.summarization_model is not None:
             body["compaction"]["summarization_model"] = self.summarization_model
+        if self.context_window is not None:
+            body["compaction"]["context_window"] = self.context_window
         if self.recall_mcp_server_url is not None:
             body["recall"]["mcp_server_url"] = self.recall_mcp_server_url
         return body

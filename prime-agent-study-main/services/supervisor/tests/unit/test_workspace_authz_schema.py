@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -30,7 +30,7 @@ async def db() -> async_sessionmaker[AsyncSession]:
 
 @pytest.mark.asyncio
 async def test_membership_and_grant_rows(db: async_sessionmaker[AsyncSession]) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scope_id = uuid.uuid4().hex
     async with db() as session:
         session.add(

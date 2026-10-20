@@ -21,18 +21,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Final
 
-_log = logging.getLogger(__name__)
+from supervisor.sandbox.security.env import DROPPED_PROXY_ENV
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DROPPED_PROXY_ENV",
     "EgressPolicy",
     "ProxyEnvVars",
-    "EgressPolicyError",
-    "DROPPED_PROXY_ENV",
-    "strip_proxy_env",
-    "inject_proxy_env",
-    "force_through_proxy_env",
 ]
 
 
@@ -40,45 +37,12 @@ __all__ = [
 # Constants
 # =============================================================================
 
-# Proxy environment variables that should be stripped from caller
-DROPPED_PROXY_ENV: Final[frozenset[str]] = frozenset({
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "FTP_PROXY",
-    "ftp_proxy",
-})
+# One list of proxy variables, kept with the rest of the sandbox environment rules.
 
 
 # =============================================================================
 # Errors
 # =============================================================================
-
-
-class EgressPolicyError(Exception):
-    """Egress policy configuration failed.
-
-    Attributes:
-        message: Error description.
-        domain: Affected domain, if known.
-        retryable: Whether the operation can be retried.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        domain: str | None = None,
-        retryable: bool = False,
-    ) -> None:
-        super().__init__(message)
-        self.domain = domain
-        self.retryable = retryable
 
 
 # =============================================================================
@@ -145,92 +109,3 @@ class ProxyEnvVars:
 # =============================================================================
 
 
-def strip_proxy_env(env: dict[str, str]) -> dict[str, str]:
-    """Strip caller's proxy environment variables.
-
-    Prevents sandbox from inheriting host proxy settings
-    that could bypass egress controls.
-
-    Args:
-        env: Environment dictionary to filter.
-
-    Returns:
-        Environment with proxy vars removed.
-
-    Example:
-        >>> env = {"PATH": "/usr/bin", "HTTP_PROXY": "http://attacker.com"}
-        >>> clean = strip_proxy_env(env)
-        >>> "HTTP_PROXY" in clean
-        False
-    """
-    return {k: v for k, v in env.items() if k not in DROPPED_PROXY_ENV}
-
-
-def inject_proxy_env(
-    env: dict[str, str],
-    proxy_vars: ProxyEnvVars,
-) -> dict[str, str]:
-    """Inject proxy environment variables.
-
-    Forces traffic through specified proxy.
-
-    Args:
-        env: Base environment dictionary.
-        proxy_vars: Proxy configuration to inject.
-
-    Returns:
-        Environment with proxy vars injected.
-
-    Example:
-        >>> env = {"PATH": "/usr/bin"}
-        >>> proxy = ProxyEnvVars(http_proxy="http://proxy:8080", https_proxy="http://proxy:8080")
-        >>> result = inject_proxy_env(env, proxy)
-        >>> result["HTTP_PROXY"]
-        'http://proxy:8080'
-    """
-    result = strip_proxy_env(env)
-    result.update(proxy_vars.as_dict())
-    return result
-
-
-def force_through_proxy_env(
-    proxy_url: str,
-    token: str | None = None,
-    *,
-    no_proxy: str = "localhost,127.0.0.1,::1",
-) -> dict[str, str]:
-    """Generate proxy environment variables for controlled egress.
-
-    Matches QM's forceThroughProxyEnv pattern.
-
-    Args:
-        proxy_url: Proxy URL (e.g., "http://proxy.internal:8080").
-        token: Optional auth token to embed in URL.
-        no_proxy: Hosts to bypass proxy.
-
-    Returns:
-        Dictionary of proxy environment variables.
-
-    Example:
-        >>> env = force_through_proxy_env("http://proxy:8080", token="secret123")
-        >>> "secret123" in env["HTTP_PROXY"]
-        True
-    """
-    from urllib.parse import urlparse
-
-    parsed = urlparse(proxy_url)
-
-    if token:
-        # Embed token in URL: http://x:TOKEN@host:port
-        auth_url = f"{parsed.scheme}://x:{token}@{parsed.netloc}"
-    else:
-        auth_url = proxy_url
-
-    return {
-        "HTTP_PROXY": auth_url,
-        "http_proxy": auth_url,
-        "HTTPS_PROXY": auth_url,
-        "https_proxy": auth_url,
-        "NO_PROXY": no_proxy,
-        "no_proxy": no_proxy,
-    }

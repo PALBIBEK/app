@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 CHARS_PER_TOKEN = 3.5
 DEFAULT_LIMIT_TOKENS = 120_000
@@ -90,10 +93,6 @@ def _content(msg: dict[str, Any]) -> str:
 def _tool_calls(msg: dict[str, Any]) -> list[dict[str, Any]]:
     calls = msg.get("tool_calls")
     return calls if isinstance(calls, list) else []
-
-
-def _tool_call_ids(msg: dict[str, Any]) -> set[str]:
-    return {str(c.get("id")) for c in _tool_calls(msg) if c.get("id")}
 
 
 def _is_system(msg: dict[str, Any]) -> bool:
@@ -236,9 +235,12 @@ def summarize_span(
         return COMPACTION_NOTICE
     try:
         summary = summarizer(messages, previous_summary)
-    except Exception:  # noqa: BLE001 — summarizer failure must not fail the run
+    except Exception:
+        # The run goes on, but the dropped span is lost rather than summarised, so say why.
+        logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
         return COMPACTION_NOTICE
     if not summary or not summary.strip():
+        logger.warning("compaction summarizer returned nothing; dropping the span behind a notice")
         return COMPACTION_NOTICE
     return f"{SUMMARY_MARKER}\n{summary.strip()}"
 

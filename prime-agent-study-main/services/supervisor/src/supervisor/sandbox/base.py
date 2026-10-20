@@ -18,7 +18,6 @@ Thread Safety:
 
 from __future__ import annotations
 
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -59,6 +58,17 @@ class SandboxError(Exception):
         self.sandbox_id = sandbox_id
         self.provider = provider
         self.retryable = retryable
+
+
+class SandboxPathEscape(SandboxError, ValueError):
+    """A path resolves outside the sandbox's root (``..``, an absolute path, or a symlink).
+
+    A refusal, not a failure: tools report it as ``PATH_ESCAPE``.
+    """
+
+    def __init__(self, path: str, **kw: Any) -> None:
+        super().__init__(f"path escapes sandbox: {path}", **kw)
+        self.path = path
 
 
 class SandboxGone(SandboxError):
@@ -123,24 +133,6 @@ class WorkspaceSyncUnsupported(SandboxError):
             provider=provider,
             retryable=False,
         )
-
-
-class ProvisionError(SandboxError):
-    """Failed to create a new sandbox.
-
-    Recovery: Check provider resources, retry if retryable=True.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        provider: str,
-        *,
-        retryable: bool = True,
-        cause: Exception | None = None,
-    ) -> None:
-        super().__init__(message, provider=provider, retryable=retryable)
-        self.__cause__ = cause
 
 
 class BlobStagingUnsupported(SandboxError):
@@ -855,12 +847,20 @@ class SandboxProvider(ABC):
         """
         ...
 
+    async def adopt(self, session_id: str) -> Sandbox | None:
+        """A live sandbox this provider made for ``session_id``, if one survived its worker.
+
+        A session moves to another worker when its worker dies; its sandbox may
+        still be there (a directory on the same host, a running container), and
+        with it everything the agent wrote. Default: none can be found.
+        """
+        return None
+
     async def close(self) -> None:
         """Release provider-level resources.
 
         Called during graceful shutdown. Default: no-op.
         """
-        pass
 
     async def health_check(self) -> bool:
         """Check if provider is healthy (can create sandboxes).

@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from supervisor.harness.config import get_settings, HarnessSettings
+from supervisor.harness.config import HarnessSettings, get_settings
 from supervisor.harness.core.types import SessionFilesPaths
 from supervisor.harness.storage.validators import validate_session_dir
 
 if TYPE_CHECKING:
     from supervisor.agent.seams import RuntimeSeams
     from supervisor.catalog.core.types import MemoryProfile, SandboxProfile, SessionPins
-    from supervisor.seams import PromptBindings
 
 __all__ = [
     "materialize_harness_binds",
@@ -74,6 +74,7 @@ def materialize_harness_binds(
     session_id: str | None = None,
     tenant_id: str | None = None,
     settings: HarnessSettings | None = None,
+    memory_scope: Mapping[str, str] | None = None,
 ) -> SessionFilesPaths:
     """Write .yal/{pins.json,system_prompt.txt,tools.json,...} under session_dir.
 
@@ -187,16 +188,20 @@ def materialize_harness_binds(
     # Durable Memory Service bind (Tier 1)
     if settings.memory_service_url:
         ms_path = yal / "memory_service.json"
-        subject = f"session:{sid}"
         durable_doc: dict[str, object] = {
             "base_url": settings.memory_service_url,
             "session_id": sid,
-            "scope": {
+            # The supervisor's long-term scope (user and agent) when it gives one.
+            "scope": dict(memory_scope)
+            if memory_scope
+            else {
                 "tenant": tenant_id or settings.memory_tenant,
-                "subject": subject,
+                "subject": settings.memory_subject or f"session:{sid}",
                 "namespace": settings.memory_namespace,
             },
         }
+        if settings.memory_lease_owner:
+            durable_doc["lease_owner"] = settings.memory_lease_owner
         _write_json(ms_path, durable_doc)
         created_files["memory_service_json"] = str(ms_path)
 

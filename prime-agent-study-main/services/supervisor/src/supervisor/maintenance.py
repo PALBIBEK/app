@@ -6,9 +6,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from supervisor.session import SessionManager, reap_idle
+from supervisor.session import SessionManager
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 async def approval_sweeper(
@@ -18,9 +18,9 @@ async def approval_sweeper(
     while not should_stop():
         try:
             if expired := await manager.expire_overdue_approvals():
-                _log.info("approval-sweeper: expired %d approvals", len(expired))
+                logger.info("approval-sweeper: expired %d approvals", len(expired))
         except Exception:
-            _log.exception("approval sweeper failed")
+            logger.exception("approval sweeper failed")
         await asyncio.sleep(interval_s)
 
 
@@ -35,8 +35,8 @@ async def idle_reaper(
     interval_s = max(5.0, interval_s)
     while not should_stop():
         try:
-            if reaped := await reap_idle(manager, max_idle_seconds=max_idle_s):
-                _log.info("idle reaper: reaped %d sessions %s", len(reaped), reaped[:8])
+            if reaped := await manager.reap_idle_sessions(max_idle_seconds=max_idle_s):
+                logger.info("idle reaper: reaped %d sessions %s", len(reaped), reaped[:8])
         except Exception:
-            _log.exception("idle reaper failed")
+            logger.exception("idle reaper failed")
         await asyncio.sleep(interval_s)

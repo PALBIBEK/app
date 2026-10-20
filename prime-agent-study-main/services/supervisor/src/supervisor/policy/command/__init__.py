@@ -14,8 +14,8 @@ from supervisor.policy.command.rules import (
 from supervisor.policy.command.scanner import CommandScanner
 
 __all__ = [
+    "DEFAULT_FLOOR_RULES",
     "CommandPolicy",
     "CommandScanner",
-    "DEFAULT_FLOOR_RULES",
     "create_rule",
 ]

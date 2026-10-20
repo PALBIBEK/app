@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from supervisor.catalog.storage import CompositionCatalog
 from supervisor.catalog.core.types import MemoryProfile, SessionPins
+from supervisor.catalog.storage import CompositionCatalog
 
 
 def load_pinned_memory_profile(

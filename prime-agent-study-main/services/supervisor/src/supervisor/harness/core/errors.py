@@ -15,30 +15,30 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "ApprovalsNotSupported",
     # Base
     "HarnessError",
-    # Resolution
-    "UnknownHarness",
     "HarnessNotOffered",
-    "VersionResolutionError",
+    # Compatibility
+    "IncompatibleHarness",
+    "InvalidDigest",
+    "InvalidEnvironmentValue",
+    "InvalidGatewayConfig",
     # Manifest
     "ManifestError",
     "ManifestParseError",
     "ManifestValidationError",
-    "InvalidDigest",
-    # Compatibility
-    "IncompatibleHarness",
-    "UnsupportedProtocol",
-    "MissingRuntimeCapability",
-    "SandboxRequired",
-    "ApprovalsNotSupported",
-    # Spawn
-    "SpawnError",
     "MissingHarnessCli",
-    "InvalidGatewayConfig",
+    "MissingRuntimeCapability",
     # Security
     "PathTraversalAttempt",
-    "InvalidEnvironmentValue",
+    "SandboxRequired",
+    # Spawn
+    "SpawnError",
+    # Resolution
+    "UnknownHarness",
+    "UnsupportedProtocol",
+    "VersionResolutionError",
 ]
 
 

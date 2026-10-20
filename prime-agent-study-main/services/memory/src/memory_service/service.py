@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from memory_service.bank import MemoryBank
 from memory_service.buffer import WriteBehindBuffer
 from memory_service.cost import CachingEmbedder, flush_batch_is_barren
 from memory_service.db import init_db, make_engine, make_session_factory
-from memory_service.bank import MemoryBank
 from memory_service.embed import Embedder
 from memory_service.erase import EraseService
 from memory_service.extract import ExtractionQueue, Extractor
@@ -44,6 +46,8 @@ from memory_service.types import (
     SessionSummary,
     StaleFence,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SeqConflict(Exception):
@@ -92,6 +96,23 @@ class MemoryService:
 
     async def aclose(self) -> None:
         await self._engine.dispose()
+
+    async def ping_db(self) -> bool:
+        """Whether the database answers (the readiness probe)."""
+        try:
+            async with self._engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception:  # noqa: BLE001 — any failure means not ready
+            return False
+        return True
+
+    async def session_tenant(self, session_id: str) -> str | None:
+        """The tenant a logical session belongs to, or None if there is no such session."""
+        try:
+            row = await self._store.get_session_row(session_id)
+        except SessionNotFound:
+            return None
+        return str(row.tenant)
 
     def _buf(self, session_id: str) -> WriteBehindBuffer:
         if session_id not in self._buffers:
@@ -142,8 +163,8 @@ class MemoryService:
             ]
             buf.drain()
             for ev in renumbered:
-                buf._pending.append(ev)  # noqa: SLF001
-            buf._next_seq = expected + len(renumbered)  # noqa: SLF001
+                buf._pending.append(ev)
+            buf._next_seq = expected + len(renumbered)
         batch = list(buf.peek())
         if not batch:
             return row.last_seq
@@ -166,18 +187,15 @@ class MemoryService:
                     seq_from = prev + 1
                     await self._extraction.enqueue(session_id, seq_from, last)
                     self._last_extracted_seq[session_id] = last
-        except Exception:
-            pass
+        except Exception:  # extraction is off the request path; the flush itself succeeded
+            logger.warning("enqueueing extraction failed session=%s", session_id, exc_info=True)
         return last
 
     async def load(self, session_id: str) -> LogicalSession:
         if not self._ready:
             await self.startup()
         row = await self._store.get_session_row(session_id)
-        try:
-            assert_format_supported(row.format_version)
-        except FormatUnsupported:
-            raise
+        assert_format_supported(row.format_version)
         if row.status == "corrupt":
             METRICS.inc("resume_corrupt")
             raise SessionCorrupt(f"SESSION_CORRUPT: {session_id}", code="SESSION_CORRUPT")
@@ -401,11 +419,11 @@ class MemoryService:
 
 # Re-export errors for callers
 __all__ = [
+    "FORMAT_VERSION",
+    "FormatUnsupported",
     "MemoryService",
     "SeqConflict",
-    "SessionNotFound",
     "SessionCorrupt",
-    "FormatUnsupported",
+    "SessionNotFound",
     "StaleFence",
-    "FORMAT_VERSION",
 ]

@@ -16,6 +16,7 @@ Operators must allow DNS + model-gateway egress in E2B policy. See
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 from typing import Any
 
@@ -31,7 +32,6 @@ from supervisor.sandbox.base import (
     ComputerStatusUnsupported,
     ExecResult,
     ProcessHandle,
-    ROLayersUnsupported,
     Sandbox,
     SandboxGone,
     SandboxInfo,
@@ -43,6 +43,7 @@ from supervisor.sandbox.layers import (
     MaterializationResult,
     create_exec_layers,
 )
+from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.staging import (
     BlobStagingConfig,
     CapabilityTokenMinter,
@@ -55,16 +56,14 @@ from supervisor.sandbox.status import (
     MachineState,
     RestartResult,
 )
-from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.seams.providers.workspace import normalize_workspace_path
 from supervisor.seams.services import (
     WorkspaceHydrator,
-    WorkspacePathEscape,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _QUEUE_MAX = 256
 
@@ -164,13 +163,13 @@ def _push_bounded(queue: asyncio.Queue[bytes | None], data: bytes) -> None:
         try:
             queue.put_nowait(data)
         except asyncio.QueueFull:
-            _log.warning("e2b callback queue full; dropped chunk")
+            logger.warning("e2b callback queue full; dropped chunk")
 
 
 class E2BWorkspaceTreeIO:
     """WorkspaceTreeIO over an E2B sandbox ``/workspace`` (D10)."""
 
-    def __init__(self, sandbox: "E2BSandbox") -> None:
+    def __init__(self, sandbox: E2BSandbox) -> None:
         self._sb = sandbox
         self._root = (sandbox.info.workdir or "/workspace").rstrip("/") or "/workspace"
 
@@ -185,7 +184,7 @@ class E2BWorkspaceTreeIO:
         return await self._sb.read_file(self._abs(path))
 
     async def list_paths(self) -> list[str]:
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             return sorted(
@@ -203,14 +202,14 @@ class E2BWorkspaceTreeIO:
 
     async def delete_path(self, path: str) -> None:
         abs_path = self._abs(path)
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         if isinstance(files, dict):
             files.pop(abs_path, None)
             return
         await self._sb.exec(["rm", "-f", "--", abs_path], timeout=30)
 
     async def clear(self) -> None:
-        files = getattr(self._sb._sbx, "files", None)  # noqa: SLF001
+        files = getattr(self._sb._sbx, "files", None)
         prefix = self._root + "/"
         if isinstance(files, dict):
             for key in list(files):
@@ -396,6 +395,7 @@ class E2BSandbox(Sandbox):
             await self.read_file(path)
             return True
         except Exception:
+            logger.debug("e2b exists check failed", exc_info=True)
             return False
 
     async def pause(self) -> str:
@@ -414,7 +414,7 @@ class E2BSandbox(Sandbox):
             try:
                 await kill()
             except Exception:
-                _log.exception("e2b destroy failed")
+                logger.exception("e2b destroy failed")
 
     async def is_alive(self) -> bool:
         alive = getattr(self._sbx, "is_alive", None)
@@ -499,6 +499,7 @@ class E2BSandbox(Sandbox):
         try:
             return await self.read_file(path)
         except Exception:
+            logger.debug("e2b layer read failed", exc_info=True)
             return None
 
     async def _write_file_bytes(self, path: str, data: bytes) -> None:
@@ -551,7 +552,7 @@ class E2BSandbox(Sandbox):
                     uptime_str = result.stdout_text.split()[0]
                     uptime_ms = int(float(uptime_str) * 1000)
             except Exception:
-                pass
+                logger.debug("e2b uptime probe failed", exc_info=True)
 
         return ComputerStatus(
             scope_id=self._scope_id or self._info.id,
@@ -610,6 +611,9 @@ class E2BProvider(SandboxProvider):
         staging_config: BlobStagingConfig | None = None,
         token_minter: CapabilityTokenMinter | None = None,
     ) -> None:
+        if client is None and importlib.util.find_spec("e2b") is None:
+            # Fail at construction (boot), not at the first user's session.
+            raise ModuleNotFoundError("the e2b provider needs the 'e2b' package (pip install e2b)")
         self._client = client
         self._api_key = api_key
         self._hydrator = hydrator
@@ -703,6 +707,7 @@ class E2BProvider(SandboxProvider):
         try:
             handle = await connect(sandbox_id)
         except Exception:
+            logger.warning("reconnecting to an e2b sandbox failed", exc_info=True)
             return None
         if handle is None:
             return None

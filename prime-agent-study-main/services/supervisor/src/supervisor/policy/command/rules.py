@@ -12,11 +12,9 @@ Reference: QM's command policy rules.
 
 from __future__ import annotations
 
-import re
 from typing import Final
 
 from supervisor.policy.types import CommandAction, CommandRule
-
 
 __all__ = [
     "DEFAULT_FLOOR_RULES",

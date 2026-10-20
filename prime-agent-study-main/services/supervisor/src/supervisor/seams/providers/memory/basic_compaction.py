@@ -7,8 +7,10 @@ from typing import Any, Literal
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
     build_gateway_summarizer,
-    estimate_tokens as compaction_estimate_tokens,
     summarize_span,
+)
+from supervisor.seams.compaction import (
+    estimate_tokens as compaction_estimate_tokens,
 )
 from supervisor.seams.interfaces.context_memory import (
     CompactionDecision,

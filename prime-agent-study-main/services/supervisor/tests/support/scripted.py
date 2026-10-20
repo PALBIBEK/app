@@ -14,13 +14,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from supervisor.catalog.providers.catalog_tools import CatalogToolProvider
 from supervisor.harness import HarnessCatalog, HarnessManifest
 from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion
 from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
+from supervisor.seams.providers.tools import RegistryToolProvider
 
 
 @dataclasses.dataclass
@@ -39,6 +39,8 @@ class ScriptedGateway:
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
     sensitivity: str = "ordinary"
+    # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
+    window: int | None = None
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
@@ -85,6 +87,9 @@ class ScriptedGateway:
             self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
         return answer
 
+    def context_window(self, model: str) -> int | None:
+        return self.window
+
     def stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:  # pragma: no cover
         raise NotImplementedError
 
@@ -103,18 +108,18 @@ def scripted_model(gateway: ScriptedGateway) -> Iterator[ScriptedGateway]:
 @contextmanager
 def slow_tool(name: str, seconds: float) -> Iterator[None]:
     """Make one catalog tool take ``seconds`` (in the worker's thread)."""
-    original = CatalogToolProvider.invoke
+    original = RegistryToolProvider.invoke
 
-    def invoke(self: CatalogToolProvider, ctx: Any, tool: str, args: dict[str, Any]) -> Any:
+    def invoke(self: RegistryToolProvider, ctx: Any, tool: str, args: dict[str, Any]) -> Any:
         if tool == name:
             time.sleep(seconds)
         return original(self, ctx, tool, args)
 
-    CatalogToolProvider.invoke = invoke  # type: ignore[method-assign]
+    RegistryToolProvider.invoke = invoke  # type: ignore[method-assign]
     try:
         yield
     finally:
-        CatalogToolProvider.invoke = original  # type: ignore[method-assign]
+        RegistryToolProvider.invoke = original  # type: ignore[method-assign]
 
 
 @contextmanager

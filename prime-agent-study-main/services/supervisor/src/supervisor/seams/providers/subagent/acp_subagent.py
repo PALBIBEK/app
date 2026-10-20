@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 import httpx
 
-from supervisor.seams.interfaces.subagent_transport import (
-    CAP_BACKGROUND,
-    CAP_FORK,
-    CAP_SPAWN,
-)
 from supervisor.seams.core.types import (
     ChildInfo,
     JobHandle,
     SubagentRequest,
     SubagentRunResult,
 )
+from supervisor.seams.interfaces.subagent_transport import (
+    CAP_BACKGROUND,
+    CAP_FORK,
+    CAP_SPAWN,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class AcpSubagentProvider:
@@ -69,6 +72,7 @@ class AcpSubagentProvider:
                 {"protocolVersion": "1", "capabilities": {}},
             )
         except Exception:
+            logger.warning("ACP initialize failed; continuing without it", exc_info=True)
             return {"protocolVersion": "1", "skipped": True}
 
     def start_one_shot(self, request: SubagentRequest) -> SubagentRunResult:

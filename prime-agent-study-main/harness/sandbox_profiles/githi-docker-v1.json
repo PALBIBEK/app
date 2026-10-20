@@ -1,8 +1,8 @@
 {
   "approval_default": "ask",
-  "digest": "sha256:b2ef6ff9146285f849f68d09e581f3058222089be426820c4835e111b79b1431",
+  "digest": "sha256:f31d062a8a12b20df2bcb6467399210830ab74b93547ead08f9aad6391e8e837",
   "file_effects": "workspace_write",
-  "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "image_digest": "buildpack-deps@sha256:8ea58fbc817960cd62d512044956ff00cb94865e549eeec32c12139413262004",
   "name": "githi-docker-v1",
   "protocol_version": 1,
   "provider": "local_docker",

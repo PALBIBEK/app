@@ -12,8 +12,6 @@ from supervisor.seams.core.errors import SeamError
 
 __all__ = [
     "HeadResult",
-    "ObjectConflict",
-    "ObjectForbidden",
     "ObjectIntegrityError",
     "ObjectNotFound",
     "ObjectStorage",
@@ -35,19 +33,9 @@ class ObjectNotFound(ObjectStorageError):
         self.key = key
 
 
-class ObjectConflict(ObjectStorageError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, "OBJECT_CONFLICT")
-
-
 class ObjectTransient(ObjectStorageError):
     def __init__(self, message: str) -> None:
         super().__init__(message, "OBJECT_TRANSIENT")
-
-
-class ObjectForbidden(ObjectStorageError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, "OBJECT_FORBIDDEN")
 
 
 class ObjectIntegrityError(ObjectStorageError):

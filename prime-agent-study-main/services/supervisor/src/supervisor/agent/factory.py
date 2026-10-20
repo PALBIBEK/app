@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
@@ -10,7 +11,7 @@ from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
 if TYPE_CHECKING:
     from supervisor.agent.base import AgentRuntime
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RuntimeNames:
@@ -27,10 +28,6 @@ def known_runtime_names() -> frozenset[str]:
     return _KNOWN_RUNTIMES
 
 
-def is_valid_runtime(name: str) -> bool:
-    return name in _KNOWN_RUNTIMES
-
-
 def create_runtime(
     runtime_name: str,
     *,
@@ -39,10 +36,10 @@ def create_runtime(
     provider: str | None = None,
     session_id: str = "",
     **kwargs: Any,
-) -> "AgentRuntime":
+) -> AgentRuntime:
     """Create an agent runtime by name. Lazy imports for fast startup."""
     seams = seams or EMPTY_SEAMS
-    _log.debug("creating runtime: name=%s model=%s provider=%s session=%s", runtime_name, model, provider, session_id)
+    logger.debug("creating runtime: name=%s model=%s provider=%s session=%s", runtime_name, model, provider, session_id)
 
     if runtime_name == RuntimeNames.ECHO:
         from supervisor.agent.runtimes.echo.runtime import EchoRuntime
@@ -59,6 +56,11 @@ def create_runtime(
 
     if runtime_name == RuntimeNames.GITHI:
         from supervisor.agent.runtimes.githi.runtime import GithiRuntime
+
+        if seams.tool_provider is None:
+            from supervisor.seams.core.factory import build_standalone_tool_provider
+
+            seams = replace(seams, tool_provider=build_standalone_tool_provider())
         kw = {"seams": seams, "session_id": session_id, **kwargs}
         if model:
             kw["model"] = model

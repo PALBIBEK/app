@@ -1,0 +1,51 @@
+harness_version: githi-ops-v1
+protocol_version: 1
+runtime: githi
+requires_sandbox: true
+image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+mode: sticky
+model: anthropic/claude-sonnet-4
+# tools: recovery classification only — NOT the production ToolSet catalog.
+# Production tools come from composition digests → .yal/tools.json (see contracts/harness_binders.md).
+# Must be a subset of harness/tool_sets/githi-tools.json.
+tools:
+  bash: { class: non_atomic }
+  read: { class: pure }
+  grep: { class: pure }
+  ls: { class: pure }
+  write: { class: idempotent }
+  echo: { class: pure }
+  remember: { class: idempotent }
+recovery:
+  default: fail
+  by_tool_class:
+    pure: auto_resume
+    idempotent: auto_resume
+    transactional: verify_then_resume
+    non_atomic: fail
+budget:
+  max_cost_per_session: 5.00
+  max_tokens_per_turn: 200000
+guards:
+  repetition: abort
+  oscillation: abort
+  stall_iterations: 10
+approvals:
+  timeout_s: 25
+  on_timeout: deny
+  require_approval: [write, bash]
+subagents:
+  max_depth: 3
+  default_mode: one_shot
+  allow_background: true
+# Phase flags (ignored by manifest freeze; documented for product).
+memory:
+  enabled: false
+  tier1_enabled: false
+  tier2_enabled: false
+  consolidation_enabled: false
+sandbox:
+  workspace_isolation: true
+  path_safety_checks: true
+  allow_network: true
+  allow_subprocess: true

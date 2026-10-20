@@ -23,24 +23,6 @@ from __future__ import annotations
 
 from typing import Any
 
-# Import from new locations (interfaces/)
-from supervisor.seams.interfaces.context_memory import (
-    CompactionDecision,
-    CompactionPreparation,
-    CompactionResult,
-    ContextMemoryProvider,
-    MemoryInvokeContext,
-    RecallBlock,
-)
-from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
-from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
-from supervisor.seams.interfaces.subagent_transport import (
-    NamedProviderRegistry,
-    SubagentTransport,
-    SubagentTransportImpl,
-)
-from supervisor.seams.interfaces.tool_provider import ToolProvider
-
 # Import from new locations (core/)
 from supervisor.seams.core.errors import (
     BadArgs,
@@ -68,43 +50,63 @@ from supervisor.seams.core.types import (
     ToolResult,
 )
 
+# Import from new locations (interfaces/)
+from supervisor.seams.interfaces.context_memory import (
+    CompactionDecision,
+    CompactionPreparation,
+    CompactionResult,
+    ContextMemoryProvider,
+    MemoryInvokeContext,
+    RecallBlock,
+)
+from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
+from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
+from supervisor.seams.interfaces.subagent_transport import (
+    NamedProviderRegistry,
+    SubagentTransport,
+    SubagentTransportImpl,
+)
+from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
+
 __all__ = [
     # Types (from core/)
     "AssembledPrompt",
+    # Errors (from core/)
+    "BadArgs",
     "ChatMessage",
     "ChildHandle",
     "ChildId",
     "ChildInfo",
-    "Completion",
-    "JobHandle",
-    "JobId",
-    "PromptBindings",
-    "StreamEvent",
-    "SubagentRequest",
-    "SubagentRunResult",
-    "ToolDescriptor",
-    "ToolInvokeContext",
-    "ToolResult",
-    # Errors (from core/)
-    "BadArgs",
-    "DepthExceeded",
-    "ProviderConflict",
-    "ProviderMissing",
-    "SeamError",
-    "UnsupportedCapability",
     # Interfaces (from interfaces/)
     "CompactionDecision",
     "CompactionPreparation",
     "CompactionResult",
+    "Completion",
     "ContextMemoryProvider",
+    "DepthExceeded",
+    "JobHandle",
+    "JobId",
     "MemoryInvokeContext",
+    "ModelCatalog",
     "ModelGatewayClient",
     "NamedProviderRegistry",
     "PromptAssembler",
+    "PromptBindings",
+    "ProviderConflict",
+    "ProviderMissing",
     "RecallBlock",
+    "SeamError",
+    "StreamEvent",
+    "SubagentRequest",
+    "SubagentRunResult",
     "SubagentTransport",
     "SubagentTransportImpl",
+    "ToolClassifier",
+    "ToolDescriptor",
+    "ToolInvokeContext",
     "ToolProvider",
+    "ToolResult",
+    "UnsupportedCapability",
     # Factory (lazy loaded)
     "build_runtime_seams",
 ]

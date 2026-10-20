@@ -128,37 +128,3 @@ def get_env_url(key: str, default: str) -> str:
     return sanitized.rstrip("/")
 
 
-def get_env_optional(key: str) -> str | None:
-    """Get optional environment variable with validation.
-
-    Args:
-        key: Environment variable name
-
-    Returns:
-        Validated value or None if not set
-
-    Raises:
-        InvalidEnvironmentValue: If value contains unsafe characters
-    """
-    raw = os.environ.get(key, "").strip()
-    if not raw:
-        return None
-    return sanitize_env_value(key, raw)
-
-
-def get_env_required(key: str) -> str:
-    """Get required environment variable with validation.
-
-    Args:
-        key: Environment variable name
-
-    Returns:
-        Validated value
-
-    Raises:
-        InvalidEnvironmentValue: If not set or contains unsafe characters
-    """
-    raw = os.environ.get(key, "").strip()
-    if not raw:
-        raise InvalidEnvironmentValue(key, "is required but not set")
-    return sanitize_env_value(key, raw)

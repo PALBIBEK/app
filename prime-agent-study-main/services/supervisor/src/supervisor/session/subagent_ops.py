@@ -6,6 +6,7 @@ Session/journal stay free of provider concretes (P-3). Callers inject
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -118,7 +119,8 @@ class SubagentOps:
             trace_id=trace_id,
         )
         try:
-            result = self._transport.start_one_shot(provider_name, request)
+            # The provider runs a model to completion: off the loop, so heartbeats go on.
+            result = await asyncio.to_thread(self._transport.start_one_shot, provider_name, request)
         except Exception:
             await self._writer.append(
                 self._parent,
@@ -172,7 +174,7 @@ class SubagentOps:
             trace_id=trace_id,
         )
         try:
-            result = self._transport.start_fork(provider_name, request)
+            result = await asyncio.to_thread(self._transport.start_fork, provider_name, request)
         except Exception:
             await self._writer.append(
                 self._parent,

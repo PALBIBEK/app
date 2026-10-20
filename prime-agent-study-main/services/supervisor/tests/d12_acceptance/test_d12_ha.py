@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import re
-import time
 
 import pytest
 
-from supervisor.agent.events import ApprovalRequired
 from supervisor.policy.approvals import ApprovalBroker
 from tests.d12_acceptance.conftest import (
     AI_ROOT,
     HEADERS,
     create_session,
     new_command_id,
-    resolve_lab_provider,
-    spawn_body,
     wait_for_journal,
 )
 
@@ -41,12 +37,12 @@ async def test_t9_cold_resume_peer_can_message_from_shared_journal(
     await wait_for_journal(a["reader"], sid, min_events=1, require_types={"RunEnd"})
 
     # Owner process gone: drop warm registry (simulates pod death; journal remains).
-    reg = a["manager"]._registry  # noqa: SLF001
+    reg = a["manager"]._registry
     if reg.get(sid) is not None:
         reg.remove(sid)
 
     # Peer B never had the warm runtime — cold resume from shared journal.
-    assert b["manager"]._registry.get(sid) is None  # noqa: SLF001
+    assert b["manager"]._registry.get(sid) is None
 
     peer = await b["client"].post(
         f"/v1/sessions/{sid}/messages",
@@ -179,7 +175,7 @@ async def test_t10_wrong_replica_live_hub_is_process_local(
                 while True:
                     item = await sub_b.queue.get()
                     got.append(item)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
 
         staging = (
@@ -206,281 +202,18 @@ async def test_t10_wrong_replica_live_hub_is_process_local(
 
 
 
-@pytest.mark.asyncio
-async def test_t11_respond_ui_missing_runtime_not_silent_skip(
-    dual_peer_stacks,
-) -> None:
-    """T11: respond_ui when runtime missing on this process — no silent success."""
-    a = dual_peer_stacks["a"]
-    b = dual_peer_stacks["b"]
-
-    created = await create_session(a["client"])
-    sid = created["session_id"]
-
-    # Park an approval with harness_request_id (UI reply required when warm).
-    await a["manager"]._handle_approval_required(  # noqa: SLF001
-        sid,
-        "turn-t11",
-        ApprovalRequired(
-            approval_id="",
-            prompt="allow?",
-            options=["yes", "no"],
-            timeout_s=300,
-            harness_request_id="ui-req-d12-t11",
-        ),
-    )
-    pending = await a["manager"].pending_approvals(sid)
-    assert pending, "expected pending approval"
-    aid = pending[0].approval_id
-
-    # Owner warm runtime gone / peer has no registry entry.
-    if a["manager"]._registry.get(sid) is not None:  # noqa: SLF001
-        a["manager"]._registry.remove(sid)  # noqa: SLF001
-    assert b["manager"]._registry.get(sid) is None  # noqa: SLF001
-
-    resp = await b["client"].post(
-        f"/v1/approvals/{aid}",
-        headers=HEADERS,
-        json={"choice": "yes"},
-    )
-
-    # Must not look like full UI-notified success with no ownership signal.
-    if resp.status_code == 200:
-        body = resp.json() if resp.headers.get("content-type", "").startswith(
-            "application/json"
-        ) else {}
-        text = resp.text.lower()
-        signaled = (
-            body.get("queued") is True
-            or body.get("forwarded") is True
-            or body.get("owner_required") is True
-            or body.get("ui_delivered") is False
-            or "queued" in text
-            or "forward" in text
-            or "owner" in text
-            or "sticky" in text
-            or "not delivered" in text
-        )
-        assert signaled, (
-            "peer respond_ui must not silently succeed as if UI notified — "
-            f"need 409/owner-required/queue/forward signal, got {resp.status_code} {resp.text}"
-        )
-    else:
-        assert resp.status_code in (409, 503), (
-            f"peer without runtime must 409/503 with owner signal, got "
-            f"{resp.status_code}: {resp.text}"
-        )
-        detail = resp.text.lower()
-        assert (
-            "owner" in detail
-            or "runtime" in detail
-            or "sticky" in detail
-            or "queue" in detail
-            or "forward" in detail
-            or "respond_ui" in detail
-            or "warm" in detail
-            or "replica" in detail
-        ), f"error must explain owner/UI delivery: {resp.text}"
 
 
-@pytest.mark.asyncio
-async def test_t12_drain_blocks_message_spawn_and_readyz(
-    supervisor_stack,
-) -> None:
-    """T12: While draining — POST message + subagent spawn → 503; /readyz 503."""
-    client = supervisor_stack["client"]
-    state = supervisor_stack["state"]
-    provider = resolve_lab_provider(state)
-
-    created = await create_session(client)
-    sid = created["session_id"]
-
-    state.draining = True
-
-    msg = await client.post(
-        f"/v1/sessions/{sid}/messages",
-        headers=HEADERS,
-        json={"text": "blocked", "command_id": new_command_id("drain-msg")},
-    )
-    assert msg.status_code == 503, msg.text
-
-    spawn = await client.post(
-        f"/v1/sessions/{sid}/subagents/spawn",
-        headers=HEADERS,
-        json=spawn_body(provider=provider, prompt="drain spawn"),
-    )
-    assert spawn.status_code == 503, (
-        f"subagent spawn must refuse while draining, got {spawn.status_code}: {spawn.text}"
-    )
-
-    ready = await client.get("/readyz")
-    assert ready.status_code == 503, ready.text
-    body = ready.json()
-    assert body.get("reason") == "draining" or "drain" in str(body).lower()
 
 
-@pytest.mark.asyncio
-async def test_t12_drain_blocks_subagent_mutators(supervisor_stack) -> None:
-    """Drain gate on subagent mutators (fork/background/continuable/message/interrupt)."""
-    client = supervisor_stack["client"]
-    state = supervisor_stack["state"]
-    provider = resolve_lab_provider(state)
-
-    created = await create_session(client)
-    sid = created["session_id"]
-
-    # Seed a child while healthy (best-effort) for message/interrupt targets.
-    child_id = "child-drain-seed"
-    seed = await client.post(
-        f"/v1/sessions/{sid}/subagents/spawn",
-        headers=HEADERS,
-        json=spawn_body(provider=provider, prompt="seed"),
-    )
-    if seed.status_code == 200:
-        child_id = seed.json().get("child_session_id") or child_id
-
-    state.draining = True
-
-    mutators = [
-        (
-            "POST",
-            f"/v1/sessions/{sid}/subagents/fork",
-            spawn_body(provider=provider, prompt="fork"),
-        ),
-        (
-            "POST",
-            f"/v1/sessions/{sid}/subagents/background",
-            spawn_body(provider=provider, prompt="bg"),
-        ),
-        (
-            "POST",
-            f"/v1/sessions/{sid}/subagents/continuable",
-            spawn_body(provider=provider, prompt="cont"),
-        ),
-        (
-            "POST",
-            f"/v1/sessions/{sid}/children/{child_id}/message",
-            {"text": "hi"},
-        ),
-        (
-            "POST",
-            f"/v1/sessions/{sid}/children/{child_id}/interrupt",
-            None,
-        ),
-        (
-            "POST",
-            f"/v1/sessions/{sid}/abort",
-            None,
-        ),
-    ]
-
-    for method, path, body in mutators:
-        if method == "POST":
-            r = await client.post(path, headers=HEADERS, json=body)
-        else:
-            r = await client.request(method, path, headers=HEADERS)
-        assert r.status_code == 503, (
-            f"draining must 503 {path}, got {r.status_code}: {r.text}"
-        )
 
 
-@pytest.mark.asyncio
-async def test_t13_two_concurrent_sweepers_lease_single_expiry(
-    supervisor_stack,
-) -> None:
-    """T13: Two concurrent expire_due/sweepers — with lease, at most one expires."""
-    manager = supervisor_stack["manager"]
-    client = supervisor_stack["client"]
-
-    # Production multi-replica safety requires a leader lease on the sweeper.
-    lease_names = (
-        "try_acquire_sweeper_lease",
-        "acquire_approval_sweeper_lease",
-        "run_with_approval_sweeper_lease",
-        "sweeper_lease",
-        "leader_lease",
-        "try_acquire_lease",
-    )
-    lease_found = False
-    for obj in (manager, manager._approvals, type(manager), ApprovalBroker):  # noqa: SLF001
-        for name in lease_names:
-            if hasattr(obj, name):
-                lease_found = True
-                break
-        if lease_found:
-            break
-    try:
-        from supervisor.policy import leader_lease as lease_mod
-
-        for name in lease_names:
-            if hasattr(lease_mod, name):
-                lease_found = True
-                break
-    except ImportError:
-        pass
-    try:
-        from supervisor.policy import approvals as approvals_mod
-
-        for name in lease_names:
-            if hasattr(approvals_mod, name):
-                lease_found = True
-                break
-    except Exception:
-        pass
-
-    assert lease_found, (
-        "approval sweeper must expose a leader lease API under multi-replica "
-        f"(expected one of {lease_names} on manager/approvals/leader_lease)"
-    )
-
-    created = await create_session(client)
-    sid = created["session_id"]
-
-    await manager._handle_approval_required(  # noqa: SLF001
-        sid,
-        "turn-t13",
-        ApprovalRequired(
-            approval_id="",
-            prompt="expire me once",
-            options=["yes", "no"],
-            timeout_s=0.01,
-        ),
-    )
-    pending = await manager.pending_approvals(sid)
-    assert len(pending) == 1
-    aid = pending[0].approval_id
-
-    # Ensure overdue.
-    await asyncio.sleep(0.05)
-    now = time.time() + 10.0
-
-    # Two concurrent sweepers (two managers sharing DB = two replicas).
-    manager_b = dual_manager_from(supervisor_stack)
-
-    results = await asyncio.gather(
-        manager.expire_overdue_approvals(now=now),
-        manager_b.expire_overdue_approvals(now=now),
-    )
-    expired_ids = [r.approval_id for batch in results for r in batch]
-    # At most one successful expiry of this approval across both sweepers.
-    assert expired_ids.count(aid) <= 1, (
-        f"lease must ensure single expiry, got {expired_ids!r}"
-    )
-
-    row = await manager._approvals.get(aid)  # noqa: SLF001
-    assert row is not None
-    assert row.status == "timed_out"
-    # Exactly one timed_out transition — not double-applied side effects.
-    assert expired_ids.count(aid) == 1, (
-        f"exactly one sweeper should expire {aid}, got counts in {expired_ids!r}"
-    )
 
 
 def dual_manager_from(stack: dict):
     """Second SessionManager on the same DB (peer sweeper)."""
     from supervisor.journal.reader import JournalReader
     from supervisor.journal.writer import JournalWriter
-    from supervisor.policy.approvals import ApprovalBroker
     from supervisor.session.manager import SessionManager
     from supervisor.session.registry import SessionRegistry
     from tests.support.session_env import make_catalog

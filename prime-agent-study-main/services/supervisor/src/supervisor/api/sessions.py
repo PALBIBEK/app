@@ -19,11 +19,8 @@ from supervisor.api.schemas import (
 )
 from supervisor.api.session_ops import domain_http_error, run_op
 from supervisor.api.workflow_errors import to_http
-from supervisor.catalog import HarnessVersionMismatch, NotOffered
-from supervisor.harness import HarnessNotOffered, IncompatibleHarness
 from supervisor.policy.budget import BudgetExceeded
-from supervisor.policy.quotas import QuotaExceeded
-from supervisor.seams.services import GrantDenied, NotScopeMember, Principal
+from supervisor.seams.services import Principal
 from supervisor.session import (
     RecoveryBlocked,
     SessionAwaitingApproval,
@@ -82,20 +79,9 @@ async def create_session(
             principal_id=principal.id,
             memory=body.memory.model_dump() if body.memory else None,
         )
-    except IncompatibleHarness as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except HarnessNotOffered as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except NotOffered as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except HarnessVersionMismatch as exc:
-        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    except QuotaExceeded as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
-    except (GrantDenied, NotScopeMember) as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # The same statuses as the workflow path: one table (api.workflow_errors).
+        raise domain_http_error(exc) or HTTPException(status_code=503, detail=str(exc)) from exc
     info = await manager.get(session_id, tenant_id=tenant_id)
     return CreateSessionResponse(
         session_id=session_id,
@@ -111,7 +97,9 @@ async def list_sessions(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> list[SessionSummary]:
     manager = deps.get_manager(request)
-    rows = await manager.list_sessions(tenant_id=tenant_id)
+    rows = await manager.list_sessions(
+        tenant_id=tenant_id, principal_id=deps.request_principal_id(request, tenant_id)
+    )
     return [
         SessionSummary(
             session_id=r.session_id,
@@ -164,10 +152,9 @@ async def post_message(
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     await deps.require_session_access(tenant_id, session_id, request)
-    commands = deps.get_commands(request)
     manager = deps.get_manager(request)
 
-    existing = await commands.get(session_id, body.command_id)
+    existing = await deps.recorded_command(request, session_id, body.command_id, body.text)
     if existing is not None:
         return PostMessageResponse(
             turn_id=str(existing["turn_id"]),
@@ -190,7 +177,7 @@ async def post_message(
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
             raise to_http(exc) from exc
-        _, response = await commands.claim(session_id, body.command_id)
+        _, response = await deps.claim_command(request, session_id, body.command_id, body.text)
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),
             status=str(response.get("status", "accepted")),
@@ -225,7 +212,7 @@ async def post_message(
             },
         ) from exc
 
-    claimed, response = await commands.claim(session_id, body.command_id)
+    claimed, response = await deps.claim_command(request, session_id, body.command_id, body.text)
     if not claimed:
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),

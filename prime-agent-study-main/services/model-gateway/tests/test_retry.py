@@ -61,7 +61,7 @@ def test_openai_retries_once_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
 
     transport = _CountingTransport(fail_times=1)
     with TestClient(app) as c:
-        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(
             api_key="sk-test",
             base_url="https://api.openai.com/v1",
             transport=transport,
@@ -91,7 +91,7 @@ def test_openai_exhausts_retries_surfaces_upstream(
 
     transport = _CountingTransport(fail_times=99)
     with TestClient(app) as c:
-        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(
             api_key="sk-test",
             base_url="https://api.openai.com/v1",
             transport=transport,
@@ -127,7 +127,7 @@ def test_fallback_route_on_primary_failure(monkeypatch: pytest.MonkeyPatch) -> N
 
     transport = _CountingTransport(fail_times=99)
     with TestClient(app) as c:
-        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(  # noqa: SLF001
+        c.app.state.registry._by_name["openai"] = OpenAICompatProvider(
             api_key="sk-test",
             base_url="https://api.openai.com/v1",
             transport=transport,

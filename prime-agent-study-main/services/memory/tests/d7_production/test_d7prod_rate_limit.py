@@ -98,7 +98,7 @@ def test_prod_forget_route_covered_by_rate_limit_surface() -> None:
     tree = ast.parse(text)
     # Ensure we at least reference rate limiting somewhere in app wiring when present.
     blob = _memory_source_blob()
-    if not re.search(r"rate.?limit|RateLimit|X-RateLimit|Retry-After", blob, re.I):
+    if not re.search(r"rate.?limit|RateLimit|X-RateLimit|Retry-After", blob, re.IGNORECASE):
         raise AssertionError(
             "D7 FULL-PROD: forget mutate has no accompanying rate-limit middleware/header surface"
         )

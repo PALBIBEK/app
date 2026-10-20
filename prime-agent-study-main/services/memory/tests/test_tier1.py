@@ -140,7 +140,7 @@ async def test_unknown_format_version_rejected(svc: MemoryService):
     handle = await svc.create_session(scope())
     from memory_service.models import MemorySessionRow
 
-    async with svc._factory() as db:  # noqa: SLF001
+    async with svc._factory() as db:
         row = await db.get(MemorySessionRow, handle.id)
         assert row is not None
         row.format_version = 999
@@ -336,7 +336,7 @@ async def test_chaos_unflushed_lost_flushed_durable_mid_outbox(svc: MemoryServic
     handle = await svc.create_session(scope())
     svc.append(handle.id, "user/message", {"text": "unflushed"})
     # Crash before flush — drop process-local buffer (kill -9 loses unflushed)
-    svc._buffers.pop(handle.id, None)  # noqa: SLF001
+    svc._buffers.pop(handle.id, None)
     loaded = await svc.load(handle.id)
     assert loaded.events == ()
 

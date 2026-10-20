@@ -14,9 +14,11 @@ from supervisor.api import (
     approvals,
     catalog,
     events,
+    harness,
     health,
     memory,
     metrics,
+    models,
     notebooks,
     scopes,
     sessions,
@@ -27,9 +29,8 @@ from supervisor.api import (
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
-from supervisor.session import drain_for_deploy
 
-_log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = Settings.from_env()
         state = await bootstrap_supervisor(settings)
         app.state.supervisor = state
-        _log.info(
+        logger.info(
             "supervisor bootstrapped catalog_dir=%s compositions=%s",
             settings.resolved_catalog_dir(),
             "loaded" if state.composition_catalog is not None else "disabled",
@@ -78,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     ),
                     name="span-reaper",
                 )
-                _log.info(
+                logger.info(
                     "span_reaper started interval_s=%s",
                     cfg.reaper_interval_s,
                 )
@@ -90,7 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     server_sigterm_handler = signal.getsignal(signal.SIGTERM)
 
     def _begin_drain() -> None:
-        _log.info("SIGTERM received — entering drain")
+        logger.info("SIGTERM received — entering drain")
         if state is not None:
             state.draining = True
         if callable(server_sigterm_handler):
@@ -118,24 +119,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await span_reaper_task
             except asyncio.CancelledError:
                 pass
-            _log.warning("span_reaper did not stop cleanly; cancelled")
+            logger.warning("span_reaper did not stop cleanly; cancelled")
         except asyncio.CancelledError:
             pass
 
     if state is not None:
         state.draining = True
         try:
-            await drain_for_deploy(
-                state.manager, timeout_seconds=state.drain_grace_s
-            )
+            await state.manager.drain(timeout_seconds=state.drain_grace_s)
         except Exception:
-            _log.exception("drain failed")
+            logger.exception("drain failed")
         try:
             from supervisor.obs.tracing import shutdown_tracing
 
             shutdown_tracing()
         except Exception:
-            _log.exception("tracing shutdown failed")
+            logger.exception("tracing shutdown failed")
 
 
 def create_app(*, state: SupervisorState | None = None) -> FastAPI:
@@ -149,11 +148,13 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(events.router)
     app.include_router(approvals.router)
     app.include_router(tools.router)
+    app.include_router(harness.router)
     app.include_router(workspace.router)
     app.include_router(scopes.router)
     app.include_router(memory.router)
     app.include_router(notebooks.router)
     app.include_router(subagents.router)
+    app.include_router(models.router)
     return app
 
 

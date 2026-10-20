@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-from supervisor.agent.base import AgentState
+from supervisor.agent.base import AgentPhase, AgentState
 from supervisor.agent.capabilities import Capabilities
 from supervisor.agent.events import (
     Envelope,
@@ -129,12 +129,9 @@ class EchoRuntime:
     async def get_state(self) -> AgentState:
         return AgentState(
             session_id=self._session_id or "",
-            is_busy=self._busy,
-            is_compacting=False,
-            pending_count=0,
+            phase=_phase(busy=self._busy, stopped=self._stopped),
             message_count=self._message_count,
             model=None,
-            context_window=None,
         )
 
     async def get_history(self) -> list[dict]:
@@ -157,3 +154,9 @@ class EchoRuntime:
             return
         self._stopped = True
         self._stream.close()
+
+
+def _phase(*, busy: bool, stopped: bool) -> AgentPhase:
+    if stopped:
+        return AgentPhase.STOPPED
+    return AgentPhase.EXECUTING if busy else AgentPhase.READY

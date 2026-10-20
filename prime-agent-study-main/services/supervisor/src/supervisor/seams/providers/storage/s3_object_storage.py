@@ -69,7 +69,7 @@ class S3ObjectStorage:
             kwargs["ContentType"] = content_type
         try:
             await asyncio.to_thread(self.client.put_object, **kwargs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ObjectTransient(str(exc)) from exc
         return PutResult(key=key, content_sha256=digest, size_bytes=len(data))
 
@@ -80,7 +80,7 @@ class S3ObjectStorage:
             )
             body = resp["Body"]
             return await asyncio.to_thread(body.read)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if _is_not_found(exc):
                 raise ObjectNotFound(key) from exc
             raise ObjectTransient(str(exc)) from exc
@@ -90,7 +90,7 @@ class S3ObjectStorage:
             resp = await asyncio.to_thread(
                 self.client.head_object, Bucket=self.bucket, Key=key
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if _is_not_found(exc):
                 return HeadResult(
                     key=key, size_bytes=0, content_sha256=None, exists=False
@@ -109,7 +109,7 @@ class S3ObjectStorage:
             await asyncio.to_thread(
                 self.client.delete_object, Bucket=self.bucket, Key=key
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if _is_not_found(exc):
                 return
             raise ObjectTransient(str(exc)) from exc
@@ -127,7 +127,7 @@ class S3ObjectStorage:
                 {"Bucket": self.bucket, "Key": key},
                 ttl_s,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
         return PresignedUrl(url=url, method="GET", expires_in_s=ttl_s)
 
@@ -148,7 +148,7 @@ class S3ObjectStorage:
                 params,
                 ttl_s,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
         return PresignedUrl(url=url, method="PUT", expires_in_s=ttl_s)
 

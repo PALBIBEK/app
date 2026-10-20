@@ -9,17 +9,10 @@ Reference: QM's command policy pattern.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from supervisor.policy.command.rules import DEFAULT_FLOOR_RULES
 from supervisor.policy.command.scanner import CommandScanner
 from supervisor.policy.errors import CommandDenied, CommandRequiresApproval
 from supervisor.policy.types import CommandAction, CommandDecision, CommandPolicyMode, CommandRule
-
-
-if TYPE_CHECKING:
-    pass
-
 
 __all__ = ["CommandPolicy"]
 
@@ -49,7 +42,7 @@ class CommandPolicy:
                 raise CommandDenied(...)
     """
 
-    __slots__ = ("_mode", "_scanner", "_floor_scanner")
+    __slots__ = ("_floor_scanner", "_mode", "_scanner")
 
     def __init__(
         self,

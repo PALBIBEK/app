@@ -25,22 +25,27 @@ from typing import TYPE_CHECKING
 
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.sandbox.factory import create_sandbox_provider
-from supervisor.sandbox.security.guards import is_placeholder_image_digest
+from supervisor.sandbox.security.guards import (
+    assert_multi_tenant_provider,
+    is_placeholder_image_digest,
+    multi_tenant_strict_enabled,
+)
 
 if TYPE_CHECKING:
-    from supervisor.catalog.storage import CompositionCatalog
     from supervisor.catalog import SandboxProfile, SessionPins
+    from supervisor.catalog.storage import CompositionCatalog
     from supervisor.harness import HarnessManifest
+    from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 
 __all__ = [
-    "load_pinned_sandbox_profile",
-    "assert_sandbox_profile_compatible",
-    "resolve_sandbox_create",
-    "SandboxResolution",
-    "ResolutionError",
     "IncompatibleProfile",
     "MissingImageDigest",
     "PlaceholderImageError",
+    "ResolutionError",
+    "SandboxResolution",
+    "assert_sandbox_profile_compatible",
+    "load_pinned_sandbox_profile",
+    "resolve_sandbox_create",
 ]
 
 
@@ -225,6 +230,8 @@ def _resolve_provider(
     *,
     deploy_provider: SandboxProvider | None,
     client: object | None,
+    hydrator: WorkspaceHydrator | None = None,
+    strict: bool = False,
 ) -> SandboxProvider:
     """Instantiate provider from profile, with fallback to deploy provider.
 
@@ -248,9 +255,12 @@ def _resolve_provider(
         ModuleNotFoundError: If provider deps missing and no fallback.
     """
     try:
-        return create_sandbox_provider(profile_provider, client=client)
+        # The deploy provider's hydrator, so profile sandboxes can hydrate and sync scopes.
+        return create_sandbox_provider(profile_provider, client=client, hydrator=hydrator)
     except ModuleNotFoundError:
-        if deploy_provider is not None:
+        # Only a stand-in of the same kind (a test double) may replace it: a different
+        # provider would silently change the isolation the profile asked for.
+        if deploy_provider is not None and not strict and _same_kind(deploy_provider, profile_provider):
             return deploy_provider
         raise
 
@@ -265,6 +275,8 @@ def resolve_sandbox_create(
     deploy_provider: SandboxProvider | None,
     profile: SandboxProfile | None = None,
     client: object | None = None,
+    hydrator: WorkspaceHydrator | None = None,
+    multi_tenant_strict: bool | None = None,
 ) -> tuple[SandboxProvider | None, str | None]:
     """Resolve sandbox provider and image for sandbox creation.
 
@@ -309,12 +321,17 @@ def resolve_sandbox_create(
         return None, None
 
     # Sandbox required - resolve provider and image
+    strict = multi_tenant_strict_enabled() if multi_tenant_strict is None else multi_tenant_strict
     if profile is not None:
         assert_sandbox_profile_compatible(manifest, profile)
+        # A tenant-published profile picks its provider: strict mode must hold per session.
+        assert_multi_tenant_provider(_provider_name(profile.provider), multi_tenant_strict=strict)
         provider = _resolve_provider(
             profile.provider,
             deploy_provider=deploy_provider,
             client=client,
+            hydrator=hydrator,
+            strict=strict,
         )
         # Profile image takes precedence, fall back to manifest
         image = profile.image_digest or manifest.image_digest
@@ -325,53 +342,32 @@ def resolve_sandbox_create(
     # Validate we have what we need
     if provider is None:
         raise MissingProviderError()
+    assert_multi_tenant_provider(
+        _provider_name(getattr(provider, "name", "")), multi_tenant_strict=strict
+    )
 
-    if not image:
-        raise MissingImageDigest()
-
-    # D14: Reject placeholder/fixture digests
-    if is_placeholder_image_digest(image):
-        raise PlaceholderImageError(image)
+    # D14: an image a provider will actually run must be pinned to a real digest. A
+    # host-process sandbox runs no image, so the shipped placeholder does not block it.
+    if _runs_images(provider):
+        if not image:
+            raise MissingImageDigest()
+        if is_placeholder_image_digest(image):
+            raise PlaceholderImageError(image)
 
     return provider, image
 
 
-def resolve_sandbox_create_full(
-    manifest: HarnessManifest,
-    *,
-    deploy_provider: SandboxProvider | None,
-    profile: SandboxProfile | None = None,
-    client: object | None = None,
-) -> SandboxResolution:
-    """Resolve sandbox with full metadata (alternative API).
+def _provider_name(provider: object) -> str:
+    """A provider's name as the strict-mode guard spells it (enum or string)."""
+    return str(getattr(provider, "value", provider))
 
-    Same as resolve_sandbox_create but returns a SandboxResolution
-    dataclass with additional metadata.
 
-    Args:
-        manifest: Harness manifest with requirements.
-        deploy_provider: Default provider from deployment config.
-        profile: Optional sandbox profile override.
-        client: Provider-specific client.
+def _same_kind(provider: object, requested: object) -> bool:
+    return _provider_name(getattr(provider, "name", "")) == _provider_name(requested)
 
-    Returns:
-        SandboxResolution with provider, image, and metadata.
 
-    Example:
-        >>> resolution = resolve_sandbox_create_full(manifest, ...)
-        >>> if resolution.has_sandbox:
-        ...     print(f"Using profile: {resolution.profile_used}")
-    """
-    provider, image = resolve_sandbox_create(
-        manifest,
-        deploy_provider=deploy_provider,
-        profile=profile,
-        client=client,
-    )
+_IMAGELESS_PROVIDERS = frozenset({"local_process", "none"})
 
-    return SandboxResolution(
-        provider=provider,
-        image_digest=image,
-        requires_sandbox=manifest.requires_sandbox,
-        profile_used=profile.name if profile else None,
-    )
+
+def _runs_images(provider: object) -> bool:
+    return _provider_name(getattr(provider, "name", "")) not in _IMAGELESS_PROVIDERS

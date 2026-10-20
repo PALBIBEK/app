@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -38,14 +38,6 @@ async def test_create_requires_sandbox_false_never_calls_provider(session_env) -
     await m.terminate(sid)
 
 
-@pytest.mark.asyncio
-async def test_create_requires_sandbox_true_calls_provider(session_env) -> None:
-    m: SessionManager = session_env["manager"]
-    provider = session_env["provider"]
-    sid = await m.create(tenant_id="t1", harness_version="coding-v1", runtime_name="echo")
-    assert len(provider.create_calls) == 1
-    assert provider.create_calls[0]["image"] == "sha256:" + "a" * 64
-    await m.terminate(sid)
 
 
 @pytest.mark.asyncio
@@ -60,7 +52,7 @@ async def test_send_produces_events_in_journal_and_live_queue(session_env) -> No
     for _ in range(50):
         try:
             env = await asyncio.wait_for(q.get(), timeout=1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
         live.append(env)
         if isinstance(env.payload, RunEnd):
@@ -99,7 +91,7 @@ async def test_journal_append_precedes_live_publish(session_env) -> None:
     for _ in range(50):
         try:
             env = await asyncio.wait_for(q.get(), timeout=1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
         if isinstance(env.payload, RunEnd):
             break

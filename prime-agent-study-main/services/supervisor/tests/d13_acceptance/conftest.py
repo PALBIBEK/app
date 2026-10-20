@@ -34,12 +34,9 @@ AI_ROOT = SUPERVISOR_ROOT.parents[1]  # prime-agent-study-main/
 
 @pytest.fixture(autouse=True)
 def _fast_sse_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
-    try:
-        from supervisor.api import events as events_mod
+    from supervisor.api import events as events_mod
 
-        monkeypatch.setattr(events_mod, "_HEARTBEAT_SECS", 0.05)
-    except Exception:
-        pass
+    monkeypatch.setattr(events_mod, "_HEARTBEAT_SECS", 0.05)
 
 
 @pytest.fixture(autouse=True)
@@ -48,10 +45,7 @@ def _reset_global_projector() -> AsyncIterator[None]:
     tracing_mod._projector = None
     tracing_mod._provider = None
     yield
-    try:
-        shutdown_tracing()
-    except Exception:
-        pass
+    shutdown_tracing()
     tracing_mod._projector = None
     tracing_mod._provider = None
 
