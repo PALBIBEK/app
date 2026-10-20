@@ -96,7 +96,7 @@ class ApprovalBroker:
         turn_id: str | None,
         prompt: str,
         options: list[str],
-        timeout_s: int,
+        timeout_s: float,
         *,
         harness_request_id: str | None = None,
     ) -> str:

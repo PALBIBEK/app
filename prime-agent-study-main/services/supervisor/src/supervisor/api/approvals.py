@@ -86,7 +86,7 @@ async def respond_approval(
                 raise to_http(exc) from exc
             approval = await broker.get(approval_id)
             assert approval is not None
-            status = approval.status
+            status: str = approval.status
         else:
             status = (
                 await manager.respond_approval(approval_id, body.choice, responded_by=responder)
@@ -106,7 +106,7 @@ async def respond_approval(
         approval_id=approval.approval_id,
         session_id=approval.session_id,
         prompt=approval.prompt,
-        options=approval.options,
+        options=list(approval.options),
         status=status,
         choice=approval.choice,
         timeout_s=approval.timeout_s,

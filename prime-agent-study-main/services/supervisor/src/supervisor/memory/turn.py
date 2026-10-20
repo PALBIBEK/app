@@ -188,7 +188,8 @@ class SessionMemory:
         key = f"{run_id}:memory"
         existing = await self._reader.event(session_id, keyed_event_id(session_id, key))
         if existing is not None:
-            return existing.payload  # type: ignore[no-any-return]
+            assert isinstance(existing.payload, MemoryInjected)
+            return existing.payload
         scope = await self.scope(session_id)
         if scope is None or not scope.binding.recall_notebooks:
             return None

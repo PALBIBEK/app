@@ -17,7 +17,7 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from supervisor.agent.events import ErrorEvent, RunEnd, ToolStart, TurnEnd
+from supervisor.agent.events import Envelope, ErrorEvent, RunEnd, ToolStart, TurnEnd
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.session import SessionManager, is_dropped_sentinel
@@ -156,6 +156,7 @@ class SessionActivities:
                         continue
                     if is_dropped_sentinel(item):
                         raise RuntimeError("live event subscription dropped")
+                    assert isinstance(item, Envelope)
                     tools_started += isinstance(item.payload, ToolStart)
                     activity.heartbeat(tools_started)
                     if _is_terminal(item.payload):

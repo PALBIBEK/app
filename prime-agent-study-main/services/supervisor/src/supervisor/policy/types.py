@@ -195,6 +195,17 @@ class BudgetSpec:
     max_cost_per_session: Decimal | None = None
     max_tokens_per_turn: int | None = None
 
+    @classmethod
+    def from_manifest(cls, spec: Any) -> BudgetSpec | None:
+        """A harness manifest's budget (costs as floats) in exact Decimal dollars."""
+        if spec is None:
+            return None
+        cost = spec.max_cost_per_session
+        return cls(
+            max_cost_per_session=None if cost is None else Decimal(str(cost)),
+            max_tokens_per_turn=spec.max_tokens_per_turn,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class BudgetState:

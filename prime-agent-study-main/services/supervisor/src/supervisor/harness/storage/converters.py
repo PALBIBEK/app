@@ -139,7 +139,7 @@ def tool_spec_from_dict(data: str | dict[str, Any]) -> ToolSpec:
     if isinstance(data, str):
         cls_name = data
     elif isinstance(data, dict):
-        cls_name = data.get("class") or data.get("tool_class")
+        cls_name = str(data.get("class") or data.get("tool_class") or "")
     else:
         raise ManifestValidationError("tool", "invalid spec format")
 

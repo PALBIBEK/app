@@ -326,7 +326,7 @@ def resolve_sandbox_create(
         assert_sandbox_profile_compatible(manifest, profile)
         # A tenant-published profile picks its provider: strict mode must hold per session.
         assert_multi_tenant_provider(_provider_name(profile.provider), multi_tenant_strict=strict)
-        provider = _resolve_provider(
+        provider: SandboxProvider | None = _resolve_provider(
             profile.provider,
             deploy_provider=deploy_provider,
             client=client,

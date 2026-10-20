@@ -80,7 +80,7 @@ class HarnessRuntime:
         spawn_cwd = session_dir
         if getattr(sandbox.info, "provider", None) == "local_docker":
             spawn_cwd = sandbox.info.workdir or "/workspace"
-        self._proc = await sandbox.spawn(plan.argv, cwd=spawn_cwd, env=plan.env or None)
+        self._proc = await sandbox.spawn(list(plan.argv), cwd=spawn_cwd, env=plan.env or None)
         self._reader_task = asyncio.create_task(self._read_loop(), name="harness-reader")
         self._stderr_task = asyncio.create_task(self._drain_stderr(), name="harness-stderr")
         await self._rpc(commands.set_auto_retry(False, id=uuid4().hex))

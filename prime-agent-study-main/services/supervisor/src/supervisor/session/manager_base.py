@@ -41,6 +41,7 @@ from supervisor.policy.budget import BudgetExceeded, BudgetTracker
 from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard
 from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.policy.sandbox_policy import ISOLATING_PROVIDERS, SandboxPolicy
+from supervisor.policy.types import BudgetSpec
 from supervisor.sandbox.base import Sandbox, SandboxProvider
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile
 from supervisor.seams import (
@@ -293,7 +294,7 @@ class SessionManagerBase:
         *,
         sandbox_profile: Any | None = None,
     ) -> None:
-        self._budget.configure(session_id, manifest.budget)
+        self._budget.configure(session_id, BudgetSpec.from_manifest(manifest.budget))
         g = manifest.guards or GuardSpec()
         self._guards.configure(
             session_id,

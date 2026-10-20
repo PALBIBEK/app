@@ -104,7 +104,7 @@ def _is_placeholder_digest(digest: str) -> bool:
 
 def _resolve_ref(
     catalog: CompositionCatalog,
-    kind: ArtifactKind,
+    kind: ArtifactKind | str,
     artifact_id: str,
     digest: str,
 ):
@@ -112,5 +112,5 @@ def _resolve_ref(
         return catalog.get(kind, artifact_id, digest)
     digests = catalog._by_name.get((kind, artifact_id), [])
     if not digests:
-        raise DigestMissing(f"unknown {kind} id={artifact_id!r} (no offered digest)")
+        raise DigestMissing(kind=str(kind), artifact_id=artifact_id, digest="")
     return catalog.get(kind, artifact_id, digests[-1])

@@ -74,7 +74,8 @@ class ApprovalOps(SessionManagerBase):
                 row = await self._get_session_row(sid)
                 manifest = self._pinned_manifest(row)
                 if manifest.approvals is not None:
-                    session_policies[sid] = manifest.approvals.on_timeout
+                    allow = manifest.approvals.on_timeout == "allow"
+                    session_policies[sid] = "allow" if allow else "deny"
                 else:
                     session_policies[sid] = "deny"
             except Exception:
@@ -115,9 +116,9 @@ class ApprovalOps(SessionManagerBase):
             if remaining:
                 continue
             async with self._db() as db:
-                row = await db.get(SessionRow, sid)
-                if row is not None and row.status == "awaiting_approval":
-                    row.status = "active"
+                session_row = await db.get(SessionRow, sid)
+                if session_row is not None and session_row.status == "awaiting_approval":
+                    session_row.status = "active"
                     await db.commit()
         return expired
 

@@ -10,12 +10,14 @@ log is what history, restore and consolidation's stale-write check stand on.
 
 from __future__ import annotations
 
+import builtins
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -251,7 +253,7 @@ class NotebookStore:
 
     # --- facts -----------------------------------------------------------------
 
-    async def facts(self, notebook_id: str) -> list[Fact]:
+    async def facts(self, notebook_id: str) -> builtins.list[Fact]:
         async with self._db() as db:
             rows = await db.scalars(
                 select(MemoryFactRow)
@@ -276,7 +278,7 @@ class NotebookStore:
                 .where(MemoryNotebookRow.id == notebook_id)
                 .values(revision=MemoryNotebookRow.revision)
             )
-            if locked.rowcount == 0:
+            if cast("CursorResult[Any]", locked).rowcount == 0:
                 raise NotebookNotFound(notebook_id)
             notebook = await db.get(MemoryNotebookRow, notebook_id, populate_existing=True)
             assert notebook is not None
@@ -289,7 +291,7 @@ class NotebookStore:
 
     async def revisions(
         self, notebook_id: str, *, after: int = 0, limit: int = 500
-    ) -> list[Revision]:
+    ) -> builtins.list[Revision]:
         async with self._db() as db:
             rows = await db.scalars(
                 select(MemoryFactRevisionRow)

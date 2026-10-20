@@ -104,6 +104,10 @@ class WorkspaceTreeIO(Protocol):
 
     async def delete_path(self, path: str) -> None: ...
 
+    async def clear(self) -> None:
+        """Remove every file (hydrate starts from an empty tree)."""
+        ...
+
 
 @runtime_checkable
 class WorkspaceStore(Protocol):

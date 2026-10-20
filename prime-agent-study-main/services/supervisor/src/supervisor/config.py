@@ -23,22 +23,28 @@ def _optional_float(name: str) -> float | None:
     return float(raw)
 
 
+_TEMPORAL_ADDRESS = "localhost:7233"
+_TEMPORAL_NAMESPACE = "default"
+_TEMPORAL_TASK_QUEUE = "supervisor-sessions"
+
+
 @dataclass(frozen=True, slots=True)
 class TemporalSettings:
     """Where sessions run durably. Every session is a workflow on this task queue."""
 
-    address: str = "localhost:7233"
-    namespace: str = "default"
-    task_queue: str = "supervisor-sessions"
+    address: str = _TEMPORAL_ADDRESS
+    namespace: str = _TEMPORAL_NAMESPACE
+    task_queue: str = _TEMPORAL_TASK_QUEUE
     # Temporal Cloud API key; setting it also turns on TLS.
     api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> TemporalSettings:
         return cls(
-            address=os.environ.get("TEMPORAL_ADDRESS", cls.address),
-            namespace=os.environ.get("TEMPORAL_NAMESPACE", cls.namespace),
-            task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", cls.task_queue),
+            # Not cls.address: on a slots dataclass that is the slot descriptor.
+            address=os.environ.get("TEMPORAL_ADDRESS", _TEMPORAL_ADDRESS),
+            namespace=os.environ.get("TEMPORAL_NAMESPACE", _TEMPORAL_NAMESPACE),
+            task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", _TEMPORAL_TASK_QUEUE),
             api_key=os.environ.get("TEMPORAL_API_KEY") or None,
         )
 

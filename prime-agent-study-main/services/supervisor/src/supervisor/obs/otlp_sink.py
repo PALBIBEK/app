@@ -6,6 +6,8 @@ import logging
 import threading
 from typing import Any
 
+from opentelemetry.sdk.trace.id_generator import IdGenerator
+
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ def _hex_to_int(value: str | None, bits: int) -> int | None:
     return n & mask
 
 
-class _ForcedIdGenerator:
+class _ForcedIdGenerator(IdGenerator):
     """IdGenerator that yields one forced trace/span id then falls back to random."""
 
     def __init__(self) -> None:

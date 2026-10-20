@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.digests import content_digest
-from supervisor.catalog.core.types import AgentComposition
+from supervisor.catalog.core.types import AgentComposition, ToolSet
 from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog
 
@@ -23,6 +23,7 @@ def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) ->
         tool_set = catalog.get(
             "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
         )
+        assert isinstance(tool_set, ToolSet)
         require_implemented(tool_set)
     except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: tool_set {comp.tool_set.id}@{comp.tool_set.digest}: {exc}")
@@ -77,6 +78,7 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
             except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
                 problems.append(f"{path.name}: fixture digest mismatch: {exc}")
                 continue
+            assert isinstance(comp, AgentComposition)
             problems.extend(composition_problems(catalog, comp))
         else:
             # No pinned composition digest in fixture — find offered row by name.

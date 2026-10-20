@@ -8,7 +8,7 @@ from typing import Any
 _BASE_FIELDS = frozenset({"message", "session_id", "error_code", "retryable", "context"})
 
 
-def _auto_context(cls: type) -> type:
+def _auto_context(cls: type[Any]) -> type[Any]:
     """Decorator: auto-populate context dict from subclass-specific fields."""
     orig = cls.__post_init__
 

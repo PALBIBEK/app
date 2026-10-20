@@ -558,6 +558,7 @@ class SessionManager(UpkeepOps):
             principal=principal if row.scope_id else None,
         )
         existing = self._sandboxes.get(session_id)
+        sandbox: Sandbox | None
         if existing is not None:
             sandbox = existing
         else:
@@ -587,10 +588,10 @@ class SessionManager(UpkeepOps):
         history = await self._reader.latest_history(session_id)
         # D13: reconstruct open-span state from journal after cold resume / restart.
         try:
-            from supervisor.obs.tracing import get_projector
+            from supervisor.obs.tracing import ProjectorHub, get_projector
 
             proj = get_projector()
-            if proj is not None and hasattr(proj, "reconstruct"):
+            if isinstance(proj, ProjectorHub):
                 journal = await self._reader.read(session_id, since=-1)
                 harness_ver = row.harness_version
                 harness_id = harness_ver
@@ -769,7 +770,7 @@ class SessionManager(UpkeepOps):
                             session_id,
                             runtime,
                             error_class="BudgetExceeded",
-                            detail=bstate.reason or "budget exceeded",
+                            detail=bstate.exceeded_reason or "budget exceeded",
                             status="budget_exceeded",
                         )
                         return

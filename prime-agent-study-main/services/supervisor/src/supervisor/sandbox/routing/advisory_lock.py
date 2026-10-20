@@ -12,8 +12,7 @@ Reference: QM uses advisory locks to prevent concurrent migrations.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol, runtime_checkable
 
 __all__ = [
@@ -25,8 +24,7 @@ __all__ = [
 class AdvisoryLockProtocol(Protocol):
     """Protocol for advisory lock implementations."""
 
-    @asynccontextmanager
-    async def acquire(self, key: str) -> AsyncIterator[None]:
+    def acquire(self, key: str) -> AbstractAsyncContextManager[None]:
         """Acquire advisory lock for key (blocking).
 
         Args:
