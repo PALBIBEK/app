@@ -18,7 +18,7 @@ from pathlib import Path
 
 import httpx
 
-from client import User, payloads, runs_ended, types
+from client import User, ctl, payloads, runs_ended, types
 
 HARNESS = Path(os.environ["REPO"]) / "harness"
 STACK = Path(os.environ["E2E_DIR"]) / "stack"
@@ -294,10 +294,12 @@ def section_e_journal() -> None:
 
     print("   live stream during a slow turn, then a reconnect from its cursor")
     live: list[dict] = []
+    connected = threading.Event()
 
     def follow() -> None:
         with alice.http.stream("GET", f"/v1/sessions/{sid}/events", headers=alice._h() | {"Last-Event-ID": str(seqs[-1])},
                                timeout=httpx.Timeout(connect=10, read=40, write=10, pool=10)) as r:
+            connected.set()
             for line in r.iter_lines():
                 if line.startswith("data:"):
                     live.append(json.loads(line[5:]))
@@ -306,7 +308,7 @@ def section_e_journal() -> None:
 
     th = threading.Thread(target=follow)
     th.start()
-    time.sleep(0.5)
+    connected.wait(15)  # the stream resumes from its cursor, so this only spares a replay
     alice.say(sid, "SLOWMODEL please")
     th.join(45)
     cursor = live[-1]["seq"] if live else seqs[-1]
@@ -316,14 +318,7 @@ def section_e_journal() -> None:
     check("live events + a reconnect from the last one seen have no gap or duplicate",
           combined == list(range(seqs[-1] + 1, seqs[-1] + 1 + len(combined))) and len(live) == 3, combined)
 
-    subprocess.run([os.environ["E2E_CTL"], "restart", "api"], check=True)
-    for _ in range(60):
-        try:
-            if httpx.get("http://127.0.0.1:8080/readyz", timeout=2).status_code == 200:
-                break
-        except httpx.HTTPError:
-            pass
-        time.sleep(1)
+    ctl("restart", "api")
     after = alice.events(sid)
     check("after an API restart the journal replays the same", [e["event_id"] for e in after] ==
           [e["event_id"] for e in evs] + [e["event_id"] for e in after[len(evs):]] and len(after) > len(evs), len(after))
@@ -336,22 +331,22 @@ def section_f_commands() -> None:
     r1, r2 = alice.say(sid, "once", command_id=cid), alice.say(sid, "once", command_id=cid)
     info(f"same command_id twice: HTTP {r1.status_code}, {r2.status_code} {r2.text[:120]}")
     wait_for(sid, runs_ended(1), 60)
-    time.sleep(3)
-    check("a retried command_id starts only one run", types(alice.events(sid)).count("run_start") == 1,
-          types(alice.events(sid)).count("run_start"))
     r3 = alice.say(sid, "once", command_id=cid)
-    time.sleep(4)
-    check("...even when retried after the run finished", types(alice.events(sid)).count("run_start") == 1,
-          (r3.status_code, types(alice.events(sid)).count("run_start")))
+    # Barrier: messages run in order, so once this one has run, any second run of the
+    # retried command would already be in the journal.
+    alice.say(sid, "barrier")
+    starts = types(wait_for(sid, runs_ended(2), 60)).count("run_start")
+    check("a retried command_id starts only one run", starts == 2, starts)
+    check("...even when retried after the run finished", starts == 2, (r3.status_code, starts))
     r = alice.say(sid, "different text, same id", command_id=cid)
     check("a command_id reused with a different message is refused", r.status_code == 409, (r.status_code, r.text[:160]))
     alice.say(sid, "SLOWMODEL long one")
-    time.sleep(2)
+    wait_for(sid, lambda e: types(e).count("run_start") >= 3, 60)  # the slow run is under way
     r = alice.say(sid, "while you're busy")
     info(f"message during a run: HTTP {r.status_code} {r.text[:160]}")
-    evs = wait_for(sid, lambda e: types(e).count("run_end") >= (3 if r.status_code == 202 else 2), 90)
+    evs = wait_for(sid, lambda e: types(e).count("run_end") >= (4 if r.status_code == 202 else 3), 90)
     check("a message sent mid-run is either queued (and answered) or clearly refused",
-          r.status_code in (409, 429) or types(evs).count("run_end") >= 3, (r.status_code, types(evs).count("run_end")))
+          r.status_code in (409, 429) or types(evs).count("run_end") >= 4, (r.status_code, types(evs).count("run_end")))
 
 
 def section_h_quotas() -> None:
@@ -359,8 +354,7 @@ def section_h_quotas() -> None:
     (Path(os.environ["E2E_RUN_DIR"]) / "override.sh").write_text("export TENANT_MAX_SESSIONS=2 TENANT_RATE_LIMIT_PER_MINUTE=40\n")
     try:
         for svc in ("api", "worker"):
-            subprocess.run([os.environ["E2E_CTL"], "restart", svc], check=True)
-        time.sleep(10)
+            ctl("restart", svc)
         tess = User(f"t9-{uuid.uuid4().hex[:6]}", "tess")
         c = comp(f"pol-quota-{tess.tenant}", user=tess)
         rs = [tess.create(c[0], c[1]) for _ in range(3)]
@@ -376,8 +370,7 @@ def section_h_quotas() -> None:
     finally:
         (Path(os.environ["E2E_RUN_DIR"]) / "override.sh").unlink(missing_ok=True)
         for svc in ("api", "worker"):
-            subprocess.run([os.environ["E2E_CTL"], "restart", svc], check=True)
-        time.sleep(8)
+            ctl("restart", svc)
 
 
 if __name__ == "__main__":

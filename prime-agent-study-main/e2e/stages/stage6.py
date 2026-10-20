@@ -5,12 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-from client import User, payloads, relay_mark, relay_since, runs_ended, types
+from client import User, ctl, payloads, relay_mark, relay_since, runs_ended, types
 
 HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
@@ -83,8 +81,7 @@ sid = session(c)
 turn(sid, "My favourite colour is teal.", 1)
 _, calls = turn(sid, "What did I just tell you?", 2)
 check("turn 2's model call includes turn 1", "favourite colour is teal" in seen(calls), seen(calls)[:120])
-subprocess.run([os.environ["E2E_CTL"], "restart", "worker"], check=True)
-time.sleep(8)
+ctl("restart", "worker")
 _, calls = turn(sid, "And now?", 3)
 check("after a worker restart the model still sees the whole conversation",
       "favourite colour is teal" in seen(calls) and "What did I just tell you" in seen(calls), seen(calls)[:120])

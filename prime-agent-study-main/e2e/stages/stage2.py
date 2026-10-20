@@ -10,14 +10,10 @@ import copy
 import hashlib
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-import httpx
-
-from client import User
+from client import User, ctl
 
 HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
@@ -270,15 +266,8 @@ STATE["cross-tenant-create"] = code
 
 # --- 6. restart: everything survives ---------------------------------------------------
 print("\n## 6. Restart API and worker; the user's catalog survives")
-subprocess.run([os.environ["E2E_CTL"], "restart", "api"], check=True)
-subprocess.run([os.environ["E2E_CTL"], "restart", "worker"], check=True)
-for _ in range(60):
-    try:
-        if u.get("/readyz").status_code == 200:
-            break
-    except httpx.HTTPError:  # not listening yet
-        pass
-    time.sleep(1)
+ctl("restart", "api")
+ctl("restart", "worker")
 names = {a["artifact_id"] for a in u.get("/v1/catalog/compositions").json()}
 check("published compositions are listed after restart", {"my-githi", "c-power-tools"} <= names, sorted(names)[:8])
 check("v2 still starts sessions after restart", create("my-githi", v2["digest"])[0] == 201)

@@ -5,13 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
-import time
 import uuid
 from pathlib import Path
 
-from client import User, payloads, runs_ended, types
+from client import User, ctl, eventually, payloads, runs_ended, types
 
 HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
@@ -122,7 +120,10 @@ r = invoke(s2["session_id"], "read", file_path="private.txt")
 check("another session cannot read my files through tools", r.get("code") == "FILE_NOT_FOUND", r.get("code"))
 where = invoke(s1["session_id"], "bash", command="pwd").get("payload", {}).get("stdout", "").strip()
 r = alice.delete(f"/v1/sessions/{s1['session_id']}")
-time.sleep(1)
+try:
+    eventually(lambda: not Path(where).exists(), 30, what="the sandbox directory to go")
+except TimeoutError:
+    pass  # reported by the check below
 check("deleting a session destroys its sandbox", r.status_code == 204 and not Path(where).exists(), (r.status_code, where, Path(where).exists()))
 
 # --- D. workspace scopes -----------------------------------------------------------
@@ -139,8 +140,15 @@ if sid:
     r = invoke(sid, "read", file_path="docs/brief.md")
     check("agent sees the uploaded file in its sandbox", r.get("payload") == "# Brief\nship it\n", r)
     run = turn(sid, '/tool write {"file_path": "out/report.txt", "content": "done"}', 1)
-    time.sleep(1)
-    files = alice.get(f"/v1/scopes/{scope}/files").json()
+
+    def scope_files() -> list | dict:
+        return alice.get(f"/v1/scopes/{scope}/files").json()
+
+    try:
+        eventually(lambda: "out/report.txt" in str(scope_files()), 30, what="the sync back")
+    except TimeoutError:
+        pass  # reported by the check below
+    files = scope_files()
     paths = sorted(f.get("path") for f in files) if isinstance(files, list) else files
     check("what the agent wrote is synced back after the run", isinstance(paths, list) and "out/report.txt" in paths, paths)
     code, s2 = session(full, scope=scope)
@@ -162,8 +170,9 @@ check("two sessions on one scope start", code == code2 == 201, (code, code2))
 if code == 201 and code2 == 201:
     turn(a["session_id"], '/tool write {"file_path": "shared.txt", "content": "from A"}', 1)
     turn(a["session_id"], '/tool write {"file_path": "only-a.txt", "content": "A made this"}', 2)
+    # B's sync runs inside its turn (its conflict is reported in the run's events),
+    # so once the turn has ended the scope holds whatever won.
     run = turn(b["session_id"], '/tool write {"file_path": "shared.txt", "content": "from B"}', 1)
-    time.sleep(1)
     content = alice.get(f"/v1/scopes/{scope}/files/shared.txt").text
     check("the session that wrote second does not overwrite the first", content == "from A", content)
     errors = [p for p in payloads(run, "error") if p.get("error_code") == "WORKSPACE_CONFLICT"]
@@ -181,9 +190,8 @@ _, plain = session(full)
 invoke(plain["session_id"], "write", file_path="work.txt", content="unsaved work")
 _, scoped = session(full, scope=scope)
 turn(scoped["session_id"], '/tool write {"file_path": "saved.txt", "content": "saved work"}', 1)
-subprocess.run([os.environ["E2E_CTL"], "kill", "worker"], check=True)
-subprocess.run([os.environ["E2E_CTL"], "start", "worker"], check=True)
-time.sleep(8)
+ctl("kill", "worker")
+ctl("start", "worker")
 r = invoke(plain["session_id"], "read", file_path="work.txt")
 check("no scope: files survive a worker crash", r.get("payload") == "unsaved work", r)
 r = invoke(scoped["session_id"], "read", file_path="saved.txt")

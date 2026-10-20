@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -149,3 +151,48 @@ def relay_since(mark: int) -> list[dict[str, Any]]:
             return [json.loads(line) for i, line in enumerate(fh) if i >= mark]
     except FileNotFoundError:
         return []
+
+
+# --- the stack's services ------------------------------------------------------
+
+READY_LINE = "session worker up"  # what a worker logs once it polls its queues
+
+
+def eventually[T](probe: Callable[[], T], timeout: float = 60, every: float = 0.25, what: str = "") -> T:
+    """``probe()``'s first truthy value; a TimeoutError naming ``what`` after ``timeout``."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if value := probe():
+            return value
+        time.sleep(every)
+    raise TimeoutError(f"not within {timeout:.0f}s: {what or probe}")
+
+
+def _serving(url: str) -> bool:
+    try:
+        return httpx.get(url, timeout=2).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def ctl(action: str, service: str, timeout: float = 90) -> None:
+    """``ctl.sh action service``; after a start or restart, wait until the service serves.
+
+    The API serves once ``/readyz`` answers 200; a worker once it has logged that it
+    polls its queues (after the restart: only the log written since counts).
+    """
+    log = Path(os.environ["E2E_RUN_DIR"]) / "logs" / f"{service}.log"
+    offset = log.stat().st_size if log.exists() else 0
+    subprocess.run([os.environ["E2E_CTL"], action, service], check=True)
+    if action not in ("start", "restart"):
+        return
+    if service == "api":
+        eventually(lambda: _serving(f"{SUP}/readyz"), timeout, what="the API to be ready")
+    elif service.startswith("worker"):
+
+        def logged_ready() -> bool:
+            with log.open("rb") as f:
+                f.seek(offset)
+                return READY_LINE.encode() in f.read()
+
+        eventually(logged_ready, timeout, what=f"{service} to poll its queues")
