@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from supervisor.harness.config import HarnessSettings, get_settings
 from supervisor.harness.core.types import SessionFilesPaths
@@ -50,7 +50,7 @@ def _subagent_provider_meta(seams: RuntimeSeams) -> tuple[list[str], str]:
     return providers, default
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _write_json(path: Path, data: dict[str, Any] | list[Any]) -> None:
     """Write JSON file with consistent formatting.
 
     Args:
@@ -152,7 +152,7 @@ def materialize_harness_binds(
     # memory_profile.json and memory_rpc.json
     if memory_profile is not None:
         mp_path = yal / "memory_profile.json"
-        mp_data = {
+        mp_data: dict[str, Any] = {
             "id": memory_profile.name,
             "digest": memory_profile.digest,
             "compaction": {
@@ -204,6 +204,10 @@ def materialize_harness_binds(
             durable_doc["lease_owner"] = settings.memory_lease_owner
         _write_json(ms_path, durable_doc)
         created_files["memory_service_json"] = str(ms_path)
+
+    # A harness session is launched from its prompt and tools: both are pinned seams.
+    if seams.prompt_assembler is None or seams.tool_provider is None:
+        raise ValueError("a harness session needs a prompt assembler and a tool provider")
 
     # system_prompt.txt
     work_cwd = cwd if cwd is not None else str(root.resolve())
@@ -285,10 +289,10 @@ def materialize_harness_binds(
     )
 
     return SessionFilesPaths(
-        root=created_files["root"],
-        pins_json=created_files["pins_json"],
-        system_prompt_txt=created_files["system_prompt_txt"],
-        tools_json=created_files["tools_json"],
+        root=str(yal),
+        pins_json=str(pins_path),
+        system_prompt_txt=str(sp_txt_path),
+        tools_json=str(tools_path),
         tool_invoke_json=created_files["tool_invoke_json"],
         sandbox_profile_json=created_files["sandbox_profile_json"],
         memory_profile_json=created_files["memory_profile_json"],

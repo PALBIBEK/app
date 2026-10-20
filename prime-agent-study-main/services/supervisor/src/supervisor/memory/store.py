@@ -82,7 +82,7 @@ class FactTx:
     at: int = field(default_factory=now_ms)
     changed: bool = False
 
-    async def list(self) -> list[Fact]:
+    async def current(self) -> list[Fact]:
         rows = await self.db.scalars(
             select(MemoryFactRow)
             .where(
@@ -216,7 +216,7 @@ class NotebookStore:
                 raise NotebookNotFound(notebook_id)
             return _notebook(row)
 
-    async def list(
+    async def list_notebooks(
         self, *, tenant_id: str, owner: str, agent_pin: str, archived: bool = False
     ) -> list[Notebook]:
         query = select(MemoryNotebookRow).where(
@@ -271,12 +271,13 @@ class NotebookStore:
         """Run ``fn`` on the notebook's facts atomically; ``expect_revision`` refuses stale."""
         async with self._db() as db:
             # Lock by writing: portable, and taken before any read the change depends on.
-            locked = await db.execute(
+            locked = await db.scalar(
                 update(MemoryNotebookRow)
                 .where(MemoryNotebookRow.id == notebook_id)
                 .values(revision=MemoryNotebookRow.revision)
+                .returning(MemoryNotebookRow.id)
             )
-            if locked.rowcount == 0:
+            if locked is None:
                 raise NotebookNotFound(notebook_id)
             notebook = await db.get(MemoryNotebookRow, notebook_id, populate_existing=True)
             assert notebook is not None

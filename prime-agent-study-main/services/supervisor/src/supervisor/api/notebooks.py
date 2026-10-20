@@ -119,7 +119,7 @@ async def list_notebooks(
     principal: Principal = Depends(deps.current_principal),
 ) -> list[NotebookOut]:
     platform = _platform(request)
-    notebooks = await platform.store.list(
+    notebooks = await platform.store.list_notebooks(
         tenant_id=principal.tenant_id or principal.id,
         owner=principal.id,
         agent_pin=agent_pin,
@@ -287,7 +287,7 @@ async def search_memory(
     else:
         notebooks = [
             nb.id
-            for nb in await platform.store.list(
+            for nb in await platform.store.list_notebooks(
                 tenant_id=principal.tenant_id or principal.id,
                 owner=principal.id,
                 agent_pin=body.agent_pin,

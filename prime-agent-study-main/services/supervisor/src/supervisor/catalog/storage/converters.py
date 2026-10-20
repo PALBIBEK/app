@@ -16,6 +16,7 @@ Reference: Extracted from store.py with improvements.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -208,7 +209,7 @@ def _tool_definition_from_dict(raw: dict[str, Any]) -> ToolDefinition:
     actual = content_digest(tool.body_for_digest())
     claimed = raw.get("digest")
     if not is_unset_digest(claimed) and claimed != actual:
-        raise DigestMismatch(expected=claimed, actual=actual)
+        raise DigestMismatch(expected=str(claimed), actual=actual)
     return replace(tool, digest=actual)
 
 
@@ -649,11 +650,11 @@ def with_status(artifact: Artifact, status: ArtifactStatus) -> Artifact:
 # Generic Converters
 # =============================================================================
 
-def artifact_from_dict(kind: ArtifactKind, data: dict[str, Any]) -> Artifact:
+def artifact_from_dict(kind: ArtifactKind | str, data: dict[str, Any]) -> Artifact:
     """Parse artifact from dict by kind.
 
     Args:
-        kind: Type of artifact
+        kind: Type of artifact (an ArtifactKind or its value)
         data: Dict with artifact fields
 
     Returns:
@@ -662,16 +663,17 @@ def artifact_from_dict(kind: ArtifactKind, data: dict[str, Any]) -> Artifact:
     Raises:
         ValueError: If kind is unknown
     """
-    converters = {
+    converters: dict[ArtifactKind, Callable[[dict[str, Any]], Artifact]] = {
         ArtifactKind.PROMPT_PACK: prompt_pack_from_dict,
         ArtifactKind.TOOL_SET: tool_set_from_dict,
         ArtifactKind.COMPOSITION: composition_from_dict,
         ArtifactKind.SANDBOX_PROFILE: sandbox_profile_from_dict,
         ArtifactKind.MEMORY_PROFILE: memory_profile_from_dict,
     }
-    converter = converters.get(kind)
-    if converter is None:
-        raise ValueError(f"unknown artifact kind: {kind}")
+    try:
+        converter = converters[ArtifactKind(kind)]
+    except ValueError:
+        raise ValueError(f"unknown artifact kind: {kind}") from None
     return converter(data)
 
 

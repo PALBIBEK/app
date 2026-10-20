@@ -204,6 +204,7 @@ class AgentSessionWorkflow:
         return SessionResult(self._session_id, self._state.phase, self._state.turns_completed)
 
     async def _create(self, inp: SessionInput) -> None:
+        arg: CreateRequest | ForkRequest
         if inp.fork is not None:
             activity, arg = Activity.FORK, ForkRequest(self._session_id, inp.fork)
         else:
@@ -525,14 +526,14 @@ class AgentSessionWorkflow:
 
     # --- messages ------------------------------------------------------------
 
-    @workflow.update(name="wait_ready")
+    @workflow.update
     async def wait_ready(self) -> SessionStatus:
         await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
         if self._creation_error is not None:
             raise self._creation_error
         return self.status()
 
-    @workflow.update(name="submit_message")
+    @workflow.update
     async def submit_message(self, message: Message) -> Accepted:
         if message.command_id in self._state.seen_commands:
             return Accepted(message.command_id, queued=self._is_queued(message.command_id))
@@ -556,7 +557,7 @@ class AgentSessionWorkflow:
         if not message.command_id or not message.text:
             raise ValueError("command_id and text are required")
 
-    @workflow.update(name="session_op")
+    @workflow.update
     async def session_op(self, op: SessionOp) -> OpResult:
         """Tool invoke, memory, subagents, workspace: on the worker holding the session."""
         await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
@@ -647,7 +648,7 @@ class AgentSessionWorkflow:
         if op.session_id != self._session_id or not op.op_id:
             raise ValueError("op must name this session and carry an op_id")
 
-    @workflow.update(name="respond_approval")
+    @workflow.update
     async def respond_approval(self, choice: ApprovalChoice) -> None:
         try:
             if choice.approval_id in self._awaiting:
@@ -691,7 +692,7 @@ class AgentSessionWorkflow:
         if self._turn is not None and not self._turn.done():
             self._turn.cancel()
 
-    @workflow.update(name="terminate")
+    @workflow.update
     async def terminate(self) -> SessionStatus:
         self._terminate_requested = True
         await workflow.wait_condition(lambda: self._state.phase in (Phase.TERMINATED, Phase.FAILED))

@@ -5,16 +5,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from typing import Final
 
 from supervisor.agent.events import Envelope
 
 logger = logging.getLogger(__name__)
-_DROPPED = object()
+
+
+class Dropped:
+    """Put on a slow subscriber's queue once it is disconnected."""
+
+
+_DROPPED: Final = Dropped()
 
 
 @dataclass(eq=False)
 class LiveSubscription:
-    queue: asyncio.Queue[Envelope | object]
+    queue: asyncio.Queue[Envelope | Dropped]
     dropped: bool = False
 
     def __hash__(self) -> int:
@@ -63,6 +70,3 @@ class LiveHub:
     def drop_session(self, session_id: str) -> None:
         self._subs.pop(session_id, None)
 
-
-def is_dropped_sentinel(item: object) -> bool:
-    return item is _DROPPED

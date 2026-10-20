@@ -16,7 +16,7 @@ from supervisor.session.errors import (
     ToolInvokeNotConfigured,
     WorkspaceUnavailable,
 )
-from supervisor.session.live import LiveHub, LiveSubscription, is_dropped_sentinel
+from supervisor.session.live import Dropped, LiveHub, LiveSubscription
 from supervisor.session.manager import (
     ResumeResult,
     SessionInfo,
@@ -34,6 +34,7 @@ from supervisor.session.tree import (
 )
 
 __all__ = [
+    "Dropped",
     "LiveHub",
     "LiveSubscription",
     "MemoryNotConfigured",
@@ -56,7 +57,6 @@ __all__ = [
     "ToolInvokeOutcome",
     "WorkspaceUnavailable",
     "build_session_tree",
-    "is_dropped_sentinel",
     "unpaired_compaction_starts",
     "unpaired_subagent_starts",
 ]

@@ -194,25 +194,14 @@ class UpkeepOps(ChildOps):
         try:
             import time
 
-            from supervisor.obs.reaper import ReaperConfig, SpanReaper
             from supervisor.obs.tracing import get_projector
 
             proj = get_projector()
             if proj is not None:
-                if hasattr(proj, "force_close_session"):
-                    proj.force_close_session(
-                        session_id,
-                        end_ms=int(time.time() * 1000),
-                        closed_by="session_terminal",
-                    )
-                else:
-                    SpanReaper(
-                        projector=proj,
-                        config=ReaperConfig(),
-                        session_terminal=True,
-                    ).tick()
-                if hasattr(proj, "drop_session"):
-                    proj.drop_session(session_id)
+                proj.force_close_session(
+                    session_id, end_ms=int(time.time() * 1000), closed_by="session_terminal"
+                )
+                proj.drop_session(session_id)
         except Exception:
             logger.exception("span session_terminal reap failed session=%s", session_id)
 

@@ -322,6 +322,7 @@ def resolve_sandbox_create(
 
     # Sandbox required - resolve provider and image
     strict = multi_tenant_strict_enabled() if multi_tenant_strict is None else multi_tenant_strict
+    provider: SandboxProvider | None
     if profile is not None:
         assert_sandbox_profile_compatible(manifest, profile)
         # A tenant-published profile picks its provider: strict mode must hold per session.

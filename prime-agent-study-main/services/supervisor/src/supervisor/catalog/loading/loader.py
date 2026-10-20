@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.errors import DigestMissing
-from supervisor.catalog.core.types import AgentComposition, ArtifactKind, DigestRef, PlugBindings
+from supervisor.catalog.core.types import (
+    AgentComposition,
+    Artifact,
+    ArtifactKind,
+    DigestRef,
+    PlugBindings,
+)
 from supervisor.catalog.storage import (
     CompositionCatalog,
     memory_profile_from_dict,
@@ -52,18 +58,18 @@ def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
         ts_raw = data["tool_set"]
         sp_raw = data.get("sandbox_profile")
         mp_raw = data.get("memory_profile")
-        pp = _resolve_ref(catalog, "prompt_pack", pp_raw["id"], pp_raw.get("digest", ""))
-        ts = _resolve_ref(catalog, "tool_set", ts_raw["id"], ts_raw.get("digest", ""))
+        pp = _resolve_ref(catalog, ArtifactKind.PROMPT_PACK, pp_raw["id"], pp_raw.get("digest", ""))
+        ts = _resolve_ref(catalog, ArtifactKind.TOOL_SET, ts_raw["id"], ts_raw.get("digest", ""))
         sp_ref: DigestRef | None = None
         if sp_raw is not None:
             sp = _resolve_ref(
-                catalog, "sandbox_profile", sp_raw["id"], sp_raw.get("digest", "")
+                catalog, ArtifactKind.SANDBOX_PROFILE, sp_raw["id"], sp_raw.get("digest", "")
             )
             sp_ref = DigestRef(id=sp.name, digest=sp.digest)
         mp_ref: DigestRef | None = None
         if mp_raw is not None:
             mp = _resolve_ref(
-                catalog, "memory_profile", mp_raw["id"], mp_raw.get("digest", "")
+                catalog, ArtifactKind.MEMORY_PROFILE, mp_raw["id"], mp_raw.get("digest", "")
             )
             mp_ref = DigestRef(id=mp.name, digest=mp.digest)
         comp = AgentComposition(
@@ -107,10 +113,10 @@ def _resolve_ref(
     kind: ArtifactKind,
     artifact_id: str,
     digest: str,
-):
+) -> Artifact:
     if not _is_placeholder_digest(digest):
         return catalog.get(kind, artifact_id, digest)
     digests = catalog._by_name.get((kind, artifact_id), [])
     if not digests:
-        raise DigestMissing(f"unknown {kind} id={artifact_id!r} (no offered digest)")
+        raise DigestMissing(kind=kind, artifact_id=artifact_id, digest=digest or "latest")
     return catalog.get(kind, artifact_id, digests[-1])

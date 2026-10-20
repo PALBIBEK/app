@@ -180,6 +180,21 @@ class CompositionCatalog:
 
         return artifact
 
+    def get_as[A: Artifact](
+        self,
+        cls: type[A],
+        kind: ArtifactKind | str,
+        artifact_id: str,
+        digest: str,
+        *,
+        require_offered: bool = False,
+    ) -> A:
+        """``get``, checked to be a ``cls`` (a kind always maps to one artifact type)."""
+        artifact = self.get(kind, artifact_id, digest, require_offered=require_offered)
+        if not isinstance(artifact, cls):
+            raise TypeError(f"{kind} {artifact_id!r} is a {type(artifact).__name__}")
+        return artifact
+
     def deprecate(
         self,
         kind: ArtifactKind | str,

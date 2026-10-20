@@ -9,10 +9,14 @@ from typing import Any, Protocol
 
 
 class _EnvelopeLike(Protocol):
-    session_id: str
-    seq: int
-    trace_id: str | None
-    payload: Any
+    @property
+    def session_id(self) -> str: ...
+    @property
+    def seq(self) -> int: ...
+    @property
+    def trace_id(self) -> str | None: ...
+    @property
+    def payload(self) -> Any: ...
 
 
 def resolve_run_id(env: _EnvelopeLike, *, explicit_run_id: str | None = None) -> str:

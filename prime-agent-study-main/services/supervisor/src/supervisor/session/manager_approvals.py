@@ -11,6 +11,7 @@ from supervisor.agent.events import (
     ErrorEvent,
 )
 from supervisor.db.models import SessionRow
+from supervisor.harness.core.enums import ApprovalOnTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,11 @@ class ApprovalOps(SessionManagerBase):
                 row = await self._get_session_row(sid)
                 manifest = self._pinned_manifest(row)
                 if manifest.approvals is not None:
-                    session_policies[sid] = manifest.approvals.on_timeout
+                    session_policies[sid] = (
+                        "allow"
+                        if manifest.approvals.on_timeout is ApprovalOnTimeout.ALLOW
+                        else "deny"
+                    )
                 else:
                     session_policies[sid] = "deny"
             except Exception:
@@ -115,9 +120,9 @@ class ApprovalOps(SessionManagerBase):
             if remaining:
                 continue
             async with self._db() as db:
-                row = await db.get(SessionRow, sid)
-                if row is not None and row.status == "awaiting_approval":
-                    row.status = "active"
+                waiting = await db.get(SessionRow, sid)
+                if waiting is not None and waiting.status == "awaiting_approval":
+                    waiting.status = "active"
                     await db.commit()
         return expired
 

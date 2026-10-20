@@ -22,13 +22,13 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from supervisor.harness.core.types import BudgetSpec
     from supervisor.policy.types import (
         Approval,
         ApprovalContext,
         ApprovalGrant,
         ApprovalScope,
         AuditEvent,
-        BudgetSpec,
         BudgetState,
         CommandDecision,
         GuardConfig,
@@ -134,7 +134,7 @@ class ApprovalBrokerProtocol(Protocol):
         turn_id: str | None,
         prompt: str,
         options: list[str],
-        timeout_s: int,
+        timeout_s: float,
         *,
         harness_request_id: str | None = None,
     ) -> str:

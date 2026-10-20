@@ -7,8 +7,22 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
-from supervisor.obs.projector import JournalProjector
+
+class Reapable(Protocol):
+    """What a sweep needs: one session's projector, or the hub over all of them."""
+
+    @property
+    def has_open_run(self) -> bool: ...
+    @property
+    def open_run_id(self) -> str | None: ...
+    @property
+    def run_start_ms(self) -> int | None: ...
+    @property
+    def last_event_ms(self) -> int | None: ...
+    def force_close(self, *, end_ms: int, closed_by: str) -> bool: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +60,7 @@ class ReaperConfig:
 class SpanReaper:
     """Periodic sweep over a projector. Reconstructible — no durable open-span store."""
 
-    projector: JournalProjector
+    projector: Reapable
     config: ReaperConfig
     session_terminal: bool = False
 

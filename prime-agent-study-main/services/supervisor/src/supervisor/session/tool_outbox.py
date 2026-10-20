@@ -41,7 +41,8 @@ def result_to_wire(result: ToolResult) -> dict[str, Any]:
 def wire_to_result(wire: dict[str, Any]) -> ToolResult:
     if wire.get("ok"):
         return ToolResult(ok=True, payload=wire.get("payload"))
-    payload = wire.get("payload") if isinstance(wire.get("payload"), dict) else {}
+    raw = wire.get("payload")
+    payload: dict[str, Any] = raw if isinstance(raw, dict) else {}
     return ToolResult(
         ok=False,
         error=wire.get("error") or payload.get("error"),

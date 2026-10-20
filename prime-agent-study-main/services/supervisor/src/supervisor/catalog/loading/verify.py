@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.digests import content_digest
-from supervisor.catalog.core.types import AgentComposition
+from supervisor.catalog.core.types import AgentComposition, ToolSet
 from supervisor.catalog.services import require_implemented
 from supervisor.catalog.storage import CompositionCatalog
 
@@ -20,8 +20,8 @@ def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) ->
     except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
         problems.append(f"{comp.name}: prompt_pack {comp.prompt_pack.id}@{comp.prompt_pack.digest}: {exc}")
     try:
-        tool_set = catalog.get(
-            "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
+        tool_set = catalog.get_as(
+            ToolSet, "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
         )
         require_implemented(tool_set)
     except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
@@ -73,7 +73,9 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
         digest = raw.get("digest", "")
         if digest and not digest.startswith("sha256:REPLACE"):
             try:
-                comp = catalog.get("composition", name, digest, require_offered=True)
+                comp = catalog.get_as(
+                    AgentComposition, "composition", name, digest, require_offered=True
+                )
             except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
                 problems.append(f"{path.name}: fixture digest mismatch: {exc}")
                 continue
@@ -88,9 +90,10 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
             if not offered:
                 problems.append(f"{path.name}: no offered composition named {name!r}")
                 continue
-            for comp in offered:
-                if not isinstance(comp, AgentComposition):
+            for art in offered:
+                if not isinstance(art, AgentComposition):
                     continue
+                comp = art
                 problems.extend(composition_problems(catalog, comp))
                 # Fixture child digests must match offered children when present.
                 pp = raw.get("prompt_pack") or {}
