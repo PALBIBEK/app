@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -70,7 +71,8 @@ def invoke(sid: str, name: str, user: User = alice, **args: object) -> dict:
 
 
 def turn(sid: str, text: str, n: int, user: User = alice) -> list[dict]:
-    assert user.say(sid, text).status_code == 202
+    said = user.say(sid, text)
+    assert said.status_code == 202, (said.status_code, said.text[:300])
     evs = user.wait(sid, runs_ended(n), timeout=90)
     starts = [i for i, t in enumerate(types(evs)) if t == "run_start"]
     return evs[starts[n - 1]:]
@@ -168,6 +170,9 @@ check("bob can now start a session on the scope", code == 201, (code, s))
 code, a = session(full, scope=scope); code2, b = session(full, scope=scope)
 check("two sessions on one scope start", code == code2 == 201, (code, code2))
 if code == 201 and code2 == 201:
+    # B's sandbox is built (from the scope as it is now) before A writes: a real race.
+    # Sandboxes are built on first use, so without this B would start from A's version.
+    invoke(b["session_id"], "ls", path=".")
     turn(a["session_id"], '/tool write {"file_path": "shared.txt", "content": "from A"}', 1)
     turn(a["session_id"], '/tool write {"file_path": "only-a.txt", "content": "A made this"}', 2)
     # B's sync runs inside its turn (its conflict is reported in the run's events),
@@ -196,6 +201,29 @@ r = invoke(plain["session_id"], "read", file_path="work.txt")
 check("no scope: files survive a worker crash", r.get("payload") == "unsaved work", r)
 r = invoke(scoped["session_id"], "read", file_path="saved.txt")
 check("scope: the adopting worker rehydrates the workspace", r.get("payload") == "saved work", r)
+
+# --- F. sandboxes are cattle: built when needed, replaced when they die -------------
+print("\n## F. A sandbox is built when a tool needs one, and replaced when it dies")
+_, chat = session(full)
+turn(chat["session_id"], "just say hello", 1)
+check("a turn that runs no tool builds no sandbox",
+      "hand_provisioned" not in types(alice.events(chat["session_id"])), types(alice.events(chat["session_id"])))
+_, doomed = session(full)
+sid = doomed["session_id"]
+invoke(sid, "write", file_path="kept.txt", content="survives")
+root = invoke(sid, "bash", command="pwd").get("payload", {}).get("stdout", "").strip()
+check("the sandbox is a directory on this host (local_process)", root and Path(root).is_dir(), root)
+shutil.rmtree(root, ignore_errors=True)  # the sandbox dies under the session
+r = invoke(sid, "read", file_path="kept.txt")
+check("the call that finds its sandbox dead reads WORKSPACE_RESET", r.get("code") == "WORKSPACE_RESET", r)
+check("...and is told what comes back", "restored" in str(r.get("error", "")), r.get("error"))
+r = invoke(sid, "read", file_path="kept.txt")
+check("the next call gets a fresh sandbox holding the checkpointed file", r.get("payload") == "survives", r)
+evs = alice.events(sid)
+causes = [e["data"].get("cause") for e in evs if e["type"] == "hand_provisioned"]
+check("the journal names the checkpoint, the loss and the replacement",
+      "hand_checkpointed" in types(evs) and "hand_lost" in types(evs) and causes == ["first_use", "replaced"],
+      (types(evs)[-12:], causes))
 
 (Path(os.environ["E2E_RUN_DIR"]) / "stage4_state.json").write_text(json.dumps({"scope": scope}))
 print(f"\n{sum(ok for _, ok, _ in results)}/{len(results)} checks passed")

@@ -20,6 +20,7 @@ __all__ = [
     "ToolTimeout",
     "UnknownTools",
     "UnsupportedCapability",
+    "WorkspaceReset",
     "WorkspaceUnavailable",
 ]
 
@@ -91,3 +92,21 @@ class WorkspaceUnavailable(ToolError):
     """The invoke context names no workspace for the tool to act on."""
 
     code = "WORKSPACE_UNAVAILABLE"
+
+
+class WorkspaceReset(ToolError):
+    """The sandbox behind the workspace died; the next call gets a fresh one.
+
+    The model reads this like any tool failure: the call did not run (or its
+    outcome was lost with the sandbox), the session goes on, and what survives
+    in the new sandbox is what was saved at the end of the last turn.
+    """
+
+    code = "WORKSPACE_RESET"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            f"your workspace was reset: its sandbox stopped ({reason}), so this call did "
+            "not complete. A fresh sandbox starts with your next tool call."
+        )
+        self.reason = reason

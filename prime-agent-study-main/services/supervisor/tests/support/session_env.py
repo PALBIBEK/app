@@ -61,12 +61,17 @@ class TrackingProvider(SandboxProvider):
 
 
 class _DummySandbox(Sandbox):
-    """Tracked lifecycle (no snapshots) over a real local directory for files and commands."""
+    """Tracked lifecycle (no snapshots) over a real local directory for files and commands.
+
+    Like a real sandbox it has its own id, and it is gone once destroyed or once its
+    directory disappears (a test kills it by removing the directory).
+    """
 
     def __init__(self, base_dir: Path | None = None) -> None:
-        self._info = SandboxInfo(id="dummy", provider="tracking", supports_snapshot=True)
+        sandbox_id = f"dummy-{uuid.uuid4().hex[:8]}"
+        self._info = SandboxInfo(id=sandbox_id, provider="tracking", supports_snapshot=True)
         root = Path(tempfile.mkdtemp(prefix="sandbox-", dir=base_dir))
-        self._local = LocalProcessSandbox(root, f"dummy-{uuid.uuid4().hex[:8]}")
+        self._local = LocalProcessSandbox(root, sandbox_id)
 
     @property
     def info(self) -> SandboxInfo:
@@ -95,10 +100,13 @@ class _DummySandbox(Sandbox):
         raise SnapshotUnsupported("dummy")
 
     async def destroy(self) -> None:
-        return None
+        await self._local.destroy()
 
     async def is_alive(self) -> bool:
-        return True
+        return await self._local.is_alive()
+
+    def as_tree_io(self):  # type: ignore[no-untyped-def]
+        return self._local.as_tree_io()
 
 
 def _tools(mapping: dict[str, ToolClass]) -> dict[str, ToolSpec]:

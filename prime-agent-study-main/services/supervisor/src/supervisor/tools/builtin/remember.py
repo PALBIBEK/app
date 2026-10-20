@@ -20,7 +20,7 @@ class RememberArgs(ToolArgs):
     """Fact or note to remember"""
 
 
-@tool(tool_class=ToolClass.IDEMPOTENT)
+@tool(tool_class=ToolClass.IDEMPOTENT, needs_workspace=False)
 async def remember(args: RememberArgs, ctx: ToolContext) -> dict[str, Any]:
     """Store a durable fact in long-term memory (append-only, safe to retry).
 

@@ -21,6 +21,7 @@ import pytest
 from supervisor.agent.events import (
     BackgroundResults,
     CompactionEnd,
+    HandProvisioned,
     JobEnd,
     MemoryRecall,
     SubagentEnd,
@@ -36,12 +37,12 @@ from supervisor.catalog.core.types import (
     SandboxProviderName,
 )
 from supervisor.catalog.repository import persist_offer
+from supervisor.hands import HandWorkspace
 from supervisor.seams.compaction import SUMMARY_MARKER
 from supervisor.session.workspaces import session_workspace
 from supervisor.temporal.contracts import CreateSession, Message, job_ids
 from supervisor.temporal.steps import run_id_for
 from supervisor.temporal.worker import session_worker
-from supervisor.tools import SandboxWorkspace
 from tests.support.githi_env import FAST, WRITE, Env, payloads, run_ended
 from tests.support.scripted import ScriptedGateway
 
@@ -162,9 +163,11 @@ async def test_tools_act_in_the_pinned_sandbox(
         await env.sessions.submit(sid, Message("c1", "write a note"))
         events = await env.wait_for(state, sid, run_ended())
         runtime = state.manager._registry.get(sid)
-        sandbox = state.manager._sandboxes[sid]
+        sandbox = state.manager._hands.sandbox(sid)
 
-    assert isinstance(runtime.workspace, SandboxWorkspace)
+    assert isinstance(runtime.workspace, HandWorkspace)
+    (up,) = payloads(events, HandProvisioned)
+    assert (up.hand_id, up.cause) == (sandbox.id, "first_use")
     assert payloads(events, ToolEnd)[0].result["ok"] is True
     assert await sandbox.read_file("/workspace/notes.txt") == b"hello"
     assert not (session_workspace(sid) / "notes.txt").exists()  # never the supervisor's disk
@@ -204,7 +207,7 @@ async def test_a_resumed_session_gets_the_same_pins(
     await fresh.manager.resume(sid)
     runtime = fresh.manager._registry.get(sid)
     assert runtime.model == "echo"
-    assert isinstance(runtime.workspace, SandboxWorkspace)
+    assert isinstance(runtime.workspace, HandWorkspace)
 
 
 # --- memory -----------------------------------------------------------------------

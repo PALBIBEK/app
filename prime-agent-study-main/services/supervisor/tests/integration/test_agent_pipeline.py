@@ -137,7 +137,10 @@ async def test_session_pins_exact_digests_from_composition(pipeline: Pipeline) -
     )
     assert (pins.tool_set_id, pins.tool_set_digest) == (comp.tool_set.id, comp.tool_set.digest)
     assert pins.to_dict() == SessionPins.from_dict(pins.to_dict()).to_dict()  # lossless
-    assert pipeline.sandboxes.create_calls[-1]["image"] == MOCK_IMAGE
+    # The pinned image is the session's recipe; the sandbox waits for a tool that needs it.
+    recipe = pipeline.manager._hands.recipe(sid)
+    assert recipe is not None and recipe.image == MOCK_IMAGE
+    assert pipeline.manager._hands.sandbox(sid) is None
     # The agent persists history under this id; it must be the supervisor's, or resume loses it.
     assert pipeline.manager._registry.get(sid).session_id == sid
 

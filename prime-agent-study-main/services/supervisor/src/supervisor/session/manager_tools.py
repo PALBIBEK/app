@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +14,7 @@ from supervisor.agent.events import (
     ToolStart,
 )
 from supervisor.db.models import SessionRow
+from supervisor.hands import HandWorkspace
 from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.seams import (
     ModelGatewayClient,
@@ -20,6 +23,7 @@ from supervisor.seams import (
     ToolProvider,
     ToolResult,
 )
+from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session.errors import (
     SessionAwaitingApproval,
     SessionNotFound,
@@ -27,11 +31,82 @@ from supervisor.session.errors import (
 )
 from supervisor.session.manager_approvals import ApprovalOps
 from supervisor.session.manager_base import ToolInvokeOutcome
-from supervisor.tools import SandboxWorkspace
+from supervisor.tools import WorkspaceReset
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class HandForCall:
+    """The sandbox serving one tool call, or why there is none."""
+
+    hand_id: str | None = None
+    unavailable: ToolResult | None = None
+    """Set when the call needs a sandbox and none could be built: the call's result."""
 
 
 class ToolOps(ApprovalOps):
     """Direct tool calls, and what a session's tools may do and hold."""
+
+    async def hand_for_call(
+        self, session_id: str, name: str, provider: ToolProvider | None
+    ) -> HandForCall:
+        """Before a tool runs: a sandbox for it if it needs one, built now if none serves.
+
+        Runs on the supervisor's loop (building and hydrating touch the database);
+        the tool itself then runs on its own. A sandbox that cannot be built is the
+        model's to read (``WORKSPACE_UNAVAILABLE``), never a lost tool outcome.
+        """
+        if not needs_workspace(provider, name):
+            return HandForCall()
+        try:
+            sandbox = await self._hands.ensure(session_id)
+        except Exception as exc:
+            logger.exception("building a sandbox failed session=%s", session_id)
+            return HandForCall(
+                unavailable=ToolResult(
+                    ok=False,
+                    error=f"the session's sandbox could not be started: {exc}",
+                    code="WORKSPACE_UNAVAILABLE",
+                )
+            )
+        if (ws := self._workspace.get(session_id)) is not None:
+            self._workspace_svc.assert_ready(ws)
+        return HandForCall(hand_id=sandbox.id if sandbox is not None else None)
+
+    async def after_call(
+        self,
+        session_id: str,
+        hand: HandForCall,
+        name: str,
+        provider: ToolProvider | None,
+        result: ToolResult,
+    ) -> ToolResult:
+        """After a tool ran in a sandbox: note what it changed, or let a dead sandbox go.
+
+        A reset result is rewritten to say what the model gets back (the last
+        checkpoint) and what it must redo (processes, rebuilt folders).
+        """
+        if hand.hand_id is None:
+            return result
+        if result.code == WorkspaceReset.code:
+            await self._hands.lose(session_id, hand.hand_id, result.error or "the sandbox stopped")
+            restored = (
+                self._checkpoints.notice(session_id)
+                if self._checkpoints is not None
+                else "nothing was saved, so it starts empty (or from the session's scope)."
+            )
+            return replace(result, error=f"{result.error} In it: {restored}")
+        pure = isinstance(provider, ToolClassifier) and provider.tool_class(name) == "pure"
+        sandbox = self._hands.sandbox(session_id)
+        if self._checkpoints is not None and not pure and sandbox is not None:
+            try:
+                await self._checkpoints.observe(
+                    session_id, sandbox, processes=self._hand_isolated(session_id)
+                )
+            except Exception:
+                logger.warning("observing sandbox failed session=%s", session_id, exc_info=True)
+        return result
 
     async def tool_env(self, session_id: str) -> dict[str, str]:
         """What this turn's commands may hold: the browse runner's model access, if any.
@@ -75,11 +150,10 @@ class ToolOps(ApprovalOps):
         if (identity := self._long_term.get(session_id)) is not None:
             extra["owner"], extra["agent"] = identity
         runtime_workspace = getattr(self._registry.get(session_id), "workspace", None)
-        sandbox = self._sandboxes.get(session_id)
         if runtime_workspace is not None:
             extra["workspace"] = runtime_workspace
-        elif sandbox is not None:
-            extra["workspace"] = SandboxWorkspace(sandbox)
+        elif self._hands.recipe(session_id) is not None:
+            extra["workspace"] = HandWorkspace(lambda: self._hands.sandbox(session_id))
         if (ws := self._workspace.get(session_id)) is not None:
             extra["on_mutate"] = lambda: self._workspace_svc.mark_dirty(ws)
         return extra
@@ -96,9 +170,6 @@ class ToolOps(ApprovalOps):
         row = await self._require_active(session_id)
         if row.tenant_id != tenant_id:
             raise SessionNotFound(f"unknown session_id={session_id!r}")
-        ws = self._workspace.get(session_id)
-        if ws is not None:
-            self._workspace_svc.assert_ready(ws)
         seams = self._seams_for_session(session_id, row)
         if seams is None or seams.tool_provider is None:
             raise ToolInvokeNotConfigured(
@@ -161,6 +232,7 @@ class ToolOps(ApprovalOps):
                     f"session awaiting approval id={session_id!r} tool={name!r}"
                 )
 
+        hand = await self.hand_for_call(session_id, name, seams.tool_provider)
         ctx = ToolInvokeContext(trace_id=call_id, extra=self.tool_context(session_id, tenant_id))
         begin = await self._tool_outbox.begin(
             session_id,
@@ -174,7 +246,11 @@ class ToolOps(ApprovalOps):
 
         # Tools block (files, sandboxes, HTTP); off the loop so the worker's heartbeats
         # and every other session it holds keep running.
-        result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
+        if hand.unavailable is not None:
+            result = hand.unavailable
+        else:
+            result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
+            result = await self.after_call(session_id, hand, name, seams.tool_provider, result)
         result = await self._tool_outbox.complete(
             session_id,
             tool_call_id=call_id,
@@ -182,4 +258,6 @@ class ToolOps(ApprovalOps):
             result=result,
             trace_id=run_trace,
         )
+        # No model step follows a direct call to overlap with: save its changes now.
+        await self.checkpoint(session_id)
         return ToolInvokeOutcome(tool_call_id=call_id, result=result)

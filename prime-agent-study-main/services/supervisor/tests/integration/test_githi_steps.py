@@ -66,6 +66,7 @@ async def test_githi_turn_runs_one_activity_per_model_and_tool_call(
         "MemoryInjected",  # recall: the notebook is empty, so nothing is shown
         "MessageEnd",
         "ToolStart",
+        "HandProvisioned",  # the first tool that needs a sandbox brings one up
         "ToolEnd",
         "TurnStart",
         "MessageEnd",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from supervisor.agent.events import RunEnd
 from supervisor.db.models import SessionRow
 from supervisor.session.manager import SessionManager
 from supervisor.session.registry import SessionRegistry
+from tests.support.session_env import make_manifest
 from tests.support.waits import counted, journalled
 
 
@@ -39,6 +41,42 @@ async def test_create_requires_sandbox_false_never_calls_provider(session_env) -
     await m.terminate(sid)
 
 
+async def _githi_with_real_image(session_env) -> str:  # type: ignore[no-untyped-def]
+    """A githi harness pinning a real-looking image (the fixture's githi-v1 pins a placeholder)."""
+    digest = "sha256:" + hashlib.sha256(b"githi-image").hexdigest()
+    manifest = make_manifest("githi-real", requires_sandbox=True, image_digest=digest, runtime="githi")
+    await session_env["catalog"].register(manifest)
+    return manifest.harness_version
+
+
+@pytest.mark.asyncio
+async def test_a_githi_session_builds_its_sandbox_only_when_a_tool_needs_it(session_env) -> None:
+    m: SessionManager = session_env["manager"]
+    provider = session_env["provider"]
+    harness = await _githi_with_real_image(session_env)
+    sid = await m.create(tenant_id="t1", harness_version=harness, runtime_name="githi")
+    assert provider.create_calls == [], "the recipe is resolved, the sandbox is not built"
+    assert m._hands.recipe(sid) is not None and m._hands.sandbox(sid) is None
+    await m.terminate(sid)
+
+
+@pytest.mark.asyncio
+async def test_a_config_that_could_never_get_a_sandbox_is_refused_at_create(
+    session_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    m: SessionManager = session_env["manager"]
+    provider = session_env["provider"]
+
+    async def unreachable(*, image: str | None = None) -> None:
+        raise ConnectionError("Error while fetching server API version")
+
+    monkeypatch.setattr(provider, "preflight", unreachable)
+    harness = await _githi_with_real_image(session_env)
+    with pytest.raises(ConnectionError):
+        await m.create(
+            tenant_id="t1", harness_version=harness, runtime_name="githi", session_id="doomed"
+        )
+    assert "doomed" not in m._hands and provider.create_calls == [], "nothing is left behind"
 
 
 @pytest.mark.asyncio

@@ -565,6 +565,26 @@ class LocalDockerProvider(SandboxProvider):
             self._client = self._docker_mod.from_env()
         return self._client
 
+    async def preflight(self, *, image: str | None = None) -> None:
+        """The daemon answers and ``image`` resolves (locally, else its registry manifest)."""
+        if not image:
+            raise ValueError("local_docker requires image digest")
+        client = self._ensure_client()
+
+        def _check() -> None:
+            client.ping()
+            try:
+                client.images.get(image)
+            except self._docker_errors().ImageNotFound:
+                client.images.get_registry_data(image)  # a manifest lookup, no layers pulled
+
+        await asyncio.to_thread(_check)
+
+    def _docker_errors(self) -> Any:
+        import docker.errors  # type: ignore[import-untyped]
+
+        return docker.errors
+
     async def create(
         self,
         *,

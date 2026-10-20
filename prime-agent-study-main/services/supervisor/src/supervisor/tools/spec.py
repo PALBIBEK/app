@@ -86,6 +86,9 @@ class ToolSpec[ArgsT: BaseModel]:
     args_model: type[ArgsT]
     handler: Handler[ArgsT]
     tool_class: ToolClass
+    needs_workspace: bool = True
+    """Whether a call acts on the session's files or shell, so a sandbox must exist
+    before it runs. Implementation metadata only: not part of the published body."""
 
     @classmethod
     def from_handler(
@@ -94,6 +97,7 @@ class ToolSpec[ArgsT: BaseModel]:
         *,
         name: str | None = None,
         tool_class: ToolClass,
+        needs_workspace: bool = True,
     ) -> ToolSpec[ArgsT]:
         """Derive a spec from a handler's signature and docstring; reject malformed ones."""
         qualname = getattr(handler, "__qualname__", repr(handler))
@@ -116,6 +120,7 @@ class ToolSpec[ArgsT: BaseModel]:
             args_model=cast("type[ArgsT]", args_model),
             handler=handler,
             tool_class=ToolClass(tool_class),
+            needs_workspace=needs_workspace,
         )
 
     @property

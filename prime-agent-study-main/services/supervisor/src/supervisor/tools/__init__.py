@@ -21,6 +21,7 @@ from supervisor.tools.errors import (
     ToolTimeout,
     UnknownTools,
     UnsupportedCapability,
+    WorkspaceReset,
     WorkspaceUnavailable,
 )
 from supervisor.tools.registry import ToolRegistry, default_registry, tool
@@ -55,6 +56,7 @@ __all__ = [
     "UnknownTools",
     "UnsupportedCapability",
     "Workspace",
+    "WorkspaceReset",
     "WorkspaceUnavailable",
     "default_registry",
     "json_schema",

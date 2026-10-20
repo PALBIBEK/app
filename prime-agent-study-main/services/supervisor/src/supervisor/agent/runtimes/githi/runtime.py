@@ -70,6 +70,10 @@ class GithiRuntime:
         """Where tools act: the pinned sandbox, else the session's host directory."""
         return self._workspace
 
+    def set_workspace(self, workspace: Workspace) -> None:
+        """Act in ``workspace`` from now on: the session's sandbox, built on first use."""
+        self._workspace = workspace
+
     def set_on_mutate(self, callback: Callable[[], None]) -> None:
         """Called whenever a tool changes the workspace (drives workspace sync)."""
         self._on_mutate = callback

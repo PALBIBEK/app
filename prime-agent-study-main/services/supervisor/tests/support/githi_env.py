@@ -66,8 +66,9 @@ class Env:
     sessions: SessionWorkflows
     factory: object
 
-    async def state(self) -> SupervisorState:
-        state, _ = await boot_platform(self.factory, self.blob_dir)  # type: ignore[arg-type]
+    async def state(self, **options: Any) -> SupervisorState:
+        """A supervisor process; ``options`` go to ``boot_platform`` (a workspace store)."""
+        state, _ = await boot_platform(self.factory, self.blob_dir, **options)  # type: ignore[arg-type]
         return state
 
     async def create(
