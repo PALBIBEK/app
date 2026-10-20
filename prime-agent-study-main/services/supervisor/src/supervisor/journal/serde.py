@@ -13,6 +13,7 @@ Key design decisions:
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import Any, TypeVar
 
 from supervisor.agent.events import (
@@ -44,6 +45,7 @@ from supervisor.agent.events import (
     Usage,
 )
 
+logger = logging.getLogger(__name__)
 
 class SerializationError(Exception):
     """Failed to serialize an AgentEvent."""
@@ -209,12 +211,21 @@ def _construct_event[T: AgentEvent](event_cls: type[T], payload: dict[str, Any])
     Returns:
         Constructed event instance.
     """
+    # Fields this build does not know were written by a newer one (a rolling deploy:
+    # new workers journal before old API replicas are replaced). Ignore them rather
+    # than fail every read of the session; a missing required field still fails.
+    known = {f.name for f in dataclasses.fields(event_cls)}  # type: ignore[arg-type]
+    if unknown := set(payload) - known:
+        payload = {k: v for k, v in payload.items() if k in known}
+        logger.debug("ignoring %s fields unknown to this build: %s", event_cls.__name__, sorted(unknown))
+
     # Handle MessageEnd.usage specially (nested dataclass)
     if event_cls is MessageEnd:
         usage_data = payload.get("usage")
         if usage_data is not None and isinstance(usage_data, dict):
             payload = dict(payload)
-            payload["usage"] = Usage(**usage_data)
+            usage_known = {f.name for f in dataclasses.fields(Usage)}
+            payload["usage"] = Usage(**{k: v for k, v in usage_data.items() if k in usage_known})
 
     return event_cls(**payload)  # type: ignore[return-value]
 

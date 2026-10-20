@@ -430,6 +430,11 @@ harness are gone.
   `replaced_from_seq`/`replaced_to_seq`; the range is found from where the kept
   tail starts in the journal (the whole carried-over journal when it cannot be
   found, still a correct pointer).
+- **Found on the live stack: a newer event broke older readers.** A worker on
+  the new code journalled `CompactionEnd` with its new fields; an API process on
+  the older code could not decode it and cut the session's event stream. In a
+  rolling deploy that is the normal state, so reading now ignores fields this
+  build does not know (a missing required field still fails).
 - **Gate test:** a turn writes and reads a file; the next turn is compacted, the
   file's text is no longer in the model's context, and the model reopens the
   read's result from the cited range, verbatim; every history of the test

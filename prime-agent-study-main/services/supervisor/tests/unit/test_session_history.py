@@ -62,3 +62,12 @@ def test_a_compaction_names_the_entries_before_the_kept_tail() -> None:
     assert _replaced_range(EVENTS, tail) == (1, 3)
     assert _replaced_range(EVENTS, [{"role": "user", "content": "unseen"}]) == (1, 6)  # all of it
     assert _replaced_range(_journal(TurnStart()), tail) is None
+
+
+def test_an_event_from_a_newer_build_still_reads() -> None:
+    """A rolling deploy: a new worker journals a field this build lacks; the read must not fail."""
+    from supervisor.agent.events import CompactionEnd
+    from supervisor.journal.serde import decode_event, encode_event
+
+    stored = encode_event(CompactionEnd(compaction_id="c", stop_reason="ok")) | {"added_later": 1}
+    assert decode_event(stored) == CompactionEnd(compaction_id="c", stop_reason="ok")
