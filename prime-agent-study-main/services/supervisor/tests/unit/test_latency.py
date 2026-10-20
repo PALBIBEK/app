@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,16 +29,19 @@ def test_ttft_is_start_to_first_assistant_answer_per_run() -> None:
 async def test_recent_ttft_reads_the_journal(
     tmp_path: Path, memory_db: async_sessionmaker[AsyncSession]
 ) -> None:
+    # The Postgres test database is shared: unique ids, and the newest timestamps,
+    # so the most recent window is exactly this test's runs.
     writer = JournalWriter(memory_db, blob_dir=tmp_path)
+    t0 = 4_000_000_000_000 + uuid4().int % 1_000_000
     async with memory_db() as db:
-        for i, delay in enumerate((100, 200, 300, 400, 5_000)):
-            sid = f"s{i}"
+        for delay in (100, 200, 300, 400, 5_000):
+            sid = uuid4().hex
             await writer.ensure_session(sid)
             for seq, (kind, payload, ts) in enumerate(
                 [
-                    ("RunStart", {}, 1_000),
-                    ("ToolStart", {"tool_name": "ls"}, 1_001),
-                    ("MessageEnd", {"role": "assistant"}, 1_000 + delay),
+                    ("RunStart", {}, t0),
+                    ("ToolStart", {"tool_name": "ls"}, t0 + 1),
+                    ("MessageEnd", {"role": "assistant"}, t0 + delay),
                 ]
             ):
                 db.add(
@@ -52,5 +56,5 @@ async def test_recent_ttft_reads_the_journal(
                     )
                 )
         await db.commit()
-        got = await recent_ttft(db)
+        got = await recent_ttft(db, events=10)  # 5 runs: a start and an answer each
     assert (got.runs, got.p50_ms, got.p95_ms) == (5, 300, 5_000)

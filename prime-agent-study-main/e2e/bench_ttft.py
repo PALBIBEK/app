@@ -4,9 +4,11 @@
 
 (``fx-full`` is the local_process composition stage 4 publishes for tenant t1.)
 
-Creates sessions on a githi composition, sends one message each, and reads every
-run's TTFT from its journal: ``run_start`` to the first assistant ``message_end``
-(the same measure as the supervisor's /metrics). Run it before and after a
+Creates sessions on a githi composition, sends one message each, and reports two
+times: **start → first token**, from the create request to the first assistant
+``message_end`` (what a new session's user waits; the article's measure, since a
+sandbox used to be built at create), and **run → first token**, from the run's
+``run_start`` (the supervisor's /metrics measure). Run it before and after a
 change, on the same stack, to compare. With the local_process provider a sandbox
 costs a directory; with Docker or E2B it costs a container boot, which is what
 lazy provisioning takes off a chat-only turn.
@@ -33,12 +35,19 @@ def ttft(evs: list[dict]) -> int | None:
     return answer - start if start is not None and answer is not None else None
 
 
-def one(composition: tuple[str, str], text: str) -> int | None:
+def one(composition: tuple[str, str], text: str) -> tuple[int, int] | None:
+    began = int(time.time() * 1000)
     r = user.create(*composition)
     assert r.status_code == 201, (r.status_code, r.text[:200])
     sid = r.json()["session_id"]
     assert user.say(sid, text).status_code == 202
-    return ttft(user.wait(sid, runs_ended(1), timeout=120))
+    evs = user.wait(sid, runs_ended(1), timeout=120)
+    run = ttft(evs)
+    answer = next(
+        (e["ts_ms"] for e in evs if e["type"] == "message_end" and e["data"].get("role") == "assistant"),
+        None,
+    )
+    return (answer - began, run) if run is not None and answer is not None else None
 
 
 def pct(values: list[int], q: float) -> int:
@@ -54,8 +63,12 @@ def main() -> None:
         started = time.time()
         with ThreadPoolExecutor(max_workers=5) as pool:
             got = [v for v in pool.map(one, [composition] * n, [text] * n) if v is not None]
+        start = [g[0] for g in got]
+        run = [g[1] for g in got]
         print(
-            f"{label:10} runs={len(got):3}  p50={pct(got, 0.5):6} ms  p95={pct(got, 0.95):6} ms"
+            f"{label:10} runs={len(got):3}"
+            f"  start→token p50={pct(start, 0.5):5} p95={pct(start, 0.95):5} ms"
+            f"  run→token p50={pct(run, 0.5):5} p95={pct(run, 0.95):5} ms"
             f"  ({time.time() - started:.0f}s)"
         )
 

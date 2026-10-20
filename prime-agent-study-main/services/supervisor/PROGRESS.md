@@ -310,6 +310,51 @@ The full report, with every finding (F1–F35) and the fix plan, is the
   quotas and rate limits; a journal that is contiguous, persisted 1:1 and
   gap-free on reconnect.
 
+### 15. Brain and hands, Phase 1: sandboxes are cattle
+The plan is the doc "Brain–Hands Decoupling Plan", built from Anthropic's
+[Scaling Managed Agents: Decoupling the brain from the hands](https://anthropic.com/engineering/managed-agents).
+Phase 1 (workstreams BH1–BH3, part of BH9) is on `feat/bh-phase1-hands`.
+- **One owner for a session's sandbox** (`supervisor/hands`): a recipe (pinned
+  provider, image, labels) resolved and checked at create; the sandbox built on
+  the first tool call that needs one; adopted on resume if a dead worker left
+  it alive (F21); let go when it dies; replaced by the next call.
+- **Lazy provisioning.** Tools declare `needs_workspace` (`echo` and `remember`
+  don't); a turn that runs none builds no sandbox. A provider `preflight`
+  (Docker: daemon reachable, image resolvable, nothing pulled) still refuses at
+  create a config that could never get one.
+- **A dead sandbox is a tool result.** Any failure in a sandbox that is no
+  longer alive becomes `WORKSPACE_RESET` for that call; the model is told what
+  comes back and what doesn't; the session continues. Building one that fails
+  is `WORKSPACE_UNAVAILABLE`, never a lost tool outcome.
+- **Change-aware checkpoints, Crab-style** (Semantics-Aware Checkpoint/Restore
+  for agent sandboxes), portable to every provider:
+  - after each tool that can change files, one command lists every file's size
+    and modification time and, in containers, the running processes;
+  - during each model step, alongside the model call, only the changed files
+    go to the session's own checkpoint scope in the workspace store; removed
+    ones are deleted there; nothing happens when nothing changed; the next tool
+    waits for the save (direct API calls are checkpointed right after);
+  - a replacement sandbox is restored from the last checkpoint; processes and
+    rebuilt folders (`node_modules`, `.venv`, caches) are not, and the model is
+    told which.
+- **Journal:** `HandProvisioned` (first_use, replaced, adopted, eager),
+  `HandCheckpointed`, `HandLost`: which sandbox served each call, and why each
+  one ended.
+- **TTFT** read from the journal (`obs/latency`, in `/metrics`), plus
+  `e2e/bench_ttft.py`. On the local stack (local_process sandboxes: a
+  directory each) lazy provisioning changes nothing measurable: start-to-first-
+  token p50 was about 1.3 to 1.7 s before and after, within noise. The saving
+  the article reports comes from not booting a container at create; it has not
+  been measured here (no Docker).
+- **Found and fixed on the live stack:** a Docker-pinned session was created
+  without Docker (now refused by preflight); a scoped session's first message
+  was refused as "workspace not ready" before any sandbox existed.
+- Tests: unit (hands, fingerprints, checkpoints and restore over real local
+  sandboxes, TTFT on SQLite and Postgres, preflight refusal), Temporal
+  integration (no sandbox for a chat turn; a sandbox killed between turns is
+  replaced with its file restored), and e2e stage 4 section F. Supervisor
+  suite 839 passing.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
@@ -340,6 +385,22 @@ Open:
   `/readyz` requires Temporal, so the staging supervisors would never report
   healthy. The root `docker-compose.yml` is complete (CI's compose smoke runs
   it). Neither manifest has been run here (no Docker or cluster).
+- **Brain and hands (Phase 1 limits).**
+  - Change detection reads modification times at one-second resolution: a file
+    rewritten twice in one second to the same size is not seen as changed.
+  - Processes are recorded, not restored (no memory snapshots; E2B and CRIU
+    could later), and not observed at all in local_process sandboxes, which
+    share the host's `/proc`.
+  - Checkpoint scopes are never deleted (no retention policy yet).
+  - Checkpoint state is per worker: after a takeover the first checkpoint
+    uploads every file again.
+  - A lost sandbox's own logs are not kept (BH9's log capture is not done).
+  - The TTFT gain is unmeasured where it matters (Docker, E2B).
+  - Model steps and tool steps still share the session's sticky worker
+    (Phase 2, BH4).
+- **An import cycle:** importing `supervisor.seams.providers` before
+  `supervisor.main` fails (seams.services ↔ sandbox.providers); it predates this
+  work and only bites a script that imports in that order.
 - **Continuable subagents** (`start_continuable`, child messages) still hold
   live state in the provider. No built-in provider supports them except ACP,
   whose state lives on the remote server.
@@ -511,6 +572,9 @@ The first is the one that matters for shipping.
 
 ## Next step
 
+0. **Brain and hands, Phase 2** (BH4 brain on any worker, BH5 credentials out of
+   the hands), then Phase 3 (BH6 Pi harness loop on the worker, BH7 the
+   session as a context object) and Phase 4 (BH8 many hands).
 1. **Deployable beyond compose:** add Temporal (or Temporal Cloud settings) and
    `supervisor-worker` to `deploy/staging/` and `deploy/k8s/`, mirroring
    `docker-compose.yml`, and run the staging stack in CI the way compose smoke
