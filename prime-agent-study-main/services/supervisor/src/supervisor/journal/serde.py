@@ -24,6 +24,7 @@ from supervisor.agent.events import (
     CompactionEnd,
     CompactionStart,
     ErrorEvent,
+    ContextCleared,
     HandCheckpointed,
     HandLost,
     HandProvisioned,
@@ -90,6 +91,7 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "BackgroundResults": BackgroundResults,
     "HandProvisioned": HandProvisioned,
     "HandCheckpointed": HandCheckpointed,
+    "ContextCleared": ContextCleared,
     "HandLost": HandLost,
 }
 

@@ -24,7 +24,7 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from supervisor.agent.events import (
     CompactionEnd,
@@ -166,19 +166,33 @@ class PinnedContextMemory:
 
     # --- compaction ----------------------------------------------------------------
 
+    async def budget(self, session_id: str) -> tuple[int, int] | None:
+        """(window, limit) each model call is kept under; ``None`` when the profile manages no context."""
+        binding = await self._binding(session_id)
+        if binding is None or not binding.profile.compaction_enabled:
+            return None
+        window = await binding.context_window()
+        return window, binding.limit(window)
+
     async def compact(
         self,
         session_id: str,
         run_id: str,
         prior: list[dict[str, Any]],
         events: Sequence[Envelope] = (),
+        *,
+        overflow: str | None = None,
     ) -> None:
         """Compact the conversation carried into this run, if the profile's limit is passed.
 
         ``events``: the journal the audience may see. The summary names the entries
         it replaced, so the model can reopen any of them verbatim with ``history``.
+        ``overflow``: compact in the middle of the run, whatever the estimate, once
+        per key (a retried step finds it done): the next call would not fit even
+        with old tool results cleared.
         """
-        if await self._keyed(session_id, run_id, "compaction:end") is not None:
+        key = "compaction" if overflow is None else f"overflow:{overflow}"
+        if await self._keyed(session_id, run_id, f"{key}:end") is not None:
             return
         binding = await self._binding(session_id)
         if binding is None or not binding.profile.compaction_enabled:
@@ -188,21 +202,22 @@ class PinnedContextMemory:
         # the last call includes all of it, so the larger of the two decides.
         tokens = max(binding.memory.estimate_tokens(prior), _reported_tokens(events, binding.memory))
         window = await binding.context_window()
-        if tokens <= binding.limit(window):
+        if overflow is None and tokens <= binding.limit(window):
             return
         tail = _recent(prior, binding.keep_recent(window), binding.memory)
         head = prior[: len(prior) - len(tail)]
         if not head:
             return
 
-        compaction_id = f"cmp-{run_id[:12]}"
+        reason = "threshold" if overflow is None else "overflow"
+        compaction_id = f"cmp-{run_id[:12]}" if overflow is None else f"cmp-{run_id[:8]}-{overflow}"
         await self._record(
             session_id,
             run_id,
-            "compaction:start",
+            f"{key}:start",
             CompactionStart(
                 compaction_id=compaction_id,
-                reason="threshold",
+                reason=reason,
                 tokens_before=tokens,
                 first_kept_entry_id=str(len(head)),
             ),
@@ -216,8 +231,8 @@ class PinnedContextMemory:
             reserve_tokens=binding.reserve(window),
         )
         replaced = _replaced_range([e for e in events if e.turn_id != run_id], tail)
-        end = await self._summarise(compaction_id, binding, preparation, tail, replaced)
-        await self._record(session_id, run_id, "compaction:end", end)
+        end = await self._summarise(compaction_id, binding, preparation, tail, replaced, reason=reason)
+        await self._record(session_id, run_id, f"{key}:end", end)
 
     @staticmethod
     async def _summarise(
@@ -226,10 +241,12 @@ class PinnedContextMemory:
         preparation: CompactionPreparation,
         tail: list[dict[str, Any]],
         replaced: tuple[int, int] | None = None,
+        *,
+        reason: Literal["threshold", "overflow"] = "threshold",
     ) -> CompactionEnd:
         try:
             decision = await asyncio.to_thread(
-                binding.memory.before_compact, binding.context, preparation, reason="threshold"
+                binding.memory.before_compact, binding.context, preparation, reason=reason
             )
         except Exception:  # noqa: BLE001 — a failed summary leaves the turn uncompacted, not failed
             return CompactionEnd(compaction_id=compaction_id, stop_reason="error")

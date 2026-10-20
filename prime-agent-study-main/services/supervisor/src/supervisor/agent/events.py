@@ -331,6 +331,22 @@ class HandLost:
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 
+@dataclass(frozen=True)
+class ContextCleared:
+    """Older tool results were cleared from what the model is shown, to stay in its window.
+
+    The journal keeps every result in full: the model reopens one verbatim with the
+    ``history`` tool (``call_id``). ``truncated``: the newest result, shortened to fit.
+    """
+
+    step: int
+    call_ids: list[str]
+    tokens_before: int
+    tokens_after: int
+    truncated: str | None = None
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
 # ── Meta Events ────────────────────────────────────────────────────────────────
 
 
@@ -373,6 +389,7 @@ AgentEvent = (
     | BackgroundResults
     | HandProvisioned
     | HandCheckpointed
+    | ContextCleared
     | HandLost
     | Settled
     | ErrorEvent
