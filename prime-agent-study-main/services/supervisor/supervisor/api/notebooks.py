@@ -29,6 +29,8 @@ from supervisor.api.schemas import (
     RevisionOut,
 )
 from supervisor.memory.cross import search_across
+from supervisor.memory.platform import MemoryPlatform
+from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
@@ -36,8 +38,6 @@ from supervisor.memory_service.notebooks.errors import (
     NotebookNotFound,
     RevisionConflict,
 )
-from supervisor.memory.platform import MemoryPlatform
-from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.types import Edit, Fact, Notebook
 from supervisor.seams.services import Principal
 

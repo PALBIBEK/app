@@ -39,13 +39,14 @@ from supervisor.memory_service.notebooks.models import (
     FactRow,
     NotebookRow,
 )
-from supervisor.memory_service.notebooks.types import notebook_id, (
+from supervisor.memory_service.notebooks.types import (
     Fact,
     Notebook,
     NotebookStats,
     Provenance,
     Revision,
     Sensitivity,
+    notebook_id,
     personal_source,
 )
 

@@ -12,8 +12,8 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from supervisor.memory_service.notebooks.render import fact_line
 from supervisor.memory.service import MemoryService
+from supervisor.memory_service.notebooks.render import fact_line
 from supervisor.memory_service.notebooks.types import RECALL_MAX_CHARS, Provenance, RecallContext
 
 

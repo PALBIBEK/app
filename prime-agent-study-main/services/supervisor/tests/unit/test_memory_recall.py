@@ -16,7 +16,12 @@ from supervisor.memory.service import CaptureContext, NotebookMemory
 from supervisor.memory.store import NotebookStore
 from supervisor.memory.tools import TurnMemory
 from supervisor.memory.turn import dependencies, memory_section, recall_query
-from supervisor.memory_service.notebooks.types import UNTRACKED, Provenance, RecallContext, Sensitivity
+from supervisor.memory_service.notebooks.types import (
+    UNTRACKED,
+    Provenance,
+    RecallContext,
+    Sensitivity,
+)
 
 pytestmark = pytest.mark.asyncio
 Factory = async_sessionmaker[AsyncSession]

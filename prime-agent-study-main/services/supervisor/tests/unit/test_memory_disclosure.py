@@ -7,10 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory.classification import ClassifiedMemory
 from supervisor.memory.disclosure import Audience, DisclosedMemory
-from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
 from supervisor.memory.service import CaptureContext, NotebookMemory
 from supervisor.memory.store import NotebookStore
-from supervisor.memory_service.notebooks.types import Edit, Provenance, Sensitivity, personal_source, scope_source
+from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
+from supervisor.memory_service.notebooks.types import (
+    Edit,
+    Provenance,
+    Sensitivity,
+    personal_source,
+    scope_source,
+)
 
 pytestmark = pytest.mark.asyncio
 

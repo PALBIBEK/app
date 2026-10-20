@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol, runtime_checkable
 
+from supervisor.memory.store import FactTx, NotebookStore
 from supervisor.memory_service.notebooks.errors import MemoryFactsMissing
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
@@ -22,7 +23,6 @@ from supervisor.memory_service.notebooks.render import (
     recent_candidates,
     render_facts,
 )
-from supervisor.memory.store import FactTx, NotebookStore
 from supervisor.memory_service.notebooks.types import (
     Candidate,
     CaptureMetadata,

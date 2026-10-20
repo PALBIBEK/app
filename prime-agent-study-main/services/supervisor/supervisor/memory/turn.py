@@ -39,7 +39,12 @@ from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
-from supervisor.memory_service.notebooks.types import UNTRACKED, Provenance, RecallContext, personal_source
+from supervisor.memory_service.notebooks.types import (
+    UNTRACKED,
+    Provenance,
+    RecallContext,
+    personal_source,
+)
 
 logger = logging.getLogger(__name__)
 

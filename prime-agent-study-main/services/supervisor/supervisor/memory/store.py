@@ -20,8 +20,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import MemoryFactRevisionRow, MemoryFactRow, MemoryNotebookRow
-from supervisor.memory_service.notebooks.errors import NotebookExists, NotebookNotFound, RevisionConflict
-from supervisor.memory_service.notebooks.types import Fact, Notebook, NotebookStats, Provenance, Revision, Sensitivity
+from supervisor.memory_service.notebooks.errors import (
+    NotebookExists,
+    NotebookNotFound,
+    RevisionConflict,
+)
+from supervisor.memory_service.notebooks.types import (
+    Fact,
+    Notebook,
+    NotebookStats,
+    Provenance,
+    Revision,
+    Sensitivity,
+)
 
 
 def now_ms() -> int:
