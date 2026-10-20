@@ -17,6 +17,8 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.worker import Replayer
 
 from supervisor.agent.events import (
     BackgroundResults,
@@ -41,10 +43,13 @@ from supervisor.hands import HandWorkspace
 from supervisor.seams.compaction import SUMMARY_MARKER
 from supervisor.session.workspaces import session_workspace
 from supervisor.temporal.contracts import CreateSession, Message, job_ids
+from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.steps import run_id_for
 from supervisor.temporal.worker import session_worker
+from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import FAST, WRITE, Env, payloads, run_ended
 from tests.support.scripted import ScriptedGateway
+from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -237,6 +242,50 @@ async def test_the_conversation_is_compacted_by_the_pinned_profile(
     texts = [m.content for m in second]
     assert not any(long.strip() in t for t in texts)  # the long turn was summarised away
     assert any(t.startswith(SUMMARY_MARKER) for t in texts)
+
+
+async def test_after_a_compaction_the_model_reopens_a_tool_output_verbatim(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """BH7: compaction is never the only copy. The summary names the journal range it
+    replaced, and ``history`` returns a tool result from inside it, verbatim."""
+    marker = "".join(f"line {n}: the quick brown fox {n * 7919 % 1000}\n" for n in range(60))
+    gateway = model(("write", {"path": "notes.txt", "content": marker}), ("read", {"path": "notes.txt"}))
+    calls = recording(gateway)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(
+            env,
+            state,
+            memory={"context_window": 2_000, "reserve_tokens": 100, "keep_recent_tokens": 50},
+        )
+        await env.sessions.submit(sid, Message("c1", "keep this file: " + "lorem ipsum " * 600))
+        first = await env.wait_for(state, sid, run_ended(1))
+        read = next(e for e in first if isinstance(e.payload, ToolEnd) and e.payload.tool_name == "read")
+        assert read.payload.result["payload"] == marker
+
+        gateway.calls = [("history", {"seq": read.seq})]
+        await env.sessions.submit(sid, Message("c2", "what was in that file?"))
+        events = await env.wait_for(state, sid, run_ended(2))
+
+    end = payloads(events, CompactionEnd)[-1]
+    assert end.stop_reason == "ok"
+    assert end.replaced_from_seq is not None and end.replaced_to_seq is not None
+    assert end.replaced_from_seq <= read.seq <= end.replaced_to_seq
+    # The model was shown the summary, with the range it can reopen ...
+    shown = [m.content for m in calls[-2].messages]
+    assert any(f"#{end.replaced_from_seq}–#{end.replaced_to_seq}" in t for t in shown)
+    assert not any(marker in t for t in shown), "the tool output was still in context"
+    # ... and reopened the tool output from it, verbatim.
+    reopened = payloads(events, ToolEnd)[-1]
+    assert reopened.tool_name == "history" and not reopened.is_error
+    assert reopened.result["payload"].endswith(f"read [call-0-1]\n{marker}")
+    # Replay stays deterministic: the history read is a journalled tool result.
+    replayer = Replayer(workflows=[AgentSessionWorkflow, SubagentJobWorkflow], data_converter=pydantic_data_converter)
+    query = f"WorkflowType = 'AgentSession' AND TaskQueue = '{env.queue}'"
+    async for history in replayable_histories(env.client, query):
+        result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
+        assert result.replay_failure is None, result.replay_failure
 
 
 @pytest.mark.parametrize(

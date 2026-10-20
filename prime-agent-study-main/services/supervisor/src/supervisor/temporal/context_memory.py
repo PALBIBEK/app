@@ -22,12 +22,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
+from supervisor.agent.events import (
+    CompactionEnd,
+    CompactionStart,
+    Envelope,
+    MemoryRecall,
+    MessageEnd,
+    ToolEnd,
+    ToolStart,
+)
 from supervisor.memory.binding import long_term_agent
+from supervisor.memory.history import message_text
 from supervisor.seams import CompactionPreparation, MemoryInvokeContext, ModelCatalog
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
@@ -131,8 +140,18 @@ class PinnedContextMemory:
 
     # --- compaction ----------------------------------------------------------------
 
-    async def compact(self, session_id: str, run_id: str, prior: list[dict[str, Any]]) -> None:
-        """Compact the conversation carried into this run, if the profile's limit is passed."""
+    async def compact(
+        self,
+        session_id: str,
+        run_id: str,
+        prior: list[dict[str, Any]],
+        events: Sequence[Envelope] = (),
+    ) -> None:
+        """Compact the conversation carried into this run, if the profile's limit is passed.
+
+        ``events``: the journal the audience may see. The summary names the entries
+        it replaced, so the model can reopen any of them verbatim with ``history``.
+        """
         if await self._keyed(session_id, run_id, "compaction:end") is not None:
             return
         binding = await self._binding(session_id)
@@ -167,7 +186,8 @@ class PinnedContextMemory:
             context_window=window,
             reserve_tokens=binding.reserve(window),
         )
-        end = await self._summarise(compaction_id, binding, preparation, tail)
+        replaced = _replaced_range([e for e in events if e.turn_id != run_id], tail)
+        end = await self._summarise(compaction_id, binding, preparation, tail, replaced)
         await self._record(session_id, run_id, "compaction:end", end)
 
     @staticmethod
@@ -176,6 +196,7 @@ class PinnedContextMemory:
         binding: _Binding,
         preparation: CompactionPreparation,
         tail: list[dict[str, Any]],
+        replaced: tuple[int, int] | None = None,
     ) -> CompactionEnd:
         try:
             decision = await asyncio.to_thread(
@@ -192,6 +213,8 @@ class PinnedContextMemory:
             if decision.action == "custom" and decision.result is not None
             else COMPACTION_NOTICE
         )
+        if replaced is not None:
+            summary = f"{summary}\n\n{_citation(*replaced)}"
         compacted = [{"role": "user", "content": summary}, *tail]
         return CompactionEnd(
             compaction_id=compaction_id,
@@ -199,6 +222,8 @@ class PinnedContextMemory:
             tokens_after=binding.memory.estimate_tokens(compacted),
             summary_digest=hashlib.sha256(summary.encode()).hexdigest()[:32],
             messages=compacted,
+            replaced_from_seq=replaced[0] if replaced is not None else None,
+            replaced_to_seq=replaced[1] if replaced is not None else None,
         )
 
     # --- recall ------------------------------------------------------------------------
@@ -232,6 +257,46 @@ class PinnedContextMemory:
                 text=text or None,
             ),
         )
+
+
+def _citation(first: int, last: int) -> str:
+    return (
+        f"[This summary stands in for journal entries #{first}–#{last}, which are kept verbatim. "
+        f"Reopen any of them with the `history` tool: `seq` for one entry, `from_seq`={first} and "
+        f"`to_seq`={last} for the range, `call_id` for a tool call with its result.]"
+    )
+
+
+def _text(message: Mapping[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def _replaced_range(before: Sequence[Envelope], tail: list[dict[str, Any]]) -> tuple[int, int] | None:
+    """The seqs of the entries the summarised head came from: up to where the kept tail starts.
+
+    The tail is found by its first message's role and text, newest match first; if
+    it cannot be found the whole carried-over journal is named (an over-wide range
+    is still a correct pointer: everything in it is readable).
+    """
+    entries = [e for e in before if isinstance(e.payload, (MessageEnd, ToolStart, ToolEnd))]
+    if not entries:
+        return None
+    first, last = entries[0].seq, entries[-1].seq
+    if tail:
+        role, text = tail[0].get("role"), _text(tail[0]).strip()
+        for envelope in reversed(entries):
+            event = envelope.payload
+            if isinstance(event, MessageEnd) and event.role == role and message_text(event).strip() == text:
+                last = envelope.seq - 1
+                break
+    return (first, last) if last >= first else None
 
 
 def _recent(

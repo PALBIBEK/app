@@ -230,7 +230,12 @@ class GithiSteps:
         await self._memory.checkpoint(session_id, run_id, self._record)
         # Between turns: compact what this run carries over, per the pinned memory profile.
         await heartbeating(
-            self._pinned.compact(session_id, run_id, await self._memory.prior_history(session_id))
+            self._pinned.compact(
+                session_id,
+                run_id,
+                await self._memory.prior_history(session_id),
+                await self._memory.bounded(session_id),
+            )
         )
         await self._announce_background(session_id, run_id)
         guards = (await self._manifest(session_id)).guards

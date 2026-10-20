@@ -413,6 +413,29 @@ harness are gone.
   skips, with a warning, any stored version it cannot load.
 - Supervisor suite: 804 passing (the Pi-only tests are gone).
 
+### 18. Brain and hands, Phase 3: the session is githi's context object (BH7)
+- **The journal is what the model reads, not only its window.** githi's
+  `history` tool, which searched the transcript and opened a message or tool
+  call, now also:
+  - opens a **tool result** by its seq, verbatim (a text result as the tool
+    returned it, up to 20,000 characters with the middle of a longer one
+    elided); search still leaves results out, as in QM;
+  - reads a **range** (`from_seq`, optional `to_seq`), oldest first, each entry
+    clipped with a pointer to all of it, at most 50 entries or 20,000
+    characters, saying where to continue;
+  - returns **one tool call with its result** (`call_id`).
+  Like search, it reads only what the audience may see (after the cutoff).
+- **A compaction cites what it replaced.** Its summary ends with the journal
+  range it stands in for and how to reopen it, and `CompactionEnd` records
+  `replaced_from_seq`/`replaced_to_seq`; the range is found from where the kept
+  tail starts in the journal (the whole carried-over journal when it cannot be
+  found, still a correct pointer).
+- **Gate test:** a turn writes and reads a file; the next turn is compacted, the
+  file's text is no longer in the model's context, and the model reopens the
+  read's result from the cited range, verbatim; every history of the test
+  replays deterministically. Unit tests cover search, opening, slices and their
+  bounds, calls, and the cited range.
+
 ### Where it stands now
 - **Every session is durable by default,** whatever seams it was composed
   from:
