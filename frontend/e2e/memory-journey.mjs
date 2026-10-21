@@ -3,13 +3,13 @@
 //   npm i --no-save playwright && node e2e/memory-journey.mjs
 //   (CHROME=/path/to/chrome for an installed browser; BASE_URL, API_URL, DEMO_EMAIL, DEMO_PASSWORD to override)
 import { chromium } from 'playwright';
-const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
+import { BASE, EMAIL, PASSWORD } from './lib.mjs';
 const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 const p = await (await b.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
 p.on('dialog', (d) => d.accept());
 await p.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 180000 });
-await p.fill('input[type=email]', (process.env.DEMO_EMAIL ?? 'demo@example.com'));
-await p.fill('input[type=password]', (process.env.DEMO_PASSWORD ?? 'demo-password-123'));
+await p.fill('input[type=email]', EMAIL);
+await p.fill('input[type=password]', PASSWORD);
 await p.click('button[type=submit]');
 await p.waitForURL(`${BASE}/`);
 await p.getByRole('link', { name: 'Memory' }).click();

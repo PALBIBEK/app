@@ -24,22 +24,14 @@ import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { cn } from '@/lib/utils';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useMemo } from 'react';
+import { useSessions } from '@/lib/api/hooks/useSessions';
+import { dashboardStats } from '@/lib/dashboard/stats';
 
 export default function DashboardPage(): JSX.Element {
   const { data, isLoading, error } = useHarnesses();
 
-  const stats = useMemo(() => {
-    if (!data?.data) {
-      return { total: 0, sessions: 0, todaySessions: 0 };
-    }
-
-    const harnesses = data.data;
-    const total = harnesses.length;
-    const sessions = 0;
-    const todaySessions = 0;
-
-    return { total, sessions, todaySessions };
-  }, [data]);
+  const { data: sessions } = useSessions({ page: 1, page_size: 100 });
+  const stats = useMemo(() => dashboardStats(data?.data, sessions), [data, sessions]);
 
   return (
     <AuthGuard>
@@ -101,14 +93,14 @@ export default function DashboardPage(): JSX.Element {
                 <StatCard
                   icon={Stack}
                   label="Total Harnesses"
-                  value={stats.total.toString()}
+                  value={stats.harnesses.toString()}
                   sublabel="configurations"
                 />
                 <StatCard
                   icon={Pulse}
-                  label="Listed"
-                  value={stats.total.toString()}
-                  sublabel="in your workspace"
+                  label="Live"
+                  value={stats.live.toString()}
+                  sublabel="published and ready"
                   accent="green"
                 />
                 <StatCard
@@ -120,7 +112,7 @@ export default function DashboardPage(): JSX.Element {
                 <StatCard
                   icon={Timer}
                   label="Today"
-                  value={stats.todaySessions.toString()}
+                  value={`${stats.today}${stats.todayCapped ? '+' : ''}`}
                   sublabel="sessions"
                   accent="blue"
                 />

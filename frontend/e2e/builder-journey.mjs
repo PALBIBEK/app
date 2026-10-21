@@ -4,17 +4,17 @@
 //   npm i --no-save playwright && node e2e/builder-journey.mjs
 //   (CHROME=/path/to/chrome to use an installed browser; SHOTS=dir to keep screenshots)
 import { chromium } from 'playwright';
+import { BASE, EMAIL, PASSWORD, check, deleteHarness } from './lib.mjs';
 const dir = process.env.SHOTS;
 const shot = (p, n) => (dir ? p.screenshot({ path: `${dir}/${n}.png`, fullPage: true }) : Promise.resolve());
-const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 const p = await b.newPage({ viewport: { width: 1400, height: 1000 } });
 p.on('dialog', (d) => d.accept());
 const name = 'journey-' + Math.random().toString(36).slice(2, 7);
 
 await p.goto(`${BASE}/login`, { waitUntil: 'networkidle', timeout: 180000 });
-await p.fill('input[type=email]', process.env.DEMO_EMAIL ?? 'demo@example.com');
-await p.fill('input[type=password]', process.env.DEMO_PASSWORD ?? 'demo-password-123');
+await p.fill('input[type=email]', EMAIL);
+await p.fill('input[type=password]', PASSWORD);
 await p.click('button[type=submit]');
 await p.waitForURL(`${BASE}/`, { timeout: 60000 });
 
@@ -22,6 +22,7 @@ await p.goto(`${BASE}/harness/new`, { waitUntil: 'networkidle' });
 await p.getByPlaceholder('e.g., coding-assistant-v1').fill(name);
 await p.getByRole('button', { name: /Create and configure/ }).click();
 await p.waitForURL(/\/harness\/[0-9a-f-]{36}$/, { timeout: 30000 });
+const hid = p.url().split('/').pop();
 await p.getByTestId('manifest-status').waitFor();
 console.log('1 status:', await p.getByTestId('manifest-status').innerText());
 
@@ -35,7 +36,8 @@ await p.getByLabel('edit needs approval').check();
 // Sandbox: host process needs full access for bash (no Docker here).
 await p.getByRole('tab', { name: 'Sandbox' }).click();
 await p.getByLabel('Host process').check().catch(async () => { await p.getByText('Host process').click(); });
-console.log('2 bash warning shown:', await p.getByText(/only runs with “Everything the sandbox can reach”/).isVisible());
+check(await p.getByText(/only runs with “Everything the sandbox can reach”/).isVisible(), 'bash warning on the Sandbox tab');
+console.log('2 bash warning shown');
 await p.selectOption('#file_effects', 'danger_full_access');
 // Policy: an invalid value is shown on its tab.
 await p.getByRole('tab', { name: 'Policy' }).click();
@@ -56,7 +58,9 @@ await p.getByText('Compact long conversations').click();
 console.log('5 changes since v1:', await p.getByTestId('changes').innerText());
 await p.getByRole('button', { name: 'Publish' }).click();
 await p.getByText('Version 2 published', { exact: false }).first().waitFor({ timeout: 30000 });
-console.log('  versions now:', (await p.getByTestId('releases').innerText()).match(/Version \d/g));
+const versions = (await p.getByTestId('releases').innerText()).match(/Version \d/g) ?? [];
+check(versions.length === 2, `two versions listed (got ${versions})`);
+console.log('  versions now:', versions);
 await shot(p, 'b2-published');
 
 // Test: run bash through the agent, approve it, see the output.
@@ -69,8 +73,9 @@ await box.press('Enter');
 await p.getByTestId('approval-approve').first().click({ timeout: 30000 });
 await p.getByTestId('tool-output').filter({ hasText: 'built-in-the-browser' }).first().waitFor({ timeout: 30000 });
 console.log('6 bash ran: its output is on the tool card');
-console.log('  user bubbles with the command:', await p.getByText('/tool bash {"command": "echo built-in-the-browser"}', { exact: true }).count());
-console.log('  approval banner still shown:', await p.getByTestId('approval-banner').count());
+check(await p.getByText('/tool bash {"command": "echo built-in-the-browser"}', { exact: true }).count() === 1, 'one user bubble for the command');
+check(await p.getByTestId('approval-banner').count() === 0, 'approval banner gone after approving');
 await shot(p, 'b3-test');
 await b.close();
+await deleteHarness(hid);
 console.log('journey passed');

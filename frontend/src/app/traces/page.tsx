@@ -96,7 +96,7 @@ export default function TracesPage(): JSX.Element {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const { data, isLoading, error } = useSessions({ page: 1, page_size: 50 });
-  const sessions = data?.data ?? [];
+  const sessions = useMemo(() => data?.data ?? [], [data]);
 
   const filtered = useMemo(() => {
     return sessions.filter((s) => {

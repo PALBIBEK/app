@@ -40,7 +40,7 @@ interface ChildRow {
 function SubagentsListContent(): JSX.Element {
   const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } =
     useSessions({ page: 1, page_size: 50 });
-  const sessions = sessionsData?.data ?? [];
+  const sessions = useMemo(() => sessionsData?.data ?? [], [sessionsData]);
   const { data: harnessList } = useHarnesses();
   const harnessNames = new Map((harnessList?.data ?? []).map((h) => [h.id, h.name]));
   const [selectedSessionId, setSelectedSessionId] = useState('');

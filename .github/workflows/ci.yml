@@ -3,7 +3,8 @@ name: ci
 # The quality gates, on every push and PR: the agent platform (prime-agent-study-main/) with
 # lint, types, every service's test suite, the end-to-end suite against a real stack
 # (Postgres, Temporal, the API process serving the gateway and memory service too, and the worker)
-# and a docker-compose smoke test; the product's backend/ and frontend/ suites; and the
+# and a docker-compose smoke test; the product's backend/ and frontend/ suites (lint too); the
+# product in a browser (dev.sh plus the Playwright journeys in frontend/e2e/); and the
 # backend's client against that live stack. A live model turn runs when MODEL_E2E_API_KEY is set.
 
 on:
@@ -82,6 +83,9 @@ jobs:
       - name: Install
         working-directory: frontend
         run: npm ci
+      - name: Lint
+        working-directory: frontend
+        run: npx next lint --max-warnings 0
       - name: Types
         working-directory: frontend
         run: npx tsc --noEmit
@@ -188,6 +192,59 @@ jobs:
         with:
           name: e2e-logs
           path: ${{ env.PROJECT }}/e2e/.run/logs/
+
+  journeys:  # the product in a browser: ./dev.sh brings everything up, Playwright walks the pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:  # dev.sh creates its three databases on it
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Virtualenvs, packages and the Temporal CLI
+        run: |
+          python -m venv $PROJECT/services/supervisor/.venv
+          $PROJECT/services/supervisor/.venv/bin/pip install -q -e "$PROJECT/services/supervisor[dev,postgres,s3]"
+          python -m venv backend/.venv && backend/.venv/bin/pip install -q -e "backend[dev]"
+          (cd frontend && npm ci && npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium)
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "TEMPORAL_CLI=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+          command -v lsof || sudo apt-get install -y -q lsof
+          echo "127.0.0.1 model-gateway" | sudo tee -a /etc/hosts
+      - name: Start the product
+        run: ./dev.sh
+      - name: Builder journey
+        working-directory: frontend
+        run: node e2e/builder-journey.mjs
+      - name: Memory journey
+        working-directory: frontend
+        run: node e2e/memory-journey.mjs
+      - name: Chat journey (kills and restarts the backend mid-stream)
+        working-directory: frontend
+        run: node e2e/chat-journey.mjs
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: journey-logs
+          path: .dev/logs/
 
   compose-smoke:
     runs-on: ubuntu-latest
