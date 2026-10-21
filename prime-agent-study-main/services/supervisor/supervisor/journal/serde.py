@@ -121,6 +121,14 @@ def event_type_name(event: AgentEvent) -> str:
     return name
 
 
+def type_name_of(event_cls: type) -> str:
+    """The stored type name of an event class (``EventRow.type``), e.g. ``"RunStart"``."""
+    name = _TYPE_NAMES.get(event_cls)
+    if name is None:
+        raise SerializationError(event_cls.__name__, "unregistered event type")
+    return name
+
+
 # Every event class fixes its category; it is implied by ``_type``.
 _DERIVED_FIELD = "category"
 

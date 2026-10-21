@@ -119,9 +119,7 @@ async def test_a_turn_runs_and_streams_to_its_end(client, user, pin) -> None:
     detail = await client.get_session(user, sid)  # what the session list refreshes from
     for key in ("status", "message_count", "total_cost", "last_seq"):
         assert key in detail, key
-    # Known gap: with Temporal workers the API process has no live runtime to ask, so
-    # ``is_busy`` is always null and the UI's "busy" badge never shows.
-    assert detail.get("is_busy") in (True, False, None)
+    assert detail["is_busy"] is False  # the run ended (read from the journal under Temporal)
     assert detail["last_seq"] >= events[-1]["seq"]
 
     # Resume where the reader stopped: the backend forwards Last-Event-ID, which is the
@@ -154,6 +152,8 @@ async def test_the_agent_uses_a_tool_and_a_direct_invoke_answers_in_the_same_sha
     )
     events = await _events(client, user, sid)
     pending = await client.list_session_approvals(user, sid)
+    if pending:
+        assert (await client.get_session(user, sid))["is_busy"] is True  # a run waits on a person
     for row in pending:  # a sandbox that asks: answer like the approve button does
         assert {"approval_id", "prompt", "options", "status", "timeout_s"} <= set(row)
         resolved = await client.respond_approval(user, row["approval_id"], choice="allow")
@@ -239,6 +239,7 @@ async def test_a_built_manifest_publishes_and_its_policy_holds_in_a_session(clie
             break
         await asyncio.sleep(0.5)
     assert pending, "bash ran without the approval the policy requires"
+    assert (await client.get_session(user, sid))["is_busy"] is True
     await client.respond_approval(user, pending[0]["approval_id"], choice="allow")
     events = await _events(client, user, sid)
     (end,) = [e for e in events if e["type"] == "tool_end"]

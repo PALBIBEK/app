@@ -402,3 +402,24 @@ async def test_stepped_histories_replay_deterministically(
             assert result.replay_failure is None, result.replay_failure
             replayed += 1
     assert replayed >= 1
+
+
+async def test_session_detail_says_busy_while_a_run_is_open(env: Env, model: Callable[..., ScriptedGateway]) -> None:
+    """The API process runs no session (Temporal workers do): busy comes from the journal.
+
+    It was always null, so a client could not tell a working agent from an idle one.
+    """
+    model(WRITE)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, "githi-approve-deny")
+        before = await state.manager.get(sid, tenant_id="t1")
+        assert before is not None and before.is_busy is False
+        await env.sessions.submit(sid, Message("c1", "write a note"))
+        approval_id = await _await_approval(env, state, sid)
+        waiting = await state.manager.get(sid, tenant_id="t1")
+        assert waiting is not None and waiting.is_busy is True
+        await env.sessions.respond_approval(sid, approval_id, "allow")
+        await env.wait_for(state, sid, run_ended())
+    after = await state.manager.get(sid, tenant_id="t1")
+    assert after is not None and after.is_busy is False
