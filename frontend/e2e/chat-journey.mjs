@@ -34,6 +34,19 @@ await box.press('Enter');
 await p.getByText('echo:hello there').waitFor({ timeout: 30000 });
 console.log('1 reply shown; bar:', (await p.getByTestId('session-bar').innerText()).replace(/\n/g, ' | '));
 
+// Upload a file: straight to storage over a signed URL, then the agent reads it.
+const marker = 'uploaded-' + Date.now().toString(36);  // new bytes, so a real upload (no dedupe)
+const directPuts = [];
+p.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/uploads/')) directPuts.push(r.url()); });
+await p.getByTestId('agent-workspace-upload').setInputFiles({ name: 'data.txt', mimeType: 'text/plain', buffer: Buffer.from(marker + '\n') });
+await p.getByTestId('agent-workspace-file-list').getByText('data.txt', { exact: true }).waitFor({ timeout: 30000 });
+check(directPuts.length === 1 && !directPuts[0].includes(':8000'), `the file went straight to storage (${directPuts})`);
+await box.fill('/tool bash {"command": "cat data.txt"}');
+await box.press('Enter');
+await p.getByTestId('approval-approve').first().click({ timeout: 30000 });
+await p.getByTestId('tool-output').filter({ hasText: marker }).first().waitFor({ timeout: 30000 });
+console.log('1b uploaded straight to storage; the agent read it');
+
 await box.fill('/tool bash {"command": "echo from-chat > chat.txt && cat chat.txt"}');
 await box.press('Enter');
 await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });

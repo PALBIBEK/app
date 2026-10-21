@@ -31,7 +31,10 @@ describe('D9 Test agent /workspace upload (live BFF)', () => {
     const run = panel.slice(panel.indexOf('async function run('));
     expect(run.indexOf('await action()')).toBeGreaterThan(-1);
     expect(run.indexOf('workspaceAPI.rehydrateSession')).toBeGreaterThan(run.indexOf('await action()'));
-    expect(panel).toMatch(/uploadFile\([^)]*\), `Uploaded \$\{file\.name\}`, true\)/);
+    // Uploads go straight to storage (start → PUT → complete), the API path only as a fallback.
+    expect(panel).toMatch(/uploadToWorkspace\(/);
+    for (const call of ['startUpload', 'completeUpload', 'uploadFile']) expect(panel).toMatch(new RegExp(`workspaceAPI\\.${call}`));
+    expect(panel).toMatch(/`Uploaded \$\{file\.name\}`,\s*true/);
   });
 
   it('sessionsAPI create forwards scope_id', () => {

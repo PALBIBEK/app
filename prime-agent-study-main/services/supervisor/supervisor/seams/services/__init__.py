@@ -29,14 +29,17 @@ from supervisor.seams.services.memory_service_client import (
 
 # Object Storage
 from supervisor.seams.services.object_storage import (
+    DirectUploadUnsupported,
     HeadResult,
     ObjectIntegrityError,
     ObjectNotFound,
     ObjectStorage,
     ObjectStorageError,
     ObjectTransient,
+    PresignedUpload,
     PresignedUrl,
     PutResult,
+    StoredDigest,
 )
 
 # Session Workspace
@@ -73,6 +76,7 @@ __all__ = [
     "AuthzService",
     "CasConflict",
     "ChecksumMismatch",
+    "DirectUploadUnsupported",
     "ForbiddenError",
     "Grant",
     "GrantDenied",
@@ -86,6 +90,7 @@ __all__ = [
     "ObjectStorage",
     "ObjectStorageError",
     "ObjectTransient",
+    "PresignedUpload",
     "PresignedUrl",
     "Principal",
     "PutResult",
@@ -93,6 +98,7 @@ __all__ = [
     "SessionWorkspaceState",
     "StoreAuthzService",
     "StoreWorkspaceHydrator",
+    "StoredDigest",
     "UnauthorizedError",
     "VirtualKeyClient",
     "WorkspaceConflictError",

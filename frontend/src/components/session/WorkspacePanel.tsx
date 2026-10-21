@@ -9,6 +9,8 @@ import { DownloadSimple, Eye, FolderOpen, Trash, UploadSimple, UserPlus, X } fro
 import { toast } from 'sonner';
 
 import { workspaceAPI, type ScopeMember, type WorkspaceFile } from '@/lib/api/endpoints/workspace';
+import { getApiErrorMessage } from '@/lib/api/errors';
+import { putWithProgress, sha256Hex, uploadToWorkspace } from '@/lib/workspace/upload';
 import { useAuthStore } from '@/lib/store/authStore';
 
 const TEXT_PREVIEW_LIMIT = 200_000;
@@ -36,6 +38,7 @@ export function WorkspacePanel({
   const [preview, setPreview] = useState<{ path: string; text: string } | null>(null);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState<{ name: string; fraction: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const me = useAuthStore((st) => st.user?.id);
 
@@ -58,15 +61,48 @@ export function WorkspacePanel({
     setBusy(true);
     try {
       await action();
-      // The session's sandbox holds a copy of the scope: reload it so the agent sees the change.
-      if (changesFiles && sessionId) await workspaceAPI.rehydrateSession(sessionId);
       if (done) toast.success(done);
-      await refresh();
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
-      toast.error(typeof detail === 'string' ? detail : err instanceof Error ? err.message : 'Failed');
+      toast.error(getApiErrorMessage(err, 'Failed'));
+      return;
     } finally {
       setBusy(false);
+      await refresh(); // show what is there now, whatever happened
+    }
+    // The session's sandbox (if it has one yet) holds a copy of the workspace: refresh it so
+    // the agent sees the change. A failure here does not undo the change, so it only warns.
+    if (changesFiles && sessionId) {
+      try {
+        await workspaceAPI.rehydrateSession(sessionId);
+      } catch (err) {
+        toast.warning(`Saved, but the running agent may not see it until its next turn: ${getApiErrorMessage(err, 'refresh failed')}`);
+      }
+    }
+  }
+
+  async function upload(file: File): Promise<void> {
+    setUploading({ name: file.name, fraction: 0 });
+    try {
+      await run(
+        () =>
+          uploadToWorkspace(
+            {
+              start: workspaceAPI.startUpload,
+              complete: workspaceAPI.completeUpload,
+              viaApi: workspaceAPI.uploadFile,
+              put: putWithProgress,
+              sha256: typeof crypto !== 'undefined' && crypto.subtle ? sha256Hex : null,
+            },
+            scopeId,
+            file.name,
+            file,
+            (fraction) => setUploading({ name: file.name, fraction })
+          ),
+        `Uploaded ${file.name}`,
+        true
+      );
+    } finally {
+      setUploading(null);
     }
   }
 
@@ -99,7 +135,7 @@ export function WorkspacePanel({
           data-testid="agent-workspace-upload"
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) void run(() => workspaceAPI.uploadFile(scopeId, file.name, file, file.type || undefined), `Uploaded ${file.name}`, true);
+            if (file) void upload(file);
             e.target.value = '';
           }}
         />
@@ -107,6 +143,16 @@ export function WorkspacePanel({
           <UploadSimple size={14} /> Upload
         </button>
       </div>
+
+      {uploading ? (
+        <div data-testid="upload-progress" className="mt-2 flex items-center gap-3 text-xs text-slate-600">
+          <span className="truncate font-mono">{uploading.name}</span>
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-primary-500 transition-all" style={{ width: `${Math.round(uploading.fraction * 100)}%` }} />
+          </div>
+          <span>{Math.round(uploading.fraction * 100)}%</span>
+        </div>
+      ) : null}
 
       {files.length ? (
         <ul data-testid="agent-workspace-file-list" className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">

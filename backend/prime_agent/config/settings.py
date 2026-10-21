@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     ai_sse_connect_timeout_seconds: float = 10.0
     ai_platform_status_cache_ttl_seconds: float = 10.0
     ai_session_create_timeout_seconds: float = 60.0
+    workspace_max_upload_bytes: int = 100 * 1024 * 1024
+    """Largest file the pass-through upload accepts (direct uploads are limited by the supervisor)."""
     """Starting a session resolves and checks its sandbox, which can take longer than a plain call."""
 
     # Where a new harness's commands run until its owner changes it in the builder. Docker

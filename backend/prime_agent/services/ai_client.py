@@ -563,6 +563,25 @@ class AiClient:
             expected=(200,),
         )
 
+    async def start_workspace_upload(
+        self, identity: TenantPrincipal, scope_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/uploads — a signed URL for the browser to PUT the file to."""
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/uploads", identity,
+            json_body=body, expected=(200,),
+        )
+
+    async def complete_workspace_upload(
+        self, identity: TenantPrincipal, scope_id: str, upload_token: str
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/uploads/complete — verify what was uploaded and record it."""
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/uploads/complete", identity,
+            json_body={"upload_token": upload_token}, expected=(200,),
+            timeout=LONG_CALL_TIMEOUT_S,  # a store without checksums is read back to verify
+        )
+
     async def delete_workspace_file(
         self,
         identity: TenantPrincipal,
