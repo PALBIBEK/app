@@ -105,6 +105,7 @@ NON_RETRYABLE = (
     "MemoryNotConfigured",
     "WorkspaceNotReadyError",
     "WorkspaceUnavailable",
+    "SandboxUnavailable",
     "SeamError",
     "ToolOutcomeUnknown",
     # The prompt fills the model's window: a retry sends the same prompt.

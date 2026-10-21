@@ -84,6 +84,16 @@ class SandboxGone(SandboxError):
         self.reason = reason
 
 
+class SandboxUnavailable(SandboxError):
+    """No sandbox can be built here: the provider's backend is missing or refuses (e.g. Docker
+    is not running, or the image cannot be found). Retrying does not help; the message says
+    what to change, and is safe to show the user.
+    """
+
+    def __init__(self, message: str, *, provider: str) -> None:
+        super().__init__(message, provider=provider, retryable=False)
+
+
 class SandboxTimeout(SandboxError):
     """Operation timed out.
 

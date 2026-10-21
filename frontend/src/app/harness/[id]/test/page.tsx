@@ -143,7 +143,12 @@ export default function TestHarnessPage(): JSX.Element {
         ) : (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
             {error ? (
-              <span className="text-red-600">{error}</span>
+              <span className="flex max-w-2xl flex-col items-center gap-3 text-center">
+                <span data-testid="session-error" className="text-red-600">{error}</span>
+                <Link href={`/harness/${harnessId}`} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50">
+                  Open the builder
+                </Link>
+              </span>
             ) : canRun ? (
               <>
                 <CircleNotch size={16} className="animate-spin text-primary-500" /> Creating session…

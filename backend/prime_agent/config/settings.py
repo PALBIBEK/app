@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     ai_http_timeout_seconds: float = 5.0
     ai_sse_connect_timeout_seconds: float = 10.0
     ai_platform_status_cache_ttl_seconds: float = 10.0
+    ai_session_create_timeout_seconds: float = 60.0
+    """Starting a session resolves and checks its sandbox, which can take longer than a plain call."""
+
+    # Where a new harness's commands run until its owner changes it in the builder. Docker
+    # isolates them; ./dev.sh sets host process with full access so a laptop needs no Docker
+    # image (commands still ask for approval first).
+    harness_default_sandbox_provider: Literal["none", "local_process", "local_docker", "e2b"] = "local_docker"
+    harness_default_file_effects: Literal["read_only", "workspace_write", "danger_full_access"] = "workspace_write"
 
     # D13 Trace API — Jaeger query proxy (MVP); never hardcode in route modules.
     jaeger_query_base_url: str = "http://127.0.0.1:16686"

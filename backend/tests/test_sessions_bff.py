@@ -619,3 +619,53 @@ async def test_list_includes_cost_from_detail_projection(
         r = await api.get("/api/v1/sessions")
     assert r.status_code == 200
     assert r.json()["data"][0]["total_cost"] == 1.25
+
+
+@pytest.mark.asyncio
+async def test_create_session_shows_why_the_sandbox_cannot_start(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    reason = "Docker is not reachable, so this harness's sandbox (Docker container) cannot start."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cat = _catalog_ok(request)
+        if cat:
+            return cat
+        if request.method == "POST" and request.url.path.endswith("/v1/sessions"):
+            return httpx.Response(422, json={"detail": reason})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        r = await api.post("/api/v1/sessions", json={"harness_id": harness.id})
+    assert r.status_code == 422
+    assert r.json()["detail"]["message"] == reason  # the supervisor's reason, not "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_create_session_timeout_says_so(db_session, owner, harness, session_settings, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        cat = _catalog_ok(request)
+        if cat:
+            return cat
+        raise httpx.ReadTimeout("slow", request=request)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        r = await api.post("/api/v1/sessions", json={"harness_id": harness.id})
+    assert r.status_code == 503
+    assert r.json()["detail"]["message"] == "AI supervisor did not answer in time"
