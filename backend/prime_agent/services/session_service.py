@@ -144,7 +144,7 @@ class SessionService:
             updated_at=now,
         )
         db.add(link)
-        await db.flush()
+        await db.commit()
         await db.refresh(link)
         return self._to_response(link)
 
@@ -232,7 +232,7 @@ class SessionService:
             ) from exc
         link.message_count = int(link.message_count or 0) + 1
         link.updated_at = datetime.now(UTC)
-        await db.flush()
+        await db.commit()
         return SessionMessageResponse(
             turn_id=str(upstream.get("turn_id") or ""),
             command_id=command_id,
@@ -421,7 +421,7 @@ class SessionService:
             ) from exc
         link.status = "terminated"
         link.updated_at = datetime.now(UTC)
-        await db.flush()
+        await db.commit()
 
 
     @staticmethod
@@ -585,7 +585,7 @@ class SessionService:
             updated_at=now,
         )
         db.add(child)
-        await db.flush()
+        await db.commit()
         return ForkSessionResponse(id=child.id, parent_id=parent.id)
 
     async def _get_owned(
@@ -625,7 +625,7 @@ class SessionService:
             if detail.get("title") is not None:
                 link.title = str(detail["title"])
             link.updated_at = datetime.now(UTC)
-            await db.flush()
+            await db.commit()
             return self._to_response(
                 link,
                 is_busy=detail.get("is_busy")

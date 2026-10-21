@@ -32,7 +32,7 @@ export const UserSchema = z.object({
   email: z.string().email(),
   name: z.string(),
   role: z.enum(['owner', 'admin', 'member']),
-  avatar: z.string().optional(),
+  avatar: z.string().nullish(), // the backend sends null when no avatar is set
   created_at: z.string().datetime().optional(),
 });
 

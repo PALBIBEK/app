@@ -47,3 +47,6 @@ Thumbs.db
 # Local backups from recovery
 .git-nested-backup/
 .local_demo_verify*/
+
+# ./dev.sh state
+.dev/
