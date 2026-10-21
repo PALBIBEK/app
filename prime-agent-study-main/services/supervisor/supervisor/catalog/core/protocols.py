@@ -14,14 +14,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from datetime import datetime
 
     from supervisor.catalog.core.types import (
         Artifact,
         ArtifactKind,
         ArtifactStatus,
-        ArtifactUsageRecord,
-        ArtifactUsageStats,
         SessionPins,
     )
 
@@ -33,7 +30,6 @@ __all__ = [
     # Auth protocol
     # Service protocols
     "CompositionResolverProtocol",
-    "UsageStoreProtocol",
 ]
 
 
@@ -181,131 +177,6 @@ class ArtifactStoreProtocol(Protocol):
 # Usage Store Protocol
 # =============================================================================
 
-@runtime_checkable
-class UsageStoreProtocol(Protocol):
-    """Interface for usage tracking and analytics.
-
-    Records all artifact usage for analytics dashboards.
-    """
-
-    async def record_usage(
-        self,
-        record: ArtifactUsageRecord,
-    ) -> None:
-        """Record a usage event.
-
-        Args:
-            record: Usage event to record
-        """
-        ...
-
-    async def record_error(
-        self,
-        kind: ArtifactKind,
-        artifact_id: str,
-        digest: str,
-        error_code: str,
-        *,
-        principal_id: str | None = None,
-        session_id: str | None = None,
-    ) -> None:
-        """Record an error for analytics.
-
-        Args:
-            kind: Type of artifact
-            artifact_id: Artifact name
-            digest: Content hash
-            error_code: Error classification
-            principal_id: Who triggered the error
-            session_id: Session context
-        """
-        ...
-
-    async def get_stats(
-        self,
-        kind: ArtifactKind,
-        artifact_id: str,
-        digest: str | None = None,
-        *,
-        since: datetime | None = None,
-    ) -> ArtifactUsageStats:
-        """Get aggregated usage statistics.
-
-        Args:
-            kind: Type of artifact
-            artifact_id: Artifact name
-            digest: Specific version (None for all)
-            since: Only count usage since this time
-
-        Returns:
-            Aggregated statistics
-        """
-        ...
-
-    async def get_sessions_using(
-        self,
-        kind: ArtifactKind,
-        artifact_id: str,
-        digest: str,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[str]:
-        """Get session IDs that used this artifact.
-
-        Args:
-            kind: Type of artifact
-            artifact_id: Artifact name
-            digest: Content hash
-            limit: Max results
-            offset: Skip first N
-
-        Returns:
-            List of session IDs
-        """
-        ...
-
-    async def get_popular_artifacts(
-        self,
-        kind: ArtifactKind,
-        *,
-        since_ms: int | None = None,
-        limit: int = 10,
-    ) -> list[ArtifactUsageStats]:
-        """Get most-used artifacts.
-
-        Args:
-            kind: Type of artifact
-            since_ms: Only count usage since this timestamp
-            limit: Max results
-
-        Returns:
-            List of usage stats, sorted by usage count desc
-        """
-        ...
-
-    async def get_usage_history(
-        self,
-        kind: ArtifactKind,
-        artifact_id: str,
-        digest: str | None = None,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ArtifactUsageRecord]:
-        """Get raw usage records.
-
-        Args:
-            kind: Type of artifact
-            artifact_id: Artifact name
-            digest: Specific version (None for all)
-            limit: Max results
-            offset: Skip first N
-
-        Returns:
-            List of usage records, newest first
-        """
-        ...
 
 
 # =============================================================================

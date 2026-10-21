@@ -24,7 +24,6 @@ from supervisor.catalog.core.errors import (
 from supervisor.catalog.core.protocols import (
     ArtifactStoreProtocol,
     CompositionResolverProtocol,
-    UsageStoreProtocol,
 )
 from supervisor.catalog.core.types import (
     AgentComposition,
@@ -85,6 +84,5 @@ __all__ = [
     "SessionPins",
     "ToolDefinition",
     "ToolSet",
-    "UsageStoreProtocol",
     "content_digest",
 ]

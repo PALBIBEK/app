@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from supervisor.sandbox.backup import BackupArea, BackupResult
     from supervisor.sandbox.layers import LayerManifest, MaterializationResult
     from supervisor.sandbox.staging import StagedBlob, StageOutResult
-    from supervisor.sandbox.status import ComputerStatus
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
 
 
@@ -171,34 +170,6 @@ class ROLayersUnsupported(SandboxError):
     def __init__(self, provider: str) -> None:
         super().__init__(
             f"{provider} does not support read-only layers",
-            provider=provider,
-            retryable=False,
-        )
-
-
-class ComputerStatusUnsupported(SandboxError):
-    """Provider does not support computer status/restart.
-
-    Recovery: Use a provider that supports status operations.
-    """
-
-    def __init__(self, provider: str) -> None:
-        super().__init__(
-            f"{provider} does not support computer status",
-            provider=provider,
-            retryable=False,
-        )
-
-
-class EgressPolicyUnsupported(SandboxError):
-    """Provider does not support egress policy enforcement.
-
-    Recovery: Use a provider that supports egress control.
-    """
-
-    def __init__(self, provider: str) -> None:
-        super().__init__(
-            f"{provider} does not support egress policy",
             provider=provider,
             retryable=False,
         )
@@ -706,18 +677,6 @@ class Sandbox(ABC):
     # Computer Status (Optional)
     # -------------------------------------------------------------------------
 
-    async def computer_status(self) -> ComputerStatus:
-        """Get status of the sandbox computer.
-
-        Performs health check via guest probe.
-
-        Returns:
-            ComputerStatus with machine state and responsiveness.
-
-        Raises:
-            ComputerStatusUnsupported: If provider doesn't support this.
-        """
-        raise ComputerStatusUnsupported(self.info.provider)
 
 
     # -------------------------------------------------------------------------

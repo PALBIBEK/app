@@ -50,10 +50,6 @@ from supervisor.sandbox.staging import (
     StageOutResult,
     create_exec_blob_staging,
 )
-from supervisor.sandbox.status import (
-    ComputerStatus,
-    MachineState,
-)
 from supervisor.seams.providers.workspace import normalize_workspace_path
 
 # From the defining modules, not the package: supervisor.seams.services imports the
@@ -525,32 +521,6 @@ class E2BSandbox(Sandbox):
     # Computer Status
     # -------------------------------------------------------------------------
 
-    async def computer_status(self) -> ComputerStatus:
-        """Get status of the sandbox computer."""
-        # Check if sandbox is alive
-        alive = await self.is_alive()
-
-        # Try to get uptime via exec
-        uptime_ms: int | None = None
-        if alive:
-            try:
-                result = await self.exec(
-                    ["cat", "/proc/uptime"],
-                    timeout=10.0,
-                )
-                if result.success:
-                    # Parse uptime: "12345.67 54321.00"
-                    uptime_str = result.stdout_text.split()[0]
-                    uptime_ms = int(float(uptime_str) * 1000)
-            except Exception:
-                logger.debug("e2b uptime probe failed", exc_info=True)
-
-        return ComputerStatus(
-            scope_id=self._scope_id or self._info.id,
-            machine_state=MachineState.RUNNING if alive else MachineState.STOPPED,
-            guest_responsive=alive,
-            uptime_ms=uptime_ms,
-        )
 
 
 

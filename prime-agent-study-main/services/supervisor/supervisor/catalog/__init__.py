@@ -72,7 +72,6 @@ from supervisor.catalog.core.errors import (
 from supervisor.catalog.core.protocols import (
     ArtifactStoreProtocol,
     CompositionResolverProtocol,
-    UsageStoreProtocol,
 )
 
 # =============================================================================
@@ -168,7 +167,6 @@ __all__ = [
     "SessionPins",
     "ToolDefinition",
     "ToolSet",
-    "UsageStoreProtocol",
     "artifact_from_dict",
     "artifact_to_dict",
     "composition_from_dict",
