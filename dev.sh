@@ -186,6 +186,7 @@ aws_secret_access_key='dev', region_name='us-east-1').create_bucket(Bucket='yal-
     DATABASE_URL='$PG/prime_agent' SECRET_KEY='$BACKEND_SECRET_KEY' \
     AI_SUPERVISOR_BASE_URL=http://127.0.0.1:8080 \
     AI_SERVICE_JWT_SECRET='$SERVICE_JWT_SECRET' \
+    HARNESS_DEFAULT_SANDBOX_PROVIDER=local_process HARNESS_DEFAULT_FILE_EFFECTS=danger_full_access \
     '$BPY' -m uvicorn prime_agent.main:app --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 5"
   start frontend "cd '$ROOT/frontend' && env -u OPENROUTER_API_KEY \
     NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1 npx next dev -p 3000"

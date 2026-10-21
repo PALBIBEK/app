@@ -91,6 +91,21 @@ async def test_a_new_harness_drafts_as_the_shipped_coding_agent(db_session, owne
     assert view["published_version"] is None and view["unpublished_changes"] is True
     assert view["manifest"]["model"] == "gateway/echo"
     assert "bash" in view["manifest"]["tools"] and view["manifest"]["policy"]["require_approval"] == ["bash"]
+    assert view["manifest"]["sandbox"]["provider"] == "local_docker"  # isolated unless configured
+
+
+async def test_a_new_harness_uses_the_configured_default_sandbox(db_session, owner, monkeypatch):
+    # ./dev.sh: a laptop without a Docker image still runs a new harness's commands (approved first).
+    from prime_agent.config import Settings
+
+    local = Settings(harness_default_sandbox_provider="local_process", harness_default_file_effects="danger_full_access")
+    monkeypatch.setattr("prime_agent.services.harness_publish_service.get_settings", lambda: local)
+    harness = await _harness(db_session, owner)
+    async with _api(db_session, owner, FakeSupervisor(), monkeypatch) as api:
+        view = (await api.get(f"/api/v1/harnesses/{harness.id}/manifest")).json()
+    assert view["manifest"]["sandbox"]["provider"] == "local_process"
+    assert view["manifest"]["sandbox"]["file_effects"] == "danger_full_access"
+    assert view["manifest"]["policy"]["require_approval"] == ["bash"]
 
 
 async def test_an_invalid_draft_is_refused_with_the_field_named(db_session, owner, monkeypatch):

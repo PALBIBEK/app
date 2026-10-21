@@ -49,6 +49,9 @@ _STATUS: Final[dict[str, int]] = {
     "MemoryServiceNotConfigured": 503,
     "MultiTenantViolation": 422,
     "HostSandboxRefused": 422,
+    # The harness's sandbox cannot be built on this deployment (Docker down, image missing):
+    # the request, not the server, has to change (another sandbox), so the reason is shown.
+    "SandboxUnavailable": 422,
     "MemoryUnavailable": 503,
     "MemoryRefused": 503,
     "WorkspaceNotReadyError": 409,

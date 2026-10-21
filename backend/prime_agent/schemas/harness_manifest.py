@@ -107,7 +107,7 @@ class HarnessManifest(BaseModel):
         return self
 
 
-def default_manifest() -> HarnessManifest:
+def default_manifest(sandbox: SandboxSpec | None = None) -> HarnessManifest:
     """A new harness starts as the shipped coding agent, so a first publish just works."""
     return HarnessManifest(
         prompt=PromptSpec(
@@ -120,6 +120,7 @@ def default_manifest() -> HarnessManifest:
         tools=["read", "grep", "ls", "write", "edit", "bash"],
         model="gateway/echo",
         policy=PolicySpec(require_approval=["bash"]),
+        **({"sandbox": sandbox} if sandbox is not None else {}),
     )
 
 

@@ -16,6 +16,8 @@ import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'ax
 
 import { useAuthStore } from '../store/authStore';
 
+import { serverMessage } from './errors';
+
 interface AuthRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
 }
@@ -85,6 +87,10 @@ export class APIClient {
           }
         }
 
+        // Show the server's reason ("Docker is not reachable ...") rather than
+        // "Request failed with status code 422"; the response stays on the error.
+        const reason = serverMessage(error.response?.data);
+        if (reason) error.message = reason;
         return Promise.reject(error);
       }
     );

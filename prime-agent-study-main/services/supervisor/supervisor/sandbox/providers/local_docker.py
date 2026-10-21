@@ -26,6 +26,7 @@ from supervisor.sandbox.base import (
     SandboxGone,
     SandboxInfo,
     SandboxProvider,
+    SandboxUnavailable,
     WorkspaceSyncUnsupported,
 )
 from supervisor.sandbox.security.env import sanitize_sandbox_env
@@ -581,14 +582,29 @@ class LocalDockerProvider(SandboxProvider):
         """The daemon answers and ``image`` resolves (locally, else its registry manifest)."""
         if not image:
             raise ValueError("local_docker requires image digest")
-        client = self._ensure_client()
+        errors = self._docker_errors()
 
         def _check() -> None:
-            client.ping()
+            try:
+                client = self._ensure_client()
+                client.ping()
+            except errors.DockerException as exc:
+                raise SandboxUnavailable(
+                    "Docker is not reachable, so this harness's Docker sandbox cannot start. "
+                    "Start Docker, or set the harness's sandbox to 'Host process' and publish again.",
+                    provider=self.name,
+                ) from exc
             try:
                 client.images.get(image)
-            except self._docker_errors().ImageNotFound:
-                client.images.get_registry_data(image)  # a manifest lookup, no layers pulled
+            except errors.ImageNotFound:
+                try:
+                    client.images.get_registry_data(image)  # a manifest lookup, no layers pulled
+                except errors.DockerException as exc:
+                    raise SandboxUnavailable(
+                        f"The sandbox image {image} is not on this machine and its registry did not "
+                        "have it. Pull or build the image, or set the harness's sandbox to 'Host process'.",
+                        provider=self.name,
+                    ) from exc
 
         await asyncio.to_thread(_check)
 

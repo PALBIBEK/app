@@ -18,10 +18,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prime_agent.config import get_settings
 from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.harness_release import HarnessDraft, HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
-from prime_agent.schemas.harness_manifest import HarnessManifest, default_manifest
+from prime_agent.schemas.harness_manifest import HarnessManifest, SandboxSpec, default_manifest
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.tool_publish_service import _canonical_digest
 
@@ -68,7 +69,13 @@ def artifact_prefix(harness_id: str) -> str:
 
 async def load_draft(harness_id: str, db: AsyncSession) -> HarnessManifest:
     draft = await db.get(HarnessDraft, harness_id)
-    return HarnessManifest.model_validate(draft.manifest) if draft else default_manifest()
+    if draft:
+        return HarnessManifest.model_validate(draft.manifest)
+    settings = get_settings()
+    return default_manifest(SandboxSpec(
+        provider=settings.harness_default_sandbox_provider,
+        file_effects=settings.harness_default_file_effects,
+    ))
 
 
 async def save_draft(harness_id: str, manifest: HarnessManifest, db: AsyncSession) -> None:

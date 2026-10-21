@@ -305,6 +305,7 @@ class AiClient:
             identity,
             json_body=body,
             expected=(201,),
+            timeout=self._settings.ai_session_create_timeout_seconds,
         )
 
     async def get_session(
@@ -947,7 +948,7 @@ class AiClient:
                     params=params,
                 )
             except httpx.TimeoutException as exc:
-                raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
+                raise AiUpstreamError("AI supervisor did not answer in time", status_code=503) from exc
             except httpx.HTTPError as exc:
                 raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
 
@@ -990,7 +991,7 @@ class AiClient:
                     content=content,
                 )
             except httpx.TimeoutException as exc:
-                raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
+                raise AiUpstreamError("AI supervisor did not answer in time", status_code=503) from exc
             except httpx.HTTPError as exc:
                 raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
 
@@ -1026,7 +1027,7 @@ class AiClient:
                     content=content,
                 )
             except httpx.TimeoutException as exc:
-                raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
+                raise AiUpstreamError("AI supervisor did not answer in time", status_code=503) from exc
             except httpx.HTTPError as exc:
                 raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
 
@@ -1054,7 +1055,7 @@ class AiClient:
             try:
                 response = await client.get(url, headers=self._auth_headers(identity))
             except httpx.TimeoutException as exc:
-                raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
+                raise AiUpstreamError("AI supervisor did not answer in time", status_code=503) from exc
             except httpx.HTTPError as exc:
                 raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
 
