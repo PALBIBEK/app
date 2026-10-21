@@ -1,6 +1,0 @@
-node_modules
-dist
-pnpm-lock.yaml
-*.tsbuildinfo
-prototype.html
-packages/tokens/dist

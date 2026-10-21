@@ -1,7 +1,0 @@
-.root {
-  display: block; background: var(--color-surface-sunken);
-  border-radius: var(--radius-md);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-@keyframes pulse { 50% { opacity: 0.55; } }
-@media (prefers-reduced-motion: reduce) { .root { animation: none; } }

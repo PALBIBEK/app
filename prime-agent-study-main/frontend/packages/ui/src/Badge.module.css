@@ -1,9 +1,0 @@
-.root {
-  display: inline-flex; align-items: center; padding: 0.15rem 0.45rem;
-  border-radius: 999px; font-size: var(--text-small); font-weight: 600;
-  font-family: var(--font-body); background: var(--color-surface-sunken); color: var(--color-text-secondary);
-}
-.success { background: var(--color-status-success-muted); color: var(--color-status-success); }
-.warning { background: var(--color-status-warning-muted); color: var(--color-status-warning); }
-.danger { background: var(--color-status-danger-muted); color: var(--color-status-danger); }
-.info { background: var(--color-status-info-muted); color: var(--color-status-info); }
