@@ -12,13 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from prime_agent.config import Settings, get_settings
 from prime_agent.db.models.session_link import SessionLink
+from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
     EnsureScopeResponse,
+    FileVersionOut,
     InviteScopeMemberIn,
+    RestoreVersionIn,
     ScopeMemberOut,
     WorkspaceFileOut,
     WorkspaceRehydrateResponse,
+    WorkspaceUploadStartIn,
+    WorkspaceUploadStartOut,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.session_service import SessionNotFoundError
@@ -117,6 +122,60 @@ class WorkspaceService:
             raise_workspace_upstream_http(exc)
         return WorkspaceFileOut.model_validate(raw)
 
+    async def list_versions(
+        self, *, scope_id: str, path: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> list[FileVersionOut]:
+        try:
+            rows = await self._client.list_file_versions(identity, scope_id, path)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        # Authors are user ids: show people their emails, as the members list does.
+        ids = {r.get("author") for r in rows if r.get("author")}
+        emails: dict[str, str] = {}
+        if ids:
+            found = await db.execute(select(User.id, User.email).where(User.id.in_(ids)))
+            emails = {uid: email for uid, email in found.all()}
+        return [FileVersionOut.model_validate({**r, "author_email": emails.get(r.get("author") or "")}) for r in rows]
+
+    async def get_version_bytes(
+        self, *, scope_id: str, path: str, version: int, identity: TenantPrincipal
+    ) -> bytes:
+        try:
+            return await self._client.get_file_version_bytes(identity, scope_id, path, version)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+
+    async def restore_version(
+        self, *, scope_id: str, path: str, body: RestoreVersionIn, identity: TenantPrincipal
+    ) -> WorkspaceFileOut:
+        try:
+            raw = await self._client.restore_file_version(
+                identity, scope_id, path, body.model_dump(exclude_none=True)
+            )
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        return WorkspaceFileOut.model_validate(raw)
+
+    async def start_upload(
+        self, *, scope_id: str, body: WorkspaceUploadStartIn, identity: TenantPrincipal
+    ) -> WorkspaceUploadStartOut:
+        payload = body.model_dump(exclude_none=True)
+        payload["content_sha256"] = body.content_sha256.lower()
+        try:
+            raw = await self._client.start_workspace_upload(identity, scope_id, payload)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        return WorkspaceUploadStartOut.model_validate(raw)
+
+    async def complete_upload(
+        self, *, scope_id: str, upload_token: str, identity: TenantPrincipal
+    ) -> WorkspaceFileOut:
+        try:
+            raw = await self._client.complete_workspace_upload(identity, scope_id, upload_token)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        return WorkspaceFileOut.model_validate(raw)
+
     async def delete_file(
         self,
         *,
@@ -151,6 +210,9 @@ class WorkspaceService:
                 identity, link.ai_session_id
             )
         except AiUpstreamError as exc:
+            if exc.status_code == 409 and "no sandbox" in str(exc):
+                # Built on first use, from the workspace as it is then: nothing to refresh.
+                return WorkspaceRehydrateResponse(status="no_sandbox")
             raise_workspace_upstream_http(exc)
         return WorkspaceRehydrateResponse(status="ok")
 

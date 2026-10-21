@@ -140,7 +140,7 @@ CAPABILITY_SECRET='$CAPABILITY_SECRET' SUPERVISOR_PUBLIC_URL=http://127.0.0.1:80
 GATEWAY_BASE_URL=http://model-gateway:8090 GATEWAY_TOKEN='$GATEWAY_TOKEN'
 MODEL_GATEWAY_URL=http://model-gateway:8090 MODEL_GATEWAY_API_KEY='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key
 ${OPENROUTER_API_KEY:+MODEL_GATEWAY_DEFAULT_ROUTE=free}
-OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace
+OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace OBJECT_STORAGE_PUBLIC_ENDPOINT=http://127.0.0.1:8333
 OBJECT_STORAGE_ACCESS_KEY=dev OBJECT_STORAGE_SECRET_KEY=dev OBJECT_STORAGE_REGION=us-east-1
 WORKSPACE_STORE=postgres GRANT_STORE=postgres DATABASE_URL='$PG/supervisor'
 YAL_CATALOG_DIR='$STUDY/harness' HARNESS_VERSIONS_DIR='$STATE/harness-versions' YAL_CONTRACTS_DIR='$STUDY/contracts'
@@ -173,8 +173,20 @@ up() {
   wait_http s3 http://127.0.0.1:8333 60
   wait_http gateway http://127.0.0.1:8090/v1/healthz 60
   for _ in $(seq 1 60); do "$TEMPORAL" operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1 && break; sleep 1; done
-  "$SPY" -c "import boto3; boto3.client('s3', endpoint_url='http://127.0.0.1:8333', aws_access_key_id='dev', \
-aws_secret_access_key='dev', region_name='us-east-1').create_bucket(Bucket='yal-workspace')" >/dev/null 2>&1 || true
+  # The bucket, and CORS so the browser can PUT uploads to it directly (signed URLs).
+  "$SPY" - >/dev/null 2>&1 <<'EOF' || true
+import boto3
+s3 = boto3.client("s3", endpoint_url="http://127.0.0.1:8333", aws_access_key_id="dev",
+                  aws_secret_access_key="dev", region_name="us-east-1")
+try:
+    s3.create_bucket(Bucket="yal-workspace")
+except Exception:
+    pass
+s3.put_bucket_cors(Bucket="yal-workspace", CORSConfiguration={"CORSRules": [{
+    "AllowedOrigins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+    "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600}]})
+EOF
 
   say "starting the supervisor (API :8080, memory :8092) and its worker"
   start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 '$SPY' -m supervisor.main"

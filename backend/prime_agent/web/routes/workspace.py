@@ -16,10 +16,15 @@ from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
     EnsureScopeResponse,
+    FileVersionOut,
+    RestoreVersionIn,
     InviteScopeMemberIn,
     ScopeMemberOut,
     WorkspaceFileOut,
     WorkspaceRehydrateResponse,
+    WorkspaceUploadCompleteIn,
+    WorkspaceUploadStartIn,
+    WorkspaceUploadStartOut,
 )
 from prime_agent.services.session_service import (
     SessionNotFoundError,
@@ -85,9 +90,22 @@ async def put_agent_workspace_file(
     mime_type: str | None = Query(default=None),
     expected_version: int | None = Query(default=None),
 ) -> WorkspaceFileOut:
-    """Upload into durable agent /workspace SoT (multipart; not sandbox FS)."""
+    """Upload through the API (multipart). The browser uses it only when storage cannot take a
+    direct upload (``POST .../uploads`` answered ``proxy``); read in chunks, up to a limit."""
     identity = TenantPrincipal.from_user(current_user)
-    body = await upload.read()
+    limit = get_settings().workspace_max_upload_bytes
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(1024 * 1024):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"error_code": "FILE_TOO_LARGE",
+                        "message": f"this workspace takes files up to {limit} bytes"},
+            )
+        chunks.append(chunk)
+    body = b"".join(chunks)
     resolved_mime = mime_type or upload.content_type
     return await _service().put_file(
         scope_id=scope_id,
@@ -96,6 +114,72 @@ async def put_agent_workspace_file(
         identity=identity,
         mime_type=resolved_mime,
         expected_version=expected_version,
+    )
+
+
+# History has its own prefix (a file path may end in "versions"); one version's bytes are
+# ".../@{version}", declared first because the list route's path would match it too.
+@router.get("/scopes/{scope_id}/history/{path:path}/@{version}")
+async def get_agent_workspace_file_version(
+    scope_id: str,
+    path: str,
+    version: int,
+    current_user: CurrentUser,
+) -> RawResponse:
+    data = await _service().get_version_bytes(
+        scope_id=scope_id, path=path, version=version, identity=TenantPrincipal.from_user(current_user)
+    )
+    return RawResponse(content=data, media_type="application/octet-stream")
+
+
+@router.get("/scopes/{scope_id}/history/{path:path}", response_model=list[FileVersionOut])
+async def list_agent_workspace_file_versions(
+    scope_id: str,
+    path: str,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> list[FileVersionOut]:
+    """Every saved version of a file, newest first, with who saved it."""
+    return await _service().list_versions(
+        scope_id=scope_id, path=path, identity=TenantPrincipal.from_user(current_user), db=db
+    )
+
+
+@router.post("/scopes/{scope_id}/restore/{path:path}", response_model=WorkspaceFileOut)
+async def restore_agent_workspace_file_version(
+    scope_id: str,
+    path: str,
+    body: RestoreVersionIn,
+    current_user: CurrentUser,
+) -> WorkspaceFileOut:
+    """Make an earlier version current again (a new version; nothing is lost)."""
+    return await _service().restore_version(
+        scope_id=scope_id, path=path, body=body, identity=TenantPrincipal.from_user(current_user)
+    )
+
+
+@router.post("/scopes/{scope_id}/uploads", response_model=WorkspaceUploadStartOut)
+async def start_agent_workspace_upload(
+    scope_id: str,
+    body: WorkspaceUploadStartIn,
+    current_user: CurrentUser,
+) -> WorkspaceUploadStartOut:
+    """Step 1 of a direct upload: a short-lived URL the browser PUTs the file to itself."""
+    return await _service().start_upload(
+        scope_id=scope_id, body=body, identity=TenantPrincipal.from_user(current_user)
+    )
+
+
+@router.post("/scopes/{scope_id}/uploads/complete", response_model=WorkspaceFileOut)
+async def complete_agent_workspace_upload(
+    scope_id: str,
+    body: WorkspaceUploadCompleteIn,
+    current_user: CurrentUser,
+) -> WorkspaceFileOut:
+    """Step 3: the supervisor checks what arrived and records the file."""
+    return await _service().complete_upload(
+        scope_id=scope_id, upload_token=body.upload_token,
+        identity=TenantPrincipal.from_user(current_user),
     )
 
 

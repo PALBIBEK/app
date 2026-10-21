@@ -29,14 +29,17 @@ from supervisor.seams.services.memory_service_client import (
 
 # Object Storage
 from supervisor.seams.services.object_storage import (
+    DirectUploadUnsupported,
     HeadResult,
     ObjectIntegrityError,
     ObjectNotFound,
     ObjectStorage,
     ObjectStorageError,
     ObjectTransient,
+    PresignedUpload,
     PresignedUrl,
     PutResult,
+    StoredDigest,
 )
 
 # Session Workspace
@@ -61,11 +64,14 @@ from supervisor.seams.services.workspace_store import (
     ChecksumMismatch,
     HydrateIncomplete,
     WorkspaceFileRecord,
+    WorkspaceFileVersion,
     WorkspacePathEscape,
     WorkspaceStore,
     WorkspaceStoreError,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
+    new_object_key,
+    normalize_workspace_path,
 )
 
 __all__ = [
@@ -73,6 +79,7 @@ __all__ = [
     "AuthzService",
     "CasConflict",
     "ChecksumMismatch",
+    "DirectUploadUnsupported",
     "ForbiddenError",
     "Grant",
     "GrantDenied",
@@ -86,6 +93,7 @@ __all__ = [
     "ObjectStorage",
     "ObjectStorageError",
     "ObjectTransient",
+    "PresignedUpload",
     "PresignedUrl",
     "Principal",
     "PutResult",
@@ -93,10 +101,12 @@ __all__ = [
     "SessionWorkspaceState",
     "StoreAuthzService",
     "StoreWorkspaceHydrator",
+    "StoredDigest",
     "UnauthorizedError",
     "VirtualKeyClient",
     "WorkspaceConflictError",
     "WorkspaceFileRecord",
+    "WorkspaceFileVersion",
     "WorkspaceHydrator",
     "WorkspaceNotReadyError",
     "WorkspacePathEscape",
@@ -108,6 +118,8 @@ __all__ = [
     "authorized_sync",
     "memory_service_base_url",
     "memory_service_credential",
+    "new_object_key",
+    "normalize_workspace_path",
     "recall_memory_items",
     "resolve_memory_scope",
     "tree_for_sandbox",

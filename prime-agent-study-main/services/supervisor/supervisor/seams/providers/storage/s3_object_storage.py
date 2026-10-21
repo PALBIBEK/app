@@ -7,6 +7,8 @@ Injectable sync client port + ``asyncio.to_thread`` — unit tests need no netwo
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -17,9 +19,13 @@ from supervisor.seams.services.object_storage import (
     ObjectNotFound,
     ObjectStorageError,
     ObjectTransient,
+    PresignedUpload,
     PresignedUrl,
     PutResult,
+    StoredDigest,
 )
+
+_CHUNK = 1024 * 1024
 
 
 class S3ClientPort(Protocol):
@@ -27,7 +33,9 @@ class S3ClientPort(Protocol):
 
     def get_object(self, *, Bucket: str, Key: str) -> Any: ...
 
-    def head_object(self, *, Bucket: str, Key: str) -> Any: ...
+    def head_object(self, *, Bucket: str, Key: str, **kwargs: Any) -> Any: ...
+
+    def copy_object(self, *, Bucket: str, Key: str, CopySource: dict[str, str], **kwargs: Any) -> Any: ...
 
     def delete_object(self, *, Bucket: str, Key: str) -> Any: ...
 
@@ -45,6 +53,9 @@ class S3ObjectStorage:
 
     client: S3ClientPort
     bucket: str
+    presign_client: S3ClientPort | None = None
+    """Signs URLs that browsers use: the store's public address (OBJECT_STORAGE_PUBLIC_ENDPOINT)
+    when the supervisor reaches it by another (e.g. a compose service name)."""
 
     async def put(
         self,
@@ -130,6 +141,90 @@ class S3ObjectStorage:
         except Exception as exc:
             raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
         return PresignedUrl(url=url, method="GET", expires_in_s=ttl_s)
+
+    async def create_upload_url(
+        self, key: str, *, size_bytes: int, content_sha256: str, content_type: str, ttl_s: int
+    ) -> PresignedUpload:
+        checksum = base64.b64encode(bytes.fromhex(content_sha256)).decode()
+        try:
+            url = await asyncio.to_thread(
+                (self.presign_client or self.client).generate_presigned_url,
+                "put_object",
+                {
+                    "Bucket": self.bucket,
+                    "Key": key,
+                    # Signed: S3 refuses another length, type or checksum (BadDigest).
+                    "ContentLength": size_bytes,
+                    "ContentType": content_type,
+                    "ChecksumSHA256": checksum,
+                },
+                ttl_s,
+            )
+        except Exception as exc:
+            raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
+        return PresignedUpload(
+            url=url,
+            method="PUT",
+            headers={"Content-Type": content_type, "x-amz-checksum-sha256": checksum},
+            expires_in_s=ttl_s,
+        )
+
+    async def digest(self, key: str, *, max_bytes: int) -> StoredDigest:
+        try:
+            head = await asyncio.to_thread(
+                self.client.head_object, Bucket=self.bucket, Key=key, ChecksumMode="ENABLED"
+            )
+        except Exception as exc:
+            if _is_not_found(exc):
+                raise ObjectNotFound(key) from exc
+            raise ObjectTransient(str(exc)) from exc
+        size = int(head.get("ContentLength") or 0)
+        if size > max_bytes:
+            raise ObjectIntegrityError(f"{key} holds {size} bytes, more than the {max_bytes} allowed")
+        verified = _hex_of(head.get("ChecksumSHA256"))
+        if verified is not None:  # S3 checked it against the bytes on upload
+            return StoredDigest(content_sha256=verified, size_bytes=size)
+        # A store that does not keep checksums (MinIO, SeaweedFS, moto): read it back.
+        return await asyncio.to_thread(self._stream_digest, key, max_bytes)
+
+    def _stream_digest(self, key: str, max_bytes: int) -> StoredDigest:
+        body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
+        sha, n = hashlib.sha256(), 0
+        try:
+            while chunk := body.read(_CHUNK):
+                n += len(chunk)
+                if n > max_bytes:
+                    raise ObjectIntegrityError(f"{key} holds more than the {max_bytes} bytes allowed")
+                sha.update(chunk)
+        finally:
+            body.close()
+        return StoredDigest(content_sha256=sha.hexdigest(), size_bytes=n)
+
+    async def copy(self, src: str, dst: str, *, content_sha256: str) -> None:
+        try:
+            await asyncio.to_thread(
+                self.client.copy_object,
+                Bucket=self.bucket,
+                Key=dst,
+                CopySource={"Bucket": self.bucket, "Key": src},
+                MetadataDirective="REPLACE",
+                Metadata={"sha256": content_sha256},
+            )
+        except Exception as exc:
+            if _is_not_found(exc):
+                raise ObjectNotFound(src) from exc
+            raise ObjectTransient(str(exc)) from exc
+
+
+def _hex_of(checksum: object) -> str | None:
+    """A whole-object base64 SHA-256 as hex; None for none or a multipart (composite) one."""
+    if not isinstance(checksum, str) or "-" in checksum:
+        return None
+    try:
+        raw = base64.b64decode(checksum, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return raw.hex() if len(raw) == 32 else None
 
 
 

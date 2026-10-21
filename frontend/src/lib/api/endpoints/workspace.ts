@@ -15,6 +15,19 @@ export interface WorkspaceFile {
   file_id: string;
 }
 
+/** One saved version of a file (newest first in a history). */
+export interface FileVersion {
+  version: number;
+  content_sha256: string;
+  size_bytes: number;
+  mime_type?: string | null;
+  created_at: string;
+  author?: string | null;
+  author_email?: string | null;
+  restored_from?: number | null;
+  current: boolean;
+}
+
 export interface ScopeMember {
   principal_id: string;
   grants: string[];
@@ -23,6 +36,26 @@ export interface ScopeMember {
 }
 
 const filePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');
+
+/** What the browser will send; the server answers how (see lib/workspace/upload.ts). */
+export interface UploadStart {
+  path: string;
+  size_bytes: number;
+  content_sha256: string;
+  mime_type?: string;
+  expected_version?: number;
+}
+
+export interface UploadPlan {
+  status: 'upload' | 'committed' | 'proxy';
+  max_bytes: number;
+  upload_token?: string | null;
+  url?: string | null;
+  method?: string | null;
+  headers?: Record<string, string> | null;
+  expires_in_s?: number | null;
+  file?: WorkspaceFile | null;
+}
 
 export interface EnsureScopeResponse {
   scope_id: string;
@@ -42,11 +75,23 @@ export const workspaceAPI = {
     );
   },
 
+  /** Step 1 of a direct upload: a signed URL for the browser to PUT the file to. */
+  startUpload: (scopeId: string, body: UploadStart): Promise<UploadPlan> =>
+    apiClient.post<UploadPlan>(`/workspace/scopes/${encodeURIComponent(scopeId)}/uploads`, body),
+
+  /** Step 3: the server checks what arrived and records the file. */
+  completeUpload: (scopeId: string, uploadToken: string): Promise<WorkspaceFile> =>
+    apiClient.post<WorkspaceFile>(`/workspace/scopes/${encodeURIComponent(scopeId)}/uploads/complete`, {
+      upload_token: uploadToken,
+    }),
+
+  /** Through the API (when storage cannot take a direct upload). */
   uploadFile: async (
     scopeId: string,
     path: string,
     file: File | Blob,
-    mimeType?: string
+    mimeType?: string,
+    onProgress?: (fraction: number) => void
   ): Promise<WorkspaceFile> => {
     const form = new FormData();
     form.append('upload', file, path.split('/').pop() || 'upload.bin');
@@ -60,7 +105,10 @@ export const workspaceAPI = {
         .map(encodeURIComponent)
         .join('/')}${q}`,
       form,
-      { headers: { 'Content-Type': undefined } }
+      {
+        headers: { 'Content-Type': undefined },
+        onUploadProgress: (e: { loaded: number; total?: number }) => onProgress?.(e.total ? e.loaded / e.total : 0),
+      }
     );
   },
 
@@ -78,6 +126,20 @@ export const workspaceAPI = {
     apiClient.get<Blob>(`/workspace/scopes/${encodeURIComponent(scopeId)}/files/${filePath(path)}`, {
       responseType: 'blob',
     }),
+
+  /** Every saved version of a file, newest first (kept after it is deleted). */
+  listVersions: (scopeId: string, path: string): Promise<FileVersion[]> =>
+    apiClient.get<FileVersion[]>(`/workspace/scopes/${encodeURIComponent(scopeId)}/history/${filePath(path)}`),
+
+  /** One version's bytes. */
+  getVersion: (scopeId: string, path: string, version: number): Promise<Blob> =>
+    apiClient.get<Blob>(`/workspace/scopes/${encodeURIComponent(scopeId)}/history/${filePath(path)}/@${version}`, {
+      responseType: 'blob',
+    }),
+
+  /** Make an earlier version current again (a new version; nothing is lost). */
+  restoreVersion: (scopeId: string, path: string, version: number): Promise<WorkspaceFile> =>
+    apiClient.post<WorkspaceFile>(`/workspace/scopes/${encodeURIComponent(scopeId)}/restore/${filePath(path)}`, { version }),
 
   listMembers: async (scopeId: string): Promise<ScopeMember[]> =>
     apiClient.get<ScopeMember[]>(`/workspace/scopes/${encodeURIComponent(scopeId)}/members`),

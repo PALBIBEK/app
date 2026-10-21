@@ -563,6 +563,55 @@ class AiClient:
             expected=(200,),
         )
 
+    async def list_file_versions(
+        self, identity: TenantPrincipal, scope_id: str, path: str
+    ) -> list[dict[str, Any]]:
+        """GET /v1/scopes/{scope_id}/history/{path} — every saved version, newest first."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        payload = await self._json_request(
+            "GET", f"/v1/scopes/{quote(scope_id, safe='')}/history/{encoded}", identity, expected=(200,)
+        )
+        return payload if isinstance(payload, list) else []
+
+    async def get_file_version_bytes(
+        self, identity: TenantPrincipal, scope_id: str, path: str, version: int
+    ) -> bytes:
+        """GET /v1/scopes/{scope_id}/history/{path}/@{version} — one version's bytes."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        return await self._bytes_request(
+            "GET", f"/v1/scopes/{quote(scope_id, safe='')}/history/{encoded}/@{version}", identity,
+            expected=(200,),
+        )
+
+    async def restore_file_version(
+        self, identity: TenantPrincipal, scope_id: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/restore/{path} — make an earlier version current again."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/restore/{encoded}", identity,
+            json_body=body, expected=(200,),
+        )
+
+    async def start_workspace_upload(
+        self, identity: TenantPrincipal, scope_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/uploads — a signed URL for the browser to PUT the file to."""
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/uploads", identity,
+            json_body=body, expected=(200,),
+        )
+
+    async def complete_workspace_upload(
+        self, identity: TenantPrincipal, scope_id: str, upload_token: str
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/uploads/complete — verify what was uploaded and record it."""
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/uploads/complete", identity,
+            json_body={"upload_token": upload_token}, expected=(200,),
+            timeout=LONG_CALL_TIMEOUT_S,  # a store without checksums is read back to verify
+        )
+
     async def delete_workspace_file(
         self,
         identity: TenantPrincipal,
