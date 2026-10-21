@@ -99,7 +99,7 @@ export function HarnessCard({ harness }: HarnessCardProps): JSX.Element {
               <div className="mt-1.5 flex items-center gap-3 text-[13px] text-slate-500">
                 <span className="font-medium text-slate-600">{harness.model}</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
-                <span>{harness.tools.length} tools</span>
+                <span>{(harness.published_tools ?? harness.tools).length} tools</span>
                 <span className="h-1 w-1 rounded-full bg-slate-300" />
                 <span className="capitalize">{harness.mode}</span>
               </div>

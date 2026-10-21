@@ -47,6 +47,7 @@ await p.getByTestId('approval-deny').click();
 await p.getByTestId('tool-explanation').first().waitFor({ timeout: 30000 });
 console.log('4 refusal explained:', await p.getByTestId('tool-explanation').first().innerText());
 await p.getByText('echo:and after that, this').waitFor({ timeout: 30000 });
+await p.getByTestId('queued').first().waitFor({ state: 'detached', timeout: 15000 }).catch(() => {});
 check(await p.getByTestId('queued').count() === 0, 'no queued badge left once it ran');
 console.log('5 queued message ran');
 

@@ -200,25 +200,6 @@ export default function DashboardPage(): JSX.Element {
             ))}
           </div>
 
-          {/* Empty state hint */}
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-200 bg-white/50 p-6">
-            <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-slate-100">
-                <Stack size={18} className="text-slate-500" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-slate-700">
-                  Create your first harness
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  A harness combines tools, prompts, and memory to create a complete agent configuration.
-                </p>
-                <button className="mt-3 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">
-                  Learn more about harnesses
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       </main>
     </div>

@@ -1,24 +1,19 @@
 """Seed the local product for ./dev.sh: a demo user and one harness ready to chat.
 
-Idempotent: logs in when the user exists and leaves an existing demo harness alone.
-The harness is bound to the shipped ``githi-v1`` composition at the digest the
-supervisor's catalog offers (read from the shipped file, then checked live by the bind).
+Idempotent: logs in when the user exists and leaves a published demo harness alone.
+The harness is published through the builder's own routes (manifest, then publish).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-from pathlib import Path
 
 import httpx
 
 API = "http://127.0.0.1:8000/api/v1"
 ORIGIN = "http://localhost:3000"
 HARNESS = "Demo coding agent"
-ROOT = Path(__file__).resolve().parent.parent
-COMPOSITION = ROOT / "prime-agent-study-main/harness/compositions/githi-v1.json"
 
 
 def main() -> int:
@@ -38,21 +33,25 @@ def main() -> int:
         if existing is None:
             created = http.post("/harnesses", json={
                 "name": HARNESS,
-                "description": "Shipped githi coding agent: shell, files, edit.",
-                "model": "claude-sonnet-4",  # a label only until Phase 2: the composition picks the route
+                "description": "A coding agent with shell, files and edit; bash asks first.",
+                "model": "gateway/echo",
                 "mode": "sticky",
             })
             created.raise_for_status()
             existing = created.json()
-        if existing.get("bind_status") != "bound":
-            digest = json.loads(COMPOSITION.read_text())["digest"]
-            bound = http.post(f"/harnesses/{existing['id']}/bind", json={
-                "composition_id": "githi-v1", "composition_digest": digest, "runtime": "githi",
-            })
-            if bound.status_code >= 400:
-                print(f"seed: harness created but not bound: {bound.status_code} {bound.text}", file=sys.stderr)
+        if existing.get("bind", {}).get("bind_status") != "bound":
+            # Published the way the builder does it: the default manifest, run as a host process
+            # (no Docker needed), where bash only runs with full access. It still asks first.
+            hid = existing["id"]
+            manifest = http.get(f"/harnesses/{hid}/manifest").raise_for_status().json()["manifest"]
+            manifest["sandbox"].update(provider="local_process", file_effects="danger_full_access")
+            http.put(f"/harnesses/{hid}/manifest", json=manifest).raise_for_status()
+            published = http.post(f"/harnesses/{hid}/publish", timeout=120)
+            if published.status_code >= 400:
+                print(f"seed: harness created but not published: {published.status_code} {published.text}",
+                      file=sys.stderr)
                 return 1
-    print(f"seed: user {email}, harness '{HARNESS}' bound to githi-v1")
+    print(f"seed: user {email}, harness '{HARNESS}' published")
     return 0
 
 
