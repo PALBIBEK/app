@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol, runtime_checkable
+from uuid import uuid4
 
 from supervisor.seams.core.errors import SeamError
 
@@ -79,6 +81,28 @@ class WorkspaceFileRecord:
     deleted: bool = False
 
 
+@dataclass(frozen=True)
+class WorkspaceFileVersion:
+    """One saved state of a path: its bytes (by object key) as they were at ``version``."""
+
+    scope_id: str
+    path: str
+    version: int
+    content_sha256: str
+    object_key: str
+    size_bytes: int
+    mime_type: str | None
+    created_at: datetime
+    author: str | None = None
+    restored_from: int | None = None
+
+
+def new_object_key(scope_id: str) -> str:
+    """Where a new version's bytes go: private to the workspace and opaque (never the path or
+    the content hash, so storage reveals nothing about names or about other workspaces)."""
+    return f"workspaces/{scope_id}/objects/{uuid4().hex}"
+
+
 type WorkspaceBase = dict[str, tuple[int, str]]
 """What a session's tree started from: path -> (version, sha256) in the scope."""
 
@@ -123,6 +147,7 @@ class WorkspaceStore(Protocol):
         *,
         mime_type: str | None = None,
         expected_version: int | None = None,
+        author: str | None = None,
     ) -> WorkspaceFileRecord: ...
 
     async def commit_object(
@@ -132,11 +157,24 @@ class WorkspaceStore(Protocol):
         *,
         content_sha256: str,
         size_bytes: int,
+        object_key: str,
         mime_type: str | None = None,
         expected_version: int | None = None,
+        author: str | None = None,
+        restored_from: int | None = None,
     ) -> WorkspaceFileRecord:
-        """Point ``path`` at a blob already in object storage (a verified direct upload)."""
+        """Make ``path`` a new version holding the bytes already stored at ``object_key``."""
         ...
+
+    async def find_object(self, scope_id: str, content_sha256: str, size_bytes: int) -> str | None:
+        """The key of bytes this workspace already stores with this SHA-256 (any path or version)."""
+        ...
+
+    async def list_versions(self, scope_id: str, path: str) -> list[WorkspaceFileVersion]:
+        """Every saved version of ``path``, newest first (kept through deletes)."""
+        ...
+
+    async def get_version(self, scope_id: str, path: str, version: int) -> WorkspaceFileVersion | None: ...
 
     async def soft_delete(
         self, scope_id: str, path: str, *, expected_version: int | None = None

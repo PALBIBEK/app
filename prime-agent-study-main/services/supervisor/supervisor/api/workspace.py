@@ -27,6 +27,7 @@ from supervisor.seams.services import (
     UnauthorizedError,
     WorkspacePathEscape,
     WorkspaceStore,
+    new_object_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,7 @@ async def put_workspace_file(
     expected_version: int | None = Query(default=None),
     mime_type: str | None = Query(default=None),
 ) -> WorkspaceFileOut:
-    await _require_scope_grant(
+    principal = await _require_scope_grant(
         request,
         scope_id,
         Grant.WORKSPACE_WRITE,
@@ -239,6 +240,7 @@ async def put_workspace_file(
             body,
             mime_type=mime_type,
             expected_version=expected_version,
+            author=principal.id,
         )
     except WorkspacePathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -331,7 +333,7 @@ async def start_workspace_upload(
     x_principal_id: str | None = Header(default=None),
 ) -> UploadStartOut:
     """Step 1 of a direct upload (see supervisor.workspace_uploads)."""
-    await _require_scope_grant(
+    principal = await _require_scope_grant(
         request,
         scope_id,
         Grant.WORKSPACE_WRITE,
@@ -362,13 +364,14 @@ async def start_workspace_upload(
     if objects is None:
         raise HTTPException(status_code=503, detail="object storage not configured")
 
-    # The same bytes are already stored (another file, scope or earlier upload): just record.
-    head = await objects.head(uploads.blob_key(sha))
-    if head.exists and head.content_sha256 == sha and head.size_bytes == body.size_bytes:
+    # This workspace already stores these bytes (another path or version): just record.
+    # Only this workspace is looked in, so the answer says nothing about any other one.
+    existing = await store.find_object(scope_id, sha, body.size_bytes)
+    if existing is not None:
         try:
             row = await store.commit_object(
-                scope_id, path, content_sha256=sha, size_bytes=body.size_bytes,
-                mime_type=mime, expected_version=body.expected_version,
+                scope_id, path, content_sha256=sha, size_bytes=body.size_bytes, object_key=existing,
+                mime_type=mime, expected_version=body.expected_version, author=principal.id,
             )
         except CasConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -407,7 +410,7 @@ async def complete_workspace_upload(
     x_principal_id: str | None = Header(default=None),
 ) -> WorkspaceFileOut:
     """Step 3: check what was uploaded, promote it to its content-addressed blob, record it."""
-    await _require_scope_grant(
+    principal = await _require_scope_grant(
         request,
         scope_id,
         Grant.WORKSPACE_WRITE,
@@ -442,8 +445,10 @@ async def complete_workspace_upload(
             detail="the uploaded bytes do not match the announced size and SHA-256; upload again",
         )
 
-    final = uploads.blob_key(ticket.content_sha256)
-    if not await objects.exists(final):
+    # Promote to the version's own private key (or reuse this workspace's copy of the bytes).
+    final = await store.find_object(scope_id, ticket.content_sha256, ticket.size_bytes)
+    if final is None:
+        final = new_object_key(scope_id)
         await objects.copy(staged, final, content_sha256=ticket.content_sha256)
     await objects.delete(staged)
     try:
@@ -452,11 +457,133 @@ async def complete_workspace_upload(
             ticket.path,
             content_sha256=ticket.content_sha256,
             size_bytes=ticket.size_bytes,
+            object_key=final,
             mime_type=ticket.mime_type,
             expected_version=ticket.expected_version,
+            author=principal.id,
         )
     except CasConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except WorkspacePathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _file_out(row)
+
+
+class FileVersionOut(BaseModel):
+    version: int
+    content_sha256: str
+    size_bytes: int
+    mime_type: str | None = None
+    created_at: str
+    author: str | None = None
+    restored_from: int | None = None
+    current: bool = False
+
+
+class RestoreIn(BaseModel):
+    version: int = Field(ge=1)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+# History lives under its own prefix: a file path may itself end in ``/versions``.
+# The version route comes first: the list route's path would also match ``.../@3``.
+@router.get("/{scope_id}/history/{path:path}/@{version}")
+async def get_file_version(
+    scope_id: str,
+    path: str,
+    version: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_tenant_id: str | None = Header(default=None),
+    x_principal_id: str | None = Header(default=None),
+) -> Response:
+    """The bytes of one saved version."""
+    await _require_scope_grant(
+        request, scope_id, Grant.WORKSPACE_READ,
+        authorization=authorization, x_tenant_id=x_tenant_id, x_principal_id=x_principal_id,
+    )
+    store = _workspace_store(request)
+    try:
+        found = await store.get_version(scope_id, path, version)
+    except WorkspacePathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    objects = getattr(store, "objects", None)
+    if found is None or objects is None:
+        raise HTTPException(status_code=404, detail="not found")
+    data = await objects.get(found.object_key)
+    return Response(content=data, media_type=found.mime_type or "application/octet-stream")
+
+
+@router.get("/{scope_id}/history/{path:path}", response_model=list[FileVersionOut])
+async def list_file_versions(
+    scope_id: str,
+    path: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_tenant_id: str | None = Header(default=None),
+    x_principal_id: str | None = Header(default=None),
+) -> list[FileVersionOut]:
+    """Every saved version of ``path``, newest first (kept after a delete)."""
+    await _require_scope_grant(
+        request, scope_id, Grant.WORKSPACE_READ,
+        authorization=authorization, x_tenant_id=x_tenant_id, x_principal_id=x_principal_id,
+    )
+    store = _workspace_store(request)
+    try:
+        versions = await store.list_versions(scope_id, path)
+        live = await store.stat(scope_id, path)
+    except WorkspacePathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not versions:
+        raise HTTPException(status_code=404, detail="not found")
+    return [
+        FileVersionOut(
+            version=v.version,
+            content_sha256=v.content_sha256,
+            size_bytes=v.size_bytes,
+            mime_type=v.mime_type,
+            created_at=v.created_at.isoformat(),
+            author=v.author,
+            restored_from=v.restored_from,
+            current=live is not None and live.version == v.version,
+        )
+        for v in versions
+    ]
+
+
+@router.post("/{scope_id}/restore/{path:path}", response_model=WorkspaceFileOut)
+async def restore_file_version(
+    scope_id: str,
+    path: str,
+    body: RestoreIn,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_tenant_id: str | None = Header(default=None),
+    x_principal_id: str | None = Header(default=None),
+) -> WorkspaceFileOut:
+    """Make an earlier version current again: a new version with its bytes (nothing is lost)."""
+    principal = await _require_scope_grant(
+        request, scope_id, Grant.WORKSPACE_WRITE,
+        authorization=authorization, x_tenant_id=x_tenant_id, x_principal_id=x_principal_id,
+    )
+    store = _workspace_store(request)
+    try:
+        old = await store.get_version(scope_id, path, body.version)
+        if old is None:
+            raise HTTPException(status_code=404, detail=f"{path} has no version {body.version}")
+        row = await store.commit_object(
+            scope_id,
+            old.path,
+            content_sha256=old.content_sha256,
+            size_bytes=old.size_bytes,
+            object_key=old.object_key,
+            mime_type=old.mime_type,
+            expected_version=body.expected_version,
+            author=principal.id,
+            restored_from=old.version,
+        )
+    except WorkspacePathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CasConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _file_out(row)

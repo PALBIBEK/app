@@ -237,6 +237,29 @@ class WorkspaceFileRow(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WorkspaceFileVersionRow(Base):
+    """Every saved state of a workspace path (history, restore). Bytes live in ObjectStorage
+    under the version's own opaque key; a restore records a new version pointing at old bytes."""
+
+    __tablename__ = "workspace_file_versions"
+    __table_args__ = (
+        UniqueConstraint("scope_id", "path", "version", name="uq_workspace_file_versions_path_version"),
+        Index("ix_workspace_file_versions_scope_sha", "scope_id", "content_sha256"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(36), ForeignKey("scopes.id"), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    restored_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
 class ScopeMembershipRow(Base):
     """Principal membership in a workspace scope (Track B WP-M4)."""
 
