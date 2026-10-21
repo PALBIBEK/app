@@ -128,21 +128,6 @@ class MemoryBank:
                 db.expunge(r)
             return rows
 
-    async def wipe_scope(self, scope: Scope) -> int:
-        """Test/rebuild helper — hard-delete all items in scope."""
-        async with self._factory() as db:
-            result = await db.execute(
-                select(MemoryItemRow).where(
-                    MemoryItemRow.tenant == scope.tenant,
-                    MemoryItemRow.subject == scope.subject,
-                    MemoryItemRow.namespace == scope.namespace,
-                )
-            )
-            rows = list(result.scalars().all())
-            for r in rows:
-                await db.delete(r)
-            await db.commit()
-            return len(rows)
 
     async def find_near_duplicate(
         self, scope: Scope, content: str, *, threshold: float = 0.92

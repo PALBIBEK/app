@@ -161,8 +161,6 @@ class ModelEntry:
     """Offered in the model picker by default."""
     base: bool
     """Selectable as a session's base model."""
-    auxiliary: bool = False
-    """The provider's cheap model for side calls (titles, classification)."""
     button_label: str | None = None
     request: RequestOverride | None = None
     clone: Clone | None = None
@@ -258,7 +256,6 @@ MODEL_REGISTRY: tuple[ModelEntry, ...] = (
         fast_mode=False,
         webui=True,
         base=True,
-        auxiliary=True,
         clone=Clone(
             "claude-opus-4-8",
             0.1,
@@ -307,7 +304,6 @@ MODEL_REGISTRY: tuple[ModelEntry, ...] = (
         fast_mode=True,
         webui=True,
         base=True,
-        auxiliary=True,
         button_label="5.6 Luna",
         clone=_gpt56(
             0.2,
@@ -462,13 +458,3 @@ def offered_in_picker(model_id: str) -> bool:
     return entry is not None and entry.webui and entry.base
 
 
-def auxiliary_model_for(model_id: str) -> str:
-    """The cheap model of the same provider for side calls, else the model itself."""
-    spec = resolve_builtin(model_id)
-    if spec is None:
-        return model_id
-    for entry in MODEL_REGISTRY:
-        candidate = resolve_builtin(entry.id) if entry.auxiliary else None
-        if candidate is not None and candidate.provider == spec.provider:
-            return entry.id
-    return model_id

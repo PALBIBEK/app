@@ -133,26 +133,3 @@ class EraseService:
         METRICS.inc("bank_forgets", len(item_ids))
         return {"items_forgotten": len(item_ids), "sessions_marked": len(sessions)}
 
-    async def list_audit(self, tenant: str, *, limit: int = 50) -> list[dict]:
-        async with self._factory() as db:
-            result = await db.execute(
-                select(ForgetAuditRow)
-                .where(ForgetAuditRow.tenant == tenant)
-                .order_by(ForgetAuditRow.created_at_ms.desc())
-                .limit(limit)
-            )
-            rows = list(result.scalars().all())
-            return [
-                {
-                    "id": r.id,
-                    "tenant": r.tenant,
-                    "subject": r.subject,
-                    "namespace": r.namespace,
-                    "actor": r.actor,
-                    "reason": r.reason,
-                    "count": r.count,
-                    "kind": r.kind,
-                    "created_at_ms": r.created_at_ms,
-                }
-                for r in rows
-            ]

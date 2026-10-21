@@ -209,8 +209,6 @@ class GatewayModels:
             if isinstance(m, ModelSpec) and (include_aliased or m.id not in self._aliased)
         ]
 
-    def embedding_ids(self) -> list[str]:
-        return [m.id for m in self._models.values() if isinstance(m, EmbeddingModel)]
 
 
 class GatewayCatalog:

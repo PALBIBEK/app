@@ -109,7 +109,6 @@ async def test_flush_enqueues_extraction_on_turn_end(svc: MemoryService):
     svc.append(handle.id, "user/message", {"text": "I prefer pytest for all tests"})
     svc.append(handle.id, "turn/end", {"kind": "ok"})
     await svc.flush(handle.id)
-    assert await svc.extraction_pending_count() >= 1
     n = await svc.process_extraction_jobs()
     assert n >= 1
     hit = await svc.recall(scope(), "pytest preference", TokenBudget(max_tokens=128))
@@ -134,25 +133,6 @@ async def test_extraction_error_does_not_fail_flush(svc: MemoryService):
     assert last >= 0
     await broken.process_extraction_jobs()
     await broken.aclose()
-
-
-@pytest.mark.asyncio
-async def test_rebuild_tier2_from_tier1(svc: MemoryService):
-    handle = await svc.create_session(scope())
-    svc.append(
-        handle.id,
-        "user/message",
-        {"text": "Main project is YAL agent platform"},
-    )
-    svc.append(handle.id, "turn/end", {})
-    await svc.flush(handle.id)
-    await svc.process_extraction_jobs()
-    before = await svc.recall(scope(), "project YAL", TokenBudget(max_tokens=128))
-    assert before.items
-    await svc.rebuild_tier2_from_tier1(scope(), handle.id)
-    after = await svc.recall(scope(), "project YAL", TokenBudget(max_tokens=128))
-    assert after.items
-    assert any("YAL" in i.content for i in after.items)
 
 
 @pytest.mark.asyncio

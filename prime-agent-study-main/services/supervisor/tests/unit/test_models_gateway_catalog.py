@@ -124,7 +124,6 @@ def test_only_models_in_both_responses_with_valid_chat_metadata_are_admitted() -
     f.catalog.refresh()
     assert list(f.catalog.models) == ["gateway/vendor/new-model", "gateway/embed"]
     assert [m.id for m in f.catalog.admitted.chat_models()] == ["gateway/vendor/new-model"]
-    assert f.catalog.admitted.embedding_ids() == ["gateway/embed"]
 
 
 def test_a_successful_revocation_clears_aliases_and_a_later_failure_cannot_undo_it() -> None:
