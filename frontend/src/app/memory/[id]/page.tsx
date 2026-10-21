@@ -1,16 +1,6 @@
-/**
- * Memory detail — honest unavailable empty state (D7 acceptance / G6).
- */
+/** Memory lives on one page now: notebooks by harness and version. */
+import { redirect } from 'next/navigation';
 
-'use client';
-
-import { AuthGuard } from '@/components/auth/AuthGuard';
-import { MemoryUnavailablePage } from '@/components/memory/MemoryUnavailable';
-
-export default function MemoryDetailPage(): JSX.Element {
-  return (
-    <AuthGuard>
-      <MemoryUnavailablePage />
-    </AuthGuard>
-  );
+export default function MemoryRedirect(): never {
+  redirect('/memory');
 }

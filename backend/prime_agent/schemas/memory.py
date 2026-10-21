@@ -26,6 +26,7 @@ class NotebookArchiveRequest(BaseModel):
 class NotebookResponse(BaseModel):
     id: str
     agent_pin: str
+    version: int | None = None  # the harness release this agent version is (when known)
     name: str
     label: str | None = None
     revision: int

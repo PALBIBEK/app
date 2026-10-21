@@ -42,10 +42,22 @@ async def list_notebooks(
     current_user: CurrentUser,
     harness_id: str = Query(min_length=1),
     archived: bool = False,
+    all_versions: bool = False,
 ) -> list[dict]:
+    """The harness's notebooks: of the version it runs now, or of every version it had.
+
+    Each version keeps its own notebooks (sessions pin one exact version); recall still
+    finds facts an older version learned, by meaning.
+    """
     service = _service()
-    pin = await service.pin_for(harness_id, current_user.id, db)
-    return await service.list_notebooks(TenantPrincipal.from_user(current_user), pin, archived=archived)
+    identity = TenantPrincipal.from_user(current_user)
+    pins = await service.pins_for(harness_id, current_user.id, db) if all_versions else [
+        (await service.pin_for(harness_id, current_user.id, db), None)
+    ]
+    out: list[dict] = []
+    for pin, version in pins:
+        out += [nb | {"version": version} for nb in await service.list_notebooks(identity, pin, archived=archived)]
+    return out
 
 
 @router.post("/notebooks", response_model=NotebookResponse, status_code=status.HTTP_201_CREATED)
