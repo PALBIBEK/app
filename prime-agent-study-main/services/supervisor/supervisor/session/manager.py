@@ -472,17 +472,22 @@ class SessionManager(UpkeepOps):
         if (cached := self._brains.get(session_id)) is not None:
             self._brains.move_to_end(session_id)
             return cached
-        await self._require_active(session_id)
         row = await self._get_session_row(session_id)
-        manifest = self._pinned_manifest(row)
         pins: SessionPins | None = None
-        memory_profile = None
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
+            # Before anything resolves a pin: this worker may not have seen artifacts
+            # published after it started (_require_active reads the sandbox profile).
             await sync_composition(
                 self._composition_catalog, self._db, pins.composition_id, pins.composition_digest
             )
-            memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
+        await self._require_active(session_id)
+        manifest = self._pinned_manifest(row)
+        memory_profile = (
+            load_pinned_memory_profile(pins, self._composition_catalog)
+            if pins is not None and self._composition_catalog is not None
+            else None
+        )
         principal = Principal(id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id)
         model = session_model(manifest, pins)
         owner, agent = self._long_term.setdefault(
