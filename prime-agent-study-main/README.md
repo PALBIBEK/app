@@ -14,7 +14,7 @@ prime-agent-study-main/
 ├── deploy/              # staging and Kubernetes manifests
 ├── e2e/                 # the end-to-end stack and stages (plus the live real-model stage)
 ├── scripts/             # CI gates
-├── frontend/            # the frontend prototype
+├── (frontend and backend live at the repository root: ../frontend, ../backend)
 └── githi/               # the original githi project
 ```
 

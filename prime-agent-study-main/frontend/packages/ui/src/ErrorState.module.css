@@ -1,8 +1,0 @@
-.root {
-  display: grid; gap: var(--space-3); padding: var(--space-6);
-  border-radius: var(--radius-lg); background: var(--color-status-danger-muted);
-  color: var(--color-status-danger); border: 1px solid color-mix(in srgb, var(--color-status-danger) 25%, transparent);
-}
-.title { margin: 0; font-family: var(--font-display); }
-.body { margin: 0; color: var(--color-text-primary); }
-.meta { font-family: var(--font-mono); font-size: var(--text-small); color: var(--color-text-secondary); }
