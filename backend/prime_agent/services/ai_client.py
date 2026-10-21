@@ -563,6 +563,36 @@ class AiClient:
             expected=(200,),
         )
 
+    async def list_file_versions(
+        self, identity: TenantPrincipal, scope_id: str, path: str
+    ) -> list[dict[str, Any]]:
+        """GET /v1/scopes/{scope_id}/history/{path} — every saved version, newest first."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        payload = await self._json_request(
+            "GET", f"/v1/scopes/{quote(scope_id, safe='')}/history/{encoded}", identity, expected=(200,)
+        )
+        return payload if isinstance(payload, list) else []
+
+    async def get_file_version_bytes(
+        self, identity: TenantPrincipal, scope_id: str, path: str, version: int
+    ) -> bytes:
+        """GET /v1/scopes/{scope_id}/history/{path}/@{version} — one version's bytes."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        return await self._bytes_request(
+            "GET", f"/v1/scopes/{quote(scope_id, safe='')}/history/{encoded}/@{version}", identity,
+            expected=(200,),
+        )
+
+    async def restore_file_version(
+        self, identity: TenantPrincipal, scope_id: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/scopes/{scope_id}/restore/{path} — make an earlier version current again."""
+        encoded = "/".join(quote(p, safe="") for p in path.split("/") if p)
+        return await self._json_request(
+            "POST", f"/v1/scopes/{quote(scope_id, safe='')}/restore/{encoded}", identity,
+            json_body=body, expected=(200,),
+        )
+
     async def start_workspace_upload(
         self, identity: TenantPrincipal, scope_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:

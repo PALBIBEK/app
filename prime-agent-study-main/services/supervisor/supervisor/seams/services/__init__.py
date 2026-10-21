@@ -71,6 +71,7 @@ from supervisor.seams.services.workspace_store import (
     WorkspaceSyncReport,
     WorkspaceTreeIO,
     new_object_key,
+    normalize_workspace_path,
 )
 
 __all__ = [
@@ -118,6 +119,7 @@ __all__ = [
     "memory_service_base_url",
     "memory_service_credential",
     "new_object_key",
+    "normalize_workspace_path",
     "recall_memory_items",
     "resolve_memory_scope",
     "tree_for_sandbox",

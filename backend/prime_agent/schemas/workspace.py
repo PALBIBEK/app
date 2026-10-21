@@ -64,6 +64,29 @@ class WorkspaceUploadStartOut(BaseModel):
     file: WorkspaceFileOut | None = None
 
 
+class FileVersionOut(BaseModel):
+    """One saved version of a workspace file (newest first in a history)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int
+    content_sha256: str
+    size_bytes: int
+    mime_type: str | None = None
+    created_at: str
+    author: str | None = None
+    author_email: str | None = None
+    restored_from: int | None = None
+    current: bool = False
+
+
+class RestoreVersionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
 class WorkspaceUploadCompleteIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -16,30 +16,15 @@ from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
     WorkspaceFileRecord,
     WorkspaceFileVersion,
-    WorkspacePathEscape,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
     new_object_key,
+    normalize_workspace_path,
 )
 
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def normalize_workspace_path(path: str) -> str:
-    raw = path.strip().replace("\\", "/")
-    raw = raw.removeprefix("/")
-    parts: list[str] = []
-    for part in raw.split("/"):
-        if part in ("", "."):
-            continue
-        if part == "..":
-            raise WorkspacePathEscape(path)
-        parts.append(part)
-    if not parts:
-        raise WorkspacePathEscape(path)
-    return "/".join(parts)
 
 
 @dataclass

@@ -96,35 +96,54 @@ or search facts. *History* restores a notebook to how it was after any change.
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
 
-## File uploads
+## Workspace files
 
-Workspace files go straight from the browser to object storage. The API servers never hold
-the bytes. This is the usual production pattern for S3-backed apps (and how OpenAI's Uploads
-API is shaped):
+A workspace owns its files and decides who may see them (*Shared with*). Every save is a new
+**version**, and older versions are kept: open a file's history, view or download any version,
+or **restore** one. Restoring adds a new version with the old content, so nothing is lost; a
+deleted file can be restored the same way. **Folders** are the `/`-separated parts of file
+paths, as in S3 and git. *New folder* opens one to upload into, and it stays once it holds a file.
 
-1. **Start:** `POST /workspace/scopes/{scope}/uploads` with the path, size, type and SHA-256,
-   which the browser computes itself. The supervisor checks the grant, the path, the size limit
-   and the expected version. It answers with a short-lived signed PUT URL for a staging key
-   (`uploads/<scope>/<id>`) and a signed ticket. Bytes it already stores are recorded at once,
-   with nothing to send.
+Each version's bytes are stored under a private, opaque key, `workspaces/<scope>/objects/<id>`.
+The key contains neither the file's name nor its content hash; names, folders and history live
+in PostgreSQL. Identical bytes are stored once **per workspace**. No answer depends on what
+another workspace holds, so uploading a file never reveals that someone else has the same one.
+
+### Uploads
+
+Files go straight from the browser to object storage, and the API servers never hold the
+bytes. This is the usual production pattern for S3-backed apps, and it's how OpenAI's Uploads
+API is shaped:
+
+1. **Start:** `POST /workspace/scopes/{scope}/uploads` with the path, size, type and SHA-256
+   (which the browser computes). The supervisor checks the grant, the path, the size limit and
+   the expected version. It answers with a short-lived signed PUT URL for a staging key
+   (`uploads/<scope>/<id>`) and a signed ticket. If this workspace already holds those bytes,
+   the new version is recorded at once and nothing is sent.
 2. **Upload:** the browser PUTs the file to that URL, showing progress. The URL signs the
    length, type and SHA-256 checksum, so S3 refuses any other bytes.
 3. **Complete:** `POST .../uploads/complete` with the ticket. The supervisor measures what
    arrived: S3's own checksum, or a streamed SHA-256 on stores that don't keep one (MinIO,
    SeaweedFS). It deletes the upload if it doesn't match. Otherwise it copies it inside the
-   store to its content-addressed key (`blobs/<sha256>`) and records the file. A client can
-   never write a shared blob directly.
+   store to the new version's private key and records the version, along with who saved it.
+   The client only ever writes its staging key, never a recorded version.
 
-If the store can't sign URLs, or the page isn't on https/localhost (where browsers can't
-hash files), the file goes through `PUT .../files/{path}` instead. It's read in chunks up to
-the same limit.
+If the store can't sign URLs, or the page isn't on https/localhost (where browsers can't hash
+files), the file goes through `PUT .../files/{path}` instead. It's read in chunks up to the
+same limit.
+
+History: `GET .../history/{path}` lists versions, `GET .../history/{path}/@{n}` returns one,
+and `POST .../restore/{path}` with `{"version": n}` restores one.
 
 For production:
 
 | Setting | What it does |
 |---|---|
-| `WORKSPACE_MAX_UPLOAD_BYTES` (supervisor), `WORKSPACE_MAX_UPLOAD_BYTES` (backend) | Largest file (default 100 MiB) |
+| `WORKSPACE_MAX_UPLOAD_BYTES` (supervisor and backend) | Largest file (default 100 MiB) |
 | `OBJECT_STORAGE_PUBLIC_ENDPOINT` | The address browsers use to reach the store, when the supervisor reaches it by another (e.g. a compose service name) |
 | `WORKSPACE_UPLOAD_SECRET` (or `CAPABILITY_SECRET`) | Signs upload tickets; every supervisor API replica needs the same value |
 | Bucket CORS | Allow `PUT` from the app's origin with headers `Content-Type` and `x-amz-checksum-sha256` (`./dev.sh` sets this locally) |
-| Bucket lifecycle rule | Expire objects under `uploads/` after a day, which removes abandoned uploads |
+| Bucket lifecycle rule | Expire objects under `uploads/` after a day, which removes abandoned uploads (never apply it to `workspaces/`) |
+
+Files saved before this change keep their old storage keys and are read from there; their
+current state is their first recorded version.

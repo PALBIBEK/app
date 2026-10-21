@@ -16,6 +16,8 @@ from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
     EnsureScopeResponse,
+    FileVersionOut,
+    RestoreVersionIn,
     InviteScopeMemberIn,
     ScopeMemberOut,
     WorkspaceFileOut,
@@ -112,6 +114,47 @@ async def put_agent_workspace_file(
         identity=identity,
         mime_type=resolved_mime,
         expected_version=expected_version,
+    )
+
+
+# History has its own prefix (a file path may end in "versions"); one version's bytes are
+# ".../@{version}", declared first because the list route's path would match it too.
+@router.get("/scopes/{scope_id}/history/{path:path}/@{version}")
+async def get_agent_workspace_file_version(
+    scope_id: str,
+    path: str,
+    version: int,
+    current_user: CurrentUser,
+) -> RawResponse:
+    data = await _service().get_version_bytes(
+        scope_id=scope_id, path=path, version=version, identity=TenantPrincipal.from_user(current_user)
+    )
+    return RawResponse(content=data, media_type="application/octet-stream")
+
+
+@router.get("/scopes/{scope_id}/history/{path:path}", response_model=list[FileVersionOut])
+async def list_agent_workspace_file_versions(
+    scope_id: str,
+    path: str,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> list[FileVersionOut]:
+    """Every saved version of a file, newest first, with who saved it."""
+    return await _service().list_versions(
+        scope_id=scope_id, path=path, identity=TenantPrincipal.from_user(current_user), db=db
+    )
+
+
+@router.post("/scopes/{scope_id}/restore/{path:path}", response_model=WorkspaceFileOut)
+async def restore_agent_workspace_file_version(
+    scope_id: str,
+    path: str,
+    body: RestoreVersionIn,
+    current_user: CurrentUser,
+) -> WorkspaceFileOut:
+    """Make an earlier version current again (a new version; nothing is lost)."""
+    return await _service().restore_version(
+        scope_id=scope_id, path=path, body=body, identity=TenantPrincipal.from_user(current_user)
     )
 
 

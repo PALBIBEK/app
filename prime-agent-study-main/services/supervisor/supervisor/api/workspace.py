@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from supervisor import workspace_uploads as uploads
 from supervisor.api import deps
-from supervisor.seams.providers.workspace import normalize_workspace_path
 from supervisor.seams.services import (
     CasConflict,
     DirectUploadUnsupported,
@@ -28,6 +27,7 @@ from supervisor.seams.services import (
     WorkspacePathEscape,
     WorkspaceStore,
     new_object_key,
+    normalize_workspace_path,
 )
 
 logger = logging.getLogger(__name__)

@@ -97,6 +97,23 @@ class WorkspaceFileVersion:
     restored_from: int | None = None
 
 
+def normalize_workspace_path(path: str) -> str:
+    """A workspace path in canonical form (no leading slash, no ``.``/empty parts); refuses
+    ``..`` and empty paths (WorkspacePathEscape)."""
+    raw = path.strip().replace("\\", "/")
+    raw = raw.removeprefix("/")
+    parts: list[str] = []
+    for part in raw.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            raise WorkspacePathEscape(path)
+        parts.append(part)
+    if not parts:
+        raise WorkspacePathEscape(path)
+    return "/".join(parts)
+
+
 def new_object_key(scope_id: str) -> str:
     """Where a new version's bytes go: private to the workspace and opaque (never the path or
     the content hash, so storage reveals nothing about names or about other workspaces)."""

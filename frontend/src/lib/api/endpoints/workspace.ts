@@ -15,6 +15,19 @@ export interface WorkspaceFile {
   file_id: string;
 }
 
+/** One saved version of a file (newest first in a history). */
+export interface FileVersion {
+  version: number;
+  content_sha256: string;
+  size_bytes: number;
+  mime_type?: string | null;
+  created_at: string;
+  author?: string | null;
+  author_email?: string | null;
+  restored_from?: number | null;
+  current: boolean;
+}
+
 export interface ScopeMember {
   principal_id: string;
   grants: string[];
@@ -113,6 +126,20 @@ export const workspaceAPI = {
     apiClient.get<Blob>(`/workspace/scopes/${encodeURIComponent(scopeId)}/files/${filePath(path)}`, {
       responseType: 'blob',
     }),
+
+  /** Every saved version of a file, newest first (kept after it is deleted). */
+  listVersions: (scopeId: string, path: string): Promise<FileVersion[]> =>
+    apiClient.get<FileVersion[]>(`/workspace/scopes/${encodeURIComponent(scopeId)}/history/${filePath(path)}`),
+
+  /** One version's bytes. */
+  getVersion: (scopeId: string, path: string, version: number): Promise<Blob> =>
+    apiClient.get<Blob>(`/workspace/scopes/${encodeURIComponent(scopeId)}/history/${filePath(path)}/@${version}`, {
+      responseType: 'blob',
+    }),
+
+  /** Make an earlier version current again (a new version; nothing is lost). */
+  restoreVersion: (scopeId: string, path: string, version: number): Promise<WorkspaceFile> =>
+    apiClient.post<WorkspaceFile>(`/workspace/scopes/${encodeURIComponent(scopeId)}/restore/${filePath(path)}`, { version }),
 
   listMembers: async (scopeId: string): Promise<ScopeMember[]> =>
     apiClient.get<ScopeMember[]>(`/workspace/scopes/${encodeURIComponent(scopeId)}/members`),

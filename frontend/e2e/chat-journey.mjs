@@ -47,6 +47,17 @@ await p.getByTestId('approval-approve').first().click({ timeout: 30000 });
 await p.getByTestId('tool-output').filter({ hasText: marker }).first().waitFor({ timeout: 30000 });
 console.log('1b uploaded straight to storage; the agent read it');
 
+// A second upload of the same path is version 2; its history can restore version 1.
+await p.getByTestId('agent-workspace-upload').setInputFiles({ name: 'data.txt', mimeType: 'text/plain', buffer: Buffer.from('replaced\n') });
+await p.getByTestId('agent-workspace-file-list').getByText('v2 · ', { exact: false }).waitFor({ timeout: 30000 });
+await p.getByRole('button', { name: 'History of data.txt' }).click();
+await p.getByTestId('file-history').getByRole('button', { name: 'Restore version 1' }).click();
+await p.getByTestId('file-history').getByText('restored from version 1').waitFor({ timeout: 30000 });
+check((await p.getByTestId('file-history').innerText()).includes('Version 3'), 'restore made version 3');
+await p.getByRole('button', { name: 'View data.txt' }).click();
+await p.getByTestId('file-preview').filter({ hasText: marker }).waitFor({ timeout: 15000 });
+console.log('1c version history: restored version 1 as version 3');
+
 await box.fill('/tool bash {"command": "echo from-chat > chat.txt && cat chat.txt"}');
 await box.press('Enter');
 await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });

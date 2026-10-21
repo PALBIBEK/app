@@ -98,3 +98,37 @@ async def test_refreshing_a_session_without_a_sandbox_yet_is_not_an_error(monkey
     identity = TenantPrincipal(tenant_id="t", principal_id="p")
     out = await service.rehydrate_session(session_id="s", user_id="u", identity=identity, db=None)
     assert out.status == "no_sandbox"
+
+
+async def test_history_names_authors_by_email_and_restore_goes_to_the_supervisor(db_session, make_user, monkeypatch):
+    user = await make_user(email="hist@example.com", name="Hist")
+    seen: list[tuple[str, str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.raw_path.decode(), request.content))
+        path = request.url.path
+        if path.endswith("/@1"):
+            return httpx.Response(200, content=b"first")
+        if "/history/" in path:
+            return httpx.Response(200, json=[
+                {"version": 2, "content_sha256": "b" * 64, "size_bytes": 6, "mime_type": "text/plain",
+                 "created_at": "2026-10-22T00:00:00+00:00", "author": user.id, "restored_from": None, "current": True},
+                {"version": 1, "content_sha256": "a" * 64, "size_bytes": 5, "mime_type": "text/plain",
+                 "created_at": "2026-10-21T00:00:00+00:00", "author": "agent-run", "restored_from": None, "current": False},
+            ])
+        return httpx.Response(200, json={**FILE, "path": "notes/my plan.md", "version": 3})
+
+    async with _api(db_session, user, handler, monkeypatch) as api:
+        history = await api.get("/api/v1/workspace/scopes/s1/history/notes/my%20plan.md")
+        old = await api.get("/api/v1/workspace/scopes/s1/history/notes/my%20plan.md/@1")
+        restored = await api.post("/api/v1/workspace/scopes/s1/restore/notes/my%20plan.md", json={"version": 1})
+    assert history.status_code == 200, history.text
+    assert [(v["version"], v["author_email"]) for v in history.json()] == [(2, "hist@example.com"), (1, None)]
+    assert old.content == b"first"
+    assert restored.json()["version"] == 3
+    assert [s[1] for s in seen] == [
+        "/v1/scopes/s1/history/notes/my%20plan.md",
+        "/v1/scopes/s1/history/notes/my%20plan.md/@1",
+        "/v1/scopes/s1/restore/notes/my%20plan.md",
+    ]
+    assert json.loads(seen[2][2]) == {"version": 1}
