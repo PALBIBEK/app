@@ -30,15 +30,12 @@ from prime_agent.schemas.session import (
     SpawnSubagentRequest,
     SpawnSubagentResponse,
 )
-from prime_agent.services.ai_client import AiClient, AiPlatformNotReadyError, AiUpstreamError
+from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.harness_bind_service import (
-    BindDomainError,
     HarnessBindService,
-    raise_bind_http,
 )
 from prime_agent.services.platform_status_service import (
     PlatformStatusService,
-    raise_ai_not_ready_http,
 )
 
 

@@ -1,79 +1,56 @@
 /**
- * Memory BFF types — outer /memory projection of Durable Memory (D7).
+ * Long-term memory: a user's notebooks for one harness, and their facts.
+ * Mirrors the backend's /memory routes (which proxy the supervisor's notebooks).
  */
 
-export type MemoryType =
-  | 'short_term'
-  | 'long_term'
-  | 'episodic'
-  | 'semantic'
-  | 'procedural';
-
-export type MemorySource = 'user' | 'agent' | 'system' | 'external';
-
-export interface MemoryEntry {
+export interface Notebook {
   id: string;
-  content: string;
-  type: MemoryType;
-  source: MemorySource;
-  session_id?: string | null;
-  harness_id?: string | null;
-  metadata?: Record<string, unknown>;
-  relevance_score?: number | null;
-  created_at: string;
-  expires_at?: string | null;
+  agent_pin: string;
+  name: string;
+  label: string | null;
+  revision: number;
+  created_at: number;
+  archived: boolean;
+  facts: number;
+  bytes: number;
+  updated_at: number | null;
 }
 
-/** Alias used by some pages / stubs */
-export type MemoryItem = MemoryEntry;
-
-export interface MemoryListResponse {
-  data: MemoryEntry[];
-  total: number;
-  page: number;
-  page_size: number;
+export interface Fact {
+  id: string;
+  text: string;
+  sensitivity: string;
+  sources: string[];
+  source_unknown: boolean;
+  author: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
-export interface MemoryDetailResponse {
-  data: MemoryEntry;
+export interface Revision {
+  revision: number;
+  fact_id: string;
+  op: 'insert' | 'update' | 'delete' | string;
+  text: string;
+  sensitivity: string;
+  at: number;
+  author: string | null;
 }
 
-export interface MemoryCreateRequest {
-  content: string;
-  type?: MemoryType;
-  source?: MemorySource;
-  session_id?: string | null;
-  harness_id?: string | null;
-  metadata?: Record<string, unknown>;
-  namespace?: string | null;
-  expires_at?: string | null;
-}
-
-export interface MemoryUpdateRequest {
-  content?: string;
-  metadata?: Record<string, unknown> | null;
-  expires_at?: string | null;
-  namespace?: string | null;
+export interface NotebookCreateRequest {
+  harness_id: string;
+  name: string;
+  label?: string | null;
 }
 
 export interface MemorySearchRequest {
+  harness_id: string;
   query: string;
-  type?: MemoryType;
-  session_id?: string;
-  harness_id?: string;
+  notebook_id?: string;
   limit?: number;
-  min_relevance?: number;
-  namespace?: string;
 }
 
-export interface MemorySearchResponse {
-  results: MemoryEntry[];
-  query: string;
-  total_found: number;
-}
-
-export interface MemoryListParams {
-  page?: number;
-  page_size?: number;
-  namespace?: string;
+export interface MemoryHit {
+  notebook_id: string;
+  fact: string;
 }

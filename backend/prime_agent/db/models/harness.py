@@ -132,7 +132,7 @@ class Harness(Base, AuditableMixin):
     harness_version: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
-        comment="AI harness_version pin (e.g. coding-v1)",
+        comment="AI harness_version pin (e.g. githi-v1)",
     )
     runtime: Mapped[str | None] = mapped_column(
         String(64),

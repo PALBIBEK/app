@@ -26,24 +26,8 @@ from prime_agent.services.tool_publish_service import (
     publish_owned_tool_uuids,
 )
 
-# Shipped MVP defaults — live catalog still validates offered + digest.
-DEFAULT_COMPOSITION_ID = "coding-v1"
-SHIPPED_COMPOSITION_PINS: dict[str, dict[str, str]] = {
-    "coding-v1": {
-        "harness_version": "coding-v1",
-        "runtime": "harness",
-        "composition_digest": (
-            "sha256:2f3c7842ccc00b4f802dc22da3a463e57b2583b6a6d95ebedd3558c41f8ecf7d"
-        ),
-    },
-    "githi-tools-v1": {
-        "harness_version": "coding-v1",
-        "runtime": "githi",
-        "composition_digest": (
-            "sha256:2f87308216eaceee01d4e9e87b4be60dc8e1eb336fc53da9f0cfa8a9eabaace9"
-        ),
-    },
-}
+DEFAULT_COMPOSITION_ID = "githi-v1"
+"""What a harness runs when it names no composition: the shipped githi coding agent."""
 
 
 class BindDomainError(Exception):
@@ -105,6 +89,13 @@ class _ResolvedTarget:
     runtime: str
 
 
+def _semver_key(semver: str | None) -> tuple[int, ...]:
+    parts = []
+    for part in (semver or "0").split("+")[0].split("-")[0].split("."):
+        parts.append(int(part) if part.isdigit() else 0)
+    return tuple(parts)
+
+
 class HarnessBindService:
     """Validate against live catalog and persist immutable pins."""
 
@@ -137,21 +128,32 @@ class HarnessBindService:
         harness = await HarnessService.get_owned(harness_id, user_id, db)
         tool_ids = [str(t) for t in (harness.tools or []) if t]
 
-        # LOCAL_DEMO #3 / D6: attached UUIDs → publish ToolSet + derived composition.
-        # Empty tools keeps shipped coding-v1 pin (bind still works without custom tools).
-        if tool_ids and not request.composition_id and not request.composition_digest:
+        # LOCAL_DEMO #3 / D6: attached UUIDs → a ToolSet and a composition derived
+        # from the base one (its prompt, profiles and harness version, plus the tools).
+        base = await self._resolve(identity, request)
+        if tool_ids and not request.composition_digest:
             try:
+                base_comp = await self._client.get_artifact(
+                    identity, "composition", base.composition_id, base.composition_digest
+                )
+                base_body = base_comp.get("body") or {}
+                pinned_tools = base_body.get("tool_set") or {}
+                base_tools = (
+                    await self._client.get_artifact(
+                        identity, "tool_set", pinned_tools["id"], pinned_tools["digest"]
+                    )
+                ).get("body") if pinned_tools.get("id") and pinned_tools.get("digest") else None
                 published = await publish_owned_tool_uuids(
                     db=db,
                     user_id=user_id,
                     identity=identity,
                     tool_ids=tool_ids,
                     settings=self._settings,
-                    # Echo-path demo: allow attach/list without vendor keys / HttpTool.
-                    # Custom invoke without http_url/handler remains residual.
-                    require_handlers=False,
-                    include_coding_base=True,
+                    # The supervisor refuses a tool with nothing to run it: say so here.
+                    require_handlers=True,
+                    base_tool_set=base_tools,
                     name=f"harness-{harness_id[:8]}-tools",
+                    client=self._client,
                 )
                 digest = published.get("digest")
                 set_name = published.get("name")
@@ -161,11 +163,12 @@ class HarnessBindService:
                     )
                 comp = await publish_harness_composition(
                     identity=identity,
+                    base_composition=base_body,
                     tool_set_name=str(set_name),
                     tool_set_digest=str(digest),
                     settings=self._settings,
                     composition_name=f"harness-{harness_id[:8]}-comp",
-                    harness_version="coding-v1",
+                    client=self._client,
                 )
                 comp_name = str(comp.get("name") or "")
                 comp_digest = str(comp.get("digest") or "")
@@ -178,8 +181,8 @@ class HarnessBindService:
                 target = _ResolvedTarget(
                     composition_id=summary.artifact_id or comp_name,
                     composition_digest=summary.digest,
-                    harness_version="coding-v1",
-                    runtime="harness",
+                    harness_version=base.harness_version,
+                    runtime=base.runtime,
                 )
             except ToolPublishError as exc:
                 raise ToolPublishBindError(
@@ -188,18 +191,13 @@ class HarnessBindService:
                     http_status=getattr(exc, "http_status", None),
                 ) from exc
             except AiUpstreamError as exc:
+                if exc.status_code and 400 <= exc.status_code < 500:
+                    raise ToolPublishBindError(str(exc)) from exc  # the catalog refused it
                 raise CatalogUnavailableError(
                     "AI catalog publish unavailable"
                 ) from exc
         else:
-            target = self._resolve_target(request)
-            summary = await self._fetch_offered(
-                identity, target.composition_id, target.composition_digest
-            )
-            if summary.digest != target.composition_digest:
-                raise CompositionNotOfferedError(
-                    "catalog digest does not match requested pin"
-                )
+            target = base
 
         now = datetime.now(UTC)
         harness.bind_status = "bound"
@@ -265,20 +263,48 @@ class HarnessBindService:
             composition_digest=harness.composition_digest,
         )
 
-    def _resolve_target(self, request: HarnessBindRequest) -> _ResolvedTarget:
+    async def _resolve(
+        self, identity: TenantPrincipal, request: HarnessBindRequest
+    ) -> _ResolvedTarget:
+        """What the catalog says now: never a digest or runtime typed into code.
+
+        No digest → the offered version of that composition (the newest, when
+        several are offered). Harness version from the composition itself, runtime
+        from that harness version unless the request overrides it.
+        """
         composition_id = (request.composition_id or DEFAULT_COMPOSITION_ID).strip()
-        shipped = SHIPPED_COMPOSITION_PINS.get(composition_id)
-        if shipped is None and not request.composition_digest:
-            raise CompositionNotOfferedError(
-                f"unknown composition_id {composition_id!r}; provide composition_digest"
-            )
-
-        digest = request.composition_digest or (shipped or {}).get("composition_digest")
-        if not digest:
-            raise CompositionNotOfferedError("composition_digest is required")
-
-        harness_version = (shipped or {}).get("harness_version") or composition_id
-        runtime = request.runtime or (shipped or {}).get("runtime") or "harness"
+        digest = request.composition_digest
+        try:
+            if not digest:
+                offered = [
+                    c for c in await self._client.list_compositions(identity)
+                    if c.artifact_id == composition_id
+                ]
+                if not offered:
+                    raise CompositionNotOfferedError(
+                        f"composition {composition_id!r} is not offered"
+                    )
+                digest = max(offered, key=lambda c: _semver_key(c.semver)).digest
+            summary = await self._fetch_offered(identity, composition_id, digest)
+            if summary.digest != digest:
+                raise CompositionNotOfferedError("catalog digest does not match requested pin")
+            harness_version = summary.harness_version
+            if not harness_version:
+                raise CompositionNotOfferedError(
+                    f"composition {composition_id!r} names no harness version"
+                )
+            runtime = request.runtime
+            if not runtime:
+                version = await self._client.get_harness_version(identity, harness_version)
+                runtime = str(version.get("runtime") or "")
+                if not runtime:
+                    raise CompositionNotOfferedError(
+                        f"harness version {harness_version!r} names no runtime"
+                    )
+        except AiUpstreamError as exc:
+            if exc.status_code == 404:
+                raise CompositionNotOfferedError(str(exc)) from exc
+            raise CatalogUnavailableError("AI catalog unavailable") from exc
         return _ResolvedTarget(
             composition_id=composition_id,
             composition_digest=digest,

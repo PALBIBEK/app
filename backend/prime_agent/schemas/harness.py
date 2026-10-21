@@ -61,15 +61,15 @@ class HarnessBindRequest(BaseModel):
 
     composition_id: str | None = Field(
         default=None,
-        description="Composition artifact id (default: coding-v1)",
+        description="Composition name (default: githi-v1)",
     )
     composition_digest: str | None = Field(
         default=None,
-        description="Immutable digest; default resolved from shipped map after live validate",
+        description="Immutable digest; default: the offered version of that composition",
     )
     runtime: str | None = Field(
         default=None,
-        description="Optional runtime override (MVP defaults from shipped map)",
+        description="Runtime override; default: the harness version's runtime",
     )
 
     @field_validator("composition_id", "composition_digest", "runtime")
@@ -200,6 +200,12 @@ class CatalogCompositionSummary(BaseModel):
     digest: str
     status: str
     semver: str | None = None
+    body: dict[str, Any] | None = None  # on a single read only
+
+    @property
+    def harness_version(self) -> str | None:
+        value = (self.body or {}).get("harness_version")
+        return str(value) if value else None
 
     @model_validator(mode="before")
     @classmethod

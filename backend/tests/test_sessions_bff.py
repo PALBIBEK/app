@@ -15,14 +15,13 @@ from prime_agent.db.models.session_link import SessionLink
 from prime_agent.main import create_app
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient
-from prime_agent.services.harness_bind_service import SHIPPED_COMPOSITION_PINS
+from tests.support.catalog import DIGEST, PIN
 from prime_agent.services.harness_service import HarnessService
 from prime_agent.services.platform_status_service import PlatformStatusService
 from prime_agent.services.session_service import SessionService
 from prime_agent.web.dependencies import get_current_user, get_db
 
 SECRET = "ai-service-jwt-secret-at-least-32-bytes!!"
-DIGEST = SHIPPED_COMPOSITION_PINS["coding-v1"]["composition_digest"]
 
 
 @pytest.fixture
@@ -72,9 +71,9 @@ async def harness(db_session, owner):
         db_session,
     )
     h.bind_status = "bound"
-    h.harness_version = "coding-v1"
-    h.runtime = "harness"
-    h.composition_id = "coding-v1"
+    h.harness_version = "githi-v1"
+    h.runtime = "githi"
+    h.composition_id = "githi-v1"
     h.composition_digest = DIGEST
     h.bound_at = datetime.now(UTC)
     h.bound_by = owner.id
@@ -88,7 +87,7 @@ def _catalog_ok(request: httpx.Request) -> httpx.Response | None:
             200,
             json={
                 "kind": "composition",
-                "artifact_id": "coding-v1",
+                "artifact_id": "githi-v1",
                 "digest": DIGEST,
                 "status": "offered",
                 "semver": "1.0.0",
@@ -266,7 +265,7 @@ async def test_create_session_uses_ensure_runnable_pin_and_service_bearer_only(
     body = r.json()
     assert body["id"]
     assert body["pin"]["composition_digest"] == DIGEST
-    assert captured["bodies"][0]["harness_version"] == "coding-v1"
+    assert captured["bodies"][0]["harness_version"] == "githi-v1"
     assert captured["bodies"][0]["composition_digest"] == DIGEST
     token = str(captured["auths"][-1]).removeprefix("Bearer ")
     payload = jwt.decode(
@@ -292,8 +291,8 @@ async def test_create_session_inserts_ownership_row_with_pin_snapshot(
                 201,
                 json={
                     "session_id": "ai-own-1",
-                    "harness_version": "coding-v1",
-                    "runtime": "harness",
+                    "harness_version": "githi-v1",
+                    "runtime": "githi",
                     "status": "active",
                 },
             )
@@ -336,9 +335,9 @@ async def test_message_mints_command_id_and_maps_turn_id(
         harness_id=harness.id,
         ai_session_id="ai-msg-1",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
-        composition_id="coding-v1",
+        harness_version="githi-v1",
+        runtime="githi",
+        composition_id="githi-v1",
         composition_digest=DIGEST,
         status="active",
         created_at=datetime.now(UTC),
@@ -391,8 +390,8 @@ async def test_get_message_events_abort_delete_fork_other_users_session_returns_
         harness_id=harness.id,
         ai_session_id="ai-idor",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
+        harness_version="githi-v1",
+        runtime="githi",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -438,8 +437,8 @@ async def test_sse_proxy_forwards_last_event_id_and_content_type(
         harness_id=harness.id,
         ai_session_id="ai-sse",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
+        harness_version="githi-v1",
+        runtime="githi",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -488,8 +487,8 @@ async def test_abort_maps_to_supervisor_abort(
         harness_id=harness.id,
         ai_session_id="ai-abort",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
+        harness_version="githi-v1",
+        runtime="githi",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -527,8 +526,8 @@ async def test_delete_maps_to_supervisor_terminate(
         harness_id=harness.id,
         ai_session_id="ai-term",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
+        harness_version="githi-v1",
+        runtime="githi",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -581,8 +580,8 @@ async def test_list_includes_cost_from_detail_projection(
         harness_id=harness.id,
         ai_session_id="ai-cost",
         tenant_id=owner.id,
-        harness_version="coding-v1",
-        runtime="harness",
+        harness_version="githi-v1",
+        runtime="githi",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -597,8 +596,8 @@ async def test_list_includes_cost_from_detail_projection(
                 json={
                     "session_id": "ai-cost",
                     "status": "active",
-                    "harness_version": "coding-v1",
-                    "runtime": "harness",
+                    "harness_version": "githi-v1",
+                    "runtime": "githi",
                     "last_seq": 4,
                     "message_count": 2,
                     "total_cost": 1.25,

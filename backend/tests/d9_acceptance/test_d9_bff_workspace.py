@@ -247,7 +247,7 @@ async def test_session_create_forwards_scope_id(
             return httpx.Response(
                 200,
                 json={
-                    "artifact_id": harness.composition_id or "coding-v1",
+                    "artifact_id": harness.composition_id or "githi-v1",
                     "digest": harness.composition_digest,
                     "status": "offered",
                 },

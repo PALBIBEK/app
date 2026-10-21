@@ -8,8 +8,6 @@ import {
   ToolCreate,
   ToolUpdate,
   ToolListResponse,
-  ToolExecuteRequest,
-  ToolExecuteResponse,
   ToolListParams,
   ToolSchema,
 } from '../types/tool.types';
@@ -83,15 +81,5 @@ export const toolsAPI = {
    */
   delete: async (id: string): Promise<void> => {
     await apiClient.delete(`/tools/${id}`);
-  },
-
-  /**
-   * Lab execute — owner QA outside session (not a journal substitute).
-   * POST /tools/:id/execute
-   */
-  execute: async (request: ToolExecuteRequest): Promise<ToolExecuteResponse> => {
-    return apiClient.post<ToolExecuteResponse>(`/tools/${request.tool_id}/execute`, {
-      parameters: request.parameters,
-    });
   },
 };

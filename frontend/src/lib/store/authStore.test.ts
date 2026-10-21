@@ -26,11 +26,18 @@ import { useAuthStore } from './authStore';
  * Reference: FRONTEND_BUILD_CONFIG.md (Zustand for state)
  */
 
+/** Calls made on localStorage itself: the store may use sessionStorage (CSRF), never localStorage. */
+function localStorageCalls(method: 'setItem' | 'removeItem'): number {
+  const spy = Storage.prototype[method] as unknown as { mock: { contexts: unknown[] } };
+  return spy.mock.contexts.filter((self) => self === localStorage).length;
+}
+
 describe('authStore', () => {
   beforeEach(() => {
-    // Clear localStorage mock before each test
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
     localStorage.clear();
+    vi.spyOn(Storage.prototype, 'setItem');
+    vi.spyOn(Storage.prototype, 'removeItem');
 
     // Reset Zustand store to initial state between tests
     act(() => {
@@ -110,7 +117,7 @@ describe('authStore', () => {
       });
 
       // Assert - localStorage should NOT be called (security fix)
-      expect(localStorage.setItem).not.toHaveBeenCalled();
+      expect(localStorageCalls('setItem')).toBe(0);
     });
   });
 
@@ -150,7 +157,7 @@ describe('authStore', () => {
       });
 
       // Assert - localStorage should NOT be called (security fix)
-      expect(localStorage.removeItem).not.toHaveBeenCalled();
+      expect(localStorageCalls('removeItem')).toBe(0);
     });
   });
 
@@ -203,7 +210,7 @@ describe('authStore', () => {
       expect(state.accessToken).toBe('new-access-token');
       expect(state.csrfToken).toBe('new-csrf');
       // SECURITY: Should NOT store in localStorage
-      expect(localStorage.setItem).not.toHaveBeenCalled();
+      expect(localStorageCalls('setItem')).toBe(0);
     });
   });
 });

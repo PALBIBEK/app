@@ -17,11 +17,10 @@ from prime_agent.db.models.tool import Tool
 from prime_agent.db.models.user import User
 from prime_agent.main import create_app
 from prime_agent.services.ai_client import AiClient
-from prime_agent.services.harness_bind_service import SHIPPED_COMPOSITION_PINS
+from tests.support.catalog import DIGEST, PIN
 from prime_agent.services.platform_status_service import PlatformStatusService
 from prime_agent.web.dependencies import get_current_user, get_db
 
-DIGEST = SHIPPED_COMPOSITION_PINS["coding-v1"]["composition_digest"]
 SECRET = "d6-acceptance-ai-jwt-secret-at-least-32-bytes!!"
 
 
@@ -96,7 +95,7 @@ async def make_harness(
     tools: list[str] | None = None,
     bound: bool = True,
 ) -> Harness:
-    pin = SHIPPED_COMPOSITION_PINS["coding-v1"]
+    pin = PIN
     h = Harness(
         id=str(uuid4()),
         user_id=user.id,
@@ -108,7 +107,7 @@ async def make_harness(
         bind_status="bound" if bound else "unbound",
         harness_version=pin["harness_version"] if bound else None,
         runtime=pin["runtime"] if bound else None,
-        composition_id="coding-v1" if bound else None,
+        composition_id="githi-v1" if bound else None,
         composition_digest=DIGEST if bound else None,
     )
     db.add(h)

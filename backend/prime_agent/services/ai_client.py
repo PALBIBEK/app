@@ -87,6 +87,20 @@ SAFE_READY_REASONS = frozenset(
 )
 
 
+def _refusal_message(response: httpx.Response) -> str:
+    """The supervisor's own reason for a 4xx (what was wrong with the request); never a 5xx body."""
+    if 400 <= response.status_code < 500:
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+            return detail["message"][:500]
+        if isinstance(detail, str):
+            return detail[:500]
+    return "AI supervisor returned an error"
+
+
 class AiUpstreamError(Exception):
     """Typed upstream failure — safe to map to HTTP without leaking secrets."""
 
@@ -185,6 +199,26 @@ class AiClient:
         """GET supervisor /readyz — returns structured ready/not-ready (no raise on 503)."""
         return await self._request("/readyz", identity, allow_not_ready=True)
 
+    async def get_artifact(
+        self,
+        identity: TenantPrincipal,
+        kind: str,
+        artifact_id: str,
+        digest: str,
+    ) -> dict[str, Any]:
+        """GET /v1/catalog/{kind}/{id}/{digest}, with the artifact's ``body``."""
+        encoded = quote(digest, safe="")
+        path = f"/v1/catalog/{quote(kind, safe='')}/{quote(artifact_id, safe='')}/{encoded}"
+        payload, status_code = await self._catalog_get(path, identity)
+        if status_code == 404:
+            raise AiUpstreamError(f"{kind} not found", status_code=404)
+        if status_code >= 400:
+            raise AiUpstreamError(
+                "AI catalog returned an error",
+                status_code=503 if status_code >= 500 else status_code,
+            )
+        return payload if isinstance(payload, dict) else {}
+
     async def get_composition(
         self,
         identity: TenantPrincipal,
@@ -194,18 +228,7 @@ class AiClient:
         """GET /v1/catalog/composition/{id}/{digest} — raises AiUpstreamError on failure."""
         from prime_agent.schemas.harness import CatalogCompositionSummary
 
-        encoded = quote(digest, safe="")
-        path = f"/v1/catalog/composition/{quote(composition_id, safe='')}/{encoded}"
-        payload, status_code = await self._catalog_get(path, identity)
-        if status_code == 404:
-            raise AiUpstreamError("composition not found", status_code=404)
-        if status_code >= 400:
-            raise AiUpstreamError(
-                "AI catalog returned an error",
-                status_code=503 if status_code >= 500 else status_code,
-            )
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = await self.get_artifact(identity, "composition", composition_id, digest)
         return CatalogCompositionSummary.model_validate(
             {
                 **payload,
@@ -213,6 +236,21 @@ class AiClient:
                 "digest": payload.get("digest") or digest,
             }
         )
+
+    async def get_harness_version(
+        self, identity: TenantPrincipal, harness_version: str
+    ) -> dict[str, Any]:
+        """GET /v1/harness_versions/{v}: its runtime, status and manifest."""
+        path = f"/v1/harness_versions/{quote(harness_version, safe='')}"
+        payload, status_code = await self._catalog_get(path, identity)
+        if status_code == 404:
+            raise AiUpstreamError("harness version not found", status_code=404)
+        if status_code >= 400:
+            raise AiUpstreamError(
+                "AI catalog returned an error",
+                status_code=503 if status_code >= 500 else status_code,
+            )
+        return payload if isinstance(payload, dict) else {}
 
     async def list_compositions(
         self,
@@ -569,205 +607,56 @@ class AiClient:
             allow_empty=True,
         )
 
-    def _require_memory_base_url(self) -> str:
-        """Resolve Durable Memory base URL.
+    # --- long-term memory: the supervisor's notebooks ------------------------------
+    # The supervisor applies tenancy and disclosure: a notebook of someone else's is
+    # "not found". The backend never talks to the memory service directly.
 
-        Order: ``settings.ai_memory_base_url`` → env ``MEMORY_SERVICE_URL`` →
-        derive from supervisor host (compose sibling ``memory:8092``).
-        """
-        import os
-        from urllib.parse import urlparse
+    async def list_notebooks(
+        self, identity: TenantPrincipal, *, agent_pin: str, archived: bool = False
+    ) -> list[dict[str, Any]]:
+        return await self._json_request(
+            "GET", "/v1/memory/notebooks", identity,
+            params={"agent_pin": agent_pin, "archived": str(archived).lower()},
+        )
 
-        base = (self._settings.ai_memory_base_url or "").rstrip("/")
-        if not base:
-            base = (os.environ.get("MEMORY_SERVICE_URL") or "").strip().rstrip("/")
-        if not base:
-            supervisor = (self._settings.ai_supervisor_base_url or "").rstrip("/")
-            if supervisor:
-                parsed = urlparse(supervisor)
-                host = parsed.hostname or "localhost"
-                if host in {"supervisor", "yal-supervisor"}:
-                    host = "memory"
-                scheme = parsed.scheme or "http"
-                base = f"{scheme}://{host}:8092"
-        if not base:
-            raise AiUpstreamError("AI memory base URL is not configured", status_code=503)
-        return base
+    async def create_notebook(
+        self, identity: TenantPrincipal, *, agent_pin: str, name: str, label: str | None = None
+    ) -> dict[str, Any]:
+        return await self._json_request(
+            "POST", "/v1/memory/notebooks", identity,
+            json_body={"agent_pin": agent_pin, "name": name, "label": label}, expected=(201,),
+        )
 
-    def _memory_auth_headers(self, identity: TenantPrincipal) -> dict[str, str]:
-        audience = getattr(self._settings, "ai_memory_jwt_audience", None) or "yal-memory"
-        token = self._minter.mint(identity, audience=audience)
-        return {"Authorization": f"Bearer {token}"}
-
-    async def _memory_json_request(
+    async def notebook_request(
         self,
-        method: str,
-        path: str,
         identity: TenantPrincipal,
+        method: str,
+        notebook_id: str,
+        sub: str = "",
         *,
         json_body: dict[str, Any] | None = None,
         expected: tuple[int, ...] = (200,),
-        allow_empty: bool = False,
     ) -> Any:
-        """HTTP to Durable Memory Service (/v1/memory/*) with service JWT tenant claim."""
-        url = f"{self._require_memory_base_url()}{path}"
-        timeout = self._settings.ai_http_timeout_seconds
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            timeout=timeout,
-        ) as client:
-            try:
-                response = await client.request(
-                    method,
-                    url,
-                    headers=self._memory_auth_headers(identity),
-                    json=json_body,
-                )
-            except httpx.TimeoutException as exc:
-                raise AiUpstreamError("AI memory service unreachable", status_code=503) from exc
-            except httpx.HTTPError as exc:
-                raise AiUpstreamError("AI memory service unreachable", status_code=503) from exc
-
-        if response.status_code not in expected:
-            raise AiUpstreamError(
-                "AI memory service returned an error",
-                status_code=503 if response.status_code >= 500 else response.status_code,
-            )
-        if allow_empty or response.status_code == 204:
-            return {}
-        try:
-            return response.json()
-        except ValueError:
-            return {}
-
-    async def list_memory(
-        self,
-        identity: TenantPrincipal,
-        *,
-        tenant: str,
-        subject: str,
-        namespace: str,
-        query: str = "",
-        max_tokens: int = 2048,
-    ) -> dict[str, Any]:
-        """List durable items via POST /v1/memory/recall (Memory has no bare list route)."""
-        return await self.search_memory(
-            identity,
-            tenant=tenant,
-            subject=subject,
-            namespace=namespace,
-            query=query or "*",
-            max_tokens=max_tokens,
+        """One notebook's routes: ``""`` (patch), ``facts``, ``clear``, ``revisions``, ``restore``."""
+        path = f"/v1/memory/notebooks/{quote(notebook_id, safe='')}" + (f"/{sub}" if sub else "")
+        return await self._json_request(
+            method, path, identity, json_body=json_body, expected=expected,
+            allow_empty=204 in expected,
         )
 
-    async def search_memory(
+    async def search_notebooks(
         self,
         identity: TenantPrincipal,
         *,
-        tenant: str,
-        subject: str,
-        namespace: str,
+        agent_pin: str,
         query: str,
-        max_tokens: int = 512,
-    ) -> dict[str, Any]:
-        """POST /v1/memory/recall — semantic search within a Scope."""
-        return await self._memory_json_request(
-            "POST",
-            "/v1/memory/recall",
-            identity,
-            json_body={
-                "scope": {"tenant": tenant, "subject": subject, "namespace": namespace},
-                "query": query,
-                "max_tokens": max_tokens,
-            },
-            expected=(200,),
-        )
-
-    async def get_memory_item(
-        self,
-        identity: TenantPrincipal,
-        item_id: str,
-    ) -> dict[str, Any]:
-        """GET /v1/memory/items/{id}."""
-        return await self._memory_json_request(
-            "GET",
-            f"/v1/memory/items/{item_id}",
-            identity,
-            expected=(200,),
-        )
-
-    async def write_memory_item(
-        self,
-        identity: TenantPrincipal,
-        *,
-        tenant: str,
-        subject: str,
-        namespace: str,
-        content: str,
-        confidence: float = 0.8,
-    ) -> dict[str, Any]:
-        """POST /v1/memory/items — durable write."""
-        return await self._memory_json_request(
-            "POST",
-            "/v1/memory/items",
-            identity,
-            json_body={
-                "scope": {"tenant": tenant, "subject": subject, "namespace": namespace},
-                "content": content,
-                "confidence": confidence,
-            },
-            expected=(201,),
-        )
-
-    async def forget_memory(
-        self,
-        identity: TenantPrincipal,
-        *,
-        tenant: str,
-        subject: str,
-        namespace: str,
-        item_id: str | None = None,
-        all_in_scope: bool = False,
-        actor: str = "system",
-        reason: str = "bff",
-    ) -> dict[str, Any]:
-        """POST /v1/memory/forget — soft-forget by id or scope."""
-        return await self._memory_json_request(
-            "POST",
-            "/v1/memory/forget",
-            identity,
-            json_body={
-                "scope": {"tenant": tenant, "subject": subject, "namespace": namespace},
-                "item_id": item_id,
-                "all_in_scope": all_in_scope,
-                "actor": actor,
-                "reason": reason,
-            },
-            expected=(200,),
-        )
-
-    async def erase_subject_memory(
-        self,
-        identity: TenantPrincipal,
-        *,
-        tenant: str,
-        subject: str,
-        actor: str,
-        reason: str = "bff",
-    ) -> dict[str, Any]:
-        """POST /v1/memory/erase_subject — GDPR-shaped subject erase."""
-        return await self._memory_json_request(
-            "POST",
-            "/v1/memory/erase_subject",
-            identity,
-            json_body={
-                "tenant": tenant,
-                "subject": subject,
-                "actor": actor,
-                "reason": reason,
-            },
-            expected=(200,),
-        )
+        notebook_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        body: dict[str, Any] = {"agent_pin": agent_pin, "query": query, "limit": limit}
+        if notebook_id:
+            body["notebook_id"] = notebook_id
+        return await self._json_request("POST", "/v1/memory/search", identity, json_body=body)
 
     async def stream_session_events(
         self,
@@ -1006,6 +895,7 @@ class AiClient:
         json_body: dict[str, Any] | None = None,
         expected: tuple[int, ...] = (200,),
         allow_empty: bool = False,
+        params: dict[str, str] | None = None,
     ) -> Any:
         url = f"{self._require_base_url()}{path}"
         timeout = self._settings.ai_http_timeout_seconds
@@ -1019,6 +909,7 @@ class AiClient:
                     url,
                     headers=self._auth_headers(identity),
                     json=json_body,
+                    params=params,
                 )
             except httpx.TimeoutException as exc:
                 raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
@@ -1027,7 +918,7 @@ class AiClient:
 
         if response.status_code not in expected:
             raise AiUpstreamError(
-                "AI supervisor returned an error",
+                _refusal_message(response),
                 status_code=503 if response.status_code >= 500 else response.status_code,
             )
         if allow_empty or response.status_code == 204:

@@ -1,55 +1,51 @@
 /**
- * memoryAPI — product BFF /memory only (never Durable Memory host).
+ * memoryAPI — the backend's /memory routes only (never the memory service or supervisor).
  */
 
 import { apiClient } from '../client';
 import type {
-  MemoryCreateRequest,
-  MemoryEntry,
-  MemoryListParams,
-  MemoryListResponse,
+  Fact,
+  MemoryHit,
   MemorySearchRequest,
-  MemorySearchResponse,
-  MemoryUpdateRequest,
+  Notebook,
+  NotebookCreateRequest,
+  Revision,
 } from '../types/memory.types';
 
+const nb = (id: string) => `/memory/notebooks/${encodeURIComponent(id)}`;
+
 export const memoryAPI = {
-  list: async (params?: MemoryListParams): Promise<MemoryListResponse> => {
-    return apiClient.get<MemoryListResponse>('/memory', { params });
+  listNotebooks: (harnessId: string, archived = false): Promise<Notebook[]> =>
+    apiClient.get<Notebook[]>('/memory/notebooks', { params: { harness_id: harnessId, archived } }),
+
+  createNotebook: (data: NotebookCreateRequest): Promise<Notebook> =>
+    apiClient.post<Notebook>('/memory/notebooks', data),
+
+  setArchived: (id: string, archived: boolean): Promise<Notebook> =>
+    apiClient.patch<Notebook>(nb(id), { archived }),
+
+  listFacts: (id: string): Promise<Fact[]> => apiClient.get<Fact[]>(`${nb(id)}/facts`),
+
+  addFacts: (id: string, facts: string[]): Promise<{ added: number }> =>
+    apiClient.post<{ added: number }>(`${nb(id)}/facts`, { facts }),
+
+  editFacts: async (id: string, edits: { id: string; text: string }[]): Promise<void> => {
+    await apiClient.patch(`${nb(id)}/facts`, { edits });
   },
 
-  getById: async (id: string): Promise<MemoryEntry> => {
-    const response = await apiClient.get<{ data: MemoryEntry } | MemoryEntry>(`/memory/${id}`);
-    if (response && typeof response === 'object' && 'data' in response && response.data) {
-      return response.data;
-    }
-    return response as MemoryEntry;
+  forgetFacts: async (id: string, ids: string[]): Promise<void> => {
+    await apiClient.post(`${nb(id)}/forget`, { ids });
   },
 
-  create: async (data: MemoryCreateRequest): Promise<MemoryEntry> => {
-    const response = await apiClient.post<{ data: MemoryEntry } | MemoryEntry>('/memory', data);
-    if (response && typeof response === 'object' && 'data' in response && response.data) {
-      return response.data;
-    }
-    return response as MemoryEntry;
+  clear: (id: string): Promise<{ removed: number }> =>
+    apiClient.post<{ removed: number }>(`${nb(id)}/clear`),
+
+  revisions: (id: string): Promise<Revision[]> => apiClient.get<Revision[]>(`${nb(id)}/revisions`),
+
+  restore: async (id: string, revision: number): Promise<void> => {
+    await apiClient.post(`${nb(id)}/restore`, { revision });
   },
 
-  update: async (id: string, data: MemoryUpdateRequest): Promise<MemoryEntry> => {
-    const response = await apiClient.put<{ data: MemoryEntry } | MemoryEntry>(
-      `/memory/${id}`,
-      data
-    );
-    if (response && typeof response === 'object' && 'data' in response && response.data) {
-      return response.data;
-    }
-    return response as MemoryEntry;
-  },
-
-  delete: async (id: string): Promise<void> => {
-    await apiClient.delete(`/memory/${id}`);
-  },
-
-  search: async (body: MemorySearchRequest): Promise<MemorySearchResponse> => {
-    return apiClient.post<MemorySearchResponse>('/memory/search', body);
-  },
+  search: (body: MemorySearchRequest): Promise<MemoryHit[]> =>
+    apiClient.post<MemoryHit[]>('/memory/search', body),
 };

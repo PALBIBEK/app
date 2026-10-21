@@ -16,12 +16,11 @@ from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.user import User
 from prime_agent.main import create_app
 from prime_agent.services.ai_client import AiClient
-from prime_agent.services.harness_bind_service import SHIPPED_COMPOSITION_PINS
+from tests.support.catalog import DIGEST, PIN
 from prime_agent.services.platform_status_service import PlatformStatusService
 from prime_agent.services.session_service import SessionService
 from prime_agent.web.dependencies import get_current_user, get_db
 
-DIGEST = SHIPPED_COMPOSITION_PINS["coding-v1"]["composition_digest"]
 SECRET = "d4-acceptance-ai-jwt-secret-at-least-32-bytes!!"
 
 
@@ -70,7 +69,7 @@ async def make_harness(
     name: str | None = None,
     bound: bool = True,
 ) -> Harness:
-    pin = SHIPPED_COMPOSITION_PINS["coding-v1"]
+    pin = PIN
     h = Harness(
         id=str(uuid4()),
         user_id=user.id,
@@ -82,7 +81,7 @@ async def make_harness(
         bind_status="bound" if bound else "unbound",
         harness_version=pin["harness_version"] if bound else None,
         runtime=pin["runtime"] if bound else None,
-        composition_id="coding-v1" if bound else None,
+        composition_id="githi-v1" if bound else None,
         composition_digest=DIGEST if bound else None,
     )
     db.add(h)
@@ -154,7 +153,7 @@ def catalog_and_ready_handler(
 
     catalog_body = {
         "kind": "composition",
-        "artifact_id": "coding-v1",
+        "artifact_id": "githi-v1",
         "digest": DIGEST,
         "status": "offered",
         "semver": "1.0.0",
@@ -177,8 +176,8 @@ def catalog_and_ready_handler(
                 201,
                 json={
                     "session_id": ai_sid,
-                    "harness_version": "coding-v1",
-                    "runtime": "harness",
+                    "harness_version": "githi-v1",
+                    "runtime": "githi",
                     "status": "active",
                 },
             )
@@ -204,8 +203,8 @@ def catalog_and_ready_handler(
                 json={
                     "session_id": ai_sid,
                     "status": "active",
-                    "harness_version": "coding-v1",
-                    "runtime": "harness",
+                    "harness_version": "githi-v1",
+                    "runtime": "githi",
                     "last_seq": 0,
                     "message_count": 0,
                     "total_cost": 0.0,
