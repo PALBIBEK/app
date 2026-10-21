@@ -11,7 +11,7 @@ Reference: catalog/core/protocols.py pattern.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from supervisor.harness.core.types import (
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 __all__ = [
     "CompatibilityCheckerProtocol",
     "HarnessResolverProtocol",
-    "ManifestParserProtocol",
 ]
 
 
@@ -128,37 +127,3 @@ class CompatibilityCheckerProtocol(Protocol):
         ...
 
 
-@runtime_checkable
-class ManifestParserProtocol(Protocol):
-    """Interface for manifest parsing and validation.
-
-    Implementations must parse YAML and validate manifest structure.
-    """
-
-    def parse(self, raw: str | bytes) -> dict[str, Any]:
-        """Parse YAML manifest to dict.
-
-        Args:
-            raw: Raw YAML bytes or string
-
-        Returns:
-            Parsed dict
-
-        Raises:
-            ManifestParseError: If YAML invalid
-        """
-        ...
-
-    def validate_and_freeze(self, data: dict[str, Any]) -> HarnessManifest:
-        """Validate and convert to frozen manifest.
-
-        Args:
-            data: Parsed manifest dict
-
-        Returns:
-            Frozen manifest
-
-        Raises:
-            ManifestValidationError: If validation fails
-        """
-        ...

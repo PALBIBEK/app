@@ -128,10 +128,6 @@ class ReapStats:
             "errors": self.errors,
         }
 
-    @property
-    def total_processed(self) -> int:
-        """Total sandboxes processed."""
-        return self.reattached + self.destroyed + self.skipped + self.errors
 
 
 # =============================================================================

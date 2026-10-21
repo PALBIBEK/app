@@ -47,10 +47,6 @@ class Capabilities:
     extras: frozenset[str] = field(default_factory=frozenset)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def supports(self, capability: str) -> bool:
-        if attr := _CAP_TO_ATTR.get(capability):
-            return getattr(self, attr)
-        return capability in self.extras
 
 
     def to_dict(self) -> dict[str, Any]:

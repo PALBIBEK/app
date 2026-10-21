@@ -131,26 +131,6 @@ class S3ObjectStorage:
             raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
         return PresignedUrl(url=url, method="GET", expires_in_s=ttl_s)
 
-    async def create_upload_url(
-        self,
-        key: str,
-        *,
-        ttl_s: int,
-        content_type: str | None = None,
-    ) -> PresignedUrl:
-        params: dict[str, Any] = {"Bucket": self.bucket, "Key": key}
-        if content_type:
-            params["ContentType"] = content_type
-        try:
-            url = await asyncio.to_thread(
-                self.client.generate_presigned_url,
-                "put_object",
-                params,
-                ttl_s,
-            )
-        except Exception as exc:
-            raise ObjectStorageError(str(exc), "OBJECT_PRESIGN") from exc
-        return PresignedUrl(url=url, method="PUT", expires_in_s=ttl_s)
 
 
 def _is_not_found(exc: BaseException) -> bool:

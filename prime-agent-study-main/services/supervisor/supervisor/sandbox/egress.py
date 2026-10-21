@@ -64,15 +64,7 @@ class EgressPolicy:
     proxy_url: str | None = None
     created_at_ms: int = 0
 
-    @classmethod
-    def allow_all(cls) -> EgressPolicy:
-        """Create policy that allows all egress (no restrictions)."""
-        return cls(allowed_domains=frozenset())
 
-    @classmethod
-    def deny_all(cls) -> EgressPolicy:
-        """Create policy that denies all egress."""
-        return cls(allowed_domains=frozenset({"<none>"}))
 
 
 @dataclass(frozen=True, slots=True)

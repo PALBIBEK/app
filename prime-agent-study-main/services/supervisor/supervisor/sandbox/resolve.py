@@ -126,10 +126,6 @@ class SandboxResolution:
     requires_sandbox: bool
     profile_used: str | None = None
 
-    @property
-    def has_sandbox(self) -> bool:
-        """True if resolution includes a sandbox."""
-        return self.provider is not None and self.image_digest is not None
 
 
 # =============================================================================

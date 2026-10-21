@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 
 __all__ = [
     "HarnessSettings",
@@ -39,11 +38,6 @@ class HarnessSettings:
         )
         return cls(contracts_dir=contracts_dir, default_protocol_versions=frozenset({1, 2}))
 
-    def get_contracts_path(self) -> Path | None:
-        """Get contracts directory path if configured."""
-        if self.contracts_dir:
-            return Path(self.contracts_dir)
-        return None
 
 
 

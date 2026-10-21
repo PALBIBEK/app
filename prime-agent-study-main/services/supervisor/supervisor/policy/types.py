@@ -236,16 +236,7 @@ class Approval:
     responded_by: str | None = None
     responded_at_ms: int | None = None
 
-    @property
-    def is_pending(self) -> bool:
-        return self.status == ApprovalStatus.PENDING
 
-    @property
-    def is_allow(self) -> bool:
-        """True if choice is an allow-shaped response."""
-        if self.choice is None:
-            return False
-        return self.choice.strip().lower() in ALLOW_CHOICES
 
 
 @dataclass(frozen=True, slots=True)

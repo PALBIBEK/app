@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from supervisor.sandbox.backup import BackupArea, BackupResult
     from supervisor.sandbox.layers import LayerManifest, MaterializationResult
     from supervisor.sandbox.staging import StagedBlob, StageOutResult
-    from supervisor.sandbox.status import ComputerStatus, RestartResult
+    from supervisor.sandbox.status import ComputerStatus
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
 
 
@@ -290,10 +290,6 @@ class ProcessHandle(ABC):
         """Forced shutdown (SIGKILL or equivalent)."""
         ...
 
-    @property
-    def is_running(self) -> bool:
-        """Check if process is still running."""
-        return self.returncode() is None
 
 
 # =============================================================================
@@ -705,16 +701,6 @@ class Sandbox(ABC):
         """
         raise ROLayersUnsupported(self.info.provider)
 
-    async def current_ro_manifest_sha(self) -> str | None:
-        """Get SHA256 of currently materialized manifest.
-
-        Returns:
-            Manifest SHA or None if no layers materialized.
-
-        Raises:
-            ROLayersUnsupported: If provider doesn't support this.
-        """
-        raise ROLayersUnsupported(self.info.provider)
 
     # -------------------------------------------------------------------------
     # Computer Status (Optional)
@@ -733,23 +719,6 @@ class Sandbox(ABC):
         """
         raise ComputerStatusUnsupported(self.info.provider)
 
-    async def restart_computer(
-        self,
-        *,
-        timeout: float | None = None,
-    ) -> RestartResult:
-        """Restart the sandbox computer.
-
-        Args:
-            timeout: Maximum wait time for restart in seconds.
-
-        Returns:
-            RestartResult with timing details.
-
-        Raises:
-            ComputerStatusUnsupported: If provider doesn't support this.
-        """
-        raise ComputerStatusUnsupported(self.info.provider)
 
     # -------------------------------------------------------------------------
     # Egress Control (Optional)

@@ -110,7 +110,6 @@ from supervisor.harness.core.errors import (
 from supervisor.harness.core.protocols import (
     CompatibilityCheckerProtocol,
     HarnessResolverProtocol,
-    ManifestParserProtocol,
 )
 
 # =============================================================================
@@ -200,7 +199,6 @@ __all__ = [
     "LoopSpec",
     "ManifestError",
     "ManifestParseError",
-    "ManifestParserProtocol",
     "ManifestValidationError",
     "MissingRuntimeCapability",
     "PathTraversalAttempt",

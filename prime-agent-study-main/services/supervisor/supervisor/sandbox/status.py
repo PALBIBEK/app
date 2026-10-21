@@ -90,10 +90,6 @@ class ComputerStatus:
     boot_id: str | None = None
     message: str = ""
 
-    @property
-    def is_healthy(self) -> bool:
-        """True if machine is running and guest is responsive."""
-        return self.machine_state == MachineState.RUNNING and self.guest_responsive
 
 
 @dataclass(frozen=True, slots=True)

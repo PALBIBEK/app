@@ -23,11 +23,7 @@ from supervisor.catalog.core.errors import (
 )
 from supervisor.catalog.core.protocols import (
     ArtifactStoreProtocol,
-    CatalogAnalyticsProtocol,
-    CatalogAuthzProtocol,
-    CatalogServiceProtocol,
     CompositionResolverProtocol,
-    RuntimeBinderProtocol,
     UsageStoreProtocol,
 )
 from supervisor.catalog.core.types import (
@@ -64,12 +60,9 @@ __all__ = [
     "ArtifactStoreProtocol",
     "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    "CatalogAnalyticsProtocol",
-    "CatalogAuthzProtocol",
     "CatalogError",
     "CatalogGrant",
     "CatalogOwnershipRequired",
-    "CatalogServiceProtocol",
     "CompositionDigestRequired",
     "CompositionIncomplete",
     "CompositionResolverProtocol",
@@ -87,7 +80,6 @@ __all__ = [
     "PromptPack",
     "PromptSection",
     "RecallBackend",
-    "RuntimeBinderProtocol",
     "SandboxProfile",
     "SandboxProviderName",
     "SessionPins",

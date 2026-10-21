@@ -127,15 +127,6 @@ class ApprovalOps(SessionManagerBase):
         return expired
 
 
-    def require_approval_for_tool(self, session_id: str, name: str) -> bool:
-        """True when named tool must park before provider.invoke."""
-        manifest = self._approval_manifest_cache.get(session_id)
-        if manifest is None:
-            return False
-        if manifest.approvals is None:
-            return False
-        return name in manifest.approvals.require_approval
-
     async def _resolve_require_approval(
         self, session_id: str, name: str
     ) -> bool:

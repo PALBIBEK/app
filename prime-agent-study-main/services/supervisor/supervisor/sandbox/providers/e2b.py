@@ -29,7 +29,6 @@ from supervisor.sandbox.base import (
     BlobStagingUnsupported,
     ByteReader,
     ByteWriter,
-    ComputerStatusUnsupported,
     ExecResult,
     ProcessHandle,
     Sandbox,
@@ -54,7 +53,6 @@ from supervisor.sandbox.staging import (
 from supervisor.sandbox.status import (
     ComputerStatus,
     MachineState,
-    RestartResult,
 )
 from supervisor.seams.providers.workspace import normalize_workspace_path
 
@@ -522,14 +520,6 @@ class E2BSandbox(Sandbox):
         )
         return await layers.materialize_ro_layers(manifest, force=force, timeout=timeout)
 
-    async def current_ro_manifest_sha(self) -> str | None:
-        """Get SHA256 of currently materialized manifest."""
-        layers = create_exec_layers(
-            exec_fn=self._exec_fn,
-            read_fn=self._read_file_bytes,
-            write_fn=self._write_file_bytes,
-        )
-        return await layers.current_manifest_sha()
 
     # -------------------------------------------------------------------------
     # Computer Status
@@ -562,42 +552,6 @@ class E2BSandbox(Sandbox):
             uptime_ms=uptime_ms,
         )
 
-    async def restart_computer(
-        self,
-        *,
-        timeout: float | None = None,
-    ) -> RestartResult:
-        """Restart the sandbox computer."""
-        import time
-
-        start_ms = int(time.time() * 1000)
-        previous_status = await self.computer_status()
-
-        # Try E2B restart API if available
-        restart = getattr(self._sbx, "restart", None)
-        if restart is not None:
-            await restart()
-        else:
-            # Fallback: kill and recreate isn't possible from sandbox
-            raise ComputerStatusUnsupported(self._info.provider)
-
-        # Wait for restart
-        timeout_s = timeout or 60.0
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            await asyncio.sleep(2.0)
-            if await self.is_alive():
-                break
-
-        duration_ms = int(time.time() * 1000) - start_ms
-        new_status = await self.computer_status()
-
-        return RestartResult(
-            scope_id=self._scope_id or self._info.id,
-            previous_state=previous_status.machine_state,
-            new_state=new_status.machine_state,
-            duration_ms=duration_ms,
-        )
 
 
 class E2BProvider(SandboxProvider):

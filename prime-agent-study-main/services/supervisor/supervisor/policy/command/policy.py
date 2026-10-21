@@ -173,7 +173,3 @@ class CommandPolicy:
         """Number of custom rules."""
         return self._scanner.rule_count
 
-    @property
-    def floor_rule_count(self) -> int:
-        """Number of floor rules."""
-        return self._floor_scanner.rule_count
