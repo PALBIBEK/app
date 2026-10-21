@@ -43,7 +43,12 @@ from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.harness.services.compat_checker import capabilities_for, check
 from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
-from supervisor.memory.client import MemoryServiceNotConfigured, UnavailableNotebooks
+from supervisor.memory.client import (
+    MemoryRefused,
+    MemoryServiceNotConfigured,
+    MemoryUnavailable,
+    UnavailableNotebooks,
+)
 from supervisor.models import model_router
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
@@ -213,16 +218,35 @@ class SessionManager(UpkeepOps):
                     )
                 _warn_no_memory_service()
                 request = MemoryRequest.without_notebooks()
-            binding = await resolve_binding(
-                self._memory.store,
-                tenant_id=tenant_id,
-                owner=principal.id,
-                pin=agent_pin(
-                    harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
-                ),
-                request=request,
-                agent=(self._long_term.get(session_id) or (None, None))[1],
+            pin = agent_pin(
+                harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
             )
+            agent = (self._long_term.get(session_id) or (None, None))[1]
+            try:
+                binding = await resolve_binding(
+                    self._memory.store,
+                    tenant_id=tenant_id,
+                    owner=principal.id,
+                    pin=pin,
+                    request=request,
+                    agent=agent,
+                )
+            except (MemoryUnavailable, MemoryRefused) as exc:
+                if MemoryRequest.names_notebooks(memory):
+                    raise  # the client asked for notebooks: it hears they are unavailable
+                # Only the implicit default notebook was wanted: the session starts without
+                # long-term memory rather than not at all.
+                logger.warning(
+                    "session %s starts without long-term memory: %s", session_id, exc
+                )
+                binding = await resolve_binding(
+                    self._memory.store,
+                    tenant_id=tenant_id,
+                    owner=principal.id,
+                    pin=pin,
+                    request=MemoryRequest.without_notebooks(),
+                    agent=agent,
+                )
             await self._writer.ensure_session(
                 session_id,
                 runtime=runtime_name,
