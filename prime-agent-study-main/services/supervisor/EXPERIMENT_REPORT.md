@@ -1,5 +1,8 @@
 # Supervisor experiment report — 2026-10-21
 
+**Status: every problem below is fixed on `feat/githi-parity`** (see "After the fixes" at
+the end for the re-run). The findings are kept as found, for the record.
+
 The full stack (API, two workers, gateway, memory service, Temporal, Postgres, S3)
 was exercised as a user and as an operator would, beyond what CI covers. Real-model
 runs used the **shipped** githi configuration (prompt pack `coding-prompt`, tool set
@@ -55,3 +58,48 @@ Scripts: `user_scenarios.py` and `system_scenarios.py` (kept outside the repo; a
 | Agent usefulness (the product a user meets) | 4/10 | Answers and short tasks are good, but 2 of 3 real multi-step tasks ended with no answer because of the platform's own limits (1, 2). |
 | Operability and safety defaults | 6/10 | Silent fallbacks (5, 6) turn configuration mistakes into isolation or model changes. |
 | **Overall** | **6.5/10** | Strong platform, weak agent loop defaults. Fixing 1, 2, 4, 5 and 6 — each small — would put it near 8.5. |
+
+## After the fixes (same day, same scripts)
+
+| # | Fix | Re-run evidence |
+|---|---|---|
+| 1 | The stall guard counts calls that get nowhere: a successful call with new arguments resets it (patched for replay) | 11-step task: 11 tool calls, no `LoopGuard`, full answer |
+| 2 | Step limit from the manifest's `loop:` (default 30); "N steps left" on the last requests; the last step sends `tool_choice=none` | same run: 12 model steps, `stop`; scripted test: warned, then made to answer on step 30 |
+| 3 | `brain()` syncs pins before resolving them | regression test reproduces the live `NotOffered`, passes after |
+| 4 | Recall skipped with a notice to the model; memory tool errors are readable; a session without named notebooks starts without memory | memory service stopped: create 201 in 0.2 s, turns run |
+| 5 | Production/staging refuse host sandboxes at boot and per profile, and never fall back to them (`ALLOW_HOST_SANDBOX=1` to opt in) | unit tests on the real boot path |
+| 6 | No route override from a provider key; explicit signals still upgrade `echo`, and every override is logged | 30 users × 3 echo turns: 0 errors (they all failed before) |
+| 7 | Command output clipped to 12k characters a stream, keeping start and end, with how to see the rest | `seq 1 300000`: 14,584 characters (was 76,650), next prompt 8.6k tokens (was 39k), right answer in 2 steps |
+| 8 | `edit` (and `bash` with `timeout`) in the shipped tool sets | bug fix done with `edit`; other 60 functions intact |
+| 9 | `command_id` ≤ 200 chars; NUL refused in text, ids and URLs; validation errors stop echoing the body | all hostile inputs answer 4xx |
+| 10 | (with 9) NUL no longer reaches the events table | — |
+| 11 | `queued` on message responses; `duration_ms` set; a direct invoke journals the same result shape (it dropped non-dict payloads to `{}`) | journal |
+
+Found while fixing, and fixed too:
+
+- **Changing a shipped artifact orphaned everything pinned to the old version** (and failed
+  readiness for the whole API). Shipped artifacts are now recorded in the database at boot,
+  the replaced versions ship frozen in `harness/previous/`, and readiness considers only
+  shipped compositions.
+- **`import supervisor.tools` first failed with a circular import** (already on `main`); fixed,
+  with a test that imports every entry point first.
+- **Truncated or malformed tool calls ran** with clipped or empty arguments (from the githi
+  parity check): now refused with a message telling the model to resend.
+
+Verification: 1,096 tests pass (SQLite and Postgres), ruff and mypy clean, e2e stages 3, 4, 6,
+7 and 7q pass; stage 2's one Docker check needs Docker Hub, which this environment blocks
+(CI's runners have it).
+
+## Rating after the fixes
+
+| Dimension | Before | After |
+|---|---|---|
+| Security boundaries (API) | 9 | 9 |
+| Reliability and durability | 8 | 9 |
+| Agent usefulness | 4 | 7.5 |
+| Operability and safety defaults | 6 | 8 |
+| **Overall** | **6.5** | **8.5** |
+
+What keeps it from higher: Docker and e2b isolation are unverified here; no measurement on real
+hardware under load; mid-turn compaction is still missing (a long tool-heavy turn on a small
+window still hits `ContextWindowFull`); one free model tested live.
