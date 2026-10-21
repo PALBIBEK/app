@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 def _truthy(name: str) -> bool:
@@ -10,16 +13,28 @@ def _truthy(name: str) -> bool:
 
 
 def apply_runtime_model_route(pinned: str | None) -> str | None:
-    """Override composition ``model_route`` without mutating catalog digests.
+    """The route a session actually uses: the composition's pin, unless ops chose otherwise.
 
-    Keys stay in the **gateway** process. Supervisor only sees signals:
-    ``YAL_MODEL_ROUTE``, ``GATEWAY_VENDOR_READY``, or ``MODEL_GATEWAY_DEFAULT_ROUTE``
-    (mirrored from compose — not vendor API keys).
+    Only explicit operator signals change it, and a change is logged, because a pin
+    that silently resolves to another model breaks the promise that a composition
+    decides its model:
 
-    - ``YAL_MODEL_ROUTE`` wins when set (ops/local demo).
-    - Non-echo pins are kept.
-    - Echo upgrades when vendor-ready signal or non-echo default route is set.
+    - ``YAL_MODEL_ROUTE`` wins when set (ops / local demo);
+    - a pin other than ``echo`` is kept;
+    - an ``echo`` pin (the shipped placeholder) is upgraded by ``MODEL_GATEWAY_DEFAULT_ROUTE``
+      (when not ``echo``) or ``GATEWAY_VENDOR_READY`` (to ``githi``).
+
+    A provider key in this process's environment is not a signal: keys belong to the
+    gateway, and sniffing them here sent compositions pinned to ``echo`` to a paid
+    model nobody chose.
     """
+    effective = _effective(pinned)
+    if effective != pinned:
+        logger.warning("model route %r overridden to %r by deployment settings", pinned, effective)
+    return effective
+
+
+def _effective(pinned: str | None) -> str | None:
     explicit = os.environ.get("YAL_MODEL_ROUTE", "").strip()
     if explicit:
         return explicit
@@ -30,10 +45,4 @@ def apply_runtime_model_route(pinned: str | None) -> str | None:
         return default_route
     if _truthy("GATEWAY_VENDOR_READY"):
         return "githi"
-    # Legacy local signal: only if ops mistakenly mirrored keys onto supervisor.
-    # Prefer GATEWAY_VENDOR_READY / YAL_MODEL_ROUTE (no key custody on supervisor).
-    if os.environ.get("OPENROUTER_API_KEY", "").strip():
-        return "githi"
-    if os.environ.get("OPENAI_API_KEY", "").strip():
-        return "openai"
     return pinned

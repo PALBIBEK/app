@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from supervisor.sandbox.base import SandboxProvider
 from supervisor.sandbox.factory import create_sandbox_provider
 from supervisor.sandbox.security.guards import (
+    assert_host_sandbox_allowed,
     assert_multi_tenant_provider,
     is_placeholder_image_digest,
     multi_tenant_strict_enabled,
@@ -327,6 +328,7 @@ def resolve_sandbox_create(
         assert_sandbox_profile_compatible(manifest, profile)
         # A tenant-published profile picks its provider: strict mode must hold per session.
         assert_multi_tenant_provider(_provider_name(profile.provider), multi_tenant_strict=strict)
+        assert_host_sandbox_allowed(_provider_name(profile.provider))
         provider = _resolve_provider(
             profile.provider,
             deploy_provider=deploy_provider,
@@ -346,6 +348,7 @@ def resolve_sandbox_create(
     assert_multi_tenant_provider(
         _provider_name(getattr(provider, "name", "")), multi_tenant_strict=strict
     )
+    assert_host_sandbox_allowed(_provider_name(getattr(provider, "name", "")))
 
     # D14: an image a provider will actually run must be pinned to a real digest. A
     # host-process sandbox runs no image, so the shipped placeholder does not block it.
