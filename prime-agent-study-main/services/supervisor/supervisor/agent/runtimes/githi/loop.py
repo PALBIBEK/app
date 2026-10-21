@@ -38,13 +38,10 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams import ChatMessage, PromptBindings, ToolInvokeContext
+from supervisor.seams.core.types import invalid_arguments
 from supervisor.tools import Workspace
 
 logger = logging.getLogger(__name__)
-
-MAX_TOOL_ITERATIONS = 8
-"""Model steps a single run may take before the workflow ends it."""
-
 
 class AgentLoopError(Exception):
     """Unrecoverable failure inside the agent loop."""
@@ -272,14 +269,14 @@ class AgentLoop:
             args = item.get("arguments") or fn.get("arguments") or {}
             if isinstance(args, str):
                 try:
-                    args = json.loads(args)
+                    args = json.loads(args) if args.strip() else {}
                 except json.JSONDecodeError:
-                    args = {"raw": args}
+                    args = invalid_arguments(args)
             calls.append(
                 {
                     "id": item.get("id") or uuid4().hex,
                     "name": item.get("name") or fn.get("name"),
-                    "arguments": args if isinstance(args, dict) else {},
+                    "arguments": args if isinstance(args, dict) else invalid_arguments(args),
                 }
             )
         return calls

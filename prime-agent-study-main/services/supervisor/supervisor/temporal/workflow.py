@@ -113,6 +113,9 @@ _CLOSE_LOST_BEFORE_ADOPT = "close-lost-call-before-adopt"
 # Histories from before model steps ran on any worker (with CHECKPOINT on the
 # sandbox's worker beside them) replay with the step on the session's worker.
 _BRAIN_ANYWHERE = "brain-anywhere"
+# Histories from before a successful new call counted as progress replay with the
+# stall guard counting every call.
+_STALL_COUNTS_PROGRESS = "stall-counts-progress"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -325,6 +328,7 @@ class AgentSessionWorkflow:
         """Model call, then each tool call, until the model answers or policy stops it."""
         guard = _guard(plan.guard)
         in_flight: str | None = None
+        tried: set[str] = set()  # (tool, arguments) the run has already run
 
         async def end(stop_reason: str, **details: Any) -> TurnOutcome:
             req = EndRunRequest(
@@ -356,7 +360,7 @@ class AgentSessionWorkflow:
                     approved = call.approval is None or await self._approve(plan.run_id, call)
                     in_flight = call.call_id
                     try:
-                        await self._call_tool(plan.run_id, call, denied=not approved)
+                        failed = await self._call_tool(plan.run_id, call, denied=not approved)
                     except ActivityError as err:
                         if is_cancelled_exception(err):
                             raise
@@ -368,10 +372,22 @@ class AgentSessionWorkflow:
                             lost_call_id=call.call_id,
                         )
                     in_flight = None
+                    key = f"{call.name}:{call.args_hash}"
+                    if (
+                        guard is not None
+                        and not failed
+                        and key not in tried
+                        and workflow.patched(_STALL_COUNTS_PROGRESS)
+                    ):
+                        guard.progress("run")  # a stall is calls that get nowhere, not many calls
+                    tried.add(key)
             return await end(
                 "error",
                 error_class="AgentLoopError",
-                detail=f"no answer after {plan.max_steps} model steps",
+                detail=(
+                    f"the step limit ({plan.max_steps} model steps) was reached without an "
+                    "answer; ask the agent to continue"
+                ),
             )
         except (ActivityError, asyncio.CancelledError) as err:
             if is_cancelled_exception(err) and self._abort_requested:
@@ -426,9 +442,10 @@ class AgentSessionWorkflow:
                 # A lost checkpoint costs a reset's restore, never the turn.
                 workflow.logger.warning("checkpoint failed: %s", err)
 
-    async def _call_tool(self, run_id: str, call: PlannedCall, *, denied: bool) -> None:
+    async def _call_tool(self, run_id: str, call: PlannedCall, *, denied: bool) -> bool:
+        """Run one tool call; whether it failed."""
         once = call.retry is RetryMode.ONCE and not denied
-        await self._session_activity(
+        return await self._session_activity(
             Activity.TOOL_CALL,
             ToolRequest(self._session_id, run_id, call.call_id, denied=denied),
             bool,

@@ -123,6 +123,17 @@ class ChildInfo:
     live: bool = False
 
 
+INVALID_ARGUMENTS_KEY = "__invalid_json__"
+"""Key of the one entry a tool call's arguments hold when the model's JSON did not
+parse: the raw text, kept so the loop can refuse the call and say why, rather than
+run the tool with arguments it never sent."""
+
+
+def invalid_arguments(raw: object) -> dict[str, Any]:
+    """Arguments for a call whose JSON did not parse (or was not an object)."""
+    return {INVALID_ARGUMENTS_KEY: str(raw)[:2000]}
+
+
 @dataclass
 class ChatMessage:
     """OpenAI-compat message shape.
