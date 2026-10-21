@@ -111,10 +111,6 @@ def reply(run: list[dict]) -> str:
     return " ".join(c.get("text", "") for c in finals[-1]["content"] if c.get("type") == "text") if finals else ""
 
 
-def ended_ok(run: list[dict]) -> bool:
-    return "run_end" in types(run) and not payloads(run, "RunError")
-
-
 def invoke(sid: str, name: str, **args: object) -> dict:
     r = alice.post(f"/v1/sessions/{sid}/tools/invoke", {"name": name, "arguments": args})
     return {"status": r.status_code} | (r.json() if r.headers.get("content-type", "").startswith("application/json") else {})

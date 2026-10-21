@@ -200,9 +200,6 @@ class GatewayModels:
         model = self._models.get(model_id)
         return model if isinstance(model, ModelSpec) else None
 
-    def resolve_embedding(self, model_id: str) -> EmbeddingModel | None:
-        model = self._models.get(model_id)
-        return model if isinstance(model, EmbeddingModel) else None
 
     def chat_models(self, *, include_aliased: bool = False) -> list[ModelSpec]:
         """Discovered chat models; a group a native alias already offers is hidden by default."""
@@ -212,8 +209,6 @@ class GatewayModels:
             if isinstance(m, ModelSpec) and (include_aliased or m.id not in self._aliased)
         ]
 
-    def embedding_ids(self) -> list[str]:
-        return [m.id for m in self._models.values() if isinstance(m, EmbeddingModel)]
 
 
 class GatewayCatalog:

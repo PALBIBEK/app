@@ -16,8 +16,8 @@ from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from supervisor.obs import tracing as tracing_mod
 from supervisor.obs.tracing import setup_tracing, shutdown_tracing
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from tests.support.session_env import make_catalog
+from tests.support.telemetry_fakes import FakeSpanSink
 
 TENANT = "d13-tenant"
 HEADERS = {"X-Tenant-Id": TENANT}
@@ -137,10 +137,6 @@ async def wait_for_journal(
                 return last
         await asyncio.sleep(0.02)
     return last
-
-
-def journal_payloads(events: list[Any], cls: type) -> list[Any]:
-    return [e.payload for e in events if isinstance(e.payload, cls)]
 
 
 def new_command_id(prefix: str = "d13") -> str:

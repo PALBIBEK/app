@@ -78,18 +78,5 @@ class MemoryObjectStorage:
             expires_in_s=ttl_s,
         )
 
-    async def create_upload_url(
-        self,
-        key: str,
-        *,
-        ttl_s: int,
-        content_type: str | None = None,
-    ) -> PresignedUrl:
-        del content_type
-        return PresignedUrl(
-            url=f"memory://upload/{key}?ttl={ttl_s}",
-            method="PUT",
-            expires_in_s=ttl_s,
-        )
 
 

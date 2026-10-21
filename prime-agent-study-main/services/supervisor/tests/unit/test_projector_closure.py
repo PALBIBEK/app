@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from supervisor.agent.events import Envelope, RunEnd, RunStart, ToolStart, TurnStart
 from supervisor.obs.projector import JournalProjector, backfill
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanStatus
+from tests.support.telemetry_fakes import FakeSpanSink
 
 
 def _env(seq: int, payload: object, *, turn_id: str | None = None) -> Envelope:

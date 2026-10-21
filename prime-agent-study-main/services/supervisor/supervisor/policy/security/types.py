@@ -142,10 +142,6 @@ class SecurityVerdict:
             quarantine_id=quarantine_id,
         )
 
-    @property
-    def is_blocked(self) -> bool:
-        """Whether content was blocked."""
-        return not self.allowed
 
 
 @dataclass(frozen=True, slots=True)

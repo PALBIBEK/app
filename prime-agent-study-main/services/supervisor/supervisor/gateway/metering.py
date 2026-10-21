@@ -81,7 +81,3 @@ def normalize_usage(
     }
 
 
-def usage_cost_usd(usage: dict[str, Any] | None) -> float:
-    if not isinstance(usage, dict):
-        return 0.0
-    return float(usage.get("cost_total") or usage.get("cost") or 0.0)

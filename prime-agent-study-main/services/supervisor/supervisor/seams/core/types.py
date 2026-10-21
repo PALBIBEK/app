@@ -58,26 +58,6 @@ class AssembledPrompt:
     content_digest: str | None = None
 
 
-@dataclass(frozen=True)
-class ChildId:
-    """Branded child handle id (C-7)."""
-
-    value: str
-
-    def __str__(self) -> str:
-        return self.value
-
-
-@dataclass(frozen=True)
-class JobId:
-    """Branded background job id (C-7)."""
-
-    value: str
-
-    def __str__(self) -> str:
-        return self.value
-
-
 @dataclass
 class SubagentRequest:
     """Provider-neutral spawn / fork / background / continuable request."""

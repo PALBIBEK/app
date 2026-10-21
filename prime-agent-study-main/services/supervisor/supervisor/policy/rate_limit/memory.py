@@ -164,16 +164,4 @@ class MemoryRateLimiter:
         """
         self._windows.pop(principal_id, None)
 
-    def clear_all(self) -> None:
-        """Clear all rate limit state."""
-        self._windows.clear()
 
-    @property
-    def max_per_window(self) -> int:
-        """Maximum requests per window."""
-        return self._max
-
-    @property
-    def window_ms(self) -> int:
-        """Window duration in milliseconds."""
-        return self._window_ms

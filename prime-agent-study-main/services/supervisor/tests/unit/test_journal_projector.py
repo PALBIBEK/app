@@ -14,8 +14,8 @@ from supervisor.agent.events import (
     Usage,
 )
 from supervisor.obs.projector import JournalProjector
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanStatus
+from tests.support.telemetry_fakes import FakeSpanSink
 
 
 def _env(

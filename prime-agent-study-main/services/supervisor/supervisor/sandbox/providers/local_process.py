@@ -53,10 +53,6 @@ from supervisor.sandbox.base import (
     WorkspaceSyncUnsupported,
 )
 from supervisor.sandbox.security.env import sanitize_sandbox_env
-from supervisor.sandbox.status import (
-    ComputerStatus,
-    MachineState,
-)
 
 if TYPE_CHECKING:
     from supervisor.seams.services import WorkspaceTreeIO
@@ -321,18 +317,6 @@ class LocalProcessSandbox(Sandbox):
     # Computer Status (basic)
     # -------------------------------------------------------------------------
 
-    async def computer_status(self) -> ComputerStatus:
-        """Get status of the sandbox.
-
-        For local_process, this just checks if the directory exists.
-        """
-        alive = await self.is_alive()
-
-        return ComputerStatus(
-            scope_id=self.id,
-            machine_state=MachineState.RUNNING if alive else MachineState.STOPPED,
-            guest_responsive=alive,
-        )
 
 
 class LocalProcessProvider(SandboxProvider):

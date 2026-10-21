@@ -10,7 +10,7 @@ import pytest
 from supervisor.agent.events import Envelope, RunStart
 from supervisor.obs.projector import JournalProjector
 from supervisor.obs.reaper import ReaperConfig, SpanReaper, run_reaper_loop
-from supervisor.telemetry_contract.fakes import FakeSpanSink
+from tests.support.telemetry_fakes import FakeSpanSink
 from tests.support.waits import until
 
 

@@ -68,4 +68,3 @@ which knows scopes and their members; this service never imports it.
 
 Adapters should: buffer on hot path → flush at checkpoints → `load` / `recall` via HTTP.
 
-- **Simple loop:** `memory_service.adapters.SimpleLoopAdapter` (constructor scope, `begin`/`note`/`checkpoint`)

@@ -7,7 +7,6 @@ import pytest
 from supervisor.models.registry import (
     DEFAULT_AGENT_MODEL_ID,
     MODEL_REGISTRY,
-    auxiliary_model_for,
     offered_in_picker,
     request_override,
     resolve_builtin,
@@ -118,9 +117,6 @@ def test_context_budget_is_half_the_room_after_output_capped_at_150k() -> None:
     assert _spec("claude-opus-5").context_token_budget == 150_000
 
 
-def test_picker_and_auxiliary_models() -> None:
+def test_picker_models() -> None:
     assert offered_in_picker("claude-opus-5-5")
     assert not offered_in_picker("claude-opus-4-7")
-    assert auxiliary_model_for("claude-opus-5-5") == "claude-haiku-5-5"
-    assert auxiliary_model_for("gpt-6-astra") == "gpt-5.6-luna"
-    assert auxiliary_model_for("unknown") == "unknown"

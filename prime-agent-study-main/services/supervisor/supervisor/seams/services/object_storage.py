@@ -88,10 +88,3 @@ class ObjectStorage(Protocol):
 
     async def create_download_url(self, key: str, *, ttl_s: int) -> PresignedUrl: ...
 
-    async def create_upload_url(
-        self,
-        key: str,
-        *,
-        ttl_s: int,
-        content_type: str | None = None,
-    ) -> PresignedUrl: ...

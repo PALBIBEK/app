@@ -154,14 +154,6 @@ class ArtifactMetadata:
             owner_id=principal_id,
         )
 
-    def with_update(self) -> ArtifactMetadata:
-        """Return copy with updated timestamp."""
-        return ArtifactMetadata(
-            created_by=self.created_by,
-            created_at=self.created_at,
-            updated_at=_now(),
-            owner_id=self.owner_id,
-        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

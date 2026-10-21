@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from supervisor.memory_service.types import (
     SUPPORTED_FORMAT_VERSIONS,
@@ -108,5 +107,3 @@ def build_recovery_closers(events: list[SessionEvent]) -> list[SessionEvent]:
     return closers
 
 
-def event_from_row(seq: int, type: str, time_ms: int, data: Any) -> SessionEvent:
-    return SessionEvent(type=type, seq=seq, time=time_ms, data=data)

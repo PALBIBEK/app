@@ -58,8 +58,6 @@ class SessionTree:
             if c.parent_id == self.parent_session_id
         ]
 
-    def list_jobs(self) -> list[JobRow]:
-        return list(self.jobs.values())
 
 
 def build_session_tree(parent_session_id: str, envelopes: list[Envelope]) -> SessionTree:

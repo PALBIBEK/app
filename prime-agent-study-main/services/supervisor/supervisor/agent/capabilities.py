@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from supervisor.agent.errors import CapabilityError
@@ -47,13 +47,7 @@ class Capabilities:
     extras: frozenset[str] = field(default_factory=frozenset)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def supports(self, capability: str) -> bool:
-        if attr := _CAP_TO_ATTR.get(capability):
-            return getattr(self, attr)
-        return capability in self.extras
 
-    def with_extra(self, *capabilities: str) -> Capabilities:
-        return replace(self, extras=self.extras | frozenset(capabilities))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,17 +60,6 @@ class Capabilities:
             "supports_compaction": self.supports_compaction,
             "extras": list(self.extras),
         }
-
-
-@dataclass(frozen=True)
-class CapabilityRequirement:
-    """Specification for required capabilities."""
-    capability: str
-    required: bool = True
-    reason: str | None = None
-
-    def check(self, caps: Capabilities) -> bool:
-        return not self.required or caps.supports(self.capability)
 
 
 def require(have: Capabilities, need: Capabilities) -> None:

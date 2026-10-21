@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from supervisor.db.models import SessionIndexRow, SessionRow
 from supervisor.sandbox.base import Sandbox, SnapshotUnsupported
 from supervisor.seams.services import (
-    SessionWorkspaceState,
     WorkspaceConflictError,
 )
 from supervisor.session.errors import (
@@ -45,18 +44,6 @@ class UpkeepOps(ChildOps):
             raise WorkspaceUnavailable("session has no sandbox to rehydrate")
         await self._workspace_svc.ensure_hydrated(ws, sandbox, force=True)
 
-    async def _sync_workspace_fail_closed(
-        self,
-        session_id: str,
-        ws_state: SessionWorkspaceState,
-        sandbox: Sandbox,
-    ) -> None:
-        """Sync dirty paths; on CAS conflict rehydrate durable bytes then re-raise."""
-        try:
-            await self._workspace_svc.sync_if_dirty(ws_state, sandbox, force=True)
-        except WorkspaceConflictError:
-            await self._workspace_svc.recover_cas_conflict(ws_state, sandbox)
-            raise
 
     async def reap_idle_sessions(self, *, max_idle_seconds: float) -> list[str]:
         """Pause sticky or terminate stateless sessions idle longer than threshold."""

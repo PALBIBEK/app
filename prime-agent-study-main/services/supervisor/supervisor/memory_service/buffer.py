@@ -19,9 +19,6 @@ class WriteBehindBuffer:
     def pending_count(self) -> int:
         return len(self._pending)
 
-    @property
-    def next_seq(self) -> int:
-        return self._next_seq
 
     def seed_next_seq(self, next_seq: int) -> None:
         """After durable load/fork, continue numbering from durable tip + 1."""

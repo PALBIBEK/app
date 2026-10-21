@@ -5,8 +5,8 @@ from __future__ import annotations
 from supervisor.agent.events import Envelope, RunEnd, RunStart, ToolStart, TurnStart
 from supervisor.obs.projector import JournalProjector
 from supervisor.obs.reaper import ReaperConfig, SpanReaper
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanStatus
+from tests.support.telemetry_fakes import FakeSpanSink
 
 TRACE = "b" * 32
 

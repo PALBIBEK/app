@@ -334,38 +334,6 @@ class ApprovalBroker:
                 await db.commit()
             return self._to_approval(row)
 
-    async def wait_for_response(
-        self,
-        approval_id: str,
-        timeout_s: float | None = None,
-    ) -> Approval | None:
-        """Wait for approval response (for tests).
-
-        Args:
-            approval_id: Approval to wait for
-            timeout_s: Optional timeout
-
-        Returns:
-            Approval if responded, None if timeout
-        """
-        # Check if already responded
-        approval = await self.get(approval_id)
-        if approval is None:
-            raise ApprovalNotFound(approval_id)
-        if approval.status != ApprovalStatus.PENDING:
-            return approval
-
-        # Create waiter
-        event = asyncio.Event()
-        self._waiters[approval_id] = event
-
-        try:
-            await asyncio.wait_for(event.wait(), timeout=timeout_s)
-            return await self.get(approval_id)
-        except TimeoutError:
-            return None
-        finally:
-            self._waiters.pop(approval_id, None)
 
     def _to_approval(self, row: ApprovalRow) -> Approval:
         """Convert DB row to Approval dataclass."""

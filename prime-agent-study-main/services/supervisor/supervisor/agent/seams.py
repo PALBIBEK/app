@@ -31,8 +31,6 @@ class RuntimeSeams:
     def has(self, seam_name: str) -> bool:
         return getattr(self, seam_name) is not None
 
-    def available_seams(self) -> list[str]:
-        return [name for name in _SEAM_FIELDS if getattr(self, name) is not None]
 
     def to_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) is not None for name in _SEAM_FIELDS}

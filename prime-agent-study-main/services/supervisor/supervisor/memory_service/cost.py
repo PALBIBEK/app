@@ -26,8 +26,6 @@ class CachingEmbedder:
         self._cache[key] = vec
         return vec
 
-    def batch_embed(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed(t) for t in texts]
 
 
 def flush_batch_is_barren(events: list[SessionEvent] | list[Any]) -> bool:

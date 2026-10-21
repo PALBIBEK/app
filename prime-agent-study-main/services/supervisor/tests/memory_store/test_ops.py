@@ -6,11 +6,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from starlette.testclient import TestClient
 
 from supervisor.memory_service.app import create_app
 from supervisor.memory_service.cost import CachingEmbedder, flush_batch_is_barren
 from supervisor.memory_service.metrics import METRICS
+from supervisor.memory_service.models import ForgetAuditRow
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.tenant import TenantRequired, require_tenant
 from supervisor.memory_service.tier2_types import ForgetSelector, NewMemoryItem, TokenBudget
@@ -66,10 +68,9 @@ async def test_forget_writes_audit(svc: MemoryService):
         reason="user request",
     )
     assert n == 1
-    audit = await svc._erase.list_audit("t1")
-    assert audit
-    assert audit[0]["actor"] == "admin@yal"
-    assert audit[0]["reason"] == "user request"
+    async with svc._factory() as db:  # the audit row forgetting writes
+        rows = (await db.execute(select(ForgetAuditRow).where(ForgetAuditRow.tenant == "t1"))).scalars().all()
+    assert [(r.actor, r.reason) for r in rows] == [("admin@yal", "user request")]
 
 
 @pytest.mark.asyncio
@@ -148,7 +149,7 @@ async def test_barren_flush_skips_extraction(svc: MemoryService):
     svc.append(handle.id, "tool/result", {"call_id": "c", "status": "ok"})
     svc.append(handle.id, "turn/end", {})
     await svc.flush(handle.id)
-    assert await svc.extraction_pending_count() == 0
+    assert await svc.process_extraction_jobs() == 0
     assert METRICS.extraction_jobs_skipped_barren >= 1
 
 

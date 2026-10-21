@@ -214,13 +214,3 @@ class LoopGuard:
         """
         return len(self._hashes.get(session_id, []))
 
-    def stall_count(self, session_id: str) -> int:
-        """Get current stall count for session.
-
-        Args:
-            session_id: Session to check
-
-        Returns:
-            Number of calls since last reset
-        """
-        return self._stall_count.get(session_id, 0)

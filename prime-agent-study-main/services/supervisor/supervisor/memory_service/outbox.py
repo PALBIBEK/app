@@ -123,10 +123,3 @@ class Outbox:
                 results.append(outcome)
         return results
 
-    async def count_effects_by_key(self, idempotency_key: str) -> int:
-        """Test helper: how many done outbox rows share this key (should be ≤1)."""
-        async with self._factory() as db:
-            result = await db.execute(
-                select(OutboxRow).where(OutboxRow.idempotency_key == idempotency_key)
-            )
-            return len(list(result.scalars().all()))

@@ -39,44 +39,6 @@ def _fast_sse_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(events_mod, "_HEARTBEAT_SECS", 0.05)
 
 
-def resolve_lab_provider(state: Any | None = None) -> str:
-    """Prefer ``lab_echo`` when registered; else stock echo stub name ``memory``."""
-    if state is not None:
-        manager = getattr(state, "manager", None)
-        seams_map = getattr(manager, "_seams", None) if manager is not None else None
-        if isinstance(seams_map, dict):
-            for seams in seams_map.values():
-                transport = getattr(seams, "subagent_transport", None)
-                registry = getattr(transport, "_registry", None)
-                if registry is not None and hasattr(registry, "names"):
-                    names = set(registry.names())
-                    if "lab_echo" in names:
-                        return "lab_echo"
-                    if "memory" in names:
-                        return "memory"
-        fallback = getattr(manager, "_fallback_seams", None) if manager else None
-        transport = getattr(fallback, "subagent_transport", None) if fallback else None
-        registry = getattr(transport, "_registry", None)
-        if registry is not None and hasattr(registry, "names"):
-            names = set(registry.names())
-            if "lab_echo" in names:
-                return "lab_echo"
-            if "memory" in names:
-                return "memory"
-    # Provider module rename path
-    providers = (
-        AI_ROOT
-        / "services"
-        / "supervisor"
-        / "supervisor"
-        / "seams"
-        / "providers"
-    )
-    if (providers / "lab_echo_subagent.py").is_file():
-        return "lab_echo"
-    return "memory"
-
-
 async def _build_stack(
     tmp_path: Path,
     factory,
@@ -201,10 +163,6 @@ async def wait_for_journal(
     return last
 
 
-def journal_payloads(events: list[Any], cls: type) -> list[Any]:
-    return [e.payload for e in events if isinstance(e.payload, cls)]
-
-
 def parse_sse_json_events(raw: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for block in raw.split("\n\n"):
@@ -222,25 +180,6 @@ def parse_sse_json_events(raw: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return out
-
-
-def spawn_body(
-    *,
-    prompt: str = "d12 child work",
-    provider: str | None = None,
-    parent_depth: int = 0,
-    persona: str | None = None,
-    description: str = "d12",
-) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "prompt": prompt,
-        "description": description,
-        "provider": provider or "memory",
-        "parent_depth": parent_depth,
-    }
-    if persona is not None:
-        body["persona"] = persona
-    return body
 
 
 def new_command_id(prefix: str = "d12") -> str:

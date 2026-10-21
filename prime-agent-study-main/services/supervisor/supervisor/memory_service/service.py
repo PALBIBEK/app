@@ -371,21 +371,7 @@ class MemoryService:
             await self.startup()
         return await self._extraction.process_pending(limit=limit)
 
-    async def rebuild_tier2_from_tier1(self, scope: Scope, session_id: str) -> int:
-        """Wipe active bank for scope and re-extract from full session log."""
-        if not self._ready:
-            await self.startup()
-        await self._bank.wipe_scope(scope)
-        row = await self._store.get_session_row(session_id)
-        if row.last_seq < 0:
-            return 0
-        await self._extraction.enqueue(session_id, 0, row.last_seq)
-        return await self._extraction.process_pending()
 
-    async def extraction_pending_count(self) -> int:
-        if not self._ready:
-            await self.startup()
-        return await self._extraction.pending_count()
 
     async def inject_corrupt_gap_for_test(self, session_id: str) -> None:
         """Test-only: insert event at wrong seq to simulate corruption."""

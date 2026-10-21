@@ -25,10 +25,8 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 if TYPE_CHECKING:
     from supervisor.sandbox.backup import BackupArea, BackupResult
-    from supervisor.sandbox.egress import EgressPolicy
     from supervisor.sandbox.layers import LayerManifest, MaterializationResult
     from supervisor.sandbox.staging import StagedBlob, StageOutResult
-    from supervisor.sandbox.status import ComputerStatus, RestartResult
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
 
 
@@ -177,34 +175,6 @@ class ROLayersUnsupported(SandboxError):
         )
 
 
-class ComputerStatusUnsupported(SandboxError):
-    """Provider does not support computer status/restart.
-
-    Recovery: Use a provider that supports status operations.
-    """
-
-    def __init__(self, provider: str) -> None:
-        super().__init__(
-            f"{provider} does not support computer status",
-            provider=provider,
-            retryable=False,
-        )
-
-
-class EgressPolicyUnsupported(SandboxError):
-    """Provider does not support egress policy enforcement.
-
-    Recovery: Use a provider that supports egress control.
-    """
-
-    def __init__(self, provider: str) -> None:
-        super().__init__(
-            f"{provider} does not support egress policy",
-            provider=provider,
-            retryable=False,
-        )
-
-
 # =============================================================================
 # Process Handle Protocol
 # =============================================================================
@@ -291,10 +261,6 @@ class ProcessHandle(ABC):
         """Forced shutdown (SIGKILL or equivalent)."""
         ...
 
-    @property
-    def is_running(self) -> bool:
-        """Check if process is still running."""
-        return self.returncode() is None
 
 
 # =============================================================================
@@ -706,66 +672,17 @@ class Sandbox(ABC):
         """
         raise ROLayersUnsupported(self.info.provider)
 
-    async def current_ro_manifest_sha(self) -> str | None:
-        """Get SHA256 of currently materialized manifest.
-
-        Returns:
-            Manifest SHA or None if no layers materialized.
-
-        Raises:
-            ROLayersUnsupported: If provider doesn't support this.
-        """
-        raise ROLayersUnsupported(self.info.provider)
 
     # -------------------------------------------------------------------------
     # Computer Status (Optional)
     # -------------------------------------------------------------------------
 
-    async def computer_status(self) -> ComputerStatus:
-        """Get status of the sandbox computer.
 
-        Performs health check via guest probe.
-
-        Returns:
-            ComputerStatus with machine state and responsiveness.
-
-        Raises:
-            ComputerStatusUnsupported: If provider doesn't support this.
-        """
-        raise ComputerStatusUnsupported(self.info.provider)
-
-    async def restart_computer(
-        self,
-        *,
-        timeout: float | None = None,
-    ) -> RestartResult:
-        """Restart the sandbox computer.
-
-        Args:
-            timeout: Maximum wait time for restart in seconds.
-
-        Returns:
-            RestartResult with timing details.
-
-        Raises:
-            ComputerStatusUnsupported: If provider doesn't support this.
-        """
-        raise ComputerStatusUnsupported(self.info.provider)
 
     # -------------------------------------------------------------------------
     # Egress Control (Optional)
     # -------------------------------------------------------------------------
 
-    async def ensure_egress_policy(self, policy: EgressPolicy) -> None:
-        """Ensure egress policy is applied to sandbox.
-
-        Args:
-            policy: Egress policy with allowed domains and proxy config.
-
-        Raises:
-            EgressPolicyUnsupported: If provider doesn't support this.
-        """
-        raise EgressPolicyUnsupported(self.info.provider)
 
 
 # =============================================================================

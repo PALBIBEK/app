@@ -39,9 +39,6 @@ class AgentError(Exception):
         base = f"[{self.error_code}] {self.message}"
         return f"{base} (session={self.session_id})" if self.session_id else base
 
-    @property
-    def http_status(self) -> int:
-        return 500
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,9 +57,6 @@ class AgentNotReadyError(AgentError):
     error_code: str = "AGENT_NOT_READY"
     retryable: bool = True
 
-    @property
-    def http_status(self) -> int:
-        return 503
 
 
 @_auto_context
@@ -74,9 +68,6 @@ class AgentBusyError(AgentError):
     retryable: bool = True
     current_operation: str | None = None
 
-    @property
-    def http_status(self) -> int:
-        return 429
 
 
 @_auto_context
@@ -87,9 +78,6 @@ class AgentAbortedError(AgentError):
     error_code: str = "AGENT_ABORTED"
     abort_reason: str = "user_request"
 
-    @property
-    def http_status(self) -> int:
-        return 499
 
 
 @_auto_context
@@ -101,9 +89,6 @@ class AgentTimeoutError(AgentError):
     retryable: bool = True
     timeout_seconds: float = 0.0
 
-    @property
-    def http_status(self) -> int:
-        return 504
 
 
 @_auto_context
@@ -130,9 +115,6 @@ class ToolNotFoundError(AgentError):
             self.message = f"Tool not found: {self.tool_name}"
         super().__post_init__()
 
-    @property
-    def http_status(self) -> int:
-        return 404
 
 
 @_auto_context
@@ -155,9 +137,6 @@ class ModelOverloadedError(ModelCallError):
     error_code: str = "MODEL_OVERLOADED"
     retry_after: float | None = None
 
-    @property
-    def http_status(self) -> int:
-        return 429
 
 
 @_auto_context

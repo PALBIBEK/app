@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
@@ -23,13 +23,7 @@ class AgentPhase(Enum):
     STOPPED = "stopped"
     ERROR = "error"
 
-    @property
-    def is_active(self) -> bool:
-        return self in (AgentPhase.READY, AgentPhase.EXECUTING, AgentPhase.COMPACTING)
 
-    @property
-    def is_terminal(self) -> bool:
-        return self in (AgentPhase.STOPPED, AgentPhase.ERROR)
 
 
 @dataclass(frozen=True)
@@ -52,24 +46,16 @@ class AgentState:
     def is_busy(self) -> bool:
         return self.phase == AgentPhase.EXECUTING
 
-    @property
-    def is_compacting(self) -> bool:
-        return self.phase == AgentPhase.COMPACTING
 
     @property
     def settled(self) -> bool:
         return self.phase == AgentPhase.READY and self.pending_count == 0
 
-    @property
-    def can_accept_message(self) -> bool:
-        return self.phase == AgentPhase.READY
 
     @property
     def context_usage_ratio(self) -> float:
         return self.tokens_used / self.context_window if self.context_window else 0.0
 
-    def with_phase(self, phase: AgentPhase) -> AgentState:
-        return replace(self, phase=phase)
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -107,12 +107,6 @@ class ExtractionQueue:
             await db.commit()
         return job_id
 
-    async def pending_count(self) -> int:
-        async with self._factory() as db:
-            result = await db.execute(
-                select(ExtractionJobRow).where(ExtractionJobRow.status == "pending")
-            )
-            return len(list(result.scalars().all()))
 
     async def process_pending(self, *, limit: int = 50) -> int:
         """Drain pending jobs. Errors are recorded on the job — never raised to callers."""
