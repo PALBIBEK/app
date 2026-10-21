@@ -314,12 +314,16 @@ async def test_create_session_inserts_ownership_row_with_pin_snapshot(
     sid = r.json()["id"]
     from sqlalchemy import select
 
+    # The request's database session closes without a commit of its own: a link
+    # that was only flushed is gone, and every later call on the session 404s.
+    owner_id = owner.id  # a rollback expires loaded objects
+    await db_session.rollback()
     row = (
         await db_session.execute(select(SessionLink).where(SessionLink.id == sid))
     ).scalar_one()
     assert row.ai_session_id == "ai-own-1"
     assert row.composition_digest == DIGEST
-    assert row.user_id == owner.id
+    assert row.user_id == owner_id
 
 
 @pytest.mark.asyncio
