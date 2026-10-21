@@ -139,10 +139,6 @@ async def wait_for_journal(
     return last
 
 
-def journal_payloads(events: list[Any], cls: type) -> list[Any]:
-    return [e.payload for e in events if isinstance(e.payload, cls)]
-
-
 def new_command_id(prefix: str = "d13") -> str:
     return f"{prefix}-{uuid4().hex}"
 
