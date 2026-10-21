@@ -7,7 +7,7 @@ import os
 import shutil
 from pathlib import Path
 
-from supervisor.seams.services import WorkspacePathEscape
+from supervisor.seams.services.workspace_store import WorkspacePathEscape
 
 
 def _safe_rel(path: str) -> str:

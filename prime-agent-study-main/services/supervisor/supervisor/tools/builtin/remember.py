@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from supervisor.seams.services import (
+from supervisor.seams.services.memory_service_client import (
     memory_service_base_url,
     resolve_memory_scope,
     write_memory_item,

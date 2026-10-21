@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / "services" / "supervisor"))
 
 from supervisor.catalog.core.digests import content_digest  # noqa: E402
+from supervisor.catalog.core.types import ToolDefinition  # noqa: E402
 from supervisor.catalog.storage import artifact_from_dict  # noqa: E402
 
 LEAVES: tuple[tuple[str, str], ...] = (
@@ -40,6 +41,21 @@ def _digest(kind: str, raw: dict[str, Any]) -> str:
     return content_digest(artifact_from_dict(kind, body).body_for_digest())
 
 
+def _tool_digests(raw: dict[str, Any]) -> None:
+    """A tool set's per-tool digests (``definitions.*.digest`` and ``tools``), recomputed."""
+    for name, definition in (raw.get("definitions") or {}).items():
+        tool = ToolDefinition(
+            name=definition["name"],
+            description=definition["description"],
+            parameters=dict(definition["parameters"]),
+            digest="",
+            tool_class=definition.get("tool_class"),
+        )
+        definition["digest"] = content_digest(tool.body_for_digest())
+        if isinstance(raw.get("tools"), dict):
+            raw["tools"][name] = definition["digest"]
+
+
 def _render(raw: dict[str, Any]) -> str:
     return json.dumps(raw, indent=2, sort_keys=True) + "\n"
 
@@ -54,6 +70,8 @@ def main() -> int:
     for directory, kind in LEAVES:
         for path in sorted((ROOT / directory).glob("*.json")):
             raw = json.loads(path.read_text(encoding="utf-8"))
+            if kind == "tool_set":
+                _tool_digests(raw)
             digest = _digest(kind, raw)
             leaf_digests[(kind, raw["name"])] = digest
             if "digest" in raw:  # tool sets carry none: theirs is computed at load
@@ -76,7 +94,7 @@ def main() -> int:
             print(f"stale digest: harness/{rel}")
         else:
             path.write_text(_render(updates[path]), encoding="utf-8")
-            print(f"updated harness/{rel} -> {updates[path]['digest']}")
+            print(f"updated harness/{rel} -> {updates[path].get('digest', 'per-tool digests')}")
     if check and stale:
         print("run: python harness/scripts/recompute-digests.py", file=sys.stderr)
         return 1

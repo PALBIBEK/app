@@ -46,8 +46,10 @@ __all__ = [
 LOGICAL_ROOT: Final = "/workspace"
 """Where the workspace is mounted in a sandbox; accepted as a path prefix everywhere."""
 
-_MAX_STREAM_CHARS: Final = 64_000
-"""Per-stream cap on command output kept for the model; the rest is cut with a notice."""
+_MAX_STREAM_CHARS: Final = 12_000
+"""Per-stream cap on command output kept for the model (about 3k tokens). Every
+character returned is resent on each later step of the run, so one chatty command
+must not fill the window: found live, one ``seq`` sent 76k characters."""
 
 _DRAIN_S: Final = 5.0
 """How long to wait for a finished command's pipes to close."""
@@ -237,11 +239,14 @@ class HostWorkspace:
 
 
 def _clip(raw: bytes) -> tuple[str, bool]:
+    """The output within the cap: its start and its end, which is where results and
+    errors usually are, with the middle cut and the cut said."""
     text = raw.decode("utf-8", errors="replace")
     if len(text) <= _MAX_STREAM_CHARS:
         return text, False
-    dropped = len(text) - _MAX_STREAM_CHARS
-    return f"{text[:_MAX_STREAM_CHARS]}\n[... {dropped} more characters cut]", True
+    half = _MAX_STREAM_CHARS // 2
+    dropped = len(text) - 2 * half
+    return f"{text[:half]}\n[... {dropped} characters cut from the middle ...]\n{text[-half:]}", True
 
 
 class TreeWorkspace:

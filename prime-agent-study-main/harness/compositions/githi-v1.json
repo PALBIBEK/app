@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:f7cf7489beab22391a2a219c933ca1119c309e2ccd460f5c094ec5ca74fd246c",
+  "digest": "sha256:31d928d10622ba97fb77b0cec8fe0a1e2dd62fcc7b76179d0ca63ce34593f3de",
   "harness_version": "githi-v1",
   "memory_profile": {
     "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
@@ -18,7 +18,7 @@
   "semver": "1.0.0",
   "status": "offered",
   "tool_set": {
-    "digest": "sha256:d49abd6d6bbf6230ee084c01dd8cee6301f19aecbe1b64afe18d28ea9259b124",
+    "digest": "sha256:56feb1a11717030382305d55bb01615f9e8d5a55535dcb46f10a2ea8813c5cc1",
     "id": "githi-tools"
   }
 }
