@@ -143,13 +143,26 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       const roleRaw = String(event.data.role ?? 'assistant');
       const role =
         roleRaw === 'user' || roleRaw === 'system' ? roleRaw : 'assistant';
+      const content = textFromMessageEnd(event.data);
+      const timestamp = new Date(event.ts_ms).toISOString();
+      if (role === 'user') {
+        // The journal's copy of a message this page just showed: confirm it in place.
+        const local = next.messages.findIndex((m) => m.id.startsWith('local-') && m.role === 'user' && m.content === content);
+        if (local >= 0) {
+          next.messages = next.messages.map((m, i) => (i === local ? { ...m, id: event.event_id, timestamp } : m));
+          break;
+        }
+      }
       const tools = Array.from(next.pendingTools.values());
+      if (role === 'assistant' && !content && !tools.length) {
+        break; // only tool calls: they show as tools as they run, not as an empty bubble
+      }
       next.pendingTools.clear();
       next.messages.push({
         id: event.event_id,
         role,
-        content: textFromMessageEnd(event.data),
-        timestamp: new Date(event.ts_ms).toISOString(),
+        content,
+        timestamp,
         toolCalls: tools.length ? tools : undefined,
       });
       break;

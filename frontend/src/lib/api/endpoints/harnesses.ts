@@ -25,6 +25,19 @@ import {
   HarnessListResponse,
   HarnessSchema,
 } from '../types/harness.types';
+import {
+  CatalogModelSchema,
+  CatalogToolSchema,
+  ManifestViewSchema,
+  PublishResponseSchema,
+  ReleaseSchema,
+  type CatalogModel,
+  type CatalogTool,
+  type Manifest,
+  type ManifestView,
+  type PublishResponse,
+  type Release,
+} from '../types/manifest.types';
 
 /**
  * SECURITY: Whitelist of allowed fields for harness creation/update
@@ -118,4 +131,24 @@ export const harnessesAPI = {
     const response = await apiClient.post<Harness>(`/harnesses/${id}/bind`, data);
     return HarnessSchema.parse(response);
   },
+
+  /** The draft manifest (a new harness starts as the shipped coding agent). */
+  getManifest: async (id: string): Promise<ManifestView> =>
+    ManifestViewSchema.parse(await apiClient.get(`/harnesses/${id}/manifest`)),
+
+  saveManifest: async (id: string, manifest: Manifest): Promise<ManifestView> =>
+    ManifestViewSchema.parse(await apiClient.put(`/harnesses/${id}/manifest`, manifest)),
+
+  /** Publish the draft as the next release (an unchanged draft publishes nothing). */
+  publish: async (id: string): Promise<PublishResponse> =>
+    PublishResponseSchema.parse(await apiClient.post(`/harnesses/${id}/publish`)),
+
+  releases: async (id: string): Promise<Release[]> =>
+    ReleaseSchema.array().parse(await apiClient.get(`/harnesses/${id}/releases`)),
+};
+
+/** What a harness can be built from, as the supervisor offers it now. */
+export const catalogAPI = {
+  tools: async (): Promise<CatalogTool[]> => CatalogToolSchema.array().parse(await apiClient.get('/catalog/tools')),
+  models: async (): Promise<CatalogModel[]> => CatalogModelSchema.array().parse(await apiClient.get('/catalog/models')),
 };
