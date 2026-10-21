@@ -234,6 +234,7 @@ class SessionService:
             turn_id=str(upstream.get("turn_id") or ""),
             command_id=command_id,
             status=str(upstream.get("status") or "accepted"),
+            queued=upstream.get("queued") is True,
         )
 
     async def invoke_tool(

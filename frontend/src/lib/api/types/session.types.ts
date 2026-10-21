@@ -49,6 +49,8 @@ export const SessionMessageResponseSchema = z.object({
   turn_id: z.string(),
   command_id: z.string(),
   status: z.string(),
+  /** True when the message waits behind a turn already running. */
+  queued: z.boolean().default(false),
 });
 
 export const WireEventSchema = z.object({

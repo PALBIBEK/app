@@ -355,7 +355,7 @@ async def test_message_mints_command_id_and_maps_turn_id(
             body = json.loads(request.content.decode())
             seen["command_id"] = body["command_id"]
             seen["text"] = body["text"]
-            return httpx.Response(202, json={"turn_id": "turn-9", "status": "accepted"})
+            return httpx.Response(202, json={"turn_id": "turn-9", "status": "accepted", "queued": True})
         return httpx.Response(404)
 
     _patch_session(monkeypatch, session_settings, handler)
@@ -374,6 +374,7 @@ async def test_message_mints_command_id_and_maps_turn_id(
         )
     assert r.status_code == 202
     assert r.json()["turn_id"] == "turn-9"
+    assert r.json()["queued"] is True  # behind a running turn: the UI can say so
     assert r.json()["command_id"]
     assert seen["text"] == "hello"
     assert seen["command_id"] == r.json()["command_id"]
