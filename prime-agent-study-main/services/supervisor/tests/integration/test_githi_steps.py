@@ -8,6 +8,7 @@ The model is a scripted gateway (a pure function of the conversation).
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -30,6 +31,7 @@ from supervisor.temporal.contracts import (
     Phase,
 )
 from supervisor.temporal.sessions import SessionCommandError
+from supervisor.temporal.steps import FINAL_STEP_NOTICE, steps_left_notice
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
@@ -206,17 +208,64 @@ async def test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session(
     assert len(payloads(events, ToolEnd)) == 2  # the third identical call never ran
 
 
-async def test_a_model_that_never_answers_ends_the_run_not_the_session(
+async def test_a_model_that_keeps_working_is_warned_then_made_to_answer_on_the_last_step(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
-    model(LS, vary_args=True)
+    """Every call succeeds with new arguments, so it is progress, not a stall: the run
+    goes to the manifest's step limit (30 by default), is told the steps left on the
+    last requests, and on the last step must answer (``tool_choice=none``)."""
+    gateway = model(LS, vary_args=True)
     state = await env.state()
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "keep going"))
-        events = await env.wait_for(state, sid, run_ended())
-        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["AgentLoopError"]
+        events = await env.wait_for(state, sid, run_ended(), timeout=120)
         assert (await env.sessions.status(sid)).phase is Phase.IDLE
+    assert not payloads(events, ErrorEvent), "no LoopGuard stall and no step-limit error"
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    assert payloads(events, MessageEnd)[-1].content[0]["text"] == "final answer after 29 tool results"
+    assert len(payloads(events, ToolEnd)) == 29
+    assert gateway.tool_choices[-1] == "none" and set(gateway.tool_choices[:-1]) == {None}
+    notices = [m[-1].content for m in gateway.seen if m[-1].role == "system"]
+    assert notices[:3] == [steps_left_notice(n) for n in (3, 2)] + [FINAL_STEP_NOTICE]
+    journal = json.dumps([e.payload for e in events], default=str)
+    assert "steps left" not in journal and FINAL_STEP_NOTICE not in journal, "request only"
+
+
+async def test_calls_that_keep_failing_are_still_a_stall(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Progress resets the stall count; failures do not, so a model that keeps failing
+    with new arguments still stops after ``stall_iterations`` (10) calls."""
+    model(("read", {"file_path": "no-such-file.txt"}), vary_args=True)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "read it"))
+        events = await env.wait_for(state, sid, run_ended(), timeout=60)
+    assert [e.error_class for e in payloads(events, ErrorEvent)] == ["LoopGuard"]
+    assert "stall" in payloads(events, ErrorEvent)[0].detail
+    assert all(e.is_error for e in payloads(events, ToolEnd))
+
+
+@pytest.mark.parametrize(
+    ("script", "code"),
+    [({"truncate_first": True}, "TRUNCATED_TOOL_CALL"), ({"malformed_first": True}, "MALFORMED_ARGUMENTS")],
+)
+async def test_a_call_from_a_cut_off_reply_or_with_broken_json_is_refused_not_run(
+    env: Env, model: Callable[..., ScriptedGateway], script: dict[str, bool], code: str
+) -> None:
+    model(LS, **script)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "list the files"))
+        events = await env.wait_for(state, sid, run_ended())
+    (end,) = payloads(events, ToolEnd)
+    assert end.is_error and end.result["code"] == code, end.result
+    assert "not run" in end.result["error"]
+    assert end.duration_ms is not None
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop", "the run goes on"
 
 
 async def test_spending_the_budget_stops_the_run_and_refuses_new_turns(

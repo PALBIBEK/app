@@ -14,6 +14,7 @@ from typing import Any, Final
 from supervisor.agent.events import Envelope
 from supervisor.memory import history as session_history
 from supervisor.memory.binding import MemoryBinding
+from supervisor.memory.client import MemoryRefused, MemoryUnavailable
 from supervisor.memory.cross import read_notebook, search_across
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.service import CaptureContext, MemoryService
@@ -242,6 +243,8 @@ class TurnMemory:
                 return await self._memory(args)
             except (MemoryFactsMissing, MemoryDisclosureDenied) as exc:
                 return ToolOutput(f"[error] {exc}", True)
+            except (MemoryUnavailable, MemoryRefused) as exc:
+                return ToolOutput(f"[error] long-term memory is unavailable right now: {exc}", True)
         return ToolOutput(f"[error] unknown tool {name!r}", True)
 
     # --- memory ----------------------------------------------------------------

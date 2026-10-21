@@ -43,7 +43,12 @@ from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.harness.services.compat_checker import capabilities_for, check
 from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
-from supervisor.memory.client import MemoryServiceNotConfigured, UnavailableNotebooks
+from supervisor.memory.client import (
+    MemoryRefused,
+    MemoryServiceNotConfigured,
+    MemoryUnavailable,
+    UnavailableNotebooks,
+)
 from supervisor.models import model_router
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
@@ -213,16 +218,35 @@ class SessionManager(UpkeepOps):
                     )
                 _warn_no_memory_service()
                 request = MemoryRequest.without_notebooks()
-            binding = await resolve_binding(
-                self._memory.store,
-                tenant_id=tenant_id,
-                owner=principal.id,
-                pin=agent_pin(
-                    harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
-                ),
-                request=request,
-                agent=(self._long_term.get(session_id) or (None, None))[1],
+            pin = agent_pin(
+                harness_version=harness_version, manifest_snapshot=snap, composition_pins=pins_json
             )
+            agent = (self._long_term.get(session_id) or (None, None))[1]
+            try:
+                binding = await resolve_binding(
+                    self._memory.store,
+                    tenant_id=tenant_id,
+                    owner=principal.id,
+                    pin=pin,
+                    request=request,
+                    agent=agent,
+                )
+            except (MemoryUnavailable, MemoryRefused) as exc:
+                if MemoryRequest.names_notebooks(memory):
+                    raise  # the client asked for notebooks: it hears they are unavailable
+                # Only the implicit default notebook was wanted: the session starts without
+                # long-term memory rather than not at all.
+                logger.warning(
+                    "session %s starts without long-term memory: %s", session_id, exc
+                )
+                binding = await resolve_binding(
+                    self._memory.store,
+                    tenant_id=tenant_id,
+                    owner=principal.id,
+                    pin=pin,
+                    request=MemoryRequest.without_notebooks(),
+                    agent=agent,
+                )
             await self._writer.ensure_session(
                 session_id,
                 runtime=runtime_name,
@@ -472,17 +496,22 @@ class SessionManager(UpkeepOps):
         if (cached := self._brains.get(session_id)) is not None:
             self._brains.move_to_end(session_id)
             return cached
-        await self._require_active(session_id)
         row = await self._get_session_row(session_id)
-        manifest = self._pinned_manifest(row)
         pins: SessionPins | None = None
-        memory_profile = None
         if row.composition_pins and self._composition_catalog is not None:
             pins = SessionPins.from_dict(dict(row.composition_pins))
+            # Before anything resolves a pin: this worker may not have seen artifacts
+            # published after it started (_require_active reads the sandbox profile).
             await sync_composition(
                 self._composition_catalog, self._db, pins.composition_id, pins.composition_digest
             )
-            memory_profile = load_pinned_memory_profile(pins, self._composition_catalog)
+        await self._require_active(session_id)
+        manifest = self._pinned_manifest(row)
+        memory_profile = (
+            load_pinned_memory_profile(pins, self._composition_catalog)
+            if pins is not None and self._composition_catalog is not None
+            else None
+        )
         principal = Principal(id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id)
         model = session_model(manifest, pins)
         owner, agent = self._long_term.setdefault(

@@ -168,6 +168,14 @@ class LoopGuard:
             call_count=stall_count,
         )
 
+    def progress(self, session_id: str) -> None:
+        """A call got somewhere (it succeeded with arguments not tried before in the run).
+
+        Only the stall count restarts: repetition and oscillation still look at the
+        calls in the window, so a loop that happens to succeed is still a loop.
+        """
+        self._stall_count[session_id] = 0
+
     def reset(self, session_id: str) -> None:
         """Reset state for session on progress.
 

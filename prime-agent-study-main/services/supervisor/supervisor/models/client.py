@@ -200,11 +200,15 @@ class RoutedModelClient:
         tools: Sequence[Mapping[str, Any]],
         *,
         model: str | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[ModelSpec, AssistantTurn]:
         """One agent model call at the session's effort; the spec it resolved to and its turn."""
         spec = self.spec(model)
         return spec, self.call(
-            spec, context_from_chat(messages, tools), thinking=self.thinking_level(spec)
+            spec,
+            context_from_chat(messages, tools),
+            thinking=self.thinking_level(spec),
+            tool_choice=tool_choice,
         )
 
     def call(
@@ -268,8 +272,9 @@ class RoutedModelClient:
         tools: list[dict[str, Any]],
         *,
         model: str | None = None,
+        tool_choice: str | None = None,
     ) -> Completion:
-        spec, turn = self.turn(messages, tools, model=model)
+        spec, turn = self.turn(messages, tools, model=model, tool_choice=tool_choice)
         return completion(spec, turn)
 
     def stream(

@@ -65,7 +65,9 @@ async def readyz(request: Request, response: Response) -> dict[str, Any]:
     if catalog is not None:
         from supervisor.catalog.loading.verify import list_catalog_problems
 
-        catalog_problems = list_catalog_problems(catalog)
+        # Only what this deployment ships decides readiness: one tenant's broken
+        # composition must not take the API out of service for every tenant.
+        catalog_problems = list_catalog_problems(catalog, shipped_only=True)
         if catalog_problems:
             response.status_code = 503
             return {

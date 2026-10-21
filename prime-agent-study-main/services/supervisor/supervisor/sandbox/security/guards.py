@@ -23,9 +23,12 @@ from enum import StrEnum, auto
 from typing import Final
 
 __all__ = [
+    "HostSandboxRefused",
     "MultiTenantViolation",
     "SecurityCheckResult",
+    "assert_host_sandbox_allowed",
     "assert_multi_tenant_provider",
+    "host_sandbox_allowed",
     "is_placeholder_image_digest",
 ]
 
@@ -41,6 +44,8 @@ class MultiTenantViolation(ValueError):
     are permitted. Local providers share host resources and cannot provide
     tenant isolation.
     """
+
+    retryable = False  # a policy answer: the same request is refused again
 
     def __init__(self, provider: str) -> None:
         super().__init__(
@@ -69,6 +74,42 @@ _SAFE_PROVIDERS: Final[frozenset[str]] = frozenset({
     "none",
     "firecracker",  # Future: VM-based isolation
 })
+
+
+_HOST_PROVIDERS: Final[frozenset[str]] = frozenset({"local_process", "local", "process"})
+"""Providers that run the agent's commands as host processes: no isolation at all."""
+
+
+class HostSandboxRefused(MultiTenantViolation):
+    """A host-process sandbox in production or staging, without an operator's opt-in.
+
+    Its commands run as the supervisor's user, beside the supervisor: they can read
+    its secrets through /proc, other sessions' files, and write to the host.
+    """
+
+    def __init__(self, provider: str) -> None:
+        ValueError.__init__(
+            self,
+            f"sandbox provider {provider!r} runs agent commands on the host; it is refused in "
+            "production and staging. Configure local_docker or e2b, or set ALLOW_HOST_SANDBOX=1 "
+            "if this deployment is single-tenant and trusted.",
+        )
+        self.provider = provider
+
+
+def host_sandbox_allowed() -> bool:
+    """Host-process sandboxes: fine in development, refused in production and staging
+    unless an operator opts in (``ALLOW_HOST_SANDBOX``)."""
+    env = os.environ.get("ENV", os.environ.get("ENVIRONMENT", "")).strip().lower()
+    opted_in = os.environ.get("ALLOW_HOST_SANDBOX", "").strip().lower() in ("1", "true", "yes", "on")
+    return opted_in or env not in ("production", "staging")
+
+
+def assert_host_sandbox_allowed(provider_name: str) -> None:
+    """Raise ``HostSandboxRefused`` for a host-process provider where it is not allowed."""
+    name = provider_name.strip().lower()
+    if name in _HOST_PROVIDERS and not host_sandbox_allowed():
+        raise HostSandboxRefused(name)
 
 
 def multi_tenant_strict_enabled() -> bool:

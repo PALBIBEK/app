@@ -34,8 +34,10 @@ from supervisor.sandbox.status import (
     MachineState,
 )
 from supervisor.seams.providers.workspace import normalize_workspace_path
-from supervisor.seams.services import (
-    WorkspaceHydrator,
+
+# From the defining modules, not the package (see providers/e2b.py: an import cycle).
+from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
+from supervisor.seams.services.workspace_store import (
     WorkspacePathEscape,
     WorkspaceSyncReport,
     WorkspaceTreeIO,

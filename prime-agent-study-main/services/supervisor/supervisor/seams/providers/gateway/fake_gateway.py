@@ -32,7 +32,9 @@ class FakeModelGatewayClient:
         tools: list[dict[str, Any]],
         *,
         model: str | None = None,
+        tool_choice: str | None = None,
     ) -> Completion:
+        del tool_choice  # canned text either way
         return Completion(
             message=ChatMessage(role="assistant", content=self._text),
             model=model or self._model,

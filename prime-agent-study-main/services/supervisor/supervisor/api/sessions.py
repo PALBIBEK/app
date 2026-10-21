@@ -167,7 +167,7 @@ async def post_message(
         # The workflow prepares the turn first (recovery, budget, approvals), and
         # de-duplicates by command id, so a refused message never claims its id.
         try:
-            await workflows.submit(
+            accepted = await workflows.submit(
                 session_id,
                 Message(
                     body.command_id,
@@ -181,6 +181,7 @@ async def post_message(
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),
             status=str(response.get("status", "accepted")),
+            queued=accepted.queued,
         )
 
     try:

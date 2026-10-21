@@ -31,6 +31,7 @@ from supervisor.journal.writer import keyed_event_id
 from supervisor.memory import boundary
 from supervisor.memory.binding import CaptureMode, MemoryBinding, Strategy
 from supervisor.memory.classification import OneShot
+from supervisor.memory.client import MemoryRefused, MemoryUnavailable
 from supervisor.memory.cross import recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta
 from supervisor.memory.disclosure import Audience
@@ -127,6 +128,12 @@ class Scope:
     view: MemoryService
 
 
+RECALL_UNAVAILABLE = (
+    "[Long-term memory is unavailable right now, so nothing was recalled for this turn. "
+    "Do not conclude the user has no saved facts; say so if it matters.]"
+)
+
+
 class SessionMemory:
     def __init__(
         self,
@@ -200,15 +207,23 @@ class SessionMemory:
             return None
         events = await self.bounded(session_id)
         labels = scope.binding.labels
-        recalled = await recall_across(
-            scope.view,
-            scope.binding.recall_notebooks,
-            RecallContext(query=recall_query(message, events), actor=scope.audience.actor),
-            labels,
-        )
-        held = {
-            nb: held_hashes(await scope.view.facts(nb)) for nb in scope.binding.recall_notebooks
-        }
+        try:
+            recalled = await recall_across(
+                scope.view,
+                scope.binding.recall_notebooks,
+                RecallContext(query=recall_query(message, events), actor=scope.audience.actor),
+                labels,
+            )
+            held = {
+                nb: held_hashes(await scope.view.facts(nb))
+                for nb in scope.binding.recall_notebooks
+            }
+        except (MemoryUnavailable, MemoryRefused) as exc:
+            # Long-term memory is an aid: an outage costs this turn its recall, never the turn.
+            logger.warning("session %s: recall skipped, memory unavailable: %s", session_id, exc)
+            skipped = MemoryInjected(run_id, RECALL_UNAVAILABLE, [])
+            await record(session_id, run_id, "memory", skipped)
+            return skipped
         delta = recall_delta(recalled, _retained(events), held, labels)
         section = memory_section(
             delta.text,

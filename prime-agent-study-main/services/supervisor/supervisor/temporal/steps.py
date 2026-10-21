@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable
 from dataclasses import asdict
 from datetime import timedelta
@@ -35,10 +36,10 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
 )
-from supervisor.agent.runtimes.githi.loop import MAX_TOOL_ITERATIONS, AgentLoop
+from supervisor.agent.runtimes.githi.loop import AgentLoop
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
-from supervisor.harness import RecoveryAction
+from supervisor.harness import LoopSpec, RecoveryAction
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory.binding import Strategy
@@ -49,7 +50,8 @@ from supervisor.memory.tools import PLATFORM_TOOLS
 from supervisor.memory.turn import SessionMemory
 from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
-from supervisor.seams import ToolResult
+from supervisor.seams import ChatMessage, ToolResult
+from supervisor.seams.core.types import INVALID_ARGUMENTS_KEY
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager
 from supervisor.session.tool_outbox import idempotency_key
@@ -80,6 +82,55 @@ from supervisor.temporal.subagent_tools import (
 )
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
+
+FINAL_STEP_NOTICE = (
+    "This is the last step of this run: no more tool calls. Give your complete answer "
+    "now from what you already know, and say plainly which parts are unverified."
+)
+"""Shown on the last step's request only (never journalled), with ``tool_choice=none``:
+the run ends with an answer instead of at the limit with none."""
+
+
+def steps_left_notice(left: int) -> str:
+    """Shown on the requests near the limit only, so a stale count never persists."""
+    return (
+        f"[{left} steps left in this run. If you have enough to conclude, answer now; "
+        "combine any last checks into a single call.]"
+    )
+
+
+def loop_spec(manifest: Any) -> LoopSpec:
+    """The manifest's run-length settings; the defaults for manifests without them."""
+    return getattr(manifest, "loop", None) or LoopSpec()
+
+
+def is_final_step(spec: LoopSpec, step: int) -> bool:
+    return spec.force_answer_on_final_step and spec.max_steps - step <= 1
+
+
+def refusal(
+    spec: LoopSpec, step: int, assistant: MessageEnd, call: dict[str, Any]
+) -> tuple[str, str] | None:
+    """Why a call the model made must not run, as (code, message for the model); None to run it.
+
+    Decided from the journal alone, so the plan and the tool step always agree.
+    """
+    if is_final_step(spec, step):
+        return "STEP_LIMIT", (
+            "not run: this run has used its last step. Answer with what you have; "
+            "the user can ask you to continue."
+        )
+    if assistant.finish_reason == "length":
+        return "TRUNCATED_TOOL_CALL", (
+            "not run: your reply was cut off by the output limit, so this call's "
+            "arguments may be incomplete. Send it again in a shorter reply."
+        )
+    if INVALID_ARGUMENTS_KEY in (call.get("arguments") or {}):
+        return "MALFORMED_ARGUMENTS", (
+            "not run: the arguments were not valid JSON and could not be parsed. "
+            "Send the call again with well-formed JSON arguments."
+        )
+    return None
 
 
 def run_id_for(session_id: str, command_id: str) -> str:
@@ -240,7 +291,8 @@ class GithiSteps:
             )
         )
         await self._announce_background(session_id, run_id)
-        guards = (await self._manifest(session_id)).guards
+        manifest = await self._manifest(session_id)
+        guards = manifest.guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
             if guards is not None
@@ -250,7 +302,7 @@ class GithiSteps:
             run_id,
             stepped=True,
             guard=guard,
-            max_steps=MAX_TOOL_ITERATIONS,
+            max_steps=loop_spec(manifest).max_steps,
             capture=await self._capture_plan(session_id),
         )
 
@@ -329,11 +381,23 @@ class GithiSteps:
                 await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
             chat = loop.messages_for_model(conversation(await self._memory.prior_history(sid), run))
+            spec = loop_spec(await self._manifest(sid))
+            left = spec.max_steps - req.step
+            final = is_final_step(spec, req.step)
+            if final:
+                chat.append(ChatMessage(role="system", content=FINAL_STEP_NOTICE))
+            elif 0 < left <= spec.warn_steps_remaining:
+                chat.append(ChatMessage(role="system", content=steps_left_notice(left)))
             schemas = await self._tool_schemas(sid, loop)
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
+            choice: dict[str, Any] = {"tool_choice": "none"} if final and schemas else {}
             completion = await heartbeating(
                 asyncio.to_thread(
-                    runtime.seams.model_gateway.complete, chat, schemas, model=runtime.model
+                    runtime.seams.model_gateway.complete,
+                    chat,
+                    schemas,
+                    model=runtime.model,
+                    **choice,
                 )
             )
             usage = AgentLoop.usage_from_completion(completion)
@@ -357,10 +421,23 @@ class GithiSteps:
         if not calls:
             return StepResult(calls=[], final=True)
         manifest = await self._manifest(sid)
-        return StepResult(calls=[self._plan(manifest, call) for call in calls], final=False)
+        spec = loop_spec(manifest)
+        plans = [
+            self._plan(manifest, call, refused=refusal(spec, req.step, assistant, call) is not None)
+            for call in calls
+        ]
+        return StepResult(calls=plans, final=False)
 
-    def _plan(self, manifest: Any, call: dict[str, Any]) -> PlannedCall:
+    def _plan(self, manifest: Any, call: dict[str, Any], *, refused: bool = False) -> PlannedCall:
         name = str(call["name"])
+        if refused:  # answered without running: nothing to approve, safe to repeat
+            return PlannedCall(
+                call_id=str(call["id"]),
+                name=name,
+                args_hash=call_hash(name, dict(call.get("arguments") or {})),
+                retry=RetryMode.RETRY,
+                approval=None,
+            )
         approvals = manifest.approvals
         needed = (
             ApprovalNeeded(
@@ -411,15 +488,19 @@ class GithiSteps:
         sid, run_id, call_id = req.session_id, req.run_id, req.call_id
         if (done := await self._keyed(sid, run_id, f"{call_id}:end")) is not None:
             return bool(done.is_error)
-        call = await self._call(sid, run_id, call_id)
+        call, step, assistant = await self._located(sid, run_id, call_id)
         await self._record(
             sid,
             run_id,
             f"{call_id}:start",
             ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"]),
         )
+        started = time.monotonic()
         tools = await self._memory.tools(sid)
-        if req.denied:
+        refused = refusal(loop_spec(await self._manifest(sid)), step, assistant, call)
+        if refused is not None:
+            result, is_error = denied_result(refused[1], refused[0]), True
+        elif req.denied:
             result = denied_result("denied by approval", "APPROVAL_DENIED")
             is_error = True
         elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
@@ -463,7 +544,13 @@ class GithiSteps:
             sid,
             run_id,
             f"{call_id}:end",
-            ToolEnd(tool_call_id=call_id, tool_name=call["name"], result=result, is_error=is_error),
+            ToolEnd(
+                tool_call_id=call_id,
+                tool_name=call["name"],
+                result=result,
+                is_error=is_error,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ),
         )
         return is_error
 
@@ -585,12 +672,22 @@ class GithiSteps:
         return None if envelope is None else envelope.payload
 
     async def _call(self, session_id: str, run_id: str, call_id: str) -> dict[str, Any]:
+        return (await self._located(session_id, run_id, call_id))[0]
+
+    async def _located(
+        self, session_id: str, run_id: str, call_id: str
+    ) -> tuple[dict[str, Any], int, MessageEnd]:
+        """The call, the step that made it (each step journals one assistant message), and
+        that assistant message."""
+        step = -1
         for envelope in await self._reader.read_turn(session_id, run_id):
             event = envelope.payload
             if isinstance(event, MessageEnd) and event.role == "assistant":
+                step += 1
                 for part in event.content:
                     if part.get("type") == "tool_call" and part.get("id") == call_id:
-                        return {"name": str(part["name"]), "arguments": dict(part["arguments"])}
+                        call = {"name": str(part["name"]), "arguments": dict(part["arguments"])}
+                        return call, step, event
         raise LookupError(f"tool call {call_id} not found in run {run_id}")
 
     async def close_lost_call(self, lost: LostCall) -> None:

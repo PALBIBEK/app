@@ -36,6 +36,10 @@ class ScriptedGateway:
     fail_first: int = 0
     vary_args: bool = False
     repeat: bool = False
+    # The first step's reply is cut off by the output limit (finish_reason "length"),
+    # or carries arguments that are not JSON.
+    truncate_first: bool = False
+    malformed_first: bool = False
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
     sensitivity: str = "ordinary"
@@ -49,11 +53,28 @@ class ScriptedGateway:
     child_answer: str = "the job is done"
     child_gate: threading.Event | None = None
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    tool_choices: list[str | None] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def complete(
-        self, messages: list[ChatMessage], tools: list[dict[str, Any]], *, model: str | None = None
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        tool_choice: str | None = None,
     ) -> Completion:
+        self.tool_choices.append(tool_choice)
+        if tool_choice == "none":  # the model is told to answer: it does
+            with self._lock:
+                self.seen.append(list(messages))
+                self.tools_seen.append(list(tools))
+            results = sum(1 for m in messages if m.role == "tool")
+            return Completion(
+                ChatMessage("assistant", f"final answer after {results} tool results"),
+                model="scripted",
+                usage={"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call},
+            )
         if (answer := self._one_shot(messages)) is not None:
             return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
         if messages and messages[0].content.startswith("You are a background subagent"):
@@ -76,13 +97,20 @@ class ScriptedGateway:
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": json.dumps(args | ({"n": results} if self.vary_args else {})),
+                    "arguments": (
+                        '{"path": "."'  # cut off mid-object
+                        if self.malformed_first and results == 0
+                        else json.dumps(args | ({"n": results} if self.vary_args else {}))
+                    ),
                 },
             }
             for i, (name, args) in enumerate(self.calls)
         ]
         message = ChatMessage("assistant", "", tool_calls=calls)
-        return Completion(message, model="scripted", usage=usage, tool_calls=calls)
+        finish = "length" if self.truncate_first and results == 0 else "tool_calls"
+        return Completion(
+            message, model="scripted", usage=usage, tool_calls=calls, finish_reason=finish
+        )
 
     def _child(self, messages: list[ChatMessage]) -> Completion:
         if self.child_gate is not None and not self.child_gate.wait(timeout=60):

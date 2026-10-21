@@ -185,6 +185,30 @@ class SubagentsSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class LoopSpec:
+    """How long one run may go on, and how its end is handled (harness ``loop:`` block).
+
+    Attributes:
+        max_steps: Model calls one run may make
+        warn_steps_remaining: From this many steps left, each request says how many remain
+        force_answer_on_final_step: The last step offers no tools, so the run ends with
+            an answer rather than at the limit with none
+    """
+
+    max_steps: int = 30
+    warn_steps_remaining: int = 3
+    force_answer_on_final_step: bool = True
+
+    def body_for_digest(self) -> dict[str, Any]:
+        """Return canonical body for digest computation."""
+        return {
+            "max_steps": self.max_steps,
+            "warn_steps_remaining": self.warn_steps_remaining,
+            "force_answer_on_final_step": self.force_answer_on_final_step,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class HarnessManifest:
     """Immutable, version-pinned specification for agent behavior.
 
@@ -207,6 +231,7 @@ class HarnessManifest:
         subagents: Optional subagent constraints
         model: Optional default model name
         system_prompt_sha: Optional system prompt content hash
+        loop: Optional run-length settings (``LoopSpec`` defaults when absent)
     """
 
     harness_version: str
@@ -224,6 +249,7 @@ class HarnessManifest:
     subagents: SubagentsSpec | None = None
     model: str | None = None
     system_prompt_sha: str | None = None
+    loop: LoopSpec | None = None
 
     @property
     def version(self) -> str:
@@ -258,6 +284,8 @@ class HarnessManifest:
             "subagents": self.subagents.body_for_digest() if self.subagents else None,
             "model": self.model,
             "system_prompt_sha": self.system_prompt_sha,
+            # Only when set: manifests written before ``loop`` keep their digests.
+            **({"loop": self.loop.body_for_digest()} if self.loop else {}),
         }
 
 

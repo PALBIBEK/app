@@ -1,0 +1,148 @@
+{
+  "definitions": {
+    "echo": {
+      "description": "Echo text (dev / smoke tool)",
+      "digest": "sha256:2a2fa3f821b39ad7a71681c2809c6fbe348835adc74b245d6a33564c090ed3b0",
+      "name": "echo",
+      "parameters": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "grep": {
+      "description": "Search files in the workspace for a regex/string pattern",
+      "digest": "sha256:950438d4b6950562e5f912c8ffadf7bcdf70f4dd0e578e7bd00214c822d7d160",
+      "name": "grep",
+      "parameters": {
+        "properties": {
+          "case_insensitive": {
+            "type": "boolean"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "max_matches": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "ls": {
+      "description": "List directory contents in the workspace (size, modified time, type).",
+      "digest": "sha256:e72466adfec28f058e67bb89fe28d68799d4df4db0059d69845ad76a45b7a69d",
+      "name": "ls",
+      "parameters": {
+        "properties": {
+          "path": {
+            "description": "Directory path (default: workspace root)",
+            "type": "string"
+          },
+          "show_hidden": {
+            "description": "Include dotfiles (default: false)",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "read": {
+      "description": "Read file contents from the workspace. Returns the file contents as a string.",
+      "digest": "sha256:51c6058a3253bbcec16607c9768f7559b4ae4dd025e9471a6d30aa26acd8be3c",
+      "name": "read",
+      "parameters": {
+        "properties": {
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max lines to read (optional)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "1-indexed start line (optional)",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "remember": {
+      "description": "Store a durable fact in long-term memory (append-only, safe to retry).",
+      "digest": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+      "name": "remember",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Fact or note to remember",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
+    "write": {
+      "description": "Write or overwrite a file in the workspace. Creates parent directories if needed.",
+      "digest": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260",
+      "name": "write",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Content to write",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    }
+  },
+  "name": "githi-tools",
+  "protocol_version": 1,
+  "semver": "1.0.0",
+  "status": "offered",
+  "tools": {
+    "echo": "sha256:2a2fa3f821b39ad7a71681c2809c6fbe348835adc74b245d6a33564c090ed3b0",
+    "grep": "sha256:950438d4b6950562e5f912c8ffadf7bcdf70f4dd0e578e7bd00214c822d7d160",
+    "ls": "sha256:e72466adfec28f058e67bb89fe28d68799d4df4db0059d69845ad76a45b7a69d",
+    "read": "sha256:51c6058a3253bbcec16607c9768f7559b4ae4dd025e9471a6d30aa26acd8be3c",
+    "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+    "write": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260"
+  }
+}

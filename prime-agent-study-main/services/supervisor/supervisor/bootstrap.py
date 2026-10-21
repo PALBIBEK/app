@@ -65,14 +65,22 @@ async def bootstrap_supervisor(
         composition_catalog = bootstrap_composition_catalog(settings.resolved_catalog_dir())
 
     if composition_catalog is not None and settings.persist_composition_catalog:
-        from supervisor.catalog.repository import hydrate_composition_catalog
+        from supervisor.catalog.repository import hydrate_composition_catalog, persist_shipped
 
+        # Shipped versions first, so a later release that replaces one keeps it resolvable.
+        await persist_shipped(session_maker, composition_catalog)
         await hydrate_composition_catalog(composition_catalog, session_maker)
 
     assert_multi_tenant_sandbox_provider(
         settings.sandbox_provider,
         multi_tenant_strict=settings.multi_tenant_strict,
     )
+    from supervisor.sandbox.security.guards import (
+        assert_host_sandbox_allowed,
+        host_sandbox_allowed,
+    )
+
+    assert_host_sandbox_allowed(settings.sandbox_provider)  # refused at boot, not per session
     # Stage 1 / D9: honor WORKSPACE_STORE + OBJECT_STORAGE + GRANT_STORE env.
     from supervisor.seams.providers.authz.grant_store_factory import (
         create_authz_service,
@@ -100,6 +108,11 @@ async def bootstrap_supervisor(
             settings.sandbox_provider, hydrator=workspace_hydrator
         )
     except ModuleNotFoundError as exc:
+        if not host_sandbox_allowed():
+            raise RuntimeError(
+                f"SANDBOX_PROVIDER={settings.sandbox_provider!r} is unavailable ({exc}); "
+                "production and staging never fall back to running agent commands on the host"
+            ) from exc
         if settings.multi_tenant_strict:
             # Falling back to host processes would silently drop tenant isolation.
             raise RuntimeError(

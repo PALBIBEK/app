@@ -45,6 +45,11 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+    if result.truncated:
+        payload["notice"] = (
+            "output was long, so its middle was cut; to see all of it, redirect it to a file "
+            "(cmd > out.txt 2>&1) and read it with grep, head, tail or sed"
+        )
     if result.timed_out:
         payload["timed_out"] = True
         payload["notice"] = f"killed after {timeout:g}s"

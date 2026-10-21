@@ -90,3 +90,55 @@ async def test_a_worker_adopts_a_session_pinned_to_a_composition_published_after
     )
     await worker.manager.resume(sid)  # the session's first worker is gone; this one adopts it
     assert worker.manager._registry.get(sid) is not None
+
+
+async def test_a_worker_thinks_for_a_session_whose_sandbox_profile_it_has_never_seen(
+    processes: tuple[SupervisorState, SupervisorState],
+) -> None:
+    """A model step runs on any worker. One booted before the session's composition
+    and sandbox profile were published still builds the session's brain: the pins
+    are synced before anything resolves them (the sandbox profile is read first)."""
+    from supervisor.catalog.core.types import DigestRef, SandboxProviderName
+
+    api, worker = processes
+    catalog = api.composition_catalog
+    assert catalog is not None
+    base_profile = catalog.get(
+        "sandbox_profile",
+        "githi-docker-v1",
+        catalog.list_versions("sandbox_profile", "githi-docker-v1")[-1],
+    )
+    profile = catalog.offer(
+        dataclasses.replace(
+            base_profile,
+            name="sb-published-later",
+            digest="",
+            provider=SandboxProviderName.LOCAL_PROCESS,
+        )
+    )
+    await persist_offer(api.manager._db, catalog, "sandbox_profile", profile.name, profile.digest)
+    base = catalog.get(
+        "composition", "githi-v1", catalog.list_versions("composition", "githi-v1")[-1]
+    )
+    composition = catalog.offer(
+        dataclasses.replace(
+            base,
+            name="thinks-anywhere",
+            digest="",
+            sandbox_profile=DigestRef(id=profile.name, digest=profile.digest),
+        )
+    )
+    await persist_offer(
+        api.manager._db, catalog, "composition", composition.name, composition.digest
+    )
+    sid = await api.manager.create(
+        tenant_id="t1",
+        harness_version="githi-v1",
+        composition_id=composition.name,
+        composition_digest=composition.digest,
+    )
+
+    brain = await worker.manager.brain(sid)  # NotOffered before the fix
+
+    assert worker.manager._registry.get(sid) is None, "a brain, not an adopted session"
+    assert brain.seams is not None

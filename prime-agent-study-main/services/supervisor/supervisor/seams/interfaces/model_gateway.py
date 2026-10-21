@@ -24,7 +24,10 @@ class ModelGatewayClient(Protocol):
         tools: list[dict[str, Any]],
         *,
         model: str | None = None,
+        tool_choice: str | None = None,
     ) -> Completion:
+        """One model call. ``tool_choice="none"``: the tools stay listed (a history with
+        tool calls needs them on some providers) but the model must answer in text."""
         ...
 
     def stream(

@@ -47,6 +47,8 @@ _STATUS: Final[dict[str, int]] = {
     "MemoryFactsMissing": 404,
     "RevisionConflict": 409,
     "MemoryServiceNotConfigured": 503,
+    "MultiTenantViolation": 422,
+    "HostSandboxRefused": 422,
     "MemoryUnavailable": 503,
     "MemoryRefused": 503,
     "WorkspaceNotReadyError": 409,

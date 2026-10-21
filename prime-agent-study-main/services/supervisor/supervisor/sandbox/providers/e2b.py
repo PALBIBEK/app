@@ -57,11 +57,12 @@ from supervisor.sandbox.status import (
     RestartResult,
 )
 from supervisor.seams.providers.workspace import normalize_workspace_path
-from supervisor.seams.services import (
-    WorkspaceHydrator,
-    WorkspaceSyncReport,
-    WorkspaceTreeIO,
-)
+
+# From the defining modules, not the package: supervisor.seams.services imports the
+# sandbox package, so importing its __init__ from here was a cycle (it broke importing
+# supervisor.tools first in a fresh interpreter).
+from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
+from supervisor.seams.services.workspace_store import WorkspaceSyncReport, WorkspaceTreeIO
 
 logger = logging.getLogger(__name__)
 

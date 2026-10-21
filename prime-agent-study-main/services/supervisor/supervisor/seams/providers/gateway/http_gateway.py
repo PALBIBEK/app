@@ -81,6 +81,7 @@ class HttpModelGatewayClient:
         tools: list[dict[str, Any]],
         *,
         model: str | None = None,
+        tool_choice: str | None = None,
     ) -> Completion:
         body: dict[str, Any] = {
             "model": model or self._default_model,
@@ -89,6 +90,8 @@ class HttpModelGatewayClient:
         }
         if tools:
             body["tools"] = tools
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
         resp = self._client.post(
             f"{self._base}/v1/chat/completions",
             json=body,

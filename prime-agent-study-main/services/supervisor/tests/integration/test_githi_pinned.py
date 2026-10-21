@@ -53,7 +53,7 @@ from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PINNED_TOOLS = ["echo", "grep", "ls", "read", "remember", "write"]  # harness/tool_sets/githi-tools
+PINNED_TOOLS = ["echo", "edit", "grep", "ls", "read", "remember", "write"]  # harness/tool_sets/githi-tools
 PLATFORM_TOOLS = ["memory", "history", "subagent", "subagent_result"]
 
 

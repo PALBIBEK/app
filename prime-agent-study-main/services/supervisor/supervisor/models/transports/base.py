@@ -18,6 +18,7 @@ import httpx
 
 from supervisor.models.messages import AssistantBlock, Context
 from supervisor.models.spec import Cost, ModelSpec, ThinkingLevel, TokenUsage
+from supervisor.seams.core.types import invalid_arguments
 
 type Body = dict[str, Any]
 type CacheRetention = Literal["none", "short", "long"]
@@ -234,14 +235,19 @@ def parse_json(data: str, what: str) -> Any:
 
 
 def parse_partial_json(raw: str) -> dict[str, Any]:
-    """Tool arguments from a finished stream; an unparseable buffer becomes ``{}``."""
+    """Tool arguments from a finished stream.
+
+    An unparseable buffer (or a non-object) is marked, not emptied: run with ``{}``
+    the tool would fail with a misleading "missing field", or worse, run with its
+    defaults. The loop refuses a marked call and tells the model to resend it.
+    """
     if not raw.strip():
         return {}
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
-        return {}
-    return value if isinstance(value, dict) else {}
+        return invalid_arguments(raw)
+    return value if isinstance(value, dict) else invalid_arguments(raw)
 
 
 def short_hash(text: str) -> str:

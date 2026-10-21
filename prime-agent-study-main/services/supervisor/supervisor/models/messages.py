@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from supervisor.models.spec import ModelSpec, WireApi
-from supervisor.seams.core.types import ChatMessage
+from supervisor.seams.core.types import ChatMessage, invalid_arguments
 
 TEXT, REASONING, TOOL_CALL = "text", "reasoning", "tool_call"
 NO_RESULT = "No result provided"
@@ -178,11 +178,13 @@ def _tool_call(call: Mapping[str, Any]) -> ToolCallBlock:
         name, raw = call.get("name"), call.get("arguments")
     if isinstance(raw, str):
         try:
-            raw = json.loads(raw)
+            raw = json.loads(raw) if raw.strip() else {}
         except json.JSONDecodeError:
-            raw = {"raw": raw}
+            raw = invalid_arguments(raw)
     return ToolCallBlock(
-        str(call.get("id") or ""), str(name or ""), raw if isinstance(raw, dict) else {}
+        str(call.get("id") or ""),
+        str(name or ""),
+        raw if isinstance(raw, dict) else invalid_arguments(json.dumps(raw)),
     )
 
 
