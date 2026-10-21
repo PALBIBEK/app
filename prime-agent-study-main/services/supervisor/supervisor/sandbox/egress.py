@@ -89,19 +89,6 @@ class ProxyEnvVars:
     https_proxy: str
     no_proxy: str = "localhost,127.0.0.1,::1"
 
-    def as_dict(self) -> dict[str, str]:
-        """Convert to environment variable dictionary.
-
-        Returns both lowercase and uppercase variants for compatibility.
-        """
-        return {
-            "HTTP_PROXY": self.http_proxy,
-            "http_proxy": self.http_proxy,
-            "HTTPS_PROXY": self.https_proxy,
-            "https_proxy": self.https_proxy,
-            "NO_PROXY": self.no_proxy,
-            "no_proxy": self.no_proxy,
-        }
 
 
 # =============================================================================

@@ -126,9 +126,6 @@ class ApprovalOps(SessionManagerBase):
                     await db.commit()
         return expired
 
-    def check_tool_approval_required(self, session_id: str, name: str) -> bool:
-        """True when harness ``require_approval`` lists ``name`` for this session."""
-        return self.require_approval_for_tool(session_id, name)
 
     def require_approval_for_tool(self, session_id: str, name: str) -> bool:
         """True when named tool must park before provider.invoke."""

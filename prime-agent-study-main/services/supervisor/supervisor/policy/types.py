@@ -48,8 +48,6 @@ __all__ = [
     "QuotaState",
     "RateDecision",
     "RateDecisionStatus",
-    "StallSignal",
-    "StallState",
     "is_allow_choice",
 ]
 
@@ -108,14 +106,6 @@ class GuardDetector(StrEnum):
     REPETITION = "repetition"
     OSCILLATION = "oscillation"
     STALL = "stall"
-
-
-class StallSignal(StrEnum):
-    """Signal that triggered stall detection (QM 3-signal pattern)."""
-    TIME = "time"           # Total time budget exceeded
-    ROUNDS = "rounds"       # Too many stalled rounds
-    HEARTBEAT = "heartbeat" # No heartbeat received
-    QUIET = "quiet"         # Active but no progress
 
 
 # =============================================================================
@@ -224,31 +214,6 @@ class GuardVerdict:
     call_hash: str | None = None
     tool_name: str | None = None
     call_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class StallState:
-    """Enhanced 3-signal stall detection state (QM pattern).
-
-    Tracks three signals:
-    1. TIME: Total run time budget exceeded
-    2. ROUNDS: Too many consecutive stalled rounds
-    3. HEARTBEAT: No heartbeat received within threshold
-
-    Plus QUIET detection: heartbeat ok but no progress.
-    """
-    session_id: str
-    stalled: bool
-    signal: StallSignal | None
-    stalled_rounds: int
-    time_elapsed_ms: int
-    last_heartbeat_ms: int
-    last_progress_ms: int
-    auto_waived: bool = False
-    # Legacy fields for backward compatibility
-    quiet_since_ms: int | None = None
-    is_stalled: bool = False  # Alias for stalled
-    stall_duration_ms: int | None = None
 
 
 # =============================================================================

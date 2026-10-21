@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
@@ -68,8 +68,6 @@ class AgentState:
     def context_usage_ratio(self) -> float:
         return self.tokens_used / self.context_window if self.context_window else 0.0
 
-    def with_phase(self, phase: AgentPhase) -> AgentState:
-        return replace(self, phase=phase)
 
     def to_dict(self) -> dict[str, Any]:
         return {

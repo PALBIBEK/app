@@ -19,8 +19,8 @@ from supervisor.agent.events import (
 )
 from supervisor.obs.projector import JournalProjector
 from supervisor.obs.tracing import make_inmemory_otlp_projector
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from supervisor.telemetry_contract.spans import SpanRecord
+from tests.support.telemetry_fakes import FakeSpanSink
 
 
 def _env(

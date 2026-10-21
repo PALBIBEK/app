@@ -26,9 +26,3 @@ def require_scope(scope: Scope) -> Scope:
     return scope
 
 
-def assert_same_tenant(expected: str, actual: str) -> None:
-    if expected != actual:
-        raise TenantMismatch(
-            f"TENANT_MISMATCH: expected={expected} actual={actual}",
-            code="TENANT_MISMATCH",
-        )

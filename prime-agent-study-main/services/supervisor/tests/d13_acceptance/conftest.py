@@ -16,8 +16,8 @@ from supervisor.db.engine import open_db
 from supervisor.main import create_app
 from supervisor.obs import tracing as tracing_mod
 from supervisor.obs.tracing import setup_tracing, shutdown_tracing
-from supervisor.telemetry_contract.fakes import FakeSpanSink
 from tests.support.session_env import make_catalog
+from tests.support.telemetry_fakes import FakeSpanSink
 
 TENANT = "d13-tenant"
 HEADERS = {"X-Tenant-Id": TENANT}

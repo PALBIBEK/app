@@ -12,7 +12,6 @@ from supervisor.agent.capabilities import (
     Cap,
     Capabilities,
     CapabilityNames,
-    CapabilityRequirement,
     require,
 )
 from supervisor.agent.errors import (
@@ -92,7 +91,6 @@ __all__ = [
     "Capabilities",
     "CapabilityError",
     "CapabilityNames",
-    "CapabilityRequirement",
     "CompactionEnd",
     "CompactionError",
     "CompactionStart",

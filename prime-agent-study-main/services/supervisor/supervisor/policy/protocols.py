@@ -35,7 +35,6 @@ if TYPE_CHECKING:
         GuardVerdict,
         QuotaState,
         RateDecision,
-        StallState,
     )
 
 
@@ -50,7 +49,6 @@ __all__ = [
     "LoopGuardProtocol",
     "QuotaEnforcerProtocol",
     "RateLimiterProtocol",
-    "StallGuardProtocol",
 ]
 
 
@@ -266,26 +264,6 @@ class LoopGuardProtocol(Protocol):
 
     def reset(self, session_id: str) -> None:
         """Reset state for session (on progress)."""
-        ...
-
-
-@runtime_checkable
-class StallGuardProtocol(Protocol):
-    """Interface for heartbeat-based stall detection (QM pattern).
-
-    Detects operations that haven't made progress via heartbeats.
-    """
-
-    async def heartbeat(self, session_id: str) -> None:
-        """Record heartbeat from session."""
-        ...
-
-    def check_stall(self, session_id: str) -> StallState:
-        """Check if session is stalled."""
-        ...
-
-    def reset(self, session_id: str) -> None:
-        """Reset stall state for session."""
         ...
 
 

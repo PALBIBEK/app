@@ -25,7 +25,7 @@ from supervisor.agent.events import (
     Usage,
 )
 from supervisor.obs.projector import JournalProjector
-from supervisor.telemetry_contract.fakes import FakeSpanSink
+from tests.support.telemetry_fakes import FakeSpanSink
 
 
 def _e(seq: int, payload: object, *, turn: str | None = "t1") -> Envelope:

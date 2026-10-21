@@ -291,8 +291,6 @@ class SubagentOps:
     def interrupt_child(self, child_id: str) -> None:
         self._transport.interrupt(child_id)
 
-    def list_children_live(self, parent_id: str | None = None) -> list[Any]:
-        return self._transport.list_children(parent_id)
 
     async def session_tree(self, reader: Any) -> SessionTree:
         envs = await reader.read(self._parent, since=-1)

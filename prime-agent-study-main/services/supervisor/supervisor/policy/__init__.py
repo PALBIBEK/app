@@ -88,13 +88,7 @@ from supervisor.policy.errors import (
 # Guards
 # =============================================================================
 from supervisor.policy.guards import (
-    DEFAULT_HEARTBEAT_INTERVAL_MS,
-    DEFAULT_QUIET_THRESHOLD_MS,
-    DEFAULT_RUN_STALL_BUDGET_MS,
-    DEFAULT_STALL_ROUND_LIMIT,
-    EnhancedStallGuard,
     LoopGuard,
-    StallGuard,
     call_hash,
     canonicalize_args,
 )
@@ -122,7 +116,6 @@ from supervisor.policy.protocols import (
     LoopGuardProtocol,
     QuotaEnforcerProtocol,
     RateLimiterProtocol,
-    StallGuardProtocol,
 )
 
 # =============================================================================
@@ -191,8 +184,6 @@ from supervisor.policy.types import (
     QuotaState,
     RateDecision,
     RateDecisionStatus,
-    StallSignal,
-    StallState,
 )
 
 __all__ = [
@@ -203,15 +194,11 @@ __all__ = [
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_FLOOR_RULES",
     "DEFAULT_FLUSH_INTERVAL_MS",
-    "DEFAULT_HEARTBEAT_INTERVAL_MS",
     "DEFAULT_MAX_QUARANTINE_SIZE",
     "DEFAULT_QUARANTINE_RETENTION_MS",
-    "DEFAULT_QUIET_THRESHOLD_MS",
     "DEFAULT_QUOTA_LIMITS",
     "DEFAULT_RATE_WINDOW_MS",
-    "DEFAULT_RUN_STALL_BUDGET_MS",
     "DEFAULT_STALL_ITERATIONS",
-    "DEFAULT_STALL_ROUND_LIMIT",
     "DEFAULT_THREAT_THRESHOLD",
     "SCHEDULED_TASK_LOCK_KEY",
     "STALE_SESSION_LOCK_KEY",
@@ -251,7 +238,6 @@ __all__ = [
     "ContentType",
     "CostEstimatorProtocol",
     "CostQuotaExceeded",
-    "EnhancedStallGuard",
     "FileEffects",
     "GuardAction",
     "GuardConfig",
@@ -279,10 +265,6 @@ __all__ = [
     "SandboxQuotaExceeded",
     "SecurityVerdict",
     "SessionQuotaExceeded",
-    "StallGuard",
-    "StallGuardProtocol",
-    "StallSignal",
-    "StallState",
     "ThreatLevel",
     "ToolClass",
     "call_hash",

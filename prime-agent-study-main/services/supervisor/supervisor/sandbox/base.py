@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 if TYPE_CHECKING:
     from supervisor.sandbox.backup import BackupArea, BackupResult
-    from supervisor.sandbox.egress import EgressPolicy
     from supervisor.sandbox.layers import LayerManifest, MaterializationResult
     from supervisor.sandbox.staging import StagedBlob, StageOutResult
     from supervisor.sandbox.status import ComputerStatus, RestartResult
@@ -756,16 +755,6 @@ class Sandbox(ABC):
     # Egress Control (Optional)
     # -------------------------------------------------------------------------
 
-    async def ensure_egress_policy(self, policy: EgressPolicy) -> None:
-        """Ensure egress policy is applied to sandbox.
-
-        Args:
-            policy: Egress policy with allowed domains and proxy config.
-
-        Raises:
-            EgressPolicyUnsupported: If provider doesn't support this.
-        """
-        raise EgressPolicyUnsupported(self.info.provider)
 
 
 # =============================================================================

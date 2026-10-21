@@ -106,20 +106,3 @@ class RetentionService:
     async def load_archived_events(self, session_id: str) -> list[SessionEvent]:
         return self._archive.read_events(session_id)
 
-    async def archive_older_than(self, *, now_ms: int | None = None) -> list[str]:
-        """Archive active sessions whose created_at is older than hot_days."""
-        now = now_ms if now_ms is not None else int(time.time() * 1000)
-        cutoff = now - self.hot_days * 86_400_000
-        async with self._factory() as db:
-            result = await db.execute(
-                select(MemorySessionRow).where(
-                    MemorySessionRow.status == "active",
-                    MemorySessionRow.created_at < cutoff,
-                )
-            )
-            ids = [r.id for r in result.scalars().all()]
-        archived: list[str] = []
-        for sid in ids:
-            await self.archive_session(sid)
-            archived.append(sid)
-        return archived

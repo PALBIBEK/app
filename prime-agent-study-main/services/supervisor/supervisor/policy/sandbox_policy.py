@@ -164,26 +164,6 @@ class SandboxPolicy:
             isolated=isolated,
         )
 
-    def configure_from_profile(
-        self,
-        session_id: str,
-        file_effects: str | None = None,
-        approval_default: str | None = None,
-    ) -> None:
-        """Configure from profile strings (backward compatibility).
-
-        Args:
-            session_id: Session to configure
-            file_effects: File effects string
-            approval_default: Approval default string
-        """
-        fe = FileEffects(file_effects) if file_effects else FileEffects.WORKSPACE_WRITE
-        ad = ApprovalDefault(approval_default) if approval_default else ApprovalDefault.ASK
-
-        self._configs[session_id] = SandboxPolicyConfig(
-            file_effects=fe,
-            approval_default=ad,
-        )
 
     def clear(self, session_id: str) -> None:
         """Clear configuration for session.
@@ -204,14 +184,6 @@ class SandboxPolicy:
         """
         return self._configs.get(session_id, DEFAULT_CONFIG)
 
-    def register_tool_class(self, tool_name: str, tool_class: str) -> None:
-        """Register tool classification.
-
-        Args:
-            tool_name: Name of tool
-            tool_class: Classification (use ToolClass constants)
-        """
-        self._tool_classes[tool_name.lower()] = tool_class
 
     def check_tool_invoke(
         self,
@@ -300,27 +272,7 @@ class SandboxPolicy:
         # Default to first option
         return options[0]
 
-    def should_auto_approve(self, session_id: str) -> bool:
-        """Check if session auto-approves.
 
-        Args:
-            session_id: Session to check
-
-        Returns:
-            True if approval_default is NEVER
-        """
-        return self.config_for(session_id).approval_default == ApprovalDefault.NEVER
-
-    def should_always_ask(self, session_id: str) -> bool:
-        """Check if session always asks for approval.
-
-        Args:
-            session_id: Session to check
-
-        Returns:
-            True if approval_default is ALWAYS
-        """
-        return self.config_for(session_id).approval_default == ApprovalDefault.ALWAYS
 
 
 

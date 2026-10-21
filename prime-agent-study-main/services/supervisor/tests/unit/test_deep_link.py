@@ -12,7 +12,7 @@ from supervisor.agent.events import (
     Usage,
 )
 from supervisor.obs.projector import JournalProjector
-from supervisor.telemetry_contract.fakes import FakeSpanSink
+from tests.support.telemetry_fakes import FakeSpanSink
 
 
 def test_span_coords_resolve_to_journal_row() -> None:

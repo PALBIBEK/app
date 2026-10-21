@@ -69,9 +69,6 @@ class ToolRegistry(Mapping[str, ToolSpec[Any]]):
             self._specs[spec.name] = spec
         return spec
 
-    def unregister(self, name: str) -> ToolSpec[Any] | None:
-        with self._lock:
-            return self._specs.pop(name, None)
 
     def tool[H: Handler[Any]](
         self,

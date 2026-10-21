@@ -45,12 +45,6 @@ class HarnessSettings:
             return Path(self.contracts_dir)
         return None
 
-    def get_protocol_versions_path(self) -> Path | None:
-        """Get path to protocol_versions.yaml if contracts dir is configured."""
-        contracts = self.get_contracts_path()
-        if contracts:
-            return contracts / "protocol_versions.yaml"
-        return None
 
 
 @lru_cache(maxsize=1)
