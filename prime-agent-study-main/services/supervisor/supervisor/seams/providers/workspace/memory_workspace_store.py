@@ -124,16 +124,41 @@ class MemoryWorkspaceStore:
         expected_version: int | None = None,
     ) -> WorkspaceFileRecord:
         path = normalize_workspace_path(path)
+        existing = self._rows.get((scope_id, path))
+        if expected_version is not None:
+            actual = 0 if existing is None or existing.deleted else existing.version
+            if actual != expected_version:
+                raise CasConflict(path, expected_version, actual)
+        digest = _sha256(data)
+        await self.objects.put(_object_key(digest), data, content_sha256=digest)
+        return await self.commit_object(
+            scope_id,
+            path,
+            content_sha256=digest,
+            size_bytes=len(data),
+            mime_type=mime_type,
+            expected_version=expected_version,
+        )
+
+    async def commit_object(
+        self,
+        scope_id: str,
+        path: str,
+        *,
+        content_sha256: str,
+        size_bytes: int,
+        mime_type: str | None = None,
+        expected_version: int | None = None,
+    ) -> WorkspaceFileRecord:
+        path = normalize_workspace_path(path)
         key = (scope_id, path)
         existing = self._rows.get(key)
         if expected_version is not None:
             actual = 0 if existing is None or existing.deleted else existing.version
             if actual != expected_version:
                 raise CasConflict(path, expected_version, actual)
-
-        digest = _sha256(data)
+        digest = content_sha256
         object_key = _object_key(digest)
-        await self.objects.put(object_key, data, content_sha256=digest)
 
         if existing is None:
             version = 1
@@ -151,7 +176,7 @@ class MemoryWorkspaceStore:
             path=path,
             content_sha256=digest,
             object_key=object_key,
-            size_bytes=len(data),
+            size_bytes=size_bytes,
             version=version,
             mime_type=mime_type,
             deleted=False,

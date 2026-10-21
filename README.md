@@ -95,3 +95,36 @@ or search facts. *History* restores a notebook to how it was after any change.
 | In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs` and `chat-journey.mjs` |
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
+
+## File uploads
+
+Workspace files go straight from the browser to object storage. The API servers never hold
+the bytes. This is the usual production pattern for S3-backed apps (and how OpenAI's Uploads
+API is shaped):
+
+1. **Start:** `POST /workspace/scopes/{scope}/uploads` with the path, size, type and SHA-256,
+   which the browser computes itself. The supervisor checks the grant, the path, the size limit
+   and the expected version. It answers with a short-lived signed PUT URL for a staging key
+   (`uploads/<scope>/<id>`) and a signed ticket. Bytes it already stores are recorded at once,
+   with nothing to send.
+2. **Upload:** the browser PUTs the file to that URL, showing progress. The URL signs the
+   length, type and SHA-256 checksum, so S3 refuses any other bytes.
+3. **Complete:** `POST .../uploads/complete` with the ticket. The supervisor measures what
+   arrived: S3's own checksum, or a streamed SHA-256 on stores that don't keep one (MinIO,
+   SeaweedFS). It deletes the upload if it doesn't match. Otherwise it copies it inside the
+   store to its content-addressed key (`blobs/<sha256>`) and records the file. A client can
+   never write a shared blob directly.
+
+If the store can't sign URLs, or the page isn't on https/localhost (where browsers can't
+hash files), the file goes through `PUT .../files/{path}` instead. It's read in chunks up to
+the same limit.
+
+For production:
+
+| Setting | What it does |
+|---|---|
+| `WORKSPACE_MAX_UPLOAD_BYTES` (supervisor), `WORKSPACE_MAX_UPLOAD_BYTES` (backend) | Largest file (default 100 MiB) |
+| `OBJECT_STORAGE_PUBLIC_ENDPOINT` | The address browsers use to reach the store, when the supervisor reaches it by another (e.g. a compose service name) |
+| `WORKSPACE_UPLOAD_SECRET` (or `CAPABILITY_SECRET`) | Signs upload tickets; every supervisor API replica needs the same value |
+| Bucket CORS | Allow `PUT` from the app's origin with headers `Content-Type` and `x-amz-checksum-sha256` (`./dev.sh` sets this locally) |
+| Bucket lifecycle rule | Expire objects under `uploads/` after a day, which removes abandoned uploads |

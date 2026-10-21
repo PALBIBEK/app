@@ -31,6 +31,43 @@ class WorkspaceRehydrateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = "ok"
+    """``ok``: the session's sandbox now holds the workspace. ``no_sandbox``: it has none yet;
+    it will load the workspace when the agent first needs it, so there is nothing to refresh."""
+
+
+class WorkspaceUploadStartIn(BaseModel):
+    """What the browser will send (it computes the SHA-256 itself)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    size_bytes: int = Field(ge=0)
+    content_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    mime_type: str | None = Field(default=None, max_length=255)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class WorkspaceUploadStartOut(BaseModel):
+    """``upload``: PUT the file to ``url`` with ``headers``, then complete with ``upload_token``.
+    ``committed``: already stored, ``file`` is recorded. ``proxy``: send it through
+    ``PUT /workspace/scopes/{scope}/files/{path}`` instead (storage without upload URLs)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    max_bytes: int
+    upload_token: str | None = None
+    url: str | None = None
+    method: str | None = None
+    headers: dict[str, str] | None = None
+    expires_in_s: int | None = None
+    file: WorkspaceFileOut | None = None
+
+
+class WorkspaceUploadCompleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    upload_token: str = Field(min_length=1, max_length=4096)
 
 
 class WorkspaceUploadMeta(BaseModel):

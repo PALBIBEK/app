@@ -125,6 +125,19 @@ class WorkspaceStore(Protocol):
         expected_version: int | None = None,
     ) -> WorkspaceFileRecord: ...
 
+    async def commit_object(
+        self,
+        scope_id: str,
+        path: str,
+        *,
+        content_sha256: str,
+        size_bytes: int,
+        mime_type: str | None = None,
+        expected_version: int | None = None,
+    ) -> WorkspaceFileRecord:
+        """Point ``path`` at a blob already in object storage (a verified direct upload)."""
+        ...
+
     async def soft_delete(
         self, scope_id: str, path: str, *, expected_version: int | None = None
     ) -> None: ...

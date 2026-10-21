@@ -38,5 +38,14 @@ def create_object_storage(
                 secret_key=os.environ.get("OBJECT_STORAGE_SECRET_KEY", "any"),
                 region=os.environ.get("OBJECT_STORAGE_REGION", "us-east-1"),
             )
-        return S3ObjectStorage(client=client, bucket=bucket_name)
+        presign = None
+        public = os.environ.get("OBJECT_STORAGE_PUBLIC_ENDPOINT", "").strip()
+        if public:  # browsers reach the store at another address than the supervisor does
+            presign = build_boto3_s3_client(
+                endpoint_url=public,
+                access_key=os.environ.get("OBJECT_STORAGE_ACCESS_KEY", "any"),
+                secret_key=os.environ.get("OBJECT_STORAGE_SECRET_KEY", "any"),
+                region=os.environ.get("OBJECT_STORAGE_REGION", "us-east-1"),
+            )
+        return S3ObjectStorage(client=client, bucket=bucket_name, presign_client=presign)
     raise ValueError(f"unknown OBJECT_STORAGE={chosen!r}")

@@ -111,11 +111,30 @@ class PostgresWorkspaceStore:
         mime_type: str | None = None,
         expected_version: int | None = None,
     ) -> WorkspaceFileRecord:
-        path = normalize_workspace_path(path)
         digest = _sha256(data)
-        object_key = _object_key(digest)
-        await self.objects.put(object_key, data, content_sha256=digest)
+        await self.objects.put(_object_key(digest), data, content_sha256=digest)
+        return await self.commit_object(
+            scope_id,
+            path,
+            content_sha256=digest,
+            size_bytes=len(data),
+            mime_type=mime_type,
+            expected_version=expected_version,
+        )
 
+    async def commit_object(
+        self,
+        scope_id: str,
+        path: str,
+        *,
+        content_sha256: str,
+        size_bytes: int,
+        mime_type: str | None = None,
+        expected_version: int | None = None,
+    ) -> WorkspaceFileRecord:
+        path = normalize_workspace_path(path)
+        digest = content_sha256
+        object_key = _object_key(digest)
         async with self._db() as db:
             await self._ensure_scope(db, scope_id)
             live = await db.scalar(
@@ -142,7 +161,7 @@ class PostgresWorkspaceStore:
                 if tomb is not None:
                     tomb.content_sha256 = digest
                     tomb.object_key = object_key
-                    tomb.size_bytes = len(data)
+                    tomb.size_bytes = size_bytes
                     tomb.mime_type = mime_type
                     # Versions keep counting through a delete, so a version a
                     # session saw before can never name a different file.
@@ -159,7 +178,7 @@ class PostgresWorkspaceStore:
                     path=path,
                     content_sha256=digest,
                     object_key=object_key,
-                    size_bytes=len(data),
+                    size_bytes=size_bytes,
                     mime_type=mime_type,
                     version=1,
                     deleted_at=None,
@@ -171,7 +190,7 @@ class PostgresWorkspaceStore:
 
             live.content_sha256 = digest
             live.object_key = object_key
-            live.size_bytes = len(data)
+            live.size_bytes = size_bytes
             live.mime_type = mime_type
             live.version = int(live.version) + 1
             live.updated_at = _utcnow()

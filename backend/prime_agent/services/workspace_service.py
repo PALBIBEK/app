@@ -19,6 +19,8 @@ from prime_agent.schemas.workspace import (
     ScopeMemberOut,
     WorkspaceFileOut,
     WorkspaceRehydrateResponse,
+    WorkspaceUploadStartIn,
+    WorkspaceUploadStartOut,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.session_service import SessionNotFoundError
@@ -117,6 +119,26 @@ class WorkspaceService:
             raise_workspace_upstream_http(exc)
         return WorkspaceFileOut.model_validate(raw)
 
+    async def start_upload(
+        self, *, scope_id: str, body: WorkspaceUploadStartIn, identity: TenantPrincipal
+    ) -> WorkspaceUploadStartOut:
+        payload = body.model_dump(exclude_none=True)
+        payload["content_sha256"] = body.content_sha256.lower()
+        try:
+            raw = await self._client.start_workspace_upload(identity, scope_id, payload)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        return WorkspaceUploadStartOut.model_validate(raw)
+
+    async def complete_upload(
+        self, *, scope_id: str, upload_token: str, identity: TenantPrincipal
+    ) -> WorkspaceFileOut:
+        try:
+            raw = await self._client.complete_workspace_upload(identity, scope_id, upload_token)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+        return WorkspaceFileOut.model_validate(raw)
+
     async def delete_file(
         self,
         *,
@@ -151,6 +173,9 @@ class WorkspaceService:
                 identity, link.ai_session_id
             )
         except AiUpstreamError as exc:
+            if exc.status_code == 409 and "no sandbox" in str(exc):
+                # Built on first use, from the workspace as it is then: nothing to refresh.
+                return WorkspaceRehydrateResponse(status="no_sandbox")
             raise_workspace_upstream_http(exc)
         return WorkspaceRehydrateResponse(status="ok")
 

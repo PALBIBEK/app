@@ -6,12 +6,15 @@ import hashlib
 from dataclasses import dataclass, field
 
 from supervisor.seams.services.object_storage import (
+    DirectUploadUnsupported,
     HeadResult,
     ObjectIntegrityError,
     ObjectNotFound,
     ObjectTransient,
+    PresignedUpload,
     PresignedUrl,
     PutResult,
+    StoredDigest,
 )
 
 
@@ -77,6 +80,20 @@ class MemoryObjectStorage:
             method="GET",
             expires_in_s=ttl_s,
         )
+
+    async def create_upload_url(
+        self, key: str, *, size_bytes: int, content_sha256: str, content_type: str, ttl_s: int
+    ) -> PresignedUpload:
+        raise DirectUploadUnsupported()
+
+    async def digest(self, key: str, *, max_bytes: int) -> StoredDigest:
+        data = await self.get(key)
+        if len(data) > max_bytes:
+            raise ObjectIntegrityError(f"{key} holds more than the {max_bytes} bytes allowed")
+        return StoredDigest(content_sha256=_sha256(data), size_bytes=len(data))
+
+    async def copy(self, src: str, dst: str, *, content_sha256: str) -> None:
+        self._objects[dst] = await self.get(src)
 
 
 
