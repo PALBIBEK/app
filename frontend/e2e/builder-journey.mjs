@@ -62,16 +62,13 @@ await shot(p, 'b2-published');
 // Test: run bash through the agent, approve it, see the output.
 await p.getByRole('link', { name: 'Test' }).click();
 await p.waitForURL(/\/test$/);
-const box = p.locator('textarea');
-await box.waitFor({ timeout: 30000 }).catch(async (e) => { await shot(p, 'b4-notextarea'); console.log('url', p.url()); throw e; });
-await p.waitForFunction(() => { const t = document.querySelector('textarea'); return t && !t.disabled; }, null, { timeout: 60000 })
-  .catch(async (e) => { await shot(p, 'b4-disabled'); throw e; });
+await p.getByTestId('connection').filter({ hasText: 'Live' }).waitFor({ timeout: 60000 });
+const box = p.getByPlaceholder(/Send a message/);
 await box.fill('/tool bash {"command": "echo built-in-the-browser"}');
-await p.locator('button[type=submit]').click();
+await box.press('Enter');
 await p.getByTestId('approval-approve').first().click({ timeout: 30000 });
-await p.getByText(/exit_code/).first().waitFor({ timeout: 30000 }).catch(async (e) => { await shot(p, 'b4-stuck'); throw e; });
-await p.waitForTimeout(4000);
-console.log('6 agent reply with the command output visible: true');
+await p.getByTestId('tool-output').filter({ hasText: 'built-in-the-browser' }).first().waitFor({ timeout: 30000 });
+console.log('6 bash ran: its output is on the tool card');
 console.log('  user bubbles with the command:', await p.getByText('/tool bash {"command": "echo built-in-the-browser"}', { exact: true }).count());
 console.log('  approval banner still shown:', await p.getByTestId('approval-banner').count());
 await shot(p, 'b3-test');
