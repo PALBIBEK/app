@@ -376,6 +376,32 @@ class AiClient:
             expected=(201,),
         )
 
+    async def list_tools(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
+        """GET /v1/tools: the tools the supervisor can run (name, description, class, parameters)."""
+        return await self._json_request("GET", "/v1/tools", identity)
+
+    async def list_models(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
+        """GET /v1/models: what a harness can select (never an endpoint or key)."""
+        payload = await self._json_request("GET", "/v1/models", identity)
+        return list(payload.get("models") or []) if isinstance(payload, dict) else []
+
+    async def publish_artifact(
+        self, identity: TenantPrincipal, kind: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/catalog/{kind}/publish: offered with its digest (computed when absent)."""
+        return await self._json_request(
+            "POST", f"/v1/catalog/{quote(kind, safe='')}/publish", identity,
+            json_body=body, expected=(200,),
+        )
+
+    async def register_harness_version(
+        self, identity: TenantPrincipal, manifest: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST /v1/harness_versions: 201 new, 200 the same manifest already registered."""
+        return await self._json_request(
+            "POST", "/v1/harness_versions", identity, json_body=manifest, expected=(200, 201),
+        )
+
     async def publish_tool_set(
         self,
         identity: TenantPrincipal,
