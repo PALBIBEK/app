@@ -87,6 +87,11 @@ SAFE_READY_REASONS = frozenset(
 )
 
 
+LONG_CALL_TIMEOUT_S = 300.0
+"""For calls that answer only when work finishes (a subagent run, a tool call): the
+usual short timeout turned a slow but healthy run into a 503."""
+
+
 def _refusal_message(response: httpx.Response) -> str:
     """The supervisor's own reason for a 4xx (what was wrong with the request); never a 5xx body."""
     if 400 <= response.status_code < 500:
@@ -374,6 +379,7 @@ class AiClient:
             identity,
             json_body=body,
             expected=(201,),
+            timeout=60.0,  # copies the journal up to the fork point
         )
 
     async def list_tools(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
@@ -452,6 +458,7 @@ class AiClient:
             identity,
             json_body=body,
             expected=(200,),
+            timeout=LONG_CALL_TIMEOUT_S,  # a command can run for minutes
         )
 
     async def list_session_approvals(
@@ -773,6 +780,7 @@ class AiClient:
             identity,
             json_body=body,
             expected=(200, 201),
+            timeout=LONG_CALL_TIMEOUT_S,  # the child runs to completion before this answers
         )
 
     async def list_session_children(
@@ -922,9 +930,10 @@ class AiClient:
         expected: tuple[int, ...] = (200,),
         allow_empty: bool = False,
         params: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         url = f"{self._require_base_url()}{path}"
-        timeout = self._settings.ai_http_timeout_seconds
+        timeout = timeout or self._settings.ai_http_timeout_seconds
         async with httpx.AsyncClient(
             transport=self._transport,
             timeout=timeout,

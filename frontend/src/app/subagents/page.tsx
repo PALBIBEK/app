@@ -20,6 +20,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useSessions } from '@/lib/api/hooks/useSessions';
 import { displaySubagentProvider } from '@/lib/session/wireEventReducer';
 import { cn } from '@/lib/utils';
@@ -40,6 +41,8 @@ function SubagentsListContent(): JSX.Element {
   const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } =
     useSessions({ page: 1, page_size: 50 });
   const sessions = sessionsData?.data ?? [];
+  const { data: harnessList } = useHarnesses();
+  const harnessNames = new Map((harnessList?.data ?? []).map((h) => [h.id, h.name]));
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [children, setChildren] = useState<ChildRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -137,7 +140,7 @@ function SubagentsListContent(): JSX.Element {
               {sessions.length === 0 && <option value="">No sessions</option>}
               {sessions.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {(s.title || s.harness_id).slice(0, 40)} ({s.id.slice(0, 8)}…)
+                  {(s.title || harnessNames.get(s.harness_id) || 'Session').slice(0, 40)} ({s.id.slice(0, 8)}…)
                 </option>
               ))}
             </select>

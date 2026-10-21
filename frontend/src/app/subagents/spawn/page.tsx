@@ -20,6 +20,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useSessions } from '@/lib/api/hooks/useSessions';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -51,6 +52,8 @@ function SpawnSubagentContent(): JSX.Element {
   const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } =
     useSessions({ page: 1, page_size: 50 });
   const sessions = sessionsData?.data ?? [];
+  const { data: harnessList } = useHarnesses();
+  const harnessNames = new Map((harnessList?.data ?? []).map((h) => [h.id, h.name]));
 
   const selectedMode = PRODUCT_SPAWN_MODE;
   const [selectedProvider, setSelectedProvider] = useState('lab_echo');
@@ -187,7 +190,7 @@ function SpawnSubagentContent(): JSX.Element {
                 )}
                 {sessions.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {(s.title || s.harness_id).slice(0, 48)} · {s.id}
+                    {(s.title || harnessNames.get(s.harness_id) || 'Session').slice(0, 48)} · {s.id}
                   </option>
                 ))}
               </select>

@@ -139,15 +139,7 @@ class SubagentOps:
             turn_id=turn_id,
             trace_id=trace_id,
         )
-        # Prefer provider child_id for live handles; journal tree uses minted id.
-        if result.child_id:
-            return result
-        return SubagentRunResult(
-            text=result.text,
-            child_id=child_id,
-            status=result.status,
-            meta=result.meta,
-        )
+        return _as_journaled(result, child_id)
 
     async def fork(
         self,
@@ -193,14 +185,7 @@ class SubagentOps:
             turn_id=turn_id,
             trace_id=trace_id,
         )
-        if result.child_id:
-            return result
-        return SubagentRunResult(
-            text=result.text,
-            child_id=child_id,
-            status=result.status,
-            meta=result.meta,
-        )
+        return _as_journaled(result, child_id)
 
     async def begin_background(
         self,
@@ -295,3 +280,13 @@ class SubagentOps:
     async def session_tree(self, reader: Any) -> SessionTree:
         envs = await reader.read(self._parent, since=-1)
         return build_session_tree(self._parent, envs)
+
+
+def _as_journaled(result: SubagentRunResult, child_id: str) -> SubagentRunResult:
+    """The result under the child id the journal recorded (SubagentStart), the one the
+    children list and every client know. A one-shot child has finished, so nothing needs
+    the provider's own id for a live handle; it is kept in ``meta``."""
+    meta = dict(result.meta)
+    if result.child_id and result.child_id != child_id:
+        meta["provider_child_id"] = result.child_id
+    return SubagentRunResult(text=result.text, child_id=child_id, status=result.status, meta=meta)
