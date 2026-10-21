@@ -191,7 +191,7 @@ export const sessionsAPI = {
    */
   openEventStream: async function* (
     sessionId: string,
-    options?: { lastEventId?: string; signal?: AbortSignal }
+    options?: { lastEventId?: string; signal?: AbortSignal; onOpen?: () => void }
   ): AsyncGenerator<WireEvent, void, unknown> {
     const accessToken = useAuthStore.getState().accessToken;
     if (!accessToken) {
@@ -211,9 +211,13 @@ export const sessionsAPI = {
       credentials: 'include',
       signal: options?.signal,
     });
+    if (response.status === 401) {
+      throw new StreamUnauthorized();
+    }
     if (!response.ok || !response.body) {
       throw new Error(`SSE failed: ${response.status}`);
     }
+    options?.onOpen?.();
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -249,3 +253,10 @@ export const sessionsAPI = {
     }
   },
 };
+
+/** The stream's token expired: refresh it (any API call does) and reconnect. */
+export class StreamUnauthorized extends Error {
+  constructor() {
+    super('Event stream: not authorized');
+  }
+}

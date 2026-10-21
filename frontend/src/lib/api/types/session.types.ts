@@ -29,6 +29,7 @@ export const SessionSchema = z.object({
   composition_id: z.string().nullish(),
   composition_digest: z.string().nullish(),
   title: z.string().nullish(),
+  scope_id: z.string().nullish(),
   message_count: z.number(),
   total_cost: z.number(),
   last_seq: z.number(),
@@ -78,6 +79,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   toolCalls?: ToolCallView[];
+  /** The journal position, for "fork from here" (absent on a message not yet confirmed). */
+  seq?: number;
 }
 
 export interface ToolCallView {
@@ -87,4 +90,8 @@ export interface ToolCallView {
   output?: unknown;
   status: 'running' | 'success' | 'error';
   error?: string;
+  /** The supervisor's refusal or failure code (STEP_LIMIT, APPROVAL_DENIED, …). */
+  code?: string;
+  /** What happened, in plain words, when the call failed. */
+  explanation?: string;
 }

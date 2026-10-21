@@ -142,3 +142,32 @@ async def test_memory_service_outage_is_503(db_session, owner, monkeypatch):
         r = await api.get("/api/v1/memory/notebooks", params={"harness_id": harness.id})
     assert r.status_code == 503
     assert r.json()["detail"]["error_code"] == "MEMORY_UNAVAILABLE"
+
+
+async def test_all_versions_lists_each_versions_notebooks_newest_first(db_session, owner, monkeypatch):
+    from prime_agent.db.models.harness_release import HarnessRelease
+
+    harness = await _harness(db_session, owner)
+    old = "sha256:" + "0" * 64
+    db_session.add_all([
+        HarnessRelease(harness_id=harness.id, version=1, manifest={}, composition_id="githi-v1",
+                       composition_digest=old, harness_version="h-r1", runtime="githi"),
+        HarnessRelease(harness_id=harness.id, version=2, manifest={}, composition_id="githi-v1",
+                       composition_digest=DIGEST, harness_version="h-r2", runtime="githi"),
+    ])
+    await db_session.flush()
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pin = request.url.params["agent_pin"]
+        asked.append(pin)
+        return httpx.Response(200, json=[{
+            "id": f"nb-{pin[-4:]}", "agent_pin": pin, "name": "default", "label": None, "revision": 1,
+            "created_at": 1, "archived": False, "facts": 1, "bytes": 3, "updated_at": 1,
+        }])
+
+    async with _api(db_session, owner, handler, monkeypatch) as api:
+        r = await api.get("/api/v1/memory/notebooks", params={"harness_id": harness.id, "all_versions": True})
+    assert r.status_code == 200, r.text
+    assert asked == [AGENT_PIN, f"composition:githi-v1@{old}"]  # the live version first
+    assert [nb["version"] for nb in r.json()] == [2, 1]

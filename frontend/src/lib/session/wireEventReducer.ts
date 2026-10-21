@@ -3,6 +3,7 @@
  */
 
 import type { ChatMessage, ToolCallView, WireEvent } from '../api/types/session.types';
+import { explainToolResult, readToolResult } from './explain';
 
 export interface SubagentChipView {
   run_id: string;
@@ -23,11 +24,19 @@ export interface SessionViewState {
     prompt: string;
     options: string[];
     timeout_s?: number;
+    /** When it times out (epoch ms), for the countdown. */
+    deadline_ms?: number;
   }>;
   lastSeq: number;
   settled: boolean;
   error: string | None;
   awaitingApproval: boolean;
+  /** A run is open (between run_start and run_end). */
+  running: boolean;
+  /** Model steps taken in the current (or last) run. */
+  runSteps: number;
+  /** Tokens and cost over every turn seen. */
+  usage: { input_tokens: number; output_tokens: number; cost: number };
 }
 
 type None = null;
@@ -42,6 +51,9 @@ export function createSessionViewState(): SessionViewState {
     settled: false,
     error: null,
     awaitingApproval: false,
+    running: false,
+    runSteps: 0,
+    usage: { input_tokens: 0, output_tokens: 0, cost: 0 },
   };
 }
 
@@ -74,6 +86,8 @@ export function displaySubagentProvider(provider: string): {
 }
 
 export function applyWireEvent(state: SessionViewState, event: WireEvent): SessionViewState {
+  // A reconnect resumes after the last seq seen; anything at or before it is a replay.
+  if (event.seq <= state.lastSeq) return state;
   const next: SessionViewState = {
     ...state,
     pendingTools: new Map(state.pendingTools),
@@ -97,13 +111,16 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
     case 'tool_end': {
       const id = String(event.data.tool_call_id ?? event.event_id);
       const prev = next.pendingTools.get(id);
+      const result = readToolResult(event.data.result ?? event.data.output, event.data.error);
       next.pendingTools.set(id, {
         id,
         name: prev?.name ?? String(event.data.tool_name ?? 'tool'),
-        args: prev?.args,
-        output: event.data.result ?? event.data.output,
-        status: event.data.error ? 'error' : 'success',
-        error: event.data.error ? String(event.data.error) : undefined,
+        args: prev?.args ?? (event.data.args as Record<string, unknown> | undefined),
+        output: result.ok ? result.payload : undefined,
+        status: result.ok ? 'success' : 'error',
+        error: result.ok ? undefined : result.error ?? 'failed',
+        code: result.code,
+        explanation: explainToolResult(result),
       });
       break;
     }
@@ -145,11 +162,22 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
         roleRaw === 'user' || roleRaw === 'system' ? roleRaw : 'assistant';
       const content = textFromMessageEnd(event.data);
       const timestamp = new Date(event.ts_ms).toISOString();
+      if (role === 'assistant') {
+        next.runSteps += 1;
+        const usage = event.data.usage as Record<string, unknown> | null | undefined;
+        if (usage) {
+          next.usage = {
+            input_tokens: next.usage.input_tokens + Number(usage.input_tokens ?? 0),
+            output_tokens: next.usage.output_tokens + Number(usage.output_tokens ?? 0),
+            cost: next.usage.cost + Number(usage.cost_total ?? 0),
+          };
+        }
+      }
       if (role === 'user') {
         // The journal's copy of a message this page just showed: confirm it in place.
         const local = next.messages.findIndex((m) => m.id.startsWith('local-') && m.role === 'user' && m.content === content);
         if (local >= 0) {
-          next.messages = next.messages.map((m, i) => (i === local ? { ...m, id: event.event_id, timestamp } : m));
+          next.messages = next.messages.map((m, i) => (i === local ? { ...m, id: event.event_id, timestamp, seq: event.seq } : m));
           break;
         }
       }
@@ -164,6 +192,7 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
         content,
         timestamp,
         toolCalls: tools.length ? tools : undefined,
+        seq: event.seq,
       });
       break;
     }
@@ -173,16 +202,15 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       const options = Array.isArray(event.data.options)
         ? event.data.options.map((o) => String(o))
         : ['approve', 'deny'];
+      const timeout = typeof event.data.timeout_s === 'number' ? event.data.timeout_s : undefined;
       next.pendingApprovals = [
         ...next.pendingApprovals.filter((a) => a.approval_id !== approvalId),
         {
           approval_id: approvalId,
           prompt,
           options,
-          timeout_s:
-            typeof event.data.timeout_s === 'number'
-              ? event.data.timeout_s
-              : undefined,
+          timeout_s: timeout,
+          deadline_ms: timeout != null ? event.ts_ms + timeout * 1000 : undefined,
         },
       ];
       next.awaitingApproval = true;
@@ -200,9 +228,19 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       next.error = String(event.data.message ?? event.data.error ?? 'Session error');
       break;
     }
+    case 'run_start': {
+      next.running = true;
+      next.runSteps = 0;
+      next.settled = false;
+      next.error = null;
+      break;
+    }
     case 'settled':
     case 'run_end': {
       next.settled = true;
+      next.running = false;
+      next.pendingApprovals = [];
+      next.awaitingApproval = false;
       break;
     }
     default:

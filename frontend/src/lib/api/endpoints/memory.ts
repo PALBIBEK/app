@@ -15,8 +15,11 @@ import type {
 const nb = (id: string) => `/memory/notebooks/${encodeURIComponent(id)}`;
 
 export const memoryAPI = {
-  listNotebooks: (harnessId: string, archived = false): Promise<Notebook[]> =>
-    apiClient.get<Notebook[]>('/memory/notebooks', { params: { harness_id: harnessId, archived } }),
+  /** A harness's notebooks: of its live version, or (allVersions) of every version it had. */
+  listNotebooks: (harnessId: string, archived = false, allVersions = false): Promise<Notebook[]> =>
+    apiClient.get<Notebook[]>('/memory/notebooks', {
+      params: { harness_id: harnessId, archived, ...(allVersions ? { all_versions: true } : {}) },
+    }),
 
   createNotebook: (data: NotebookCreateRequest): Promise<Notebook> =>
     apiClient.post<Notebook>('/memory/notebooks', data),

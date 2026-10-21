@@ -10,9 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prime_agent.config import Settings
+from prime_agent.db.models.harness_release import HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.harness_service import HarnessService
@@ -48,6 +50,19 @@ class MemoryService:
                 detail={"error_code": "NOT_BOUND", "message": "harness is not bound: it has no memory yet"},
             )
         return agent_pin(harness.composition_id, harness.composition_digest)
+
+    async def pins_for(self, harness_id: str, user_id: str, db: AsyncSession) -> list[tuple[str, int | None]]:
+        """Every agent version of the harness, newest first: (pin, release version or None)."""
+        current = await self.pin_for(harness_id, user_id, db)
+        rows = await db.execute(
+            select(HarnessRelease.composition_id, HarnessRelease.composition_digest, HarnessRelease.version)
+            .where(HarnessRelease.harness_id == harness_id)
+            .order_by(HarnessRelease.version.desc())
+        )
+        pins: list[tuple[str, int | None]] = [(agent_pin(c, d), v) for c, d, v in rows.all()]
+        if current not in {p for p, _ in pins}:
+            pins.insert(0, (current, None))  # bound without the builder (shipped composition)
+        return pins
 
     async def call(self, coro: Any) -> Any:
         try:

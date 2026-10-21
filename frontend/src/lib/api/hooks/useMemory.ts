@@ -17,18 +17,28 @@ function sanitizeErrorMessage(error: Error): string {
 
 export const memoryKeys = {
   all: ['memory'] as const,
-  notebooks: (harnessId: string, archived: boolean) =>
-    [...memoryKeys.all, 'notebooks', harnessId, archived] as const,
+  notebooks: (harnessId: string, archived: boolean, allVersions = false) =>
+    [...memoryKeys.all, 'notebooks', harnessId, archived, allVersions] as const,
   facts: (notebookId: string) => [...memoryKeys.all, 'facts', notebookId] as const,
   revisions: (notebookId: string) => [...memoryKeys.all, 'revisions', notebookId] as const,
 };
 
-export function useNotebooks(harnessId: string | undefined, archived = false) {
+export function useNotebooks(harnessId: string | undefined, archived = false, allVersions = false) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   return useQuery({
-    queryKey: memoryKeys.notebooks(harnessId ?? '', archived),
-    queryFn: () => memoryAPI.listNotebooks(harnessId!, archived),
+    queryKey: memoryKeys.notebooks(harnessId ?? '', archived, allVersions),
+    queryFn: () => memoryAPI.listNotebooks(harnessId!, archived, allVersions),
     enabled: isAuthenticated && Boolean(harnessId),
+    retry: false,
+  });
+}
+
+export function useArchiveNotebook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { notebookId: string; archived: boolean }) => memoryAPI.setArchived(v.notebookId, v.archived),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [...memoryKeys.all, 'notebooks'] }),
+    onError: (error: Error) => toast.error(sanitizeErrorMessage(error) || 'Failed'),
   });
 }
 

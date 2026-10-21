@@ -15,6 +15,15 @@ export interface WorkspaceFile {
   file_id: string;
 }
 
+export interface ScopeMember {
+  principal_id: string;
+  grants: string[];
+  email?: string | null;
+  name?: string | null;
+}
+
+const filePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');
+
 export interface EnsureScopeResponse {
   scope_id: string;
   status: string;
@@ -61,6 +70,25 @@ export const workspaceAPI = {
         .split('/')
         .map(encodeURIComponent)
         .join('/')}`
+    );
+  },
+
+  /** The file's bytes, for viewing or saving. */
+  getFile: async (scopeId: string, path: string): Promise<Blob> =>
+    apiClient.get<Blob>(`/workspace/scopes/${encodeURIComponent(scopeId)}/files/${filePath(path)}`, {
+      responseType: 'blob',
+    }),
+
+  listMembers: async (scopeId: string): Promise<ScopeMember[]> =>
+    apiClient.get<ScopeMember[]>(`/workspace/scopes/${encodeURIComponent(scopeId)}/members`),
+
+  /** Share the scope with another user, by email. */
+  inviteMember: async (scopeId: string, email: string): Promise<ScopeMember> =>
+    apiClient.post<ScopeMember>(`/workspace/scopes/${encodeURIComponent(scopeId)}/members`, { email }),
+
+  removeMember: async (scopeId: string, principalId: string): Promise<void> => {
+    await apiClient.delete(
+      `/workspace/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(principalId)}`
     );
   },
 

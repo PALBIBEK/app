@@ -12,6 +12,7 @@ import {
   Lightning,
   Plus,
   GitBranch,
+  Brain,
 } from '@phosphor-icons/react';
 
 import { cn } from '@/lib/utils';
@@ -30,6 +31,7 @@ const navItems: NavItem[] = [
   { label: 'Prompts', href: '/prompts', icon: TextAa },
   { label: 'Subagents', href: '/subagents', icon: GitBranch },
   { label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise },
+  { label: 'Memory', href: '/memory', icon: Brain },
   { label: 'Traces', href: '/traces', icon: ChartLine, badge: 'New' },
 ];
 

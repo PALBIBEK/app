@@ -6,6 +6,8 @@
 export interface Notebook {
   id: string;
   agent_pin: string;
+  /** The harness release this notebook's agent version is, when known. */
+  version?: number | null;
   name: string;
   label: string | null;
   revision: number;

@@ -5,7 +5,7 @@ Distinct from tenant Settings / workspaceStore org chrome.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class WorkspaceFileOut(BaseModel):
@@ -45,10 +45,21 @@ class ScopeMemberOut(BaseModel):
 
     principal_id: str
     grants: list[str]
+    email: str | None = None  # filled in for members who are users of this product
+    name: str | None = None
 
 
 class InviteScopeMemberIn(BaseModel):
+    """Who to share with: a user's email (what a person knows) or their principal id."""
+
     model_config = ConfigDict(extra="forbid")
 
-    principal_id: str
+    principal_id: str | None = None
+    email: str | None = None
     grants: list[str] | None = None
+
+    @model_validator(mode="after")
+    def one_of(self) -> InviteScopeMemberIn:
+        if bool(self.principal_id) == bool(self.email):
+            raise ValueError("give either email or principal_id")
+        return self

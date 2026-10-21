@@ -206,3 +206,26 @@ async def test_session_op_histories_replay_deterministically(env: Env) -> None:
     for history in histories:
         result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
         assert result.replay_failure is None, result.replay_failure
+
+
+async def test_a_spawned_child_is_reported_under_the_id_the_journal_and_listing_use(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The lab provider numbers its own children (child-1, ...); clients must get the
+    journal's id, or the link they follow finds no such child."""
+    model()
+    worker = await env.state()
+    async with session_worker(env.client, worker, task_queue=env.queue), api(env) as (http, _):
+        sid = await env.create(worker)
+        spawned = await http.post(
+            f"/v1/sessions/{sid}/subagents/spawn",
+            json={"prompt": "summarize", "provider": "lab_echo", "description": "summary"},
+            headers=HEADERS,
+        )
+        assert spawned.status_code == 200, spawned.text
+        child = spawned.json()["child_session_id"]
+        listed = await http.get(f"/v1/sessions/{sid}/children", headers=HEADERS)
+        assert listed.status_code == 200, listed.text
+        assert child in {c["id"] for c in listed.json()}, (child, listed.json())
+        (start,) = [e.payload for e in await worker.reader.read(sid) if type(e.payload).__name__ == "SubagentStart"]
+        assert start.child_session_id == child
