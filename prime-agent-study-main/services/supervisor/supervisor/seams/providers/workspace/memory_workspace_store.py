@@ -108,6 +108,7 @@ class MemoryWorkspaceStore:
         mime_type: str | None = None,
         expected_version: int | None = None,
         author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord:
         path = normalize_workspace_path(path)
         existing = self._rows.get((scope_id, path))
@@ -129,6 +130,7 @@ class MemoryWorkspaceStore:
             mime_type=mime_type,
             expected_version=expected_version,
             author=author,
+            source=source,
         )
 
     async def find_object(self, scope_id: str, content_sha256: str, size_bytes: int) -> str | None:
@@ -161,6 +163,7 @@ class MemoryWorkspaceStore:
         expected_version: int | None = None,
         author: str | None = None,
         restored_from: int | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord:
         path = normalize_workspace_path(path)
         key = (scope_id, path)
@@ -203,6 +206,7 @@ class MemoryWorkspaceStore:
                 created_at=datetime.now(UTC),
                 author=author,
                 restored_from=restored_from,
+                source=source,
             )
         )
         return row.to_record()
@@ -255,9 +259,12 @@ class MemoryWorkspaceStore:
         tree: WorkspaceTreeIO,
         *,
         base: Mapping[str, tuple[int, str]] | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport:
         return await three_way_sync(
-            self, scope_id, tree, base, before_cas=self.before_sync_cas  # type: ignore[arg-type]
+            self, scope_id, tree, base, before_cas=self.before_sync_cas,  # type: ignore[arg-type]
+            author=author, source=source,
         )
 
 

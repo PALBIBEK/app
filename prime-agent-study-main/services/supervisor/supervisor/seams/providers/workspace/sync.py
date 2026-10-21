@@ -52,8 +52,11 @@ async def three_way_sync(
     base: Mapping[str, tuple[int, str]] | None,
     *,
     before_cas: BeforeCas | None = None,
+    author: str | None = None,
+    source: str | None = None,
 ) -> WorkspaceSyncReport:
-    """Commit what the session changed since ``base``; report the new base."""
+    """Commit what the session changed since ``base``; report the new base. Each new version
+    records ``author`` and ``source`` (which run made it)."""
     seen = dict(base or {})
     durable = {r.path: r for r in await store.list_files(scope_id)}
     written: list[str] = []
@@ -76,7 +79,8 @@ async def three_way_sync(
             await before_cas(scope_id, path)
         try:
             committed = await store.commit_blob(
-                scope_id, path, data, expected_version=started[0] if started else 0
+                scope_id, path, data, expected_version=started[0] if started else 0,
+                author=author, source=source,
             )
         except CasConflict:
             conflicts.append(path)

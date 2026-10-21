@@ -14,6 +14,7 @@ from supervisor.seams.services.authz import AuthzService, Grant, Principal
 from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
 from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
+    WorkspacePathEscape,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
@@ -50,6 +51,46 @@ class WorkspaceNotReadyError(RuntimeError):
     def __init__(self, scope_id: str | None) -> None:
         self.scope_id = scope_id
         super().__init__(f"workspace not ready scope={scope_id!r}")
+
+
+RESERVED_DIRS = (".attachments", ".outputs")
+"""Sandbox folders that are not the workspace: a run's attached files (read-only copies of
+pinned versions) and the files it makes for the user (collected as artifacts). They are never
+copied into the workspace, and refreshing the workspace leaves them alone."""
+
+
+def is_reserved(path: str) -> bool:
+    first = path.strip().lstrip("/").split("/", 1)[0]
+    return first in RESERVED_DIRS
+
+
+class ScopeMirrorTree:
+    """A sandbox tree as the workspace sees it: the reserved folders hidden and untouchable."""
+
+    def __init__(self, inner: WorkspaceTreeIO) -> None:
+        self._inner = inner
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        if is_reserved(path):
+            raise WorkspacePathEscape(path)
+        await self._inner.write_bytes(path, data)
+
+    async def read_bytes(self, path: str) -> bytes:
+        if is_reserved(path):
+            raise FileNotFoundError(path)
+        return await self._inner.read_bytes(path)
+
+    async def list_paths(self) -> list[str]:
+        return [p for p in await self._inner.list_paths() if not is_reserved(p)]
+
+    async def delete_path(self, path: str) -> None:
+        if is_reserved(path):
+            raise WorkspacePathEscape(path)
+        await self._inner.delete_path(path)
+
+    async def clear(self) -> None:
+        for path in await self.list_paths():
+            await self._inner.delete_path(path)
 
 
 def tree_for_sandbox(sandbox: Sandbox) -> WorkspaceTreeIO:
@@ -100,7 +141,7 @@ class SessionWorkspaceService:
             raise RuntimeError(
                 "scope-bound session requires authz + hydrator + principal"
             )
-        tree = tree_for_sandbox(sandbox)
+        tree = ScopeMirrorTree(tree_for_sandbox(sandbox))
         state.ready = False
         try:
             report = await authorized_hydrate(
@@ -130,6 +171,8 @@ class SessionWorkspaceService:
         sandbox: Sandbox | None,
         *,
         force: bool = False,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport | None:
         if state.scope_id is None or sandbox is None:
             return None
@@ -142,7 +185,7 @@ class SessionWorkspaceService:
         await self._authz.require(
             state.principal, state.scope_id, Grant.WORKSPACE_WRITE
         )
-        tree = tree_for_sandbox(sandbox)
+        tree = ScopeMirrorTree(tree_for_sandbox(sandbox))
         report = await authorized_sync(
             self._authz,
             self._hydrator,
@@ -150,6 +193,8 @@ class SessionWorkspaceService:
             state.scope_id,
             tree,
             base=state.base,
+            author=author,
+            source=source,
         )
         state.last_sync = report
         state.base = report.base

@@ -15,10 +15,16 @@ from prime_agent.config import get_settings
 from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
+    ArtifactOut,
+    AttachIn,
+    AttachmentOut,
     EnsureScopeResponse,
     FileVersionOut,
-    RestoreVersionIn,
     InviteScopeMemberIn,
+    RestoreVersionIn,
+    RunInputOut,
+    SaveArtifactIn,
+    SavedArtifactOut,
     ScopeMemberOut,
     WorkspaceFileOut,
     WorkspaceRehydrateResponse,
@@ -283,5 +289,80 @@ async def rehydrate_session_agent_workspace(
             identity=identity,
             db=db,
         )
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+
+# --- a conversation's attachments, its runs' inputs and its artifacts ------------------
+
+
+def _who(user) -> dict:  # noqa: ANN001
+    return {"user_id": user.id, "identity": TenantPrincipal.from_user(user)}
+
+
+@router.get("/sessions/{session_id}/attachments", response_model=list[AttachmentOut])
+async def list_session_attachments(session_id: str, db: DbSession, current_user: CurrentUser) -> list[AttachmentOut]:
+    try:
+        return await _service().list_attachments(session_id=session_id, db=db, **_who(current_user))
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.post("/sessions/{session_id}/attachments", response_model=AttachmentOut, status_code=status.HTTP_201_CREATED)
+async def attach_session_file(session_id: str, body: AttachIn, db: DbSession, current_user: CurrentUser) -> AttachmentOut:
+    """Attach a file from the session's workspace, pinned to a version: its runs read exactly
+    that version, read-only, in ``.attachments/``."""
+    try:
+        return await _service().attach(session_id=session_id, body=body, db=db, **_who(current_user))
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.delete("/sessions/{session_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def detach_session_file(session_id: str, attachment_id: str, db: DbSession, current_user: CurrentUser) -> Response:
+    try:
+        await _service().detach(session_id=session_id, attachment_id=attachment_id, db=db, **_who(current_user))
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/sessions/{session_id}/artifacts", response_model=list[ArtifactOut])
+async def list_session_artifacts(session_id: str, db: DbSession, current_user: CurrentUser) -> list[ArtifactOut]:
+    """Files the session's runs made for the user, oldest first."""
+    try:
+        return await _service().list_artifacts(session_id=session_id, db=db, **_who(current_user))
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.get("/sessions/{session_id}/artifacts/{artifact_id}/content")
+async def session_artifact_content(session_id: str, artifact_id: str, db: DbSession, current_user: CurrentUser) -> RawResponse:
+    try:
+        data = await _service().artifact_bytes(session_id=session_id, artifact_id=artifact_id, db=db, **_who(current_user))
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+    return RawResponse(content=data, media_type="application/octet-stream")
+
+
+@router.post("/sessions/{session_id}/artifacts/{artifact_id}/save", response_model=SavedArtifactOut)
+async def save_session_artifact(
+    session_id: str, artifact_id: str, body: SaveArtifactIn, db: DbSession, current_user: CurrentUser
+) -> SavedArtifactOut:
+    """Save a run's output into the workspace (a new version whose source is the artifact)."""
+    try:
+        return await _service().save_artifact(
+            session_id=session_id, artifact_id=artifact_id, body=body, db=db, **_who(current_user)
+        )
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.get("/sessions/{session_id}/runs/{turn_id}/inputs", response_model=list[RunInputOut])
+async def session_run_inputs(session_id: str, turn_id: str, db: DbSession, current_user: CurrentUser) -> list[RunInputOut]:
+    """What one run started from: its attachments and the workspace files, by version."""
+    try:
+        return await _service().run_inputs(session_id=session_id, turn_id=turn_id, db=db, **_who(current_user))
     except SessionNotFoundError as exc:
         raise_session_not_found_http(exc)

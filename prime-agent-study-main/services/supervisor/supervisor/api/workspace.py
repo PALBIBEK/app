@@ -29,6 +29,7 @@ from supervisor.seams.services import (
     new_object_key,
     normalize_workspace_path,
 )
+from supervisor.seams.services.session_workspace import RESERVED_DIRS, is_reserved
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,14 @@ def _file_out(row: Any) -> WorkspaceFileOut:
         mime_type=row.mime_type,
         file_id=row.file_id,
     )
+
+
+def _refuse_reserved(path: str) -> None:
+    if is_reserved(path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{', '.join(d + '/' for d in RESERVED_DIRS)} are a session's own folders, not workspace paths",
+        )
 
 
 def _too_large(size: int, limit: int) -> HTTPException:
@@ -226,6 +235,7 @@ async def put_workspace_file(
         x_principal_id=x_principal_id,
     )
     store = _workspace_store(request)
+    _refuse_reserved(path)
     limit = uploads.max_upload_bytes()
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit:
@@ -348,6 +358,7 @@ async def start_workspace_upload(
     sha = body.content_sha256.strip().lower()
     if not uploads.SHA256_HEX.match(sha):
         raise HTTPException(status_code=422, detail="content_sha256 must be 64 hex characters")
+    _refuse_reserved(body.path)
     try:
         path = normalize_workspace_path(body.path)
         live = await store.stat(scope_id, path)
@@ -477,6 +488,7 @@ class FileVersionOut(BaseModel):
     created_at: str
     author: str | None = None
     restored_from: int | None = None
+    source: str | None = None
     current: bool = False
 
 
@@ -545,6 +557,7 @@ async def list_file_versions(
             created_at=v.created_at.isoformat(),
             author=v.author,
             restored_from=v.restored_from,
+            source=v.source,
             current=live is not None and live.version == v.version,
         )
         for v in versions

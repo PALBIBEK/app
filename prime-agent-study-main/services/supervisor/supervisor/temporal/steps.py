@@ -381,6 +381,12 @@ class GithiSteps:
                 await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
             chat = loop.messages_for_model(conversation(await self._memory.prior_history(sid), run))
+            files = self._manager.files
+            if files is not None and self._manager._hands.recipe(sid) is not None and (note := await files.context_note(sid)):
+                # Where this session's attachments are and where outputs go, after the pinned
+                # prompt (which stays as published) and before the conversation.
+                at = 1 if chat and chat[0].role == "system" else 0
+                chat.insert(at, ChatMessage(role="system", content=note))
             spec = loop_spec(await self._manifest(sid))
             left = spec.max_steps - req.step
             final = is_final_step(spec, req.step)

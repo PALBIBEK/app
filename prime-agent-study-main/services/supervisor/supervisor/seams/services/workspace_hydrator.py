@@ -36,6 +36,8 @@ class WorkspaceHydrator(Protocol):
         tree: WorkspaceTreeIO,
         *,
         base: Mapping[str, tuple[int, str]] | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport: ...
 
 
@@ -65,8 +67,10 @@ class StoreWorkspaceHydrator:
         tree: WorkspaceTreeIO,
         *,
         base: Mapping[str, tuple[int, str]] | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport:
         async with self._lock_for(scope_id):
-            return await self._store.sync(scope_id, tree, base=base)
+            return await self._store.sync(scope_id, tree, base=base, author=author, source=source)
 
 

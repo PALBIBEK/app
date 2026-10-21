@@ -25,7 +25,47 @@ export interface FileVersion {
   author?: string | null;
   author_email?: string | null;
   restored_from?: number | null;
+  /** `run:<session>/<turn>` (the agent's edit) or `artifact:<id>` (a saved run output). */
+  source?: string | null;
   current: boolean;
+}
+
+/** A workspace file attached to a conversation, pinned to one version. */
+export interface Attachment {
+  id: string;
+  scope_id: string;
+  path: string;
+  version: number;
+  content_sha256: string;
+  size_bytes: number;
+  mime_type?: string | null;
+  name: string;
+  /** Where the agent reads it (read-only): `.attachments/<name>`. */
+  sandbox_path: string;
+  attached_by?: string | null;
+  created_at: string;
+}
+
+/** A file a run made for the user (from its `.outputs/` folder). */
+export interface Artifact {
+  id: string;
+  turn_id: string;
+  name: string;
+  content_sha256: string;
+  size_bytes: number;
+  mime_type?: string | null;
+  created_at: string;
+  saved_scope_id?: string | null;
+  saved_path?: string | null;
+  saved_version?: number | null;
+}
+
+export interface RunInput {
+  kind: 'attachment' | 'workspace' | string;
+  scope_id: string;
+  path: string;
+  version: number;
+  content_sha256: string;
 }
 
 export interface ScopeMember {
@@ -159,4 +199,31 @@ export const workspaceAPI = {
       `/workspace/sessions/${encodeURIComponent(sessionId)}/workspace/rehydrate`
     );
   },
+};
+
+const sess = (id: string) => `/workspace/sessions/${encodeURIComponent(id)}`;
+
+/** A conversation's attachments, its runs' inputs and its artifacts. */
+export const sessionFilesAPI = {
+  attachments: (sessionId: string): Promise<Attachment[]> => apiClient.get<Attachment[]>(`${sess(sessionId)}/attachments`),
+
+  /** Attach a file from the session's workspace (its current version unless `version`). */
+  attach: (sessionId: string, path: string, version?: number): Promise<Attachment> =>
+    apiClient.post<Attachment>(`${sess(sessionId)}/attachments`, version ? { path, version } : { path }),
+
+  detach: async (sessionId: string, attachmentId: string): Promise<void> => {
+    await apiClient.delete(`${sess(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`);
+  },
+
+  artifacts: (sessionId: string): Promise<Artifact[]> => apiClient.get<Artifact[]>(`${sess(sessionId)}/artifacts`),
+
+  artifactContent: (sessionId: string, artifactId: string): Promise<Blob> =>
+    apiClient.get<Blob>(`${sess(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/content`, { responseType: 'blob' }),
+
+  /** Save a run's output into the workspace at `path` (a new version, its source recorded). */
+  save: (sessionId: string, artifactId: string, path: string): Promise<{ artifact: Artifact; path: string; version: number }> =>
+    apiClient.post(`${sess(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/save`, { path }),
+
+  runInputs: (sessionId: string, turnId: string): Promise<RunInput[]> =>
+    apiClient.get<RunInput[]>(`${sess(sessionId)}/runs/${encodeURIComponent(turnId)}/inputs`),
 };
