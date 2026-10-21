@@ -36,6 +36,7 @@ await p.getByLabel('edit needs approval').check();
 // Sandbox: host process needs full access for bash (no Docker here).
 await p.getByRole('tab', { name: 'Sandbox' }).click();
 await p.getByLabel('Host process').check().catch(async () => { await p.getByText('Host process').click(); });
+await p.selectOption('#file_effects', 'workspace_write');  // ./dev.sh starts new harnesses with full access
 check(await p.getByText(/only runs with “Everything the sandbox can reach”/).isVisible(), 'bash warning on the Sandbox tab');
 console.log('2 bash warning shown');
 await p.selectOption('#file_effects', 'danger_full_access');
