@@ -167,7 +167,7 @@
   },
   "name": "githi-tools",
   "protocol_version": 1,
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered",
   "tools": {
     "echo": "sha256:2a2fa3f821b39ad7a71681c2809c6fbe348835adc74b245d6a33564c090ed3b0",

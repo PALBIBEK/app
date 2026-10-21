@@ -27,5 +27,7 @@ ENTRY_POINTS = (
 @pytest.mark.parametrize("module", ENTRY_POINTS)
 def test_imports_first_in_a_fresh_interpreter(module: str) -> None:
     code = f"import {module}; from supervisor.tools import default_registry; default_registry()"
-    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, capture_output=True, text=True, timeout=120
+    )
     assert done.returncode == 0, done.stderr[-2000:]

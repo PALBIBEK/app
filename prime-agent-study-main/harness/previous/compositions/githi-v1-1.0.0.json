@@ -1,0 +1,24 @@
+{
+  "digest": "sha256:f7cf7489beab22391a2a219c933ca1119c309e2ccd460f5c094ec5ca74fd246c",
+  "harness_version": "githi-v1",
+  "memory_profile": {
+    "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
+    "id": "default"
+  },
+  "name": "githi-v1",
+  "plug_bindings": {
+    "gateway_base_url": "http://model-gateway:8090",
+    "model_route": "echo"
+  },
+  "prompt_pack": {
+    "digest": "sha256:3258f1bc4a50d6e8d93a1b06a872905ab831e57fcd8659315972288b4d39f5b1",
+    "id": "coding-prompt"
+  },
+  "protocol_version": 1,
+  "semver": "1.0.0",
+  "status": "offered",
+  "tool_set": {
+    "digest": "sha256:d49abd6d6bbf6230ee084c01dd8cee6301f19aecbe1b64afe18d28ea9259b124",
+    "id": "githi-tools"
+  }
+}

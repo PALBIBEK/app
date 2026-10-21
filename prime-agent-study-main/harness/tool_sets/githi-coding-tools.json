@@ -205,7 +205,7 @@
   },
   "name": "githi-coding-tools",
   "protocol_version": 1,
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered",
   "tools": {
     "bash": "sha256:559029e5c3ece73b3f2a10a2fff09cd5abc3ed4882c0ff558672154fe34d0fd2",

@@ -38,6 +38,19 @@ python3 scripts/recompute-digests.py
 Commit the updated `digest` fields; the supervisor's
 `verify_composition_catalog()` must pass at boot.
 
+### Changing a shipped artifact keeps the old version
+
+Sessions and tenant compositions pin exact digests, so a version must stay
+resolvable after a release replaces it:
+
+- Each boot records every shipped artifact in the database (insert-only), so a
+  version shipped once stays available from there in later releases.
+- Before editing an artifact that may never have been recorded (anything a
+  deployment ran before this rule), copy its current file to `previous/<kind>/`
+  (e.g. `previous/tool_sets/githi-tools-1.0.0.json`) and bump `semver` in the
+  edited file. `previous/` is loaded before the current files, never rewritten by
+  `recompute-digests.py`, and its digests are verified like any other.
+
 ## Shipped manifests
 
 | Version | Runtime | Sandbox | Mode |

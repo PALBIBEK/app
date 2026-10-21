@@ -118,13 +118,18 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
     return problems
 
 
-def list_catalog_problems(catalog: CompositionCatalog) -> list[str]:
-    """List problems for all offered compositions in memory."""
+def list_catalog_problems(catalog: CompositionCatalog, *, shipped_only: bool = False) -> list[str]:
+    """List problems for all offered compositions in memory (``shipped_only``: the
+    deployment's own, not tenants')."""
+    from supervisor.catalog.storage.composition import SYSTEM_OWNER
+
     problems: list[str] = []
-    for (kind, _name, _digest), art in catalog._by_key.items():
+    for (kind, name, _digest), art in catalog._by_key.items():
         if kind != "composition" or not isinstance(art, AgentComposition):
             continue
         if art.status != "offered":
+            continue
+        if shipped_only and catalog.owner(kind, name) != SYSTEM_OWNER:
             continue
         problems.extend(composition_problems(catalog, art))
     return problems

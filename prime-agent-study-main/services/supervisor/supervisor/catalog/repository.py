@@ -25,6 +25,7 @@ __all__ = [
     "hydrate_composition_catalog",
     "persist_deprecate",
     "persist_offer",
+    "persist_shipped",
     "sync_composition",
 ]
 
@@ -81,6 +82,47 @@ async def persist_offer(
             row.status = ArtifactStatus.OFFERED.value
             row.deprecated_by = None
             row.deprecated_at = None
+
+
+async def persist_shipped(
+    factory: async_sessionmaker[AsyncSession], catalog: CompositionCatalog
+) -> int:
+    """Record every shipped artifact in the database, once; returns how many were new.
+
+    Shipped artifacts used to live only in the files a release ships, so a release
+    that changed one dropped the version before it: every session and tenant
+    composition pinned to it stopped resolving. Recorded here, each version stays
+    resolvable from the database after later releases replace it.
+
+    Insert-only: an existing row (and its status, e.g. deprecated) is left alone, and
+    replicas booting together race harmlessly (the loser's insert is skipped).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    added = 0
+    for (kind, name, digest), artifact in list(catalog._by_key.items()):
+        kind_s = _kind_str(kind)
+        if catalog.owner(kind_s, name) != SYSTEM_OWNER:
+            continue
+        try:
+            async with factory() as db, db.begin():
+                if await db.get(CatalogArtifactRow, (kind_s, name, digest)) is not None:
+                    continue
+                db.add(
+                    CatalogArtifactRow(
+                        kind=kind_s,
+                        artifact_id=name,
+                        digest=digest,
+                        status=_status_str(artifact.status),
+                        body=artifact_to_dict(artifact),
+                        created_by=SYSTEM_OWNER,
+                        owner_id=SYSTEM_OWNER,
+                    )
+                )
+            added += 1
+        except IntegrityError:
+            continue  # another replica recorded it first
+    return added
 
 
 async def persisted_owner(

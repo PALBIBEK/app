@@ -65,8 +65,10 @@ async def bootstrap_supervisor(
         composition_catalog = bootstrap_composition_catalog(settings.resolved_catalog_dir())
 
     if composition_catalog is not None and settings.persist_composition_catalog:
-        from supervisor.catalog.repository import hydrate_composition_catalog
+        from supervisor.catalog.repository import hydrate_composition_catalog, persist_shipped
 
+        # Shipped versions first, so a later release that replaces one keeps it resolvable.
+        await persist_shipped(session_maker, composition_catalog)
         await hydrate_composition_catalog(composition_catalog, session_maker)
 
     assert_multi_tenant_sandbox_provider(

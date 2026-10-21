@@ -37,12 +37,28 @@ def _load_dir(catalog_dir: Path, subdir: str, loader) -> list[Any]:  # type: ign
     return items
 
 
+PREVIOUS_DIR = "previous"
+"""Shipped versions an edit replaced, kept frozen so sessions and tenant compositions
+pinned to them still resolve. Loaded before the current versions (which stay the
+latest); never rewritten by recompute-digests."""
+
+
 def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
-    """Offer all shipped artifacts from ``catalog_dir`` (prompts → tools → profiles → compositions)."""
+    """Offer all shipped artifacts from ``catalog_dir`` (prompts → tools → profiles → compositions):
+    first the frozen previous versions (``previous/``), then the current ones."""
     if not catalog_dir.is_dir():
         raise FileNotFoundError(f"composition catalog dir not found: {catalog_dir}")
 
     catalog = CompositionCatalog()
+    roots = [r for r in (catalog_dir / PREVIOUS_DIR, catalog_dir) if r.is_dir()]
+    for root in roots:  # every artifact a composition may pin, before any composition
+        _load_leaves(catalog, root)
+    for root in roots:
+        _load_compositions(catalog, root)
+    return catalog
+
+
+def _load_leaves(catalog: CompositionCatalog, catalog_dir: Path) -> None:
     for pack in _load_dir(catalog_dir, "prompt_packs", prompt_pack_from_dict):
         catalog.offer(pack)
     for tool_set in _load_dir(catalog_dir, "tool_sets", tool_set_from_dict):
@@ -52,6 +68,11 @@ def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
     for profile in _load_dir(catalog_dir, "memory_profiles", memory_profile_from_dict):
         catalog.offer(profile)
 
+
+
+def _load_compositions(catalog: CompositionCatalog, catalog_dir: Path) -> None:
+    if not (catalog_dir / "compositions").is_dir():
+        return
     for path in sorted((catalog_dir / "compositions").glob("*.json")):
         data = _read_json(path)
         pp_raw = data["prompt_pack"]
@@ -86,8 +107,6 @@ def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
             plug_bindings=PlugBindings.from_dict(data.get("plug_bindings")),
         )
         catalog.offer(comp)
-
-    return catalog
 
 
 def _is_placeholder_digest(digest: str) -> bool:
