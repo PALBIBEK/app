@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import Response as RawResponse
+from sqlalchemy import func, select
 
 from prime_agent.config import get_settings
+from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
     EnsureScopeResponse,
@@ -118,9 +120,22 @@ async def delete_agent_workspace_file(
 async def list_agent_scope_members(
     scope_id: str,
     current_user: CurrentUser,
+    db: DbSession,
 ) -> list[ScopeMemberOut]:
     identity = TenantPrincipal.from_user(current_user)
-    return await _service().list_scope_members(scope_id=scope_id, identity=identity)
+    members = await _service().list_scope_members(scope_id=scope_id, identity=identity)
+    users = {
+        u.id: u
+        for u in (
+            await db.execute(select(User).where(User.id.in_([m.principal_id for m in members])))
+        ).scalars()
+    }
+    return [
+        m.model_copy(update={"email": users[m.principal_id].email, "name": users[m.principal_id].name})
+        if m.principal_id in users
+        else m
+        for m in members
+    ]
 
 
 @router.post(
@@ -132,13 +147,21 @@ async def invite_agent_scope_member(
     scope_id: str,
     body: InviteScopeMemberIn,
     current_user: CurrentUser,
+    db: DbSession,
 ) -> ScopeMemberOut:
     identity = TenantPrincipal.from_user(current_user)
-    return await _service().invite_scope_member(
-        scope_id=scope_id,
-        identity=identity,
-        body=body,
-    )
+    invitee: User | None = None
+    if body.email:
+        invitee = (
+            await db.execute(select(User).where(func.lower(User.email) == body.email.strip().lower()))
+        ).scalar_one_or_none()
+        if invitee is None:
+            raise HTTPException(status_code=404, detail="no user with that email")
+        body = body.model_copy(update={"principal_id": invitee.id, "email": None})
+    member = await _service().invite_scope_member(scope_id=scope_id, identity=identity, body=body)
+    if invitee is not None:
+        member = member.model_copy(update={"email": invitee.email, "name": invitee.name})
+    return member
 
 
 @router.delete(

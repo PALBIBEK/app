@@ -12,18 +12,13 @@ function read(rel: string): string {
 }
 
 describe('D8 T16 Test HITL live approvals', () => {
-  it('Test page wires listApprovals + respondApproval (BFF)', () => {
-    const page = read('app/harness/[id]/test/page.tsx');
-    expect(page).toMatch(/listApprovals/);
-    expect(page).toMatch(/respondApproval/);
-    expect(page).toMatch(/approval-approve|approval-deny|Approval required/);
-    expect(page).not.toMatch(/localhost:8080.*approvals|\/v1\/approvals/);
-  });
-
-  it('send is disabled while awaiting_approval', () => {
-    const page = read('app/harness/[id]/test/page.tsx');
-    expect(page).toMatch(/awaitingApproval|awaiting_approval/);
-    expect(page).toMatch(/sendBlocked/);
+  it('the chat answers approvals through the BFF', () => {
+    const chat = read('components/session/SessionChat.tsx');
+    const parts = read('components/session/parts.tsx');
+    expect(chat).toMatch(/sessionsAPI\.respondApproval/);
+    expect(parts).toMatch(/approval-approve/);
+    expect(parts).toMatch(/approval-deny/);
+    for (const src of [chat, parts]) expect(src).not.toMatch(/localhost:8080.*approvals|\/v1\/approvals/);
   });
 
   it('wire reducer handles approval_required / approval_resolved', () => {

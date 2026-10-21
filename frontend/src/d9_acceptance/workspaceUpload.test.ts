@@ -12,32 +12,26 @@ function read(rel: string): string {
 }
 
 describe('D9 Test agent /workspace upload (live BFF)', () => {
-  it('Test page wires workspaceAPI ensure/list/upload (BFF)', () => {
+  it('Test page creates the scope and shows its workspace panel (BFF)', () => {
     const page = read('app/harness/[id]/test/page.tsx');
-    expect(page).toMatch(/workspaceAPI/);
-    expect(page).toMatch(/ensureScope/);
-    expect(page).toMatch(/uploadFile/);
-    expect(page).toMatch(/listFiles/);
-    expect(page).toMatch(/agent-workspace-upload/);
-    expect(page).toMatch(/Upload to \/workspace/);
+    expect(page).toMatch(/workspaceAPI\.ensureScope/);
     expect(page).toMatch(/scope_id/);
-    expect(page).not.toMatch(/localhost:8080.*scopes|\/v1\/scopes/);
-    expect(page).not.toMatch(/mockWorkspace|fakeUpload|not shipped/i);
+    expect(page).toMatch(/<WorkspacePanel/);
+    const panel = read('components/session/WorkspacePanel.tsx');
+    for (const call of ['uploadFile', 'listFiles', 'getFile', 'deleteFile']) expect(panel).toMatch(new RegExp(`workspaceAPI\\.${call}`));
+    expect(panel).toMatch(/agent-workspace-upload/);
+    for (const src of [page, panel]) {
+      expect(src).not.toMatch(/localhost:8080.*scopes|\/v1\/scopes/);
+      expect(src).not.toMatch(/mockWorkspace|fakeUpload|not shipped/i);
+    }
   });
 
-  it('upload handler rehydrates live session after durable put', () => {
-    const page = read('app/harness/[id]/test/page.tsx');
-    expect(page).toMatch(/handleWorkspaceUpload/);
-    expect(page).toMatch(/workspaceAPI\.uploadFile/);
-    expect(page).toMatch(/workspaceAPI\.rehydrateSession/);
-    const uploadBlock = page.slice(
-      page.indexOf('handleWorkspaceUpload'),
-      page.indexOf('[scopeId, session?.id, refreshWorkspaceFiles]') + 60
-    );
-    const uploadIdx = uploadBlock.indexOf('workspaceAPI.uploadFile');
-    const rehydrateIdx = uploadBlock.indexOf('workspaceAPI.rehydrateSession');
-    expect(uploadIdx).toBeGreaterThan(-1);
-    expect(rehydrateIdx).toBeGreaterThan(uploadIdx);
+  it('a change to the files reloads the live session after the durable write', () => {
+    const panel = read('components/session/WorkspacePanel.tsx');
+    const run = panel.slice(panel.indexOf('async function run('));
+    expect(run.indexOf('await action()')).toBeGreaterThan(-1);
+    expect(run.indexOf('workspaceAPI.rehydrateSession')).toBeGreaterThan(run.indexOf('await action()'));
+    expect(panel).toMatch(/uploadFile\([^)]*\), `Uploaded \$\{file\.name\}`, true\)/);
   });
 
   it('sessionsAPI create forwards scope_id', () => {

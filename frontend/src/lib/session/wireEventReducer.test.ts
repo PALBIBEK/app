@@ -35,3 +35,51 @@ describe('applyWireEvent message_end', () => {
     expect(state.messages.map((m) => m.content)).toEqual(['done']);
   });
 });
+
+describe('applyWireEvent runs, tools, approvals', () => {
+  const run = (...events: WireEvent[]) => events.reduce(applyWireEvent, createSessionViewState());
+
+  it('ignores a replayed event after a reconnect', () => {
+    const first = ev('message_end', { role: 'assistant', content: 'once' });
+    const state = run(first, first);
+    expect(state.messages).toHaveLength(1);
+  });
+
+  it('counts model steps per run and adds up usage', () => {
+    const state = run(
+      ev('run_start', {}),
+      ev('message_end', { role: 'assistant', content: 'a', usage: { input_tokens: 10, output_tokens: 2, cost_total: 0.01 } }),
+      ev('message_end', { role: 'assistant', content: 'b', usage: { input_tokens: 5, output_tokens: 1, cost_total: 0.02 } }),
+    );
+    expect(state.running).toBe(true);
+    expect(state.runSteps).toBe(2);
+    expect(state.usage.input_tokens).toBe(15);
+    expect(state.usage.cost).toBeCloseTo(0.03);
+    expect(applyWireEvent(state, ev('run_end', {})).running).toBe(false);
+  });
+
+  it('explains a refused call in plain words', () => {
+    const state = run(
+      ev('tool_start', { tool_call_id: 't1', tool_name: 'bash', args: { command: 'ls' } }),
+      ev('tool_end', { tool_call_id: 't1', tool_name: 'bash', result: { ok: false, payload: null, error: 'denied by approval', code: 'APPROVAL_DENIED' } }),
+    );
+    const tool = state.pendingTools.get('t1')!;
+    expect(tool.status).toBe('error');
+    expect(tool.args).toEqual({ command: 'ls' });
+    expect(tool.code).toBe('APPROVAL_DENIED');
+    expect(tool.explanation).toMatch(/denied this call/);
+  });
+
+  it('keeps a successful payload as the output', () => {
+    const state = run(ev('tool_end', { tool_call_id: 't2', tool_name: 'ls', result: { ok: true, payload: { entries: ['a'] } } }));
+    expect(state.pendingTools.get('t2')).toMatchObject({ status: 'success', output: { entries: ['a'] } });
+  });
+
+  it('gives an approval a deadline for the countdown, and clears it when the run ends', () => {
+    const asked = ev('approval_required', { approval_id: 'a1', prompt: 'Allow?', options: ['allow', 'deny'], timeout_s: 300 });
+    let state = run(asked);
+    expect(state.pendingApprovals[0].deadline_ms).toBe(asked.ts_ms + 300_000);
+    state = applyWireEvent(state, ev('run_end', {}));
+    expect(state.pendingApprovals).toEqual([]);
+  });
+});
