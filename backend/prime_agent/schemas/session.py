@@ -76,6 +76,7 @@ class SessionMessageResponse(BaseModel):
     turn_id: str
     command_id: str
     status: str = "accepted"
+    queued: bool = False  # true when it waits behind a turn already running
 
 
 class SessionToolInvokeRequest(BaseModel):

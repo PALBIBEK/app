@@ -6,8 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.d6_production.conftest import as_user, make_tool
-
 PRIME = Path(__file__).resolve().parents[2] / "prime_agent"
 FE_TOOLS = (
     Path(__file__).resolve().parents[3]
@@ -60,38 +58,3 @@ def test_prod_lab_execute_route_or_fe_has_no_claim() -> None:
         ), (
             "D6 FULL-PROD: Lab execute exists but no SSRF re-check at call time"
         )
-
-
-@pytest.mark.asyncio
-async def test_prod_lab_execute_ssrf_at_call(
-    db_session, owner, d6_settings, monkeypatch
-) -> None:
-    """If execute is shipped, private/rebound URLs must fail at call time."""
-    routes_src = (PRIME / "web" / "routes" / "tools.py").read_text(encoding="utf-8")
-    if "/execute" not in routes_src and "execute" not in routes_src:
-        if _fe_claims_execute():
-            pytest.fail(
-                "D6 FULL-PROD: FE claims lab execute; BE route missing "
-                "(see test_prod_lab_execute_route_or_fe_has_no_claim)"
-            )
-        pytest.skip("Lab execute not shipped and FE does not claim it — OK optional path")
-
-    tool = await make_tool(
-        db_session,
-        owner,
-        name="d6prod_lab_exec",
-        endpoint="https://api.example.com/ok",
-    )
-    # Mutate to a blocked target as if DNS rebound after save.
-    tool.endpoint = "http://127.0.0.1/secret"
-    await db_session.commit()
-
-    async with as_user(db_session, owner) as api:
-        resp = await api.post(
-            f"/api/v1/tools/{tool.id}/execute",
-            json={"parameters": {"q": "x"}},
-        )
-    assert resp.status_code in {400, 422, 403}, (
-        f"D6 FULL-PROD: Lab execute must SSRF-reject loopback at call time; "
-        f"got {resp.status_code} {resp.text}"
-    )

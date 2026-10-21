@@ -82,11 +82,9 @@ class Settings(BaseSettings):
 
     # AI plane (D1) — never expose these to NEXT_PUBLIC_*
     ai_supervisor_base_url: str | None = None
-    ai_memory_base_url: str | None = None
     ai_service_jwt_secret: str | None = None
     ai_service_jwt_issuer: str = "prime-agent-api"
     ai_service_jwt_audience: str = "yal-supervisor"
-    ai_memory_jwt_audience: str = "yal-memory"
     ai_service_jwt_ttl_seconds: int = 60
     ai_service_id: str = "prime-agent-bff"
     ai_http_timeout_seconds: float = 5.0

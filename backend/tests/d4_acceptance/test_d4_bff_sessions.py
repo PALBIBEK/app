@@ -11,7 +11,7 @@ import pytest
 
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.services.auth_service import AuthService
-from prime_agent.services.harness_bind_service import SHIPPED_COMPOSITION_PINS
+from tests.support.catalog import PIN
 from tests.d4_acceptance.conftest import (
     DIGEST,
     as_user,
@@ -82,7 +82,7 @@ async def test_t12_create_uses_pin_helper_only_and_ownership_row(
         catalog_and_ready_handler(ready=True, create_session_id=ai_sid),
     )
     harness = await make_harness(db_session, owner, bound=True)
-    pin = SHIPPED_COMPOSITION_PINS["coding-v1"]
+    pin = PIN
 
     async with as_user(db_session, owner) as api:
         # Client must not be able to supply free-form digests — extra fields forbidden.

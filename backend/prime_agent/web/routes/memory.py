@@ -1,138 +1,120 @@
-"""Authenticated Memory BFF routes — Durable Memory proxy (D7 FULL-PROD).
+"""Long-term memory routes: a user's notebooks for a harness, and their facts.
 
-Owner-scoped privacy: forget / erase_subject bind subject to ``current_user.id``.
-Scope mapping documented on ``MemoryService`` / ``schemas.memory``.
+Everything goes through the supervisor's notebook API as the signed-in user, so a
+notebook of anyone else's answers 404 there. Forgetting facts and clearing a
+notebook keep its history: a revision can be restored.
 """
 
 from __future__ import annotations
-
-from typing import Annotated
 
 from fastapi import APIRouter, Query, Response, status
 
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.memory import (
-    MemoryCreateRequest,
-    MemoryDetailResponse,
-    MemoryEraseSubjectRequest,
-    MemoryEraseSubjectResponse,
-    MemoryForgetRequest,
-    MemoryForgetResponse,
-    MemoryListResponse,
+    FactResponse,
+    FactsAddedResponse,
+    FactsAddRequest,
+    FactsEditRequest,
+    FactsForgetRequest,
+    FactsRemovedResponse,
+    MemoryHit,
     MemorySearchRequest,
-    MemorySearchResponse,
-    MemoryStatsResponse,
-    MemoryUpdateRequest,
+    NotebookArchiveRequest,
+    NotebookCreateRequest,
+    NotebookResponse,
+    NotebookRestoreRequest,
+    RevisionResponse,
 )
 from prime_agent.services.memory_service import MemoryService
-from prime_agent.web.dependencies import CurrentUser
+from prime_agent.web.dependencies import CurrentUser, DbSession
 
 router = APIRouter()
-Page = Annotated[int, Query(ge=1)]
-PageSize = Annotated[int, Query(ge=1, le=100)]
 
 
 def _service() -> MemoryService:
     return MemoryService.from_settings(get_settings())
 
 
-@router.get("", response_model=MemoryListResponse)
-async def list_memory(
+@router.get("/notebooks", response_model=list[NotebookResponse])
+async def list_notebooks(
+    db: DbSession,
     current_user: CurrentUser,
-    page: Page = 1,
-    page_size: PageSize = 50,
-    namespace: str | None = None,
-) -> MemoryListResponse:
-    """List durable facts for the owner (proxied via /v1/memory/recall)."""
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().list_items(
-        identity,
-        page=page,
-        page_size=page_size,
-        namespace=namespace,
+    harness_id: str = Query(min_length=1),
+    archived: bool = False,
+) -> list[dict]:
+    service = _service()
+    pin = await service.pin_for(harness_id, current_user.id, db)
+    return await service.list_notebooks(TenantPrincipal.from_user(current_user), pin, archived=archived)
+
+
+@router.post("/notebooks", response_model=NotebookResponse, status_code=status.HTTP_201_CREATED)
+async def create_notebook(body: NotebookCreateRequest, db: DbSession, current_user: CurrentUser) -> dict:
+    service = _service()
+    pin = await service.pin_for(body.harness_id, current_user.id, db)
+    return await service.create_notebook(TenantPrincipal.from_user(current_user), pin, body.name, body.label)
+
+
+@router.patch("/notebooks/{notebook_id}", response_model=NotebookResponse)
+async def archive_notebook(notebook_id: str, body: NotebookArchiveRequest, current_user: CurrentUser) -> dict:
+    return await _service().notebook(
+        TenantPrincipal.from_user(current_user), "PATCH", notebook_id, json_body=body.model_dump()
     )
 
 
-@router.post("/search", response_model=MemorySearchResponse)
-async def search_memory(
-    body: MemorySearchRequest,
-    current_user: CurrentUser,
-) -> MemorySearchResponse:
-    """Semantic search within the owner Scope (POST /v1/memory/recall)."""
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().search(identity, body)
+@router.get("/notebooks/{notebook_id}/facts", response_model=list[FactResponse])
+async def list_facts(notebook_id: str, current_user: CurrentUser) -> list[dict]:
+    return await _service().notebook(TenantPrincipal.from_user(current_user), "GET", notebook_id, "facts")
 
 
-@router.post("/forget", response_model=MemoryForgetResponse)
-async def forget_memory(
-    body: MemoryForgetRequest,
-    current_user: CurrentUser,
-) -> MemoryForgetResponse:
-    """Soft-forget an item or scope — owner subject forced from current_user."""
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().forget(identity, body)
+@router.post("/notebooks/{notebook_id}/facts", response_model=FactsAddedResponse, status_code=201)
+async def add_facts(notebook_id: str, body: FactsAddRequest, current_user: CurrentUser) -> dict:
+    return await _service().notebook(
+        TenantPrincipal.from_user(current_user), "POST", notebook_id, "facts",
+        json_body=body.model_dump(), expected=(201,),
+    )
 
 
-@router.post("/erase_subject", response_model=MemoryEraseSubjectResponse)
-async def erase_subject(
-    body: MemoryEraseSubjectRequest,
-    current_user: CurrentUser,
-) -> MemoryEraseSubjectResponse:
-    """GDPR-shaped erase for the authenticated subject's durable bank."""
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().erase_subject(identity, body)
+@router.patch("/notebooks/{notebook_id}/facts", status_code=204, response_class=Response)
+async def edit_facts(notebook_id: str, body: FactsEditRequest, current_user: CurrentUser) -> Response:
+    await _service().notebook(
+        TenantPrincipal.from_user(current_user), "PATCH", notebook_id, "facts",
+        json_body=body.model_dump(), expected=(204,),
+    )
+    return Response(status_code=204)
 
 
-@router.post("/erase", response_model=MemoryEraseSubjectResponse)
-async def erase_memory(
-    body: MemoryEraseSubjectRequest,
-    current_user: CurrentUser,
-) -> MemoryEraseSubjectResponse:
-    """Alias of erase_subject for product privacy UX."""
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().erase_subject(identity, body)
+@router.post("/notebooks/{notebook_id}/forget", status_code=204, response_class=Response)
+async def forget_facts(notebook_id: str, body: FactsForgetRequest, current_user: CurrentUser) -> Response:
+    """Forget facts (``DELETE …/facts`` upstream; a POST here so the body is never dropped)."""
+    await _service().notebook(
+        TenantPrincipal.from_user(current_user), "DELETE", notebook_id, "facts",
+        json_body=body.model_dump(), expected=(204,),
+    )
+    return Response(status_code=204)
 
 
-@router.get("/stats", response_model=MemoryStatsResponse)
-async def memory_stats(current_user: CurrentUser) -> MemoryStatsResponse:
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().stats(identity)
+@router.post("/notebooks/{notebook_id}/clear", response_model=FactsRemovedResponse)
+async def clear_notebook(notebook_id: str, current_user: CurrentUser) -> dict:
+    return await _service().notebook(TenantPrincipal.from_user(current_user), "POST", notebook_id, "clear")
 
 
-@router.post("", response_model=MemoryDetailResponse, status_code=status.HTTP_201_CREATED)
-async def create_memory(
-    body: MemoryCreateRequest,
-    current_user: CurrentUser,
-) -> MemoryDetailResponse:
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().create(identity, body)
+@router.get("/notebooks/{notebook_id}/revisions", response_model=list[RevisionResponse])
+async def list_revisions(notebook_id: str, current_user: CurrentUser) -> list[dict]:
+    return await _service().notebook(TenantPrincipal.from_user(current_user), "GET", notebook_id, "revisions")
 
 
-@router.get("/{item_id}", response_model=MemoryDetailResponse)
-async def get_memory(
-    item_id: str,
-    current_user: CurrentUser,
-) -> MemoryDetailResponse:
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().get_item(identity, item_id)
+@router.post("/notebooks/{notebook_id}/restore", status_code=204, response_class=Response)
+async def restore_notebook(notebook_id: str, body: NotebookRestoreRequest, current_user: CurrentUser) -> Response:
+    await _service().notebook(
+        TenantPrincipal.from_user(current_user), "POST", notebook_id, "restore",
+        json_body=body.model_dump(), expected=(204,),
+    )
+    return Response(status_code=204)
 
 
-@router.patch("/{item_id}", response_model=MemoryDetailResponse)
-async def update_memory(
-    item_id: str,
-    body: MemoryUpdateRequest,
-    current_user: CurrentUser,
-) -> MemoryDetailResponse:
-    identity = TenantPrincipal.from_user(current_user)
-    return await _service().update(identity, item_id, body)
-
-
-@router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_memory(
-    item_id: str,
-    current_user: CurrentUser,
-) -> Response:
-    identity = TenantPrincipal.from_user(current_user)
-    await _service().delete(identity, item_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/search", response_model=list[MemoryHit])
+async def search_memory(body: MemorySearchRequest, db: DbSession, current_user: CurrentUser) -> list[dict]:
+    service = _service()
+    pin = await service.pin_for(body.harness_id, current_user.id, db)
+    return await service.search(TenantPrincipal.from_user(current_user), pin, body.query, body.notebook_id, body.limit)

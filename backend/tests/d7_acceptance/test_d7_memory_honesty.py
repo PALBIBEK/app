@@ -63,19 +63,6 @@ async def test_t14_harness_memory_attach_422_or_live_bff(
     pytest.fail(f"unexpected harness create status {r.status_code}: {r.text}")
 
 
-def test_t14_no_silent_mock_memory_crud_routes_without_durable() -> None:
-    """If BFF exposes /memory CRUD, it must proxy durable APIs — not a local fake table."""
-    routes_dir = PRIME_AGENT / "web" / "routes"
-    memory_routes = list(routes_dir.glob("*memory*")) if routes_dir.is_dir() else []
-    if not memory_routes:
-        # No memory routes — honesty via harness 422 is OK (paired with FE not-theater).
-        return
-    combined = "\n".join(p.read_text(encoding="utf-8") for p in memory_routes)
-    assert "/v1/memory/" in combined or "MEMORY_SERVICE" in combined, (
-        "D7: outer /memory routes exist but do not proxy Durable Memory Service"
-    )
-
-
 def test_supervisor_bff_does_not_import_parallel_memory_workspace_as_ltm() -> None:
     """Name trap: MemoryWorkspaceStore is workspace backend — BFF must not treat as LTM."""
     # AiClient / harness_service should not call create_grant_store("memory") as LTM.

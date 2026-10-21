@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { apiClient } from '../client';
 import { toolsAPI } from './tools';
-import type { Tool, ToolListResponse, ToolExecutionResult } from '../types/tool.types';
+import type { Tool, ToolListResponse } from '../types/tool.types';
 
 vi.mock('../client', () => ({
   apiClient: {
@@ -170,34 +170,6 @@ describe('toolsAPI', () => {
       await toolsAPI.delete('tool-123');
 
       expect(apiClient.delete).toHaveBeenCalledWith('/tools/tool-123');
-    });
-  });
-
-  describe('execute', () => {
-    it('should execute a tool', async () => {
-      const executeRequest = {
-        tool_id: 'tool-123',
-        parameters: { query: 'test' },
-      };
-      const mockResult: ToolExecutionResult = {
-        tool_id: 'tool-123',
-        execution_id: 'exec-1',
-        status: 'success',
-        result: { hits: [] },
-        duration_ms: 12,
-        timestamp: '2024-01-01T00:00:00Z',
-      };
-      (apiClient.post as Mock).mockResolvedValue({
-        execution_id: 'exec-1',
-        result: mockResult,
-      });
-
-      const result = await toolsAPI.execute(executeRequest);
-
-      expect(apiClient.post).toHaveBeenCalledWith('/tools/tool-123/execute', {
-        parameters: { query: 'test' },
-      });
-      expect(result.result.status).toBe('success');
     });
   });
 });

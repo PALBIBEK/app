@@ -181,7 +181,7 @@ aws_secret_access_key='dev', region_name='us-east-1').create_bucket(Bucket='yal-
   say "starting the backend (:8000) and the frontend (:3000)"
   start backend "cd '$ROOT/backend' && env -u OPENROUTER_API_KEY ENVIRONMENT=development \
     DATABASE_URL='$PG/prime_agent' SECRET_KEY='$BACKEND_SECRET_KEY' \
-    AI_SUPERVISOR_BASE_URL=http://127.0.0.1:8080 AI_MEMORY_BASE_URL=http://127.0.0.1:8092 \
+    AI_SUPERVISOR_BASE_URL=http://127.0.0.1:8080 \
     AI_SERVICE_JWT_SECRET='$SERVICE_JWT_SECRET' \
     '$BPY' -m uvicorn prime_agent.main:app --host 127.0.0.1 --port 8000"
   start frontend "cd '$ROOT/frontend' && env -u OPENROUTER_API_KEY \

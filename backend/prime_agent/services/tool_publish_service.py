@@ -128,7 +128,10 @@ def _definition_for_tool(tool: Tool) -> tuple[str, dict[str, Any], str]:
         body["tool_class"] = "http"
         HTTP_TOOL_REGISTRY[tool.name] = endpoint
         register_http_tool(tool.name, endpoint=endpoint)
-    digest = _canonical_digest(body)
+    # The supervisor's digest covers exactly these fields (ToolDefinition.body_for_digest).
+    digest = _canonical_digest(
+        {k: body[k] for k in ("name", "description", "parameters", "tool_class") if k in body}
+    )
     definition = {
         **body,
         "digest": digest,
@@ -136,88 +139,16 @@ def _definition_for_tool(tool: Tool) -> tuple[str, dict[str, Any], str]:
     return tool.name, definition, digest
 
 
-# Shipped coding-tools MVP — merged into derived harness ToolSets so sessions
-# keep echo/read/write/ls alongside custom UUIDs (LOCAL_DEMO #3 / D6 §9.3).
-_CODING_BASE_DEFINITIONS: dict[str, dict[str, Any]] = {
-    "echo": {
-        "name": "echo",
-        "description": "Echo text (dev / smoke tool)",
-        "parameters": {
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-        },
-    },
-    "ls": {
-        "name": "ls",
-        "description": "List directory contents in the workspace",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "show_hidden": {"type": "boolean"},
-            },
-        },
-    },
-    "grep": {
-        "name": "grep",
-        "description": "Search files in the workspace for a regex/string pattern",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "path": {"type": "string"},
-                "glob": {"type": "string"},
-                "case_insensitive": {"type": "boolean"},
-                "max_matches": {"type": "integer"},
-            },
-            "required": ["pattern"],
-        },
-    },
-    "read": {
-        "name": "read",
-        "description": "Read a file from the workspace",
-        "parameters": {
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    },
-    "write": {
-        "name": "write",
-        "description": "Write a file in the workspace",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"},
-            },
-            "required": ["path", "content"],
-        },
-    },
-    "remember": {
-        "name": "remember",
-        "description": "Persist a durable fact into long-term memory for this session tenant/subject",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "content": {"type": "string", "description": "Fact to remember"},
-            },
-            "required": ["content"],
-        },
-    },
-}
-
-
-def _with_coding_base(
-    definitions: dict[str, Any], tools_map: dict[str, str]
+def _with_base(
+    definitions: dict[str, Any], tools_map: dict[str, str], base: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    out_defs = dict(definitions)
-    out_tools = dict(tools_map)
-    for name, body in _CODING_BASE_DEFINITIONS.items():
-        if name in out_defs:
+    """Add the base ToolSet's tools (the harness's composition) the custom ones do not replace."""
+    out_defs, out_tools = dict(definitions), dict(tools_map)
+    base_defs = base.get("definitions") or {}
+    for name, digest in (base.get("tools") or {}).items():
+        if name in out_defs or name not in base_defs:
             continue
-        digest = _canonical_digest(body)
-        out_defs[name] = {**body, "digest": digest}
+        out_defs[name] = base_defs[name]
         out_tools[name] = digest
     return out_defs, out_tools
 
@@ -232,9 +163,13 @@ async def publish_owned_tool_uuids(
     require_handlers: bool = False,
     name: str | None = None,
     semver: str = "1.0.0",
-    include_coding_base: bool = True,
+    base_tool_set: dict[str, Any] | None = None,
+    client: AiClient | None = None,
 ) -> dict[str, Any]:
     """Load owned Tool rows → POST /v1/catalog/tool_set/publish.
+
+    ``base_tool_set`` (a ToolSet body from the catalog) keeps its tools alongside
+    the custom ones, so a harness keeps its composition's shell and file tools.
 
     Unowned UUIDs raise (not silently omitted). When ``require_handlers`` is True,
     custom tools without handler/MCP registration raise TOOL_HANDLER_MISSING.
@@ -272,8 +207,8 @@ async def publish_owned_tool_uuids(
         definitions[tname] = definition
         tools_map[tname] = digest
 
-    if include_coding_base:
-        definitions, tools_map = _with_coding_base(definitions, tools_map)
+    if base_tool_set:
+        definitions, tools_map = _with_base(definitions, tools_map, base_tool_set)
 
     set_name = name or f"derived-{user_id[:8]}-{uuid4().hex[:8]}"
     body: dict[str, Any] = {
@@ -284,7 +219,7 @@ async def publish_owned_tool_uuids(
         "definitions": definitions,
     }
 
-    client = AiClient.from_settings(settings)
+    client = client or AiClient.from_settings(settings)
     published = await client.publish_tool_set(identity, body)
     return {
         "name": published.get("name") or set_name,
@@ -296,45 +231,32 @@ async def publish_owned_tool_uuids(
     }
 
 
-# Pins copied from harness/compositions/coding-v1.json — used when deriving a
-# per-harness composition that swaps in the published ToolSet (D6 §9.3).
-CODING_V1_PROMPT_PACK = {
-    "id": "coding-prompt",
-    "digest": "sha256:3258f1bc4a50d6e8d93a1b06a872905ab831e57fcd8659315972288b4d39f5b1",
-}
-CODING_V1_MEMORY_PROFILE = {
-    "id": "default",
-    "digest": "sha256:307fac54741d2595109b8b6fd6bd3399bfdae9a7bb8f2a6a32a3123b0b675861",
-}
-
-
 async def publish_harness_composition(
     *,
     identity: TenantPrincipal,
+    base_composition: dict[str, Any],
     tool_set_name: str,
     tool_set_digest: str,
     settings: Settings | None = None,
     composition_name: str | None = None,
-    harness_version: str = "coding-v1",
     semver: str = "1.0.0",
+    client: AiClient | None = None,
 ) -> dict[str, Any]:
-    """Publish a composition that pins ``tool_set`` for session create (§9.3)."""
+    """Publish ``base_composition`` (a catalog Composition body) with its ToolSet swapped (§9.3).
+
+    Prompt pack, memory and sandbox profiles, plug bindings and harness version stay
+    the base's, so a custom-tool harness runs exactly like the one it derives from.
+    """
     settings = settings or get_settings()
     name = composition_name or f"derived-comp-{uuid4().hex[:10]}"
     body: dict[str, Any] = {
+        k: v for k, v in base_composition.items() if k not in {"digest", "status", "name", "semver"}
+    } | {
         "name": name,
         "semver": semver,
-        "protocol_version": 1,
-        "harness_version": harness_version,
-        "prompt_pack": dict(CODING_V1_PROMPT_PACK),
         "tool_set": {"id": tool_set_name, "digest": tool_set_digest},
-        "memory_profile": dict(CODING_V1_MEMORY_PROFILE),
-        "plug_bindings": {
-            "gateway_base_url": "http://model-gateway:8090",
-            "model_route": "echo",
-        },
     }
-    client = AiClient.from_settings(settings)
+    client = client or AiClient.from_settings(settings)
     published = await client.publish_composition(identity, body)
     return {
         "name": published.get("name") or name,

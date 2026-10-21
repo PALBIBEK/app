@@ -50,21 +50,10 @@ export const ToolCreateSchema = ToolSchema.omit({
 
 export const ToolUpdateSchema = ToolCreateSchema.partial();
 
-export const ToolExecutionResultSchema = z.object({
-  tool_id: z.string(),
-  execution_id: z.string(),
-  status: z.enum(['success', 'error', 'timeout']),
-  result: z.any().optional(),
-  error: z.string().optional(),
-  duration_ms: z.number().nonnegative(),
-  timestamp: z.string().datetime(),
-});
-
 export type ToolParameter = z.infer<typeof ToolParameterSchema>;
 export type Tool = z.infer<typeof ToolSchema>;
 export type ToolCreate = z.infer<typeof ToolCreateSchema>;
 export type ToolUpdate = z.infer<typeof ToolUpdateSchema>;
-export type ToolExecutionResult = z.infer<typeof ToolExecutionResultSchema>;
 
 export interface ToolListResponse {
   data: Tool[];
@@ -75,16 +64,6 @@ export interface ToolListResponse {
 
 export interface ToolDetailResponse {
   data: Tool;
-}
-
-export interface ToolExecuteRequest {
-  tool_id: string;
-  parameters: Record<string, unknown>;
-}
-
-export interface ToolExecuteResponse {
-  execution_id: string;
-  result: ToolExecutionResult;
 }
 
 export interface ToolListParams {

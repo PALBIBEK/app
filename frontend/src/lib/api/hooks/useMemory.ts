@@ -4,12 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { memoryAPI } from '@/lib/api/endpoints/memory';
-import type {
-  MemoryCreateRequest,
-  MemoryListParams,
-  MemorySearchRequest,
-  MemoryUpdateRequest,
-} from '@/lib/api/types/memory.types';
+import type { MemorySearchRequest, NotebookCreateRequest } from '@/lib/api/types/memory.types';
 import { useAuthStore } from '@/lib/store/authStore';
 
 function sanitizeErrorMessage(error: Error): string {
@@ -22,81 +17,97 @@ function sanitizeErrorMessage(error: Error): string {
 
 export const memoryKeys = {
   all: ['memory'] as const,
-  lists: () => [...memoryKeys.all, 'list'] as const,
-  list: (filters: string) => [...memoryKeys.lists(), { filters }] as const,
-  details: () => [...memoryKeys.all, 'detail'] as const,
-  detail: (id: string) => [...memoryKeys.details(), id] as const,
+  notebooks: (harnessId: string, archived: boolean) =>
+    [...memoryKeys.all, 'notebooks', harnessId, archived] as const,
+  facts: (notebookId: string) => [...memoryKeys.all, 'facts', notebookId] as const,
+  revisions: (notebookId: string) => [...memoryKeys.all, 'revisions', notebookId] as const,
 };
 
-export function useMemory(params?: MemoryListParams) {
+export function useNotebooks(harnessId: string | undefined, archived = false) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-
   return useQuery({
-    queryKey: memoryKeys.list(JSON.stringify(params ?? {})),
-    queryFn: () => memoryAPI.list(params),
-    enabled: isAuthenticated,
+    queryKey: memoryKeys.notebooks(harnessId ?? '', archived),
+    queryFn: () => memoryAPI.listNotebooks(harnessId!, archived),
+    enabled: isAuthenticated && Boolean(harnessId),
   });
 }
 
-export function useMemoryEntry(id: string | undefined) {
+export function useFacts(notebookId: string | undefined) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-
   return useQuery({
-    queryKey: memoryKeys.detail(id ?? ''),
-    queryFn: () => memoryAPI.getById(id!),
-    enabled: isAuthenticated && Boolean(id),
+    queryKey: memoryKeys.facts(notebookId ?? ''),
+    queryFn: () => memoryAPI.listFacts(notebookId!),
+    enabled: isAuthenticated && Boolean(notebookId),
   });
 }
 
-/** Alias used by older stubs */
-export const useMemoryItem = useMemoryEntry;
+export function useRevisions(notebookId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: memoryKeys.revisions(notebookId ?? ''),
+    queryFn: () => memoryAPI.revisions(notebookId!),
+    enabled: isAuthenticated && Boolean(notebookId),
+  });
+}
 
-export function useCreateMemory() {
+/** A mutation on one notebook that refreshes its facts, history and the notebook lists. */
+function useNotebookMutation<V>(fn: (vars: V) => Promise<unknown>, done: string, failed: string, id: (vars: V) => string) {
   const queryClient = useQueryClient();
-
   return useMutation({
-    mutationFn: (data: MemoryCreateRequest) => memoryAPI.create(data),
+    mutationFn: fn,
+    onSuccess: (_result, vars) => {
+      const notebookId = id(vars);
+      queryClient.invalidateQueries({ queryKey: memoryKeys.facts(notebookId) });
+      queryClient.invalidateQueries({ queryKey: memoryKeys.revisions(notebookId) });
+      queryClient.invalidateQueries({ queryKey: [...memoryKeys.all, 'notebooks'] });
+      toast.success(done);
+    },
+    onError: (error: Error) => {
+      toast.error(sanitizeErrorMessage(error) || failed);
+    },
+  });
+}
+
+export function useCreateNotebook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: NotebookCreateRequest) => memoryAPI.createNotebook(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
-      toast.success('Memory saved');
+      queryClient.invalidateQueries({ queryKey: [...memoryKeys.all, 'notebooks'] });
+      toast.success('Notebook created');
     },
     onError: (error: Error) => {
-      toast.error(sanitizeErrorMessage(error) || 'Failed to create memory');
+      toast.error(sanitizeErrorMessage(error) || 'Failed to create notebook');
     },
   });
 }
 
-export function useUpdateMemory() {
-  const queryClient = useQueryClient();
+export const useAddFacts = () =>
+  useNotebookMutation(
+    (v: { notebookId: string; facts: string[] }) => memoryAPI.addFacts(v.notebookId, v.facts),
+    'Saved', 'Failed to save', (v) => v.notebookId,
+  );
 
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: MemoryUpdateRequest }) =>
-      memoryAPI.update(id, data),
-    onSuccess: (_entry, vars) => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: memoryKeys.detail(vars.id) });
-      toast.success('Memory updated');
-    },
-    onError: (error: Error) => {
-      toast.error(sanitizeErrorMessage(error) || 'Failed to update memory');
-    },
-  });
-}
+export const useEditFacts = () =>
+  useNotebookMutation(
+    (v: { notebookId: string; edits: { id: string; text: string }[] }) => memoryAPI.editFacts(v.notebookId, v.edits),
+    'Updated', 'Failed to update', (v) => v.notebookId,
+  );
 
-export function useDeleteMemory() {
-  const queryClient = useQueryClient();
+export const useForgetFacts = () =>
+  useNotebookMutation(
+    (v: { notebookId: string; ids: string[] }) => memoryAPI.forgetFacts(v.notebookId, v.ids),
+    'Forgotten', 'Failed to forget', (v) => v.notebookId,
+  );
 
-  return useMutation({
-    mutationFn: (id: string) => memoryAPI.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoryKeys.lists() });
-      toast.success('Memory deleted');
-    },
-    onError: (error: Error) => {
-      toast.error(sanitizeErrorMessage(error) || 'Failed to delete memory');
-    },
-  });
-}
+export const useClearNotebook = () =>
+  useNotebookMutation((notebookId: string) => memoryAPI.clear(notebookId), 'Cleared', 'Failed to clear', (v) => v);
+
+export const useRestoreNotebook = () =>
+  useNotebookMutation(
+    (v: { notebookId: string; revision: number }) => memoryAPI.restore(v.notebookId, v.revision),
+    'Restored', 'Failed to restore', (v) => v.notebookId,
+  );
 
 export function useSearchMemory() {
   return useMutation({
