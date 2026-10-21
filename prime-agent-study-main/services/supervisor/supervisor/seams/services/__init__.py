@@ -64,11 +64,13 @@ from supervisor.seams.services.workspace_store import (
     ChecksumMismatch,
     HydrateIncomplete,
     WorkspaceFileRecord,
+    WorkspaceFileVersion,
     WorkspacePathEscape,
     WorkspaceStore,
     WorkspaceStoreError,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
+    new_object_key,
 )
 
 __all__ = [
@@ -103,6 +105,7 @@ __all__ = [
     "VirtualKeyClient",
     "WorkspaceConflictError",
     "WorkspaceFileRecord",
+    "WorkspaceFileVersion",
     "WorkspaceHydrator",
     "WorkspaceNotReadyError",
     "WorkspacePathEscape",
@@ -114,6 +117,7 @@ __all__ = [
     "authorized_sync",
     "memory_service_base_url",
     "memory_service_credential",
+    "new_object_key",
     "recall_memory_items",
     "resolve_memory_scope",
     "tree_for_sandbox",

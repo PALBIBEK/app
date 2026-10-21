@@ -5,14 +5,17 @@ The flow (the usual production one, as S3-backed apps and OpenAI's Uploads API d
 1. **Start**: the client says what it will send (path, size, SHA-256, type). The API checks
    the grant, the path, the size limit and the expected version, then returns a short-lived
    signed URL for a *staging* key of its own (``uploads/<scope>/<id>``) and a signed ticket.
-   Bytes the store already holds (same SHA-256) are committed at once: nothing to send.
+   Bytes this workspace already stores (same SHA-256, any path or version) are recorded at
+   once with nothing to send. Only this workspace is looked in, so the answer reveals nothing
+   about files in any other.
 2. **Upload**: the client PUTs the bytes to that URL. The URL signs the length, type and
    checksum, so S3 refuses anything else; stores that do not check (MinIO, SeaweedFS, moto)
    are caught in step 3.
 3. **Complete**: the client sends the ticket back. The API measures what the staging object
    really holds (S3's own checksum, else a streamed SHA-256), refuses and deletes it if it
-   is not what was announced, then copies it inside the store to its content-addressed key
-   (``blobs/<sha>``) and records the file. A client can never write a shared blob directly.
+   is not what was announced, then copies it inside the store to the new version's own
+   private, opaque key (``workspaces/<scope>/objects/<id>``) and records the version. A client
+   only ever writes its staging key, never a recorded version's bytes.
 
 The ticket is an HMAC-signed, expiring statement of what was announced, so the complete
 step needs no database row and cannot be pointed at another scope, path or content.
@@ -47,10 +50,6 @@ def max_upload_bytes() -> int:
 def url_ttl_s() -> int:
     raw = os.environ.get("WORKSPACE_UPLOAD_URL_TTL_S", "").strip()
     return int(raw) if raw.isdigit() and 60 <= int(raw) <= 3600 else DEFAULT_URL_TTL_S
-
-
-def blob_key(content_sha256: str) -> str:
-    return f"blobs/{content_sha256[:2]}/{content_sha256}"
 
 
 def staging_key(scope_id: str, upload_id: str) -> str:
