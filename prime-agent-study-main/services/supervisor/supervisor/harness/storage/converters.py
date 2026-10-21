@@ -31,6 +31,7 @@ from supervisor.harness.core.types import (
     BudgetSpec,
     GuardSpec,
     HarnessManifest,
+    LoopSpec,
     RecoveryPolicy,
     SubagentsSpec,
     ToolSpec,
@@ -126,6 +127,7 @@ def manifest_to_dict(manifest: HarnessManifest) -> dict[str, Any]:
         "subagents": subagents_spec_to_dict(manifest.subagents) if manifest.subagents else None,
         "model": manifest.model,
         "system_prompt_sha": manifest.system_prompt_sha,
+        **({"loop": manifest.loop.body_for_digest()} if manifest.loop else {}),
     }
 
 
@@ -222,6 +224,20 @@ def subagents_spec_from_dict(data: dict[str, Any]) -> SubagentsSpec:
         default_mode=str(data.get("default_mode", "one_shot")),
         allow_background=bool(data.get("allow_background", True)),
     )
+
+
+def loop_spec_from_dict(data: dict[str, Any]) -> LoopSpec:
+    """Parse LoopSpec from dict."""
+    spec = LoopSpec(
+        max_steps=int(data.get("max_steps", 30)),
+        warn_steps_remaining=int(data.get("warn_steps_remaining", 3)),
+        force_answer_on_final_step=bool(data.get("force_answer_on_final_step", True)),
+    )
+    if spec.max_steps < 1:
+        raise ManifestValidationError("loop.max_steps", "must be >= 1")
+    if spec.warn_steps_remaining < 0:
+        raise ManifestValidationError("loop.warn_steps_remaining", "must be >= 0")
+    return spec
 
 
 def recovery_policy_from_dict(
@@ -414,6 +430,7 @@ def validate_and_freeze(data: dict[str, Any]) -> HarnessManifest:
     guards = guard_spec_from_dict(data["guards"]) if data.get("guards") else None
     approvals = approval_spec_from_dict(data["approvals"]) if data.get("approvals") else None
     subagents = subagents_spec_from_dict(data["subagents"]) if data.get("subagents") else None
+    loop = loop_spec_from_dict(data["loop"]) if data.get("loop") else None
 
     return HarnessManifest(
         harness_version=version,
@@ -433,6 +450,7 @@ def validate_and_freeze(data: dict[str, Any]) -> HarnessManifest:
         system_prompt_sha=(
             str(data["system_prompt_sha"]) if data.get("system_prompt_sha") else None
         ),
+        loop=loop,
     )
 
 
