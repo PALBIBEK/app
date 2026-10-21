@@ -31,7 +31,7 @@ from supervisor.catalog.providers.binder import bind_runtime_seams
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.catalog.repository import sync_composition
 from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
-from supervisor.db.models import ScopeRow, SessionIndexRow, SessionRow
+from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.hands import HandRecipe, HandWorkspace
 from supervisor.hands.keys import hand_key
 from supervisor.harness import (
@@ -42,6 +42,7 @@ from supervisor.harness.core.errors import UnknownHarness
 from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.harness.services.compat_checker import capabilities_for, check
+from supervisor.journal.serde import type_name_of
 from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
 from supervisor.memory.client import (
     MemoryRefused,
@@ -94,6 +95,18 @@ from supervisor.session.manager_base import (  # noqa: F401
     session_model,
 )
 from supervisor.session.manager_upkeep import UpkeepOps
+
+
+async def _run_open(db: Any, session_id: str) -> bool:
+    """Whether the session's last run boundary in the journal is a start."""
+    start, end = type_name_of(RunStart), type_name_of(RunEnd)  # as stored, e.g. "RunStart"
+    last = await db.scalar(
+        select(EventRow.type)
+        .where(EventRow.session_id == session_id, EventRow.type.in_((start, end)))
+        .order_by(EventRow.seq.desc())
+        .limit(1)
+    )
+    return last == start
 
 
 class SessionManager(UpkeepOps):
@@ -599,6 +612,10 @@ class SessionManager(UpkeepOps):
                 except Exception:
                     logger.debug("runtime state unavailable for session info", exc_info=True)
                     is_busy = None
+            # Temporal workers run the session in steps, so a runtime here (if any) is not
+            # the one working: the journal says whether a run is open (its last run_start
+            # has no run_end after it).
+            is_busy = await _run_open(db, session_id) or bool(is_busy)
             return SessionInfo(
                 session_id=row.id,
                 tenant_id=row.tenant_id,

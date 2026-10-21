@@ -129,6 +129,8 @@ routes_json() {
 }
 
 # Environment of the supervisor API and its worker. No provider key: only the gateway holds one.
+# With a key, MODEL_GATEWAY_DEFAULT_ROUTE upgrades only echo-pinned compositions, so a model
+# picked in the builder stays. Each heredoc line becomes `env` arguments.
 supervisor_env() {
   cat <<EOF
 PROFILE=dev ENV=development HOST=127.0.0.1
@@ -137,7 +139,7 @@ SERVICE_JWT_SECRET='$SERVICE_JWT_SECRET' AI_SERVICE_JWT_SECRET='$SERVICE_JWT_SEC
 CAPABILITY_SECRET='$CAPABILITY_SECRET' SUPERVISOR_PUBLIC_URL=http://127.0.0.1:8080
 GATEWAY_BASE_URL=http://model-gateway:8090 GATEWAY_TOKEN='$GATEWAY_TOKEN'
 MODEL_GATEWAY_URL=http://model-gateway:8090 MODEL_GATEWAY_API_KEY='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key
-${OPENROUTER_API_KEY:+YAL_MODEL_ROUTE=free}
+${OPENROUTER_API_KEY:+MODEL_GATEWAY_DEFAULT_ROUTE=free}
 OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace
 OBJECT_STORAGE_ACCESS_KEY=dev OBJECT_STORAGE_SECRET_KEY=dev OBJECT_STORAGE_REGION=us-east-1
 WORKSPACE_STORE=postgres GRANT_STORE=postgres DATABASE_URL='$PG/supervisor'
@@ -156,7 +158,8 @@ up() {
   ensure_hosts
   ensure_postgres
   cp "$STUDY"/harness/versions/*.yaml "$STATE/harness-versions/"
-  local senv; senv=$(supervisor_env | tr '\n' ' ')
+  # Comments dropped, so a stray '#' can never cut the command short (env would print secrets).
+  local senv; senv=$(supervisor_env | sed 's/[[:space:]]#.*$//' | tr '\n' ' ')
 
   say "starting Temporal, object storage and the model gateway"
   start temporal "$TEMPORAL server start-dev --ip 127.0.0.1 --port 7233 --ui-port 8233 \

@@ -19,15 +19,6 @@ class HarnessService(BaseService[Harness]):
 
     model = Harness
 
-    VALID_MODELS = [
-        "claude-sonnet-4",
-        "claude-opus-4",
-        "claude-opus-4-5",
-        "gpt-4-turbo",
-        "gpt-4o",
-        "gpt-4o-mini",
-    ]
-
     # Canonical Run modes (AI-aligned). Legacy chat|completion|agent accepted via normalize.
     VALID_MODES = [
         "sticky",
@@ -48,13 +39,8 @@ class HarnessService(BaseService[Harness]):
                     detail=f"Harness with name '{name}' already exists",
                 )
 
-        if "model" in data and data["model"] is not None:
-            if data["model"] not in cls.VALID_MODELS:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid model '{data['model']}'. Must be one of: {', '.join(cls.VALID_MODELS)}",
-                )
-
+        # ``model`` is a label: the model a session runs is its manifest's, which the
+        # model gateway checks when the harness is published.
         # Validate + normalize mode (sticky|stateless; legacy chat→sticky, completion|agent→stateless)
         if "mode" in data and data["mode"] is not None:
             try:

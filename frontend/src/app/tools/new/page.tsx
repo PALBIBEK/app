@@ -92,7 +92,7 @@ function NewToolContent(): JSX.Element {
             Create New Tool
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Author a system tool UUID you can attach to a harness
+            Describe a custom HTTP tool (harnesses cannot run custom tools yet)
           </p>
         </div>
       </motion.div>
@@ -204,13 +204,10 @@ function NewToolContent(): JSX.Element {
             <Info size={20} className="text-accent-600" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-slate-900">Next: attach on a harness</p>
+            <p className="text-sm font-semibold text-slate-900">Not runnable by a harness yet</p>
             <p className="mt-1 text-sm leading-relaxed text-slate-500">
-              Saving creates an owned system UUID. Open the harness detail page →{' '}
-              <span className="font-medium text-slate-700">Attached tools</span>, check this
-              tool (or paste its UUID), Save, then Bind. Test can list/invoke via the BFF
-              (echo path works without vendor keys) — never call the supervisor host from
-              the browser.
+              The supervisor runs only its own tools, which you pick on a harness&apos;s Tools tab.
+              A tool saved here is kept for when custom HTTP tools are supported.
             </p>
           </div>
         </motion.div>

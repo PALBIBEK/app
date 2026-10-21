@@ -11,14 +11,8 @@
 import { z } from 'zod';
 
 // Zod schemas for runtime validation
-export const HarnessModelSchema = z.enum([
-  'claude-sonnet-4',
-  'claude-opus-4',
-  'claude-opus-4-5',
-  'gpt-4-turbo',
-  'gpt-4o',
-  'gpt-4o-mini',
-]);
+// A label: the model a session runs is its published manifest's (e.g. `gateway/echo`).
+export const HarnessModelSchema = z.string();
 
 export const HarnessBindSchema = z.object({
   bind_status: z.enum(['unbound', 'bound', 'stale', 'error']),

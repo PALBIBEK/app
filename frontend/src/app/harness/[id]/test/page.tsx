@@ -32,7 +32,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useHarness } from '@/lib/api/hooks/useHarnesses';
-import { useTools } from '@/lib/api/hooks/useTools';
+import { useReleases } from '@/lib/api/hooks/useManifest';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { workspaceAPI, type WorkspaceFile } from '@/lib/api/endpoints/workspace';
 import type { ChatMessage, Session, ToolCallView } from '@/lib/api/types/session.types';
@@ -79,11 +79,12 @@ export default function TestHarnessPage(): JSX.Element {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const createdForHarness = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const { data: platform, isLoading: platformLoading, isFetching } = usePlatformStatus();
   const harnessId = typeof params.id === 'string' ? params.id : '';
   const { data: harness } = useHarness(harnessId);
-  const { data: toolsList } = useTools({ page_size: 100 });
+  const { data: releases } = useReleases(harnessId);
   const isBound = harness?.bind?.bind_status === 'bound';
   // Fail-closed while platform status is still loading/fetching
   const platformReady = !platformLoading && !isFetching && platform?.run_allowed === true;
@@ -120,12 +121,20 @@ export default function TestHarnessPage(): JSX.Element {
     }
   }, [input]);
 
-  // Create session when gate opens — bind durable agent scope (≠ Settings org chrome).
+  // Create the session once the gate opens. Once started, a creation always finishes:
+  // the gate can flicker (platform status refetches) and React runs effects twice in
+  // development, and cancelling a started creation while the "created" marker stayed
+  // set left the page on "Creating session…" for good.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!runAllowed || !harnessId) return;
     if (createdForHarness.current === harnessId) return;
-
-    let cancelled = false;
     createdForHarness.current = harnessId;
     setCreating(true);
     setSessionError(null);
@@ -135,34 +144,26 @@ export default function TestHarnessPage(): JSX.Element {
         ? `ws-${harnessId.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`
         : `ws-${harnessId.slice(0, 8)}-${Date.now().toString(36)}`;
 
-    (async () => {
+    void (async () => {
       try {
         await workspaceAPI.ensureScope(nextScope);
-        if (cancelled) return;
+        const created = await sessionsAPI.create({ harness_id: harnessId, scope_id: nextScope });
+        if (!mountedRef.current) return;
         setScopeId(nextScope);
-        const created = await sessionsAPI.create({
-          harness_id: harnessId,
-          scope_id: nextScope,
-        });
-        if (cancelled) return;
         setSession(created);
         setViewState(createSessionViewState());
         const listed = await workspaceAPI.listFiles(nextScope);
-        if (!cancelled) setWorkspaceFiles(listed);
+        if (mountedRef.current) setWorkspaceFiles(listed);
       } catch (err) {
-        if (cancelled) return;
         createdForHarness.current = null;
+        if (!mountedRef.current) return;
         const message = err instanceof Error ? err.message : 'Failed to create session';
         setSessionError(message);
         toast.error(message);
       } finally {
-        if (!cancelled) setCreating(false);
+        if (mountedRef.current) setCreating(false);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [runAllowed, harnessId]);
 
   const refreshWorkspaceFiles = useCallback(async (sid: string) => {
@@ -198,10 +199,8 @@ export default function TestHarnessPage(): JSX.Element {
     [scopeId, session?.id, refreshWorkspaceFiles]
   );
 
-  const attachedTools = (harness?.tools ?? []).map((tid) => {
-    const match = toolsList?.data?.find((t) => t.id === tid);
-    return { id: tid, name: match?.name ?? tid };
-  });
+  // The tools of the version this session runs: the live release's manifest.
+  const attachedTools = (releases?.[0]?.manifest.tools ?? []).map((name) => ({ id: name, name }));
 
   const handleInvokeTool = useCallback(
     async (name: string, args: Record<string, unknown> = {}) => {
@@ -535,7 +534,7 @@ export default function TestHarnessPage(): JSX.Element {
             <div>
               <p className="text-sm font-semibold text-slate-800">Session tools</p>
               <p className="text-xs text-slate-500">
-                Attached harness UUIDs + BFF invoke (echo path OK without vendor keys)
+                The live version’s tools: invoke one directly, outside the conversation
               </p>
             </div>
             <motion.button
@@ -562,7 +561,7 @@ export default function TestHarnessPage(): JSX.Element {
                     type="button"
                     disabled={!session?.id || invokingTool !== null || !runAllowed}
                     onClick={() =>
-                      void handleInvokeTool(t.name, { text: 'local_demo_attach' })
+                      void handleInvokeTool(t.name, {})
                     }
                     className="rounded-lg border border-primary-200 bg-primary-50 px-2 py-1 text-xs font-medium text-primary-800 disabled:opacity-50"
                     title={t.id}
@@ -574,7 +573,7 @@ export default function TestHarnessPage(): JSX.Element {
             </ul>
           ) : (
             <p className="mt-2 text-xs text-slate-400">
-              No tool UUIDs on this harness — attach on harness detail, Save, then re-bind.
+              No tools in the published version: add some on the harness&apos;s Tools tab and publish.
             </p>
           )}
           {invokeResult ? (

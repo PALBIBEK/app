@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
@@ -17,6 +17,20 @@ from prime_agent.services.harness_bind_service import (
     BindDomainError,
     HarnessBindService,
     raise_bind_http,
+)
+from prime_agent.schemas.harness_manifest import (
+    HarnessManifest,
+    HarnessManifestView,
+    HarnessPublishResponse,
+    HarnessReleaseView,
+)
+from prime_agent.services.ai_client import AiClient
+from prime_agent.services.harness_publish_service import (
+    HarnessPublisher,
+    PublishError,
+    load_draft,
+    releases,
+    save_draft,
 )
 from prime_agent.services.harness_service import HarnessService
 from prime_agent.web.dependencies import CurrentUser, DbSession
@@ -134,3 +148,60 @@ async def bind_harness(
         )
     except BindDomainError as exc:
         raise_bind_http(exc)
+
+
+# --- the manifest builder: draft, publish, releases ------------------------------
+
+
+def _publisher() -> HarnessPublisher:
+    return HarnessPublisher(AiClient.from_settings(get_settings()))
+
+
+async def _manifest_view(harness_id: str, db) -> HarnessManifestView:
+    draft = await load_draft(harness_id, db)
+    history = await releases(harness_id, db)
+    latest = history[0] if history else None
+    return HarnessManifestView(
+        manifest=draft,
+        published_version=latest.version if latest else None,
+        unpublished_changes=latest is None or latest.manifest != draft.model_dump(mode="json"),
+    )
+
+
+@router.get("/{harness_id}/manifest", response_model=HarnessManifestView)
+async def get_manifest(harness_id: str, db: DbSession, current_user: CurrentUser) -> HarnessManifestView:
+    """The draft (a new harness starts as the shipped coding agent) and whether it is published."""
+    await HarnessService.get_owned(harness_id, current_user.id, db)
+    return await _manifest_view(harness_id, db)
+
+
+@router.put("/{harness_id}/manifest", response_model=HarnessManifestView)
+async def put_manifest(
+    harness_id: str, manifest: HarnessManifest, db: DbSession, current_user: CurrentUser
+) -> HarnessManifestView:
+    """Save the draft. Validation errors name the field (``loc``), so the builder shows them in place."""
+    await HarnessService.get_owned(harness_id, current_user.id, db)
+    await save_draft(harness_id, manifest, db)
+    return await _manifest_view(harness_id, db)
+
+
+@router.post("/{harness_id}/publish", response_model=HarnessPublishResponse)
+async def publish_harness(harness_id: str, db: DbSession, current_user: CurrentUser) -> HarnessPublishResponse:
+    """Publish the draft as the next release; an unchanged draft publishes nothing."""
+    harness = await HarnessService.get_owned(harness_id, current_user.id, db)
+    try:
+        published = await _publisher().publish(
+            harness, user_id=current_user.id, identity=TenantPrincipal.from_user(current_user), db=db
+        )
+    except PublishError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+    return HarnessPublishResponse(
+        release=HarnessReleaseView.model_validate(published.release, from_attributes=True),
+        created=published.created,
+    )
+
+
+@router.get("/{harness_id}/releases", response_model=list[HarnessReleaseView])
+async def list_releases(harness_id: str, db: DbSession, current_user: CurrentUser) -> list[HarnessReleaseView]:
+    await HarnessService.get_owned(harness_id, current_user.id, db)
+    return [HarnessReleaseView.model_validate(r, from_attributes=True) for r in await releases(harness_id, db)]

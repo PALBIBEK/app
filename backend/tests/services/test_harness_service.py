@@ -46,13 +46,9 @@ async def test_pre_save_allows_same_name_for_different_user(db_session, user, ma
 
 
 @pytest.mark.asyncio
-async def test_pre_save_rejects_invalid_model(db_session, user):
-    with pytest.raises(HTTPException) as exc_info:
-        await HarnessService.acreate(
-            _harness_payload(user.id, model="not-a-model"),
-            db_session,
-        )
-    assert exc_info.value.status_code == 400
+async def test_any_model_label_is_accepted_the_gateway_checks_it_at_publish(db_session, user):
+    harness = await HarnessService.acreate(_harness_payload(user.id, model="gateway/echo"), db_session)
+    assert harness.model == "gateway/echo"
 
 
 @pytest.mark.asyncio
