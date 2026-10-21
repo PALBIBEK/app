@@ -11,7 +11,10 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from supervisor.api import (
     approvals,
@@ -142,10 +145,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("tracing shutdown failed")
 
 
+async def _reject_nul_in_url(request: Request, call_next: Any) -> Any:
+    """A NUL byte in a path or query reached Postgres (500 'invalid byte sequence')."""
+    if "\x00" in request.url.path or "%00" in str(request.url.query).lower():
+        return JSONResponse({"detail": "the URL must not contain NUL characters"}, status_code=400)
+    return await call_next(request)
+
+
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Validation errors without echoing the input: echoing a deeply nested body back
+    recursed past Python's limit and turned a bad request into a 500."""
+    errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+    try:
+        return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
+    except RecursionError:
+        return JSONResponse({"detail": "the request body is nested too deeply"}, status_code=422)
+
+
 def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app = FastAPI(title="YAL Supervisor", lifespan=lifespan)
     if state is not None:
         app.state.supervisor = state
+    app.middleware("http")(_reject_nul_in_url)
+    app.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]
     app.include_router(health.router)
     app.include_router(metrics.router)
     app.include_router(catalog.router)

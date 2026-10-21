@@ -154,7 +154,14 @@ class ToolOutbox:
         """Journal ToolEnd + mark outbox done (idempotent if already done)."""
         key = idempotency_key(session_id, tool_call_id)
         wire = result_to_wire(result)
-        end_payload = wire["payload"] if isinstance(wire.get("payload"), dict) else {}
+        # The same shape a turn's tool call journals: a direct invoke used to keep only a
+        # dict payload, so a read's text (or any error) was journalled as {}.
+        end_payload = {
+            "ok": result.ok,
+            "payload": result.payload,
+            "error": result.error,
+            "code": result.code,
+        }
         is_error = bool(wire.get("is_error"))
 
         async with self._factory() as db, db.begin():

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SessionMemoryOptions(BaseModel):
@@ -59,14 +59,31 @@ class SessionDetailResponse(BaseModel):
     total_cost: float = 0.0
 
 
+COMMAND_ID_MAX: int = 200
+"""Long enough for any UUID or ULID scheme; a command id becomes part of a Temporal
+update id, which has a length limit (a 10k id was a 500)."""
+
+
+def _no_nul(value: str) -> str:
+    """NUL is not text: Postgres refuses it in text, and in JSON it breaks every query
+    that reads the field (one such message broke SQL reads of every stored event)."""
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
+
 class PostMessageRequest(BaseModel):
     text: str = Field(min_length=1)
-    command_id: str = Field(min_length=1)
+    command_id: str = Field(min_length=1, max_length=COMMAND_ID_MAX)
+
+    _text_no_nul = field_validator("text", "command_id")(_no_nul)
 
 
 class PostMessageResponse(BaseModel):
     turn_id: str
     status: str = "accepted"
+    queued: bool | None = None
+    """True when the message waits behind a running turn; None when not known."""
 
 
 class ForkSessionRequest(BaseModel):
@@ -169,6 +186,8 @@ class BackgroundJobResponse(BaseModel):
 
 class ChildMessageRequest(BaseModel):
     text: str = Field(min_length=1)
+
+    _text_no_nul = field_validator("text")(_no_nul)
 
 
 class ChildRowOut(BaseModel):
