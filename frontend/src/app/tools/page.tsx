@@ -73,7 +73,7 @@ function ToolsLibraryContent(): JSX.Element {
   const [selectedCategory, setSelectedCategory] = useState<FilterId>('all');
   const { data, isLoading, error } = useTools({ page: 1, page_size: 100 });
 
-  const tools = data?.data ?? [];
+  const tools = useMemo(() => data?.data ?? [], [data]);
 
   const filteredTools = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

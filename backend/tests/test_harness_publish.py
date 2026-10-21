@@ -142,6 +142,7 @@ async def test_publish_sends_leaves_then_the_composition_and_binds_the_harness(d
     await db_session.refresh(harness)
     assert harness.bind_status == "bound" and harness.composition_id == prefix
     assert harness.harness_version == f"{prefix}-r1" and harness.model == "gateway/githi"
+    assert harness.published_tools == manifest["tools"]  # what lists and cards show
 
 
 async def test_a_refusal_names_the_manifest_section(db_session, owner, monkeypatch):

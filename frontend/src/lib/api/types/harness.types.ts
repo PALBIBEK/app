@@ -40,6 +40,8 @@ export const HarnessSchema = z.object({
   created_by: z.string().nullish(),
   updated_by: z.string().nullish(),
   bind: HarnessBindSchema.default({ bind_status: 'unbound' }),
+  /** The live version's tools, once published through the builder. */
+  published_tools: z.array(z.string()).nullish(),
 });
 
 export const HarnessCreateSchema = HarnessSchema.omit({
@@ -49,6 +51,7 @@ export const HarnessCreateSchema = HarnessSchema.omit({
   created_by: true,
   updated_by: true,
   bind: true,
+  published_tools: true,
 });
 
 export const HarnessUpdateSchema = HarnessCreateSchema.partial();

@@ -139,6 +139,8 @@ class HarnessResponse(HarnessBase):
     created_by: str | None = None
     updated_by: str | None = None
     bind: HarnessBindView = Field(default_factory=HarnessBindView)
+    published_tools: list[str] | None = None
+    """The tools the live version has (its manifest's), once published through the builder."""
 
     @classmethod
     def from_harness(cls, harness: Harness) -> HarnessResponse:
@@ -150,6 +152,7 @@ class HarnessResponse(HarnessBase):
             model=harness.model,
             mode=harness.mode,
             tools=list(harness.tools or []),
+            published_tools=getattr(harness, "published_tools", None),
             memory=list(harness.memory or []),
             system_prompt=harness.system_prompt,
             temperature=harness.temperature,

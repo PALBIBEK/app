@@ -95,6 +95,12 @@ class Harness(Base, AuditableMixin):
         comment="List of tool IDs (stored as JSON array)",
     )
 
+    published_tools: Mapped[list[str] | None] = mapped_column(
+        JSON_DOCUMENT,
+        nullable=True,
+        comment="Built-in tool names of the live release's manifest (null until published)",
+    )
+
     memory: Mapped[list[str]] = mapped_column(
         JSON_DOCUMENT,
         nullable=False,

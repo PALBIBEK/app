@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -42,7 +42,7 @@ function SubagentDetailContent(): JSX.Element {
   const sessionFromQuery = search.get('session') || '';
 
   const { data: sessionsData } = useSessions({ page: 1, page_size: 50 });
-  const sessions = sessionsData?.data ?? [];
+  const sessions = useMemo(() => sessionsData?.data ?? [], [sessionsData]);
 
   const [child, setChild] = useState<ChildRow | null>(null);
   const [parentSessionId, setParentSessionId] = useState(sessionFromQuery);

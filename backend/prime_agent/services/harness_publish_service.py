@@ -121,6 +121,7 @@ class HarnessPublisher:
         harness.model = manifest.model
         harness.mode = "sticky" if manifest.sandbox.provider != "none" else "stateless"
         harness.tools = []  # built-in tools live in the manifest; custom tool UUIDs are not runnable
+        harness.published_tools = list(manifest.tools)
         await db.commit()
         await db.refresh(release)
         return Published(release, created=True)

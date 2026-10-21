@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -51,7 +51,7 @@ function SpawnSubagentContent(): JSX.Element {
   const sessionFromQuery = search.get('session') || '';
   const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } =
     useSessions({ page: 1, page_size: 50 });
-  const sessions = sessionsData?.data ?? [];
+  const sessions = useMemo(() => sessionsData?.data ?? [], [sessionsData]);
   const { data: harnessList } = useHarnesses();
   const harnessNames = new Map((harnessList?.data ?? []).map((h) => [h.id, h.name]));
 
