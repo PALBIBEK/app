@@ -136,9 +136,45 @@ chat, **Stop** cancels the run going now by its id (pressing it twice, or after 
 does nothing), a queued message has its own **Cancel**, and **Runs** lists each run with its
 status, duration, steps, tokens and cost.
 
-Run more workers to serve more sessions (each polls the same queue). `./dev.sh status` checks
-each process by its pid *and* start time, so a crashed worker shows as `down` and is not
-mistaken for another process that took over its pid.
+### Scaling and watching the workers
+
+**One image, two roles.** The supervisor image runs as `python -m supervisor api` (the
+default) or `python -m supervisor worker`, the split LangGraph uses for API servers and queue
+workers. Scale each on its own: more API replicas for more requests, more workers for more
+running sessions. Every worker polls the same Temporal queue, so adding one needs no other change.
+
+| Where | API | Workers |
+|---|---|---|
+| `./dev.sh` | `supervisor` | `worker` (health on :8091) |
+| docker compose | `supervisor` (`command: ["api"]`) | `supervisor-worker`; `docker compose up --scale supervisor-worker=3` |
+| Kubernetes | `deploy/k8s/supervisor-deployment.yaml` | `deploy/k8s/worker-deployment.yaml` (with a PodDisruptionBudget); optional backlog autoscaling in `worker-autoscaling.yaml` |
+
+**Per-worker settings:**
+
+| Setting | Default | Does |
+|---|---|---|
+| `WORKER_MAX_CONCURRENT_RUNS` | 50 | Runs one worker carries at once (its activity slots). Lower it for heavy sandboxes; raise it when workers mostly wait on the model |
+| `WORKER_HEALTH_PORT` | off | Serves `/healthz` (fails when heartbeats stop landing) and `/readyz` (fails while starting or draining) for probes |
+| `WORKER_BACKLOG_ALERT_S` | 30 | (API) How long queued work may wait before the fleet reads `degraded` |
+
+**Watching the fleet.** `GET /v1/ops/workers` combines what the Temporal server reports (who
+polls the queue, how many tasks wait, and how long the oldest has waited) with each worker's
+heartbeat (its slots and how many are busy). It answers one of:
+
+- `ok`;
+- `degraded`, with alert `backlog` (work waited longer than `WORKER_BACKLOG_ALERT_S`) or `at_capacity` (every slot busy);
+- `down`, with alert `no_workers`.
+
+A worker's heartbeat is removed as soon as it stops cleanly and goes stale within 30 seconds of
+a crash. Fleet health relies on that rather than on Temporal's poller list, which keeps showing
+a stopped worker for a minute or more.
+
+`GET /v1/ops/workers/metrics` serves the same numbers as Prometheus gauges, and
+`deploy/alerts/workers.rules.yml` alerts on them. In the product, a banner says when no worker is
+running or work is waiting. Runs stay allowed throughout, because work waits in Temporal and
+starts as soon as a worker is free. `./dev.sh status` prints the same summary (`workers:
+serving, 0/50 runs busy, 0 waiting`), and checks each process by its pid *and* start time, so a
+crashed worker shows as `down` and is not mistaken for another process that took over its pid.
 
 ## Workspace files
 

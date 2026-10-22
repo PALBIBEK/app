@@ -36,7 +36,7 @@ from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailabl
 
 NO_WORKER = (
     "No agent worker is running, so the session cannot start. Start the worker "
-    "(./dev.sh starts it; on its own: python -m supervisor.temporal.worker) and try again."
+    "(./dev.sh starts it; on its own: python -m supervisor worker) and try again."
 )
 
 

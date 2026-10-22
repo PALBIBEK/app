@@ -87,6 +87,14 @@ async def _events(client: AiClient, user: TenantPrincipal, sid: str, *, runs: in
     return out
 
 
+async def test_the_worker_fleet_is_reported_in_the_shape_the_product_reads(client, user) -> None:
+    fleet = await client.worker_fleet(user)
+    assert fleet["status"] in {"ok", "degraded", "down"}
+    for key in ("polling", "slots_busy", "slots_max", "backlog", "backlog_age_s", "alerts", "workers"):
+        assert key in fleet, key
+    assert fleet["status"] == "ok" and fleet["slots_max"] > 0  # the stack's worker beats
+
+
 async def test_the_default_composition_resolves_from_the_catalog(client, user, pin) -> None:
     offered = [c for c in await client.list_compositions(user) if c.artifact_id == "githi-v1"]
     assert offered, "githi-v1 is not offered"

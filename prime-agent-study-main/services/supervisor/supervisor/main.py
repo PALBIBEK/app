@@ -26,6 +26,7 @@ from supervisor.api import (
     metrics,
     models,
     notebooks,
+    ops,
     runners,
     runs,
     scopes,
@@ -64,7 +65,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         temporal = Settings.from_env().temporal
         # Lazy: the API boots while Temporal starts; /readyz reports when it is reachable.
         state.workflows = SessionWorkflows(
-            await connect(temporal, lazy=True), task_queue=temporal.task_queue
+            await connect(temporal, lazy=True), task_queue=temporal.task_queue,
+            backlog_alert_s=temporal.backlog_alert_s,
         )
 
     span_reaper_task: asyncio.Task[None] | None = None
@@ -181,6 +183,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(workspace.router)
     app.include_router(session_files.router)
     app.include_router(runs.router)
+    app.include_router(ops.router)
     app.include_router(scopes.router)
     app.include_router(memory.router)
     app.include_router(notebooks.router)

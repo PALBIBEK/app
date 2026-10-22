@@ -38,6 +38,12 @@ class TemporalSettings:
     task_queue: str = _TEMPORAL_TASK_QUEUE
     # Temporal Cloud API key; setting it also turns on TLS.
     api_key: str | None = None
+    # How many runs one worker carries at once (its activity slots): run more workers for more.
+    max_concurrent_runs: int = 50
+    # A worker serves GET /healthz and /readyz on this port for its orchestrator (0: off).
+    worker_health_port: int = 0
+    # Fleet health turns "degraded" once queued work has waited this long for a worker.
+    backlog_alert_s: float = 30.0
 
     @classmethod
     def from_env(cls) -> TemporalSettings:
@@ -46,6 +52,9 @@ class TemporalSettings:
             namespace=os.environ.get("TEMPORAL_NAMESPACE", _TEMPORAL_NAMESPACE),
             task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", _TEMPORAL_TASK_QUEUE),
             api_key=os.environ.get("TEMPORAL_API_KEY") or None,
+            max_concurrent_runs=int(os.environ.get("WORKER_MAX_CONCURRENT_RUNS", "50")),
+            worker_health_port=int(os.environ.get("WORKER_HEALTH_PORT", "0")),
+            backlog_alert_s=float(os.environ.get("WORKER_BACKLOG_ALERT_S", "30")),
         )
 
 

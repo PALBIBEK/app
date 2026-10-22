@@ -179,7 +179,7 @@ up() {
   start gateway "cd '$SUP' && export OPENROUTER_API_KEY=\"\$(grep -s '^OPENROUTER_API_KEY=' '$ROOT/.env.local' | cut -d= -f2-)\" && exec env PROFILE=dev ENV=development HOST=127.0.0.1 \
     MODEL_GATEWAY_TOKEN='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key \
     MODEL_GATEWAY_DEFAULT_ROUTE=echo MODEL_GATEWAY_ROUTES_JSON='$(routes_json)' \
-    SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 '$SPY' -m supervisor.main"
+    SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 '$SPY' -m supervisor api"
   wait_http s3 http://127.0.0.1:8333 60
   wait_http gateway http://127.0.0.1:8090/v1/healthz 60
   for _ in $(seq 1 60); do "$TEMPORAL" operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1 && break; sleep 1; done
@@ -199,9 +199,9 @@ s3.put_bucket_cors(Bucket="yal-workspace", CORSConfiguration={"CORSRules": [{
 EOF
 
   say "starting the supervisor (API :8080, memory :8092) and its worker"
-  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 '$SPY' -m supervisor.main"
+  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 '$SPY' -m supervisor api"
   wait_http supervisor http://127.0.0.1:8080/readyz 120
-  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv '$SPY' -m supervisor.temporal.worker"
+  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv WORKER_HEALTH_PORT=8091 '$SPY' -m supervisor worker"
 
   say "starting the backend (:8000) and the frontend (:3000)"
   start backend "cd '$ROOT/backend' && env -u OPENROUTER_API_KEY ENVIRONMENT=development \
@@ -230,7 +230,12 @@ case "${1:-up}" in
   up|start) up ;;
   stop) stop_all; say "stopped (Postgres keeps running)" ;;
   status) for s in $SERVICES; do running "$s" && echo "$s: up" || echo "$s: down"; done
-          pg_up && echo "postgres: up" || echo "postgres: down" ;;
+          pg_up && echo "postgres: up" || echo "postgres: down"
+          # The worker fleet as the API sees it (Temporal's pollers and backlog, workers' heartbeats).
+          fleet=$(curl -fsS --max-time 5 http://127.0.0.1:8080/v1/ops/workers/metrics 2>/dev/null) && echo "$fleet" | awk '
+            /^yal_workers_serving/ {u=$NF} /^yal_worker_slots_busy/ {b=$NF} /^yal_worker_slots\{/ {m=$NF}
+            /^yal_task_queue_backlog\{/ {q=$NF} /^yal_task_queue_backlog_age/ {a=$NF}
+            END {printf "workers: %s, %s/%s runs busy, %s waiting (oldest %ss)\n", (u == 1 ? "serving" : "none serving"), b, m, q, a}' ;;
   logs) [ -n "${2:-}" ] || die "usage: ./dev.sh logs <name>"; tail -n 100 -f "$STATE/logs/$2.log" ;;
   reset)
     stop_all

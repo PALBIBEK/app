@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import UTC, datetime
 
@@ -9,12 +10,20 @@ from fastapi import HTTPException, status
 
 from prime_agent.config import Settings, get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
-from prime_agent.schemas.platform_status import ComponentStatus, PlatformStatusResponse
+from prime_agent.schemas.platform_status import (
+    ComponentStatus,
+    PlatformStatusResponse,
+    WorkerAlert,
+    WorkersStatus,
+)
 from prime_agent.services.ai_client import (
     AiClient,
     AiPlatformNotReadyError,
     ReadyzResult,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class PlatformStatusService:
@@ -49,6 +58,8 @@ class PlatformStatusService:
 
         result = await self._client.readyz(identity)
         status_response = self._from_readyz(result)
+        if result.ready:
+            status_response.workers = await self._workers(identity)
         self._cache[cache_key] = (now, status_response)
         return status_response
 
@@ -62,6 +73,32 @@ class PlatformStatusService:
                 reason = supervisor.reason
             raise AiPlatformNotReadyError(reason=reason)
         return status_response
+
+    async def _workers(self, identity: TenantPrincipal) -> WorkersStatus | None:
+        """The worker fleet in counts (no hosts or ids); None when it cannot be read.
+
+        No worker does not block runs: work waits in Temporal and starts once one is up, so
+        the product says so instead of disabling Test and Run.
+        """
+        try:
+            raw = await self._client.worker_fleet(identity)
+            known = {"no_workers", "backlog", "at_capacity"}
+            return WorkersStatus(
+                status=raw["status"],
+                polling=int(raw["polling"]),
+                slots_busy=int(raw["slots_busy"]),
+                slots_max=int(raw["slots_max"]),
+                backlog=int(raw["backlog"]),
+                backlog_age_s=float(raw["backlog_age_s"]),
+                alerts=[
+                    WorkerAlert(code=a["code"], message=str(a["message"])[:300])
+                    for a in raw.get("alerts", [])
+                    if a.get("code") in known
+                ],
+            )
+        except Exception:  # an older supervisor, Temporal down, a malformed answer
+            logger.info("worker fleet status unavailable", exc_info=True)
+            return None
 
     def _from_readyz(self, result: ReadyzResult) -> PlatformStatusResponse:
         component = ComponentStatus(

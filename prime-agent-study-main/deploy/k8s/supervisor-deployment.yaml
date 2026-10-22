@@ -1,4 +1,5 @@
-# Supervisor deployment with drain preStop (Phase 1).
+# Supervisor API deployment with drain preStop: the image's `api` role.
+# The agent work runs in worker-deployment.yaml (the same image's `worker` role).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +19,7 @@ spec:
       containers:
         - name: supervisor
           image: yal-supervisor:latest
+          args: ["api"]  # accepts requests; sessions run on yal-supervisor-worker
           ports:
             - containerPort: 8080
           env:

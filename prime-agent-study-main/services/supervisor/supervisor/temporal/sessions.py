@@ -40,6 +40,7 @@ from supervisor.temporal.contracts import (
     Timing,
     workflow_id,
 )
+from supervisor.temporal.fleet import QueueStats, queue_stats
 from supervisor.temporal.workflow import AgentSessionWorkflow
 
 
@@ -172,9 +173,24 @@ async def _connecting() -> AsyncIterator[None]:
 
 
 class SessionWorkflows:
-    def __init__(self, client: Client, *, task_queue: str) -> None:
+    def __init__(self, client: Client, *, task_queue: str, backlog_alert_s: float = 30.0) -> None:
         self._client = client
         self._task_queue = task_queue
+        self.backlog_alert_s = backlog_alert_s
+
+    @property
+    def task_queue(self) -> str:
+        return self._task_queue
+
+    async def queue_stats(self) -> QueueStats:
+        """The session queue as the Temporal server sees it: pollers and backlog."""
+        try:
+            async with _connecting():
+                return await queue_stats(self._client, self._task_queue)
+        except RPCError as exc:
+            if exc.status in (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED):
+                raise TemporalUnavailable(str(exc)) from exc
+            raise
 
     async def worker_available(self) -> bool:
         """Whether any worker polled this session queue recently (a server-side answer)."""

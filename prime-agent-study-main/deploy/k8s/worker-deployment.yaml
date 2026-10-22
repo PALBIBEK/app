@@ -1,0 +1,84 @@
+# Session workers: the supervisor image's `worker` role. They run every session workflow (model
+# calls, tools, sandboxes); the API (supervisor-deployment.yaml) never does.
+#
+# Scale by adding replicas on the same task queue (or autoscale on the queue backlog:
+# worker-autoscaling.yaml). Each replica carries up to WORKER_MAX_CONCURRENT_RUNS runs at once.
+# Keep at least one replica: with none, sessions and messages wait in Temporal (nothing is
+# lost) and GET /v1/ops/workers reports "down"; deploy/alerts/workers.rules.yml pages on it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yal-supervisor-worker
+  namespace: yal-control
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: yal-supervisor-worker
+  template:
+    metadata:
+      labels:
+        app: yal-supervisor-worker
+    spec:
+      # In-flight steps get 30s to finish (graceful_shutdown_timeout), then live runtimes park.
+      terminationGracePeriodSeconds: 75
+      containers:
+        - name: worker
+          image: yal-supervisor:latest
+          args: ["worker"]
+          ports:
+            - name: health
+              containerPort: 8081
+          env:
+            - name: WORKER_MAX_CONCURRENT_RUNS
+              value: "50"
+            - name: WORKER_HEALTH_PORT
+              value: "8081"
+            - name: DRAIN_GRACE_S
+              value: "30"
+            - name: IDLE_REAP_MAX_SECONDS
+              value: "3600"
+          envFrom:
+            - secretRef:
+                name: yal-gateway-credentials
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            # Fails when heartbeats stop landing (the database is unreachable from this pod).
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 15
+            failureThreshold: 4
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: yal-supervisor-worker
+---
+# Never take every worker down at once (node drains, upgrades).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yal-supervisor-worker
+  namespace: yal-control
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: yal-supervisor-worker

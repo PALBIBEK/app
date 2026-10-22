@@ -35,6 +35,7 @@ services:
     build:
       context: .
       dockerfile: services/supervisor/Dockerfile
+    command: ["api"]  # accepts requests; never runs an agent
     ports:
       - "8080:8080"
     environment: &supervisor-env
@@ -104,14 +105,24 @@ services:
       # Needed when SANDBOX_PROVIDER=local_docker (githi-v1 runs its tools in a sandbox).
       - /var/run/docker.sock:/var/run/docker.sock
 
-  # Runs every session workflow and holds the live runtimes and sandboxes.
-  # Scale out with `docker compose up --scale supervisor-worker=N`.
+  # Runs every session workflow and holds the live runtimes and sandboxes: the same image in
+  # its `worker` role. Scale out with `docker compose up --scale supervisor-worker=N`; each
+  # carries up to WORKER_MAX_CONCURRENT_RUNS runs. GET /v1/ops/workers on the API shows the fleet.
   supervisor-worker:
     build:
       context: .
       dockerfile: services/supervisor/Dockerfile
-    command: ["python", "-m", "supervisor.temporal.worker"]
-    environment: *supervisor-env
+    command: ["worker"]
+    environment:
+      <<: *supervisor-env
+      WORKER_MAX_CONCURRENT_RUNS: ${WORKER_MAX_CONCURRENT_RUNS:-50}
+      WORKER_HEALTH_PORT: "8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8081/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
     volumes: *supervisor-volumes
     # Lets in-flight activities finish (graceful_shutdown_timeout is 30s).
     stop_grace_period: 45s
