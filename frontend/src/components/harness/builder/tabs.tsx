@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 
 type Edit = (next: Manifest) => void;
 
-const input =
+export const input =
   'w-full rounded-xl border-2 border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10';
 
 export function Field({
@@ -241,61 +241,6 @@ export function ModelTab({ m, onChange, models }: { m: Manifest; onChange: Edit;
           </div>
         </label>
       ))}
-    </div>
-  );
-}
-
-const PROVIDERS: { id: Manifest['sandbox']['provider']; label: string; hint: string }[] = [
-  { id: 'local_docker', label: 'Docker', hint: 'A container per session. Isolated; needs Docker where the supervisor runs.' },
-  { id: 'e2b', label: 'E2B', hint: 'A hosted micro-VM per session. Isolated; needs an E2B key.' },
-  { id: 'local_process', label: 'Host process', hint: 'Runs on the supervisor’s machine. Development only; production refuses it.' },
-  { id: 'none', label: 'None', hint: 'No workspace: the agent can only talk.' },
-];
-
-export function SandboxTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX.Element {
-  const s = m.sandbox;
-  const set = (patch: Partial<Manifest['sandbox']>) => onChange({ ...m, sandbox: { ...s, ...patch } });
-  const shellBlocked = s.provider === 'local_process' && s.file_effects !== 'danger_full_access' && m.tools.includes('bash');
-  return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-slate-700">Where commands run</p>
-        {PROVIDERS.map((p) => (
-          <label
-            key={p.id}
-            className={cn(
-              'flex cursor-pointer items-start gap-3 rounded-xl border-2 px-4 py-3',
-              s.provider === p.id ? 'border-primary-500 bg-primary-50/50' : 'border-slate-200 bg-white hover:border-slate-300'
-            )}
-          >
-            <input type="radio" name="provider" className="mt-1" checked={s.provider === p.id} onChange={() => set({ provider: p.id })} />
-            <span>
-              <span className="block text-sm font-semibold text-slate-900">{p.label}</span>
-              <span className="block text-xs text-slate-500">{p.hint}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-      <Field label="What the agent may change" htmlFor="file_effects">
-        <select id="file_effects" className={input} value={s.file_effects} onChange={(e) => set({ file_effects: e.target.value as Manifest['sandbox']['file_effects'] })}>
-          <option value="read_only">Read only</option>
-          <option value="workspace_write">Its workspace</option>
-          <option value="danger_full_access">Everything the sandbox can reach</option>
-        </select>
-      </Field>
-      {shellBlocked ? (
-        <p className="flex items-start gap-2 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <Warning size={16} className="mt-0.5 shrink-0" />
-          On a host process, <code>bash</code> only runs with “Everything the sandbox can reach”: without an isolating
-          sandbox a command could change the machine. Use Docker or E2B to keep it contained.
-        </p>
-      ) : null}
-      <Field label="Tool calls by default" htmlFor="approval_default" hint="Tools marked “Ask first” always ask, whatever this says.">
-        <select id="approval_default" className={input} value={s.approval_default} onChange={(e) => set({ approval_default: e.target.value as Manifest['sandbox']['approval_default'] })}>
-          <option value="ask">Ask when the sandbox needs to</option>
-          <option value="never">Never ask</option>
-        </select>
-      </Field>
     </div>
   );
 }

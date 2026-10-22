@@ -2,18 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  Stack,
-  Wrench,
-  TextAa,
-  ClockCounterClockwise,
-  Gear,
-  ChartLine,
-  Lightning,
-  Plus,
-  GitBranch,
-  Brain,
-} from '@phosphor-icons/react';
+import { Brain, ChartLine, ClockCounterClockwise, Cube, Gear, GitBranch, Lightning, Plus, Stack, TextAa, Wrench } from '@phosphor-icons/react';
 
 import { cn } from '@/lib/utils';
 
@@ -28,6 +17,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: 'Harnesses', href: '/', icon: Stack },
   { label: 'Tools', href: '/tools', icon: Wrench },
+  { label: 'Environments', href: '/environments', icon: Cube },
   { label: 'Prompts', href: '/prompts', icon: TextAa },
   { label: 'Subagents', href: '/subagents', icon: GitBranch },
   { label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise },

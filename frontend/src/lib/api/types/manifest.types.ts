@@ -9,6 +9,16 @@ export const PromptSectionSchema = z.object({
   text: z.string(),
 });
 
+export const SandboxSpecSchema = z.object({
+  provider: z.enum(['none', 'local_process', 'local_docker', 'e2b']),
+  file_effects: z.enum(['read_only', 'workspace_write', 'danger_full_access']),
+  approval_default: z.enum(['ask', 'never']),
+  /** with_run: built as each run begins; on_first_tool: when a tool needs it; unset: the platform's. */
+  start: z.enum(['with_run', 'on_first_tool']).nullable().optional(),
+  /** Stop after this long unused (files saved, restored on the next tool call); 0 never; unset: platform's. */
+  idle_stop_s: z.number().nullable().optional(),
+});
+
 export const ManifestSchema = z.object({
   prompt: z.object({
     persona: z.string(),
@@ -16,11 +26,9 @@ export const ManifestSchema = z.object({
   }),
   tools: z.array(z.string()),
   model: z.string(),
-  sandbox: z.object({
-    provider: z.enum(['none', 'local_process', 'local_docker', 'e2b']),
-    file_effects: z.enum(['read_only', 'workspace_write', 'danger_full_access']),
-    approval_default: z.enum(['ask', 'never']),
-  }),
+  sandbox: SandboxSpecSchema,
+  /** A shared environment: when set, its settings are the sandbox (the server fills them in). */
+  environment_id: z.string().nullable().optional(),
   memory: z.object({
     compaction: z.boolean(),
   }),
@@ -84,3 +92,5 @@ export type CatalogModel = z.infer<typeof CatalogModelSchema>;
 /** The builder's tabs, which are also the manifest's sections. */
 export const SECTIONS = ['prompt', 'tools', 'model', 'sandbox', 'memory', 'policy'] as const;
 export type Section = (typeof SECTIONS)[number];
+
+export type SandboxSpec = z.infer<typeof SandboxSpecSchema>;

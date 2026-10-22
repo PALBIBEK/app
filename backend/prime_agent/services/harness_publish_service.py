@@ -22,8 +22,9 @@ from prime_agent.config import get_settings
 from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.harness_release import HarnessDraft, HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
-from prime_agent.schemas.harness_manifest import HarnessManifest, SandboxSpec, default_manifest
+from prime_agent.schemas.harness_manifest import HarnessManifest, SandboxSpec, default_manifest, manifest_body
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
+from prime_agent.services.environment_service import EnvironmentService
 from prime_agent.services.tool_publish_service import _canonical_digest
 
 BASE_HARNESS_VERSION = "githi-v1"
@@ -80,7 +81,7 @@ async def load_draft(harness_id: str, db: AsyncSession) -> HarnessManifest:
 
 async def save_draft(harness_id: str, manifest: HarnessManifest, db: AsyncSession) -> None:
     draft = await db.get(HarnessDraft, harness_id)
-    body = manifest.model_dump(mode="json")
+    body = manifest_body(manifest)
     if draft is None:
         db.add(HarnessDraft(harness_id=harness_id, manifest=body))
     else:
@@ -102,10 +103,10 @@ class HarnessPublisher:
     async def publish(
         self, harness: Harness, *, user_id: str, identity: TenantPrincipal, db: AsyncSession
     ) -> Published:
-        manifest = await load_draft(harness.id, db)
+        manifest = await EnvironmentService.resolve(await load_draft(harness.id, db), harness.user_id, db)
         history = await releases(harness.id, db)
         latest = history[0] if history else None
-        body = manifest.model_dump(mode="json")
+        body = manifest_body(manifest)
         if latest is not None and latest.manifest == body:
             self._bind(harness, latest, user_id)
             await db.commit()
@@ -194,6 +195,8 @@ class HarnessPublisher:
                 "provider": m.sandbox.provider,
                 "file_effects": m.sandbox.file_effects,
                 "approval_default": m.sandbox.approval_default,
+                **({"start": m.sandbox.start} if m.sandbox.start is not None else {}),
+                **({"idle_stop_s": m.sandbox.idle_stop_s} if m.sandbox.idle_stop_s is not None else {}),
                 "sticky_eligible": True,
             }
             if base_manifest.get("image_digest") and m.sandbox.provider in ("local_docker", "e2b"):

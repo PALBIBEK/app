@@ -687,6 +687,7 @@ class SessionManager(UpkeepOps):
         state = await self._budget.check(session_id)
         if state.exceeded:
             raise BudgetExceeded.from_state(state)
+        self.prewarm(session_id)
 
     async def send(
         self,
@@ -955,7 +956,13 @@ class SessionManager(UpkeepOps):
             labels["supervisor.tenant_id"] = tenant_id
         if sandbox_profile is not None and getattr(sandbox_profile, "runner", None):
             labels["supervisor.runner"] = sandbox_profile.runner
-        return HandRecipe(provider=provider, image=digest, labels=labels)
+        return HandRecipe(
+            provider=provider,
+            image=digest,
+            labels=labels,
+            start=getattr(sandbox_profile, "start", None),
+            idle_stop_s=getattr(sandbox_profile, "idle_stop_s", None),
+        )
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:
         old = self._fanout.get(session_id)

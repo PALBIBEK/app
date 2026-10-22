@@ -25,3 +25,14 @@ describe('runs', () => {
     expect(runDuration(run({ started_at_ms: 1000 }), 3000)).toBe('2.0 s');
   });
 });
+
+describe('sandbox label', () => {
+  it('says how the sandbox came to be, or why it is gone', async () => {
+    const { sandboxLabel } = await import('./runs');
+    expect(sandboxLabel(null)).toBeNull();
+    expect(sandboxLabel({ status: 'ready', cause: 'prewarm' })).toBe('Sandbox ready · started with the run');
+    expect(sandboxLabel({ status: 'ready', cause: 'resumed' })).toBe('Sandbox ready · restored after an idle stop');
+    expect(sandboxLabel({ status: 'stopped', idle_s: 905 })).toBe('Sandbox stopped after 15 min idle · files saved, back on the next tool');
+    expect(sandboxLabel({ status: 'lost' })).toContain('fresh one');
+  });
+});

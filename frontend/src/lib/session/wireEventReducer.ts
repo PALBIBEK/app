@@ -37,6 +37,16 @@ export interface SessionViewState {
   runSteps: number;
   /** Tokens and cost over every turn seen. */
   usage: { input_tokens: number; output_tokens: number; cost: number };
+  /** The session's (default) sandbox, from its hand events; null until one is built. */
+  sandbox: SandboxView | null;
+}
+
+export interface SandboxView {
+  status: 'ready' | 'stopped' | 'lost';
+  /** Why it is ready: prewarm, first_use, resumed, replaced, adopted… */
+  cause?: string;
+  /** Stopped: how long it had been idle. */
+  idle_s?: number;
 }
 
 type None = null;
@@ -54,6 +64,7 @@ export function createSessionViewState(): SessionViewState {
     running: false,
     runSteps: 0,
     usage: { input_tokens: 0, output_tokens: 0, cost: 0 },
+    sandbox: null,
   };
 }
 
@@ -226,6 +237,15 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
     }
     case 'error': {
       next.error = String(event.data.message ?? event.data.error ?? 'Session error');
+      break;
+    }
+    case 'hand_provisioned':
+    case 'hand_stopped':
+    case 'hand_lost': {
+      if ((event.data.hand ?? 'default') !== 'default') break;
+      if (event.type === 'hand_provisioned') next.sandbox = { status: 'ready', cause: String(event.data.cause ?? '') };
+      else if (event.type === 'hand_stopped') next.sandbox = { status: 'stopped', idle_s: Number(event.data.idle_s ?? 0) };
+      else next.sandbox = { status: 'lost' };
       break;
     }
     case 'run_start': {

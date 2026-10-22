@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import type { Session } from '@/lib/api/types/session.types';
-import { runToStop } from '@/lib/session/runs';
+import { runToStop, sandboxLabel } from '@/lib/session/runs';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { cn } from '@/lib/utils';
 
@@ -171,6 +171,11 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
         </span>
         <span>{(state.usage.input_tokens + state.usage.output_tokens).toLocaleString()} tokens</span>
         <span data-testid="cost">${Math.max(state.usage.cost, session.total_cost).toFixed(4)}</span>
+        {sandboxLabel(state.sandbox) ? (
+          <span data-testid="sandbox-status" data-status={state.sandbox?.status} className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
+            {sandboxLabel(state.sandbox)}
+          </span>
+        ) : null}
         <span className="ml-auto flex items-center gap-1">
           {state.running && !ended ? (
             <button type="button" onClick={() => void stop()} disabled={stopping} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50" data-testid="stop">

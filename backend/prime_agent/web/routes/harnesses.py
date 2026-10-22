@@ -18,7 +18,9 @@ from prime_agent.services.harness_bind_service import (
     HarnessBindService,
     raise_bind_http,
 )
+from prime_agent.services.environment_service import EnvironmentService
 from prime_agent.schemas.harness_manifest import (
+    manifest_body,
     HarnessManifest,
     HarnessManifestView,
     HarnessPublishResponse,
@@ -157,14 +159,15 @@ def _publisher() -> HarnessPublisher:
     return HarnessPublisher(AiClient.from_settings(get_settings()))
 
 
-async def _manifest_view(harness_id: str, db) -> HarnessManifestView:
-    draft = await load_draft(harness_id, db)
+async def _manifest_view(harness_id: str, user_id: str, db) -> HarnessManifestView:
+    """The draft as it would publish: a named environment's settings are its sandbox."""
+    draft = await EnvironmentService.resolve(await load_draft(harness_id, db), user_id, db)
     history = await releases(harness_id, db)
     latest = history[0] if history else None
     return HarnessManifestView(
         manifest=draft,
         published_version=latest.version if latest else None,
-        unpublished_changes=latest is None or latest.manifest != draft.model_dump(mode="json"),
+        unpublished_changes=latest is None or latest.manifest != manifest_body(draft),
     )
 
 
@@ -172,7 +175,7 @@ async def _manifest_view(harness_id: str, db) -> HarnessManifestView:
 async def get_manifest(harness_id: str, db: DbSession, current_user: CurrentUser) -> HarnessManifestView:
     """The draft (a new harness starts as the shipped coding agent) and whether it is published."""
     await HarnessService.get_owned(harness_id, current_user.id, db)
-    return await _manifest_view(harness_id, db)
+    return await _manifest_view(harness_id, current_user.id, db)
 
 
 @router.put("/{harness_id}/manifest", response_model=HarnessManifestView)
@@ -181,8 +184,9 @@ async def put_manifest(
 ) -> HarnessManifestView:
     """Save the draft. Validation errors name the field (``loc``), so the builder shows them in place."""
     await HarnessService.get_owned(harness_id, current_user.id, db)
+    manifest = await EnvironmentService.resolve(manifest, current_user.id, db)  # 422 if it names none of yours
     await save_draft(harness_id, manifest, db)
-    return await _manifest_view(harness_id, db)
+    return await _manifest_view(harness_id, current_user.id, db)
 
 
 @router.post("/{harness_id}/publish", response_model=HarnessPublishResponse)

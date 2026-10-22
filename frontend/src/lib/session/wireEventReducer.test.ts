@@ -83,3 +83,20 @@ describe('applyWireEvent runs, tools, approvals', () => {
     expect(state.pendingApprovals).toEqual([]);
   });
 });
+
+describe('applyWireEvent hands', () => {
+  const ev = (seq: number, type: string, data: Record<string, unknown>) =>
+    ({ seq, event_id: `e${seq}`, turn_id: null, type, ts_ms: seq, data }) as never;
+
+  it('follows the default sandbox: ready, stopped when idle, ready again', () => {
+    let s = createSessionViewState();
+    s = applyWireEvent(s, ev(1, 'hand_provisioned', { hand_id: 'h1', provider: 'local_process', cause: 'prewarm', hand: 'default' }));
+    expect(s.sandbox).toEqual({ status: 'ready', cause: 'prewarm' });
+    s = applyWireEvent(s, ev(2, 'hand_provisioned', { hand_id: 'h9', cause: 'first_use', hand: 'browser' }));
+    expect(s.sandbox?.cause).toBe('prewarm');  // a named hand is not the session's sandbox
+    s = applyWireEvent(s, ev(3, 'hand_stopped', { hand_id: 'h1', reason: 'idle', idle_s: 901, hand: 'default' }));
+    expect(s.sandbox).toEqual({ status: 'stopped', idle_s: 901 });
+    s = applyWireEvent(s, ev(4, 'hand_provisioned', { hand_id: 'h2', cause: 'resumed', hand: 'default' }));
+    expect(s.sandbox?.status).toBe('ready');
+  });
+});

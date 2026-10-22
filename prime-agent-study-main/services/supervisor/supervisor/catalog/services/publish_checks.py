@@ -43,8 +43,13 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
         _check_hands(name, artifact)
     if kind == "sandbox_profile":
         _check_runner(name, artifact)
+        _check_lifecycle(name, artifact)
     for field, model in _models_named(kind, artifact):
         _check_served(kind, name, field, model)
+
+
+SANDBOX_STARTS = ("with_run", "on_first_tool")
+"""When a sandbox is built (``SandboxProfile.start``)."""
 
 
 def _unknown_keys(given: Mapping[str, Any], parsed: Mapping[str, Any], prefix: str = "") -> Iterator[str]:
@@ -64,6 +69,15 @@ def _check_runner(name: str, profile: Any) -> None:
         raise InvalidArtifact("sandbox_profile", name, "provider 'runner' needs runner: the runner's name")
     if profile.runner and not on_runner:
         raise InvalidArtifact("sandbox_profile", name, "runner is only for provider 'runner'")
+
+
+def _check_lifecycle(name: str, profile: Any) -> None:
+    if profile.start is not None and profile.start not in SANDBOX_STARTS:
+        raise InvalidArtifact(
+            "sandbox_profile", name, f"start {profile.start!r}: use one of {', '.join(SANDBOX_STARTS)}"
+        )
+    if profile.idle_stop_s is not None and not 0 <= profile.idle_stop_s <= 86_400:
+        raise InvalidArtifact("sandbox_profile", name, "idle_stop_s must be 0 (never) to 86400 seconds")
 
 
 def _check_hands(name: str, composition: Any) -> None:

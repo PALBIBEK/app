@@ -389,6 +389,13 @@ class SandboxProfile:
     metadata: ArtifactMetadata | None = None
     runner: str | None = None
     """``provider: runner`` only: which of the tenant's runners hosts the hands."""
+    start: str | None = None
+    """When a session's sandbox is built: ``with_run`` (as each run begins, alongside the
+    first model call, so the first tool does not wait) or ``on_first_tool``. ``None``: the
+    deployment's ``SANDBOX_START``."""
+    idle_stop_s: int | None = None
+    """Stop a sandbox idle this long (saved first; the next tool call restores it); ``0``
+    never. ``None``: the deployment's ``SANDBOX_IDLE_STOP_S``."""
 
     def body_for_digest(self) -> dict[str, Any]:
         """Canonical content body for hashing."""
@@ -407,6 +414,11 @@ class SandboxProfile:
             body["browser_model"] = True
         if self.runner:
             body["runner"] = self.runner
+        # Only when set, so profiles without them keep their digests.
+        if self.start is not None:
+            body["start"] = self.start
+        if self.idle_stop_s is not None:
+            body["idle_stop_s"] = self.idle_stop_s
         return body
 
 

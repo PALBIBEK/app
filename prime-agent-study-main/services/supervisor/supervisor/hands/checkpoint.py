@@ -128,6 +128,11 @@ class Checkpointer:
             self._hand[session_id] = sandbox.id
             return len(report.written)
 
+    def processes(self, session_id: str) -> frozenset[str]:
+        """What was running in the sandbox when it was last observed."""
+        seen = self._seen.get(session_id) or self._saved.get(session_id)
+        return frozenset(seen.processes or ()) if seen is not None else frozenset()
+
     def notice(self, session_id: str) -> str:
         """What a reset will not bring back, for the model."""
         lost = sorted(self._saved.get(session_id, Fingerprint()).processes or ())

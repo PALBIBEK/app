@@ -284,8 +284,10 @@ class BackgroundResults:
 class HandProvisioned:
     """A sandbox now serves the session's tools.
 
-    ``cause``: ``first_use`` (the first tool call that needed one), ``replaced``
-    (after a loss), ``adopted`` (the one a dead worker left, still alive) or
+    ``cause``: ``first_use`` (the first tool call that needed one), ``prewarm``
+    (built as a run began, alongside the first model call), ``replaced`` (after a
+    loss), ``resumed`` / ``prewarm_resumed`` (after an idle stop, restored from the
+    last checkpoint), ``adopted`` (the one a dead worker left, still alive) or
     ``eager`` (a runtime that cannot start without one).
     """
 
@@ -312,6 +314,19 @@ class HandCheckpointed:
     processes: list[str] = field(default_factory=list)
     hand: str = "default"
     """Which of the session's hands (``default``, or a name its composition pins)."""
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
+@dataclass(frozen=True)
+class HandStopped:
+    """The session's sandbox was stopped on purpose (``reason``: ``idle``), its files saved
+    first; the next tool call that needs one gets a fresh sandbox with them restored."""
+
+    hand_id: str
+    provider: str
+    reason: str
+    idle_s: float = 0.0
+    hand: str = "default"
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 
@@ -374,6 +389,7 @@ AgentEvent = (
     | HandProvisioned
     | HandCheckpointed
     | HandLost
+    | HandStopped
     | Settled
     | ErrorEvent
 )

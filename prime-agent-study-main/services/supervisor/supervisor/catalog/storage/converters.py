@@ -402,6 +402,8 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         browser_model=bool(data.get("browser_model", False)),
         metadata=metadata_from_dict(data.get("metadata")),
         runner=data.get("runner") or None,
+        start=data.get("start"),
+        idle_stop_s=int(data["idle_stop_s"]) if data.get("idle_stop_s") is not None else None,
     )
 
 
@@ -428,6 +430,8 @@ def sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         "browser_model": profile.browser_model,
         "metadata": metadata_to_dict(profile.metadata),
         **({"runner": profile.runner} if profile.runner else {}),
+        **({"start": profile.start} if profile.start is not None else {}),
+        **({"idle_stop_s": profile.idle_stop_s} if profile.idle_stop_s is not None else {}),
     }
 
 

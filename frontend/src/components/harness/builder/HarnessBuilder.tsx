@@ -19,7 +19,8 @@ import { SECTIONS, type Manifest, type Release, type Section } from '@/lib/api/t
 import { diffManifests, errorsBySection, exportHarness, parseImport, type SectionErrors } from '@/lib/harness/manifest';
 import { cn } from '@/lib/utils';
 
-import { Errors, MemoryTab, ModelTab, PolicyTab, PromptTab, SandboxTab, ToolsTab } from './tabs';
+import { SandboxTab } from './SandboxTab';
+import { Errors, MemoryTab, ModelTab, PolicyTab, PromptTab, ToolsTab } from './tabs';
 
 const TAB_LABEL: Record<Section, string> = {
   prompt: 'Prompt',

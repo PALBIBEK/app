@@ -27,6 +27,7 @@ from supervisor.agent.events import (
     HandCheckpointed,
     HandLost,
     HandProvisioned,
+    HandStopped,
     JobEnd,
     JobStart,
     MemoryContext,
@@ -91,6 +92,7 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "HandProvisioned": HandProvisioned,
     "HandCheckpointed": HandCheckpointed,
     "HandLost": HandLost,
+    "HandStopped": HandStopped,
 }
 
 # Reverse mapping for validation

@@ -36,6 +36,7 @@ from supervisor.hands.checkpoint import Checkpointer, checkpoint_scope
 from supervisor.hands.inspect import Changes
 from supervisor.hands.keys import DEFAULT_HAND, split_key
 from supervisor.hands.leases import HandLeases
+from supervisor.hands.lifecycle import SandboxLifecycle
 from supervisor.harness import (
     GuardSpec,
     HarnessCatalog,
@@ -169,6 +170,8 @@ class SessionManagerBase:
         self._live = LiveHub(maxsize=live_queue_max)
         self._fanout: dict[str, asyncio.Task[None]] = {}
         self._hands = SessionHands(_HandHooks(self))
+        # When sandboxes start and stop, where a profile does not say (supervisor.hands.lifecycle).
+        self.sandbox_lifecycle = SandboxLifecycle.from_env()
         self._leases = HandLeases(session_factory)  # who else holds a hand, if anyone
         # Change-aware checkpoints of each sandbox, where there is a store to keep them.
         self._checkpoints = (

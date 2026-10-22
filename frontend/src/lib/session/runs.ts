@@ -34,3 +34,22 @@ export function runDuration(run: Run, now = Date.now()): string | null {
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, '0')} s`;
 }
+
+/** The session bar's sandbox note, from the reducer's view of the default hand. */
+export function sandboxLabel(s: { status: 'ready' | 'stopped' | 'lost'; cause?: string; idle_s?: number } | null): string | null {
+  if (s == null) return null;
+  if (s.status === 'stopped') {
+    const mins = Math.round((s.idle_s ?? 0) / 60);
+    return `Sandbox stopped after ${mins >= 1 ? `${mins} min` : `${Math.round(s.idle_s ?? 0)} s`} idle · files saved, back on the next tool`;
+  }
+  if (s.status === 'lost') return 'Sandbox lost · the next tool gets a fresh one';
+  const why: Record<string, string> = {
+    prewarm: 'started with the run',
+    prewarm_resumed: 'restored as the run began',
+    first_use: 'started for the first tool',
+    resumed: 'restored after an idle stop',
+    replaced: 'replaced after a loss',
+    adopted: 'taken over after a restart',
+  };
+  return `Sandbox ready${s.cause && why[s.cause] ? ` · ${why[s.cause]}` : ''}`;
+}

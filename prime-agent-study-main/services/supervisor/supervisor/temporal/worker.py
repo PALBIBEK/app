@@ -33,7 +33,7 @@ from temporalio.worker import Worker
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
-from supervisor.maintenance import approval_sweeper, idle_reaper
+from supervisor.maintenance import approval_sweeper, idle_reaper, sandbox_idle_sweeper
 from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
 from supervisor.temporal.fleet import STALE_AFTER_S, Load, WorkerBeat, heartbeat_loop, worker_id
@@ -208,7 +208,14 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
                 )
 
             side.append(asyncio.create_task(heartbeat_loop(state.heartbeats, beat, finished, on_beat=health.on_beat)))
-        loops = [asyncio.create_task(approval_sweeper(state.manager, should_stop=stop.is_set))]
+        loops = [
+            asyncio.create_task(approval_sweeper(state.manager, should_stop=stop.is_set)),
+            asyncio.create_task(
+                sandbox_idle_sweeper(
+                    state.manager, should_stop=stop.is_set, interval_s=state.manager.sandbox_lifecycle.sweep_s
+                )
+            ),
+        ]
         if state.idle_reap_max_seconds > 0:
             loops.append(
                 asyncio.create_task(

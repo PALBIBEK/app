@@ -43,13 +43,19 @@ class PromptSpec(BaseModel):
 
 
 class SandboxSpec(BaseModel):
-    """Where the agent's commands run and what they may touch."""
+    """Where the agent's commands run and what they may touch, and when the sandbox lives."""
 
     model_config = ConfigDict(extra="forbid")
 
     provider: Literal["none", "local_process", "local_docker", "e2b"] = "local_docker"
     file_effects: Literal["read_only", "workspace_write", "danger_full_access"] = "workspace_write"
     approval_default: Literal["ask", "never"] = "ask"
+    start: Literal["with_run", "on_first_tool"] | None = None
+    """``with_run``: built as each run begins, alongside the first model call, so the first
+    tool does not wait. ``on_first_tool``: only when a tool needs it. None: the platform's."""
+    idle_stop_s: int | None = Field(default=None, ge=0, le=86_400)
+    """Stop it after this long unused (its files saved; the next tool call restores them);
+    0 never. None: the platform's (15 minutes)."""
 
 
 class MemorySpec(BaseModel):
@@ -88,6 +94,9 @@ class HarnessManifest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     """A model id from ``GET /v1/models`` (``gateway/<route>`` or a native model id)."""
     sandbox: SandboxSpec = Field(default_factory=SandboxSpec)
+    environment_id: str | None = Field(default=None, max_length=36)
+    """A shared environment (``/environments``): when set, its settings are the sandbox (the
+    ``sandbox`` field shows them; publishing copies them into the release)."""
     memory: MemorySpec = Field(default_factory=MemorySpec)
     policy: PolicySpec = Field(default_factory=PolicySpec)
 
@@ -105,6 +114,12 @@ class HarnessManifest(BaseModel):
             if needs:
                 raise ValueError(f"sandbox.provider 'none' cannot run workspace tools: {', '.join(sorted(needs))}")
         return self
+
+
+def manifest_body(manifest: HarnessManifest) -> dict:
+    """The manifest as stored and compared: unset optional fields are left out, so adding
+    one never makes an existing release look changed."""
+    return manifest.model_dump(mode="json", exclude_none=True)
 
 
 def default_manifest(sandbox: SandboxSpec | None = None) -> HarnessManifest:

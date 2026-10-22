@@ -40,3 +40,21 @@ async def idle_reaper(
         except Exception:
             logger.exception("idle reaper failed")
         await asyncio.sleep(interval_s)
+
+
+async def sandbox_idle_sweeper(
+    manager: SessionManager,
+    *,
+    should_stop: Callable[[], bool],
+    interval_s: float,
+) -> None:
+    """Save and stop sandboxes idle past their limit (``supervisor.hands.lifecycle``); the
+    session stays, and its next tool call gets a fresh sandbox with the files restored."""
+    interval_s = max(1.0, interval_s)
+    while not should_stop():
+        try:
+            if stopped := await manager.stop_idle_sandboxes():
+                logger.info("stopped %d idle sandboxes %s", len(stopped), stopped[:8])
+        except Exception:
+            logger.exception("idle sandbox sweep failed")
+        await asyncio.sleep(interval_s)

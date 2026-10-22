@@ -533,12 +533,16 @@ class GithiSteps:
                 row = await self._manager._get_session_row(sid)
                 invocation = {"id": call_id, "name": call["name"], "arguments": args[0]}
                 named = hand.key is not None and hand.key != sid
-                end = await runtime.loop().run_tool(
-                    invocation,
-                    tenant_id=row.tenant_id,
-                    env=await self._manager.tool_env(sid),
-                    workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
-                )
+                try:
+                    end = await runtime.loop().run_tool(
+                        invocation,
+                        tenant_id=row.tenant_id,
+                        env=await self._manager.tool_env(sid),
+                        workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
+                    )
+                except BaseException:
+                    self._manager.call_ended(hand)
+                    raise
                 checked = await self._manager.after_call(
                     sid, hand, call["name"], provider, _as_tool_result(end.result)
                 )
