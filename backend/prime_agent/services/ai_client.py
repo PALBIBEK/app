@@ -304,8 +304,16 @@ class AiClient:
             "/v1/sessions",
             identity,
             json_body=body,
-            expected=(201,),
-            timeout=self._settings.ai_session_create_timeout_seconds,
+            # Answered at once (202, status "starting"); session_startup reports how it goes.
+            expected=(201, 202),
+            extra_headers={"Prefer": "respond-async"},
+        )
+
+    async def session_startup(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/startup — starting / ready / failed (with why), and whether a
+        worker is running; answered by the Temporal server, so it works without one."""
+        return await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/startup", identity, expected=(200,)
         )
 
     async def get_session(
@@ -1008,6 +1016,7 @@ class AiClient:
         allow_empty: bool = False,
         params: dict[str, str] | None = None,
         timeout: float | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> Any:
         url = f"{self._require_base_url()}{path}"
         timeout = timeout or self._settings.ai_http_timeout_seconds
@@ -1019,7 +1028,7 @@ class AiClient:
                 response = await client.request(
                     method,
                     url,
-                    headers=self._auth_headers(identity),
+                    headers={**self._auth_headers(identity), **(extra_headers or {})},
                     json=json_body,
                     params=params,
                 )

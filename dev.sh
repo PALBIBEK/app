@@ -44,18 +44,28 @@ TEMPORAL="${TEMPORAL_CLI:-temporal}"
 mkdir -p "$STATE"/{logs,run,blobs,workspaces,harness-versions}
 
 # --- process control --------------------------------------------------------------------------
-running() { local f="$STATE/run/$1.pid"; [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; }
+# A pid file holds "pid start-time": a pid alone can be reused by another process after a
+# crash, which made a dead service look "up". Both must match for it to count as running.
+started_at() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' '; }
+running() {
+  local f="$STATE/run/$1.pid" pid when
+  [ -f "$f" ] || return 1
+  read -r pid when <"$f" || true
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$when" ] || [ "$(started_at "$pid" | tr ' ' '_')" = "$when" ]
+}
 
 start() {  # name, command (runs in its own process group so stop takes its children too)
   running "$1" && return 0
   setsid bash -c "$2" >>"$STATE/logs/$1.log" 2>&1 </dev/null &
-  echo $! >"$STATE/run/$1.pid"
+  local pid=$!
+  echo "$pid $(started_at "$pid" | tr ' ' '_')" >"$STATE/run/$1.pid"
 }
 
 stop_one() {
   local f="$STATE/run/$1.pid"
   [ -f "$f" ] || return 0
-  local pid; pid=$(cat "$f")
+  local pid; read -r pid _ <"$f"
   kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
   for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
   kill -KILL -- "-$pid" 2>/dev/null || true

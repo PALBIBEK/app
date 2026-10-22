@@ -669,3 +669,49 @@ async def test_create_session_timeout_says_so(db_session, owner, harness, sessio
         r = await api.post("/api/v1/sessions", json={"harness_id": harness.id})
     assert r.status_code == 503
     assert r.json()["detail"]["message"] == "AI supervisor did not answer in time"
+
+
+@pytest.mark.asyncio
+async def test_create_answers_at_once_and_startup_reports_how_it_goes(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    prefer: list[str | None] = []
+    phase = {"now": "starting"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cat = _catalog_ok(request)
+        if cat:
+            return cat
+        if request.method == "POST" and request.url.path.endswith("/v1/sessions"):
+            prefer.append(request.headers.get("prefer"))
+            return httpx.Response(202, json={"session_id": "ai-async-1", "harness_version": "githi-v1",
+                                             "runtime": "githi", "status": "starting"})
+        if request.url.path.endswith("/startup"):
+            if phase["now"] == "starting":
+                return httpx.Response(200, json={"session_id": "ai-async-1", "status": "starting",
+                                                 "worker_available": False, "reason": "No agent worker is running"})
+            return httpx.Response(200, json={"session_id": "ai-async-1", "status": "failed", "worker_available": True,
+                                             "reason": "Docker is not reachable", "kind": "SandboxUnavailable"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        created = await api.post("/api/v1/sessions", json={"harness_id": harness.id})
+        sid = created.json()["id"]
+        waiting = await api.get(f"/api/v1/sessions/{sid}/startup")
+        phase["now"] = "failed"
+        failed = await api.get(f"/api/v1/sessions/{sid}/startup")
+        after = await api.get(f"/api/v1/sessions/{sid}")
+    assert created.status_code == 201 and created.json()["status"] == "starting"
+    assert prefer == ["respond-async"]
+    assert waiting.json() == {"status": "starting", "worker_available": False,
+                              "reason": "No agent worker is running", "kind": None}
+    assert failed.json()["status"] == "failed" and failed.json()["reason"] == "Docker is not reachable"
+    assert after.json()["status"] == "failed"  # recorded on the session

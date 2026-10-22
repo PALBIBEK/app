@@ -208,7 +208,12 @@ class AgentSessionWorkflow:
         for job_id in list(self._state.jobs):  # a closed session's jobs stop with it
             await self._cancel_job(job_id)
         await workflow.wait_condition(workflow.all_handlers_finished)
-        return SessionResult(self._session_id, self._state.phase, self._state.turns_completed)
+        err = self._creation_error
+        return SessionResult(
+            self._session_id, self._state.phase, self._state.turns_completed,
+            error=err.message if err is not None else None,
+            error_kind=err.type if err is not None else None,
+        )
 
     async def _create(self, inp: SessionInput) -> None:
         arg: CreateRequest | ForkRequest
@@ -592,6 +597,11 @@ class AgentSessionWorkflow:
     async def submit_message(self, message: Message) -> Accepted:
         if message.command_id in self._state.seen_commands:
             return Accepted(message.command_id, queued=self._is_queued(message.command_id))
+        # A message sent while the session is still being set up waits for it (sessions start
+        # asynchronously), then runs, or is refused with the reason the session could not start.
+        await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
+        if self._creation_error is not None:
+            raise self._creation_error
         async with self._submit_lock:
             if self._running is not None or self._state.pending:
                 self._remember(message.command_id)
@@ -755,11 +765,14 @@ class AgentSessionWorkflow:
 
     @workflow.query(name="status")
     def status(self) -> SessionStatus:
+        err = self._creation_error
         return SessionStatus(
             phase=self._state.phase,
             turns_completed=self._state.turns_completed,
             queued=len(self._state.pending),
             running_command=self._running.command_id if self._running else None,
+            error=err.message if err is not None else None,
+            error_kind=err.type if err is not None else None,
         )
 
     # --- helpers -------------------------------------------------------------

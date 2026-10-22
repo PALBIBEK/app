@@ -205,3 +205,39 @@ async def _until(body: AsyncIterator[str], wire_type: str) -> AsyncIterator[str]
             yield chunk
             if f'"type":"{wire_type}"' in chunk:
                 return
+
+
+async def test_http_create_answers_at_once_and_a_message_right_after_it_runs(platform: Platform) -> None:
+    async with _api(platform) as api:
+        created = await api.post(
+            "/v1/sessions", json={"harness_version": "kg-v1"}, headers={"Prefer": "respond-async"}
+        )
+        assert created.status_code == 202 and created.json()["status"] == "starting"
+        assert created.headers["preference-applied"] == "respond-async"
+        sid = created.json()["session_id"]
+        # Sent before the session is set up: the request waits for it, then the turn runs.
+        sent = await _send(api, sid, "early")
+        assert sent.status_code == 202, sent.text
+        startup = await api.get(f"/v1/sessions/{sid}/startup")
+        assert startup.json()["status"] == "ready" and startup.json()["worker_available"] is True
+    await platform.wait_for(sid, _count("RunEnd", 1))
+
+
+async def test_http_create_fails_fast_when_no_worker_polls(platform: Platform) -> None:
+    platform.state.workflows = SessionWorkflows(platform.client, task_queue=f"idle-{uuid.uuid4().hex[:8]}")
+    try:
+        async with _api(platform) as api:
+            started = asyncio.get_running_loop().time()
+            created = await api.post("/v1/sessions", json={"harness_version": "kg-v1"})
+            took = asyncio.get_running_loop().time() - started
+            queued = await api.post(
+                "/v1/sessions", json={"harness_version": "kg-v1"}, headers={"Prefer": "respond-async"}
+            )
+            startup = await api.get(f"/v1/sessions/{queued.json()['session_id']}/startup")
+    finally:
+        platform.state.workflows = platform.sessions
+    assert created.status_code == 503 and created.json()["detail"]["reason"] == "no_worker"
+    assert took < 10  # not the old minute-long hang
+    assert queued.status_code == 202  # accepted: it starts when a worker comes
+    assert startup.json()["status"] == "starting" and startup.json()["worker_available"] is False
+    assert "No agent worker is running" in startup.json()["reason"]

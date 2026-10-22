@@ -56,6 +56,17 @@ class SessionResponse(BaseModel):
     pin: SessionPinSnapshot
 
 
+class SessionStartupResponse(BaseModel):
+    """How a new session's start stands: ``starting`` (``worker_available`` false means no
+    agent worker is running to pick it up), ``ready``, ``failed`` (``reason`` says why), or
+    ``closed``."""
+
+    status: str
+    worker_available: bool
+    reason: str | None = None
+    kind: str | None = None
+
+
 class SessionListResponse(BaseModel):
     data: list[SessionResponse]
     total: int

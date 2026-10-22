@@ -96,6 +96,33 @@ or search facts. *History* restores a notebook to how it was after any change.
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
 
+## How sessions run
+
+The agent never runs inside an API request. The same split is used by production agent
+platforms: OpenAI's background responses, xAI's deferred completions, LangGraph's API servers
+and queue workers, Claude Managed Agents (where the harness runs apart from the sandbox), and
+the OpenAI Agents SDK on Temporal.
+
+| Process | Does |
+|---|---|
+| Backend (FastAPI, :8000) | Users, harnesses, sessions they own; never runs an agent |
+| Supervisor API (:8080) | Accepts commands and starts or signals each session's **Temporal workflow** |
+| Worker(s) (`supervisor.temporal.worker`) | Run the workflows: create the session, call the model, run tools in the sandbox |
+| Temporal | Keeps every session's progress, so work survives restarts and waits for a worker |
+
+**Starting a session answers at once.** `POST /sessions` returns status `starting` (the
+supervisor gets `Prefer: respond-async` and answers `202`). The page then polls
+`GET /sessions/{id}/startup` until it reads `ready`, or `failed` with the reason (for example,
+Docker not running for a Docker sandbox). The Temporal server answers that status itself, so it
+works even when no worker runs. It reports *waiting for an agent worker* when work has been
+queued for more than 5 seconds with nobody taking it, and when the setup step keeps failing and
+being retried it shows the last error. The start waits in Temporal: when a worker comes back,
+the same page carries on by itself. A message sent while the session starts waits for it too.
+
+Run more workers to serve more sessions (each polls the same queue). `./dev.sh status` checks
+each process by its pid *and* start time, so a crashed worker shows as `down` and is not
+mistaken for another process that took over its pid.
+
 ## Workspace files
 
 A workspace owns its files and decides who may see them (*Shared with*). Every save is a new

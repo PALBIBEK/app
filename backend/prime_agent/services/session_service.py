@@ -25,6 +25,7 @@ from prime_agent.schemas.session import (
     SessionMessageResponse,
     SessionPinSnapshot,
     SessionResponse,
+    SessionStartupResponse,
     SessionToolInvokeRequest,
     SessionToolInvokeResponse,
     SpawnSubagentRequest,
@@ -194,6 +195,33 @@ class SessionService:
     ) -> SessionResponse:
         link = await self._get_owned(session_id, user_id, db)
         return await self._maybe_refresh(link, identity=identity, db=db)
+
+    async def startup(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        identity: TenantPrincipal,
+        db: AsyncSession,
+    ) -> SessionStartupResponse:
+        """Where the session's start stands; a session that started or failed is recorded so."""
+        link = await self._get_owned(session_id, user_id, db)
+        try:
+            raw = await self._client.session_startup(identity, link.ai_session_id)
+        except AiUpstreamError as exc:
+            raise HTTPException(
+                status_code=exc.status_code or 503,
+                detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
+            ) from exc
+        out = SessionStartupResponse.model_validate(
+            {k: raw.get(k) for k in ("status", "worker_available", "reason", "kind")}
+        )
+        new = {"ready": "active", "failed": "failed"}.get(out.status)
+        if new is not None and link.status != new and link.status == "starting":
+            link.status = new
+            link.updated_at = datetime.now(UTC)
+            await db.commit()
+        return out
 
     async def post_message(
         self,

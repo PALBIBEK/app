@@ -455,6 +455,9 @@ class SessionStatus:
     turns_completed: int
     queued: int
     running_command: str | None
+    error: str | None = None
+    """Why the session could not be created (``phase`` is FAILED); safe to show the user."""
+    error_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,3 +465,6 @@ class SessionResult:
     session_id: str
     phase: Phase
     turns_completed: int
+    error: str | None = None
+    """Why creation failed, kept in the closed workflow's result (read without a worker)."""
+    error_kind: str | None = None
