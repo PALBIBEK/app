@@ -28,7 +28,8 @@ from typing import Any
 from uuid import uuid4
 
 from temporalio.client import Client
-from temporalio.worker import Worker
+from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
+from temporalio.worker import Worker, WorkerDeploymentConfig
 
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
@@ -56,6 +57,21 @@ def _version() -> str:
         return ""
 
 
+def deployment_config(version: WorkerDeploymentVersion) -> WorkerDeploymentConfig:
+    """Register as ``version`` of a worker deployment, every workflow auto-upgrading.
+
+    Sessions live for hours or days and a job's worker may be replaced at any time, so each
+    workflow moves to a new build at its next workflow task rather than pinning old workers
+    in place: a rolling deploy can stop the old ones as soon as the new build is current.
+    That is safe because changes to recorded history are guarded with ``workflow.patched``
+    and checked by the replay gate (supervisor.temporal.rollout). Temporal refuses a
+    behaviour declared on the workflow class where workers run unversioned, hence here.
+    """
+    return WorkerDeploymentConfig(
+        version=version, use_worker_versioning=True, default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE
+    )
+
+
 def home_queue(task_queue: str) -> str:
     return f"{task_queue}@{socket.gethostname()}-{uuid4().hex[:8]}"
 
@@ -69,11 +85,13 @@ async def session_worker(
     max_concurrent_runs: int | None = None,
     load: Load | None = None,
     identity: str | None = None,
+    deployment: WorkerDeploymentVersion | None = None,
 ) -> AsyncIterator[SessionActivities]:
     """Run the shared and home-queue workers for as long as the context is open.
 
     ``max_concurrent_runs`` caps the activities each poller runs at once (one per run's current
-    step); ``load`` counts the ones running now.
+    step); ``load`` counts the ones running now. ``deployment`` registers both pollers as one
+    version of a worker deployment (supervisor.temporal.rollout).
     """
     assert state.writer is not None
     activities = SessionActivities(
@@ -89,6 +107,8 @@ async def session_worker(
         tuning["interceptors"] = [load.interceptor()]
     if identity:
         tuning["identity"] = identity
+    if deployment is not None:
+        tuning["deployment_config"] = deployment_config(deployment)
     shared = Worker(
         client,
         task_queue=task_queue,
@@ -176,6 +196,16 @@ async def _serve_health(health: Health, port: int, stop: asyncio.Event) -> None:
     await task
 
 
+async def _bootstrap_version(client: Client, deployment: str, build_id: str, mode: str) -> None:
+    from supervisor.temporal.rollout import bootstrap
+
+    try:
+        outcome = await bootstrap(client, deployment, build_id, mode=mode)
+        logger.info("worker version %s.%s: %s", deployment, build_id, outcome)
+    except Exception:
+        logger.exception("worker version %s.%s could not be promoted", deployment, build_id)
+
+
 async def run(settings: Settings, stop: asyncio.Event) -> None:
     state = await bootstrap_supervisor(settings)
     client = await connect(settings.temporal)
@@ -188,11 +218,14 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
     side: list[asyncio.Task[None]] = []
     if cfg.worker_health_port:
         side.append(asyncio.create_task(_serve_health(health, cfg.worker_health_port, finished)))
+    version = WorkerDeploymentVersion(cfg.deployment_name, cfg.build_id) if cfg.versioned else None
     async with session_worker(
         client, state, task_queue=cfg.task_queue, max_concurrent_runs=cfg.max_concurrent_runs,
-        load=load, identity=me,
+        load=load, identity=me, deployment=version,
     ) as activities:
         health.serving = True
+        if version is not None:
+            side.append(asyncio.create_task(_bootstrap_version(client, cfg.deployment_name, cfg.build_id, cfg.rollout)))
         logger.info(
             "session worker up id=%s queue=%s home=%s max_concurrent_runs=%s",
             me, cfg.task_queue, activities.home_queue, cfg.max_concurrent_runs,
@@ -204,7 +237,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
                 return WorkerBeat(
                     worker_id=me, host=socket.gethostname(), task_queue=cfg.task_queue, home_queue=home,
                     max_runs=cfg.max_concurrent_runs, busy=load.busy, started_at_ms=started_ms,
-                    last_seen_ms=int(time.time() * 1000), version=_version(),
+                    last_seen_ms=int(time.time() * 1000), version=cfg.build_id or _version(),
                 )
 
             side.append(asyncio.create_task(heartbeat_loop(state.heartbeats, beat, finished, on_beat=health.on_beat)))

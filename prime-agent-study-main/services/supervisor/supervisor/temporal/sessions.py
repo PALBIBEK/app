@@ -182,6 +182,10 @@ class SessionWorkflows:
     def task_queue(self) -> str:
         return self._task_queue
 
+    @property
+    def client(self) -> Client:
+        return self._client
+
     async def queue_stats(self) -> QueueStats:
         """The session queue as the Temporal server sees it: pollers and backlog."""
         try:

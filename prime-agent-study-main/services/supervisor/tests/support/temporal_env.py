@@ -6,10 +6,14 @@ Set TEMPORAL_CLI_PATH to a local ``temporal`` binary to skip the download
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest_asyncio
+from temporalio.api.enums.v1 import EventType
+from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 
 SUGGEST_CONTINUE_AS_NEW_AFTER = 60
@@ -28,5 +32,38 @@ async def temporal_env() -> AsyncIterator[WorkflowEnvironment]:
     )
     try:
         yield env
+        if out := os.environ.get("RECORD_HISTORIES"):
+            print(f"\nrecorded {await record_histories(env.client, Path(out))} histories to {out}")
     finally:
         await env.shutdown()
+
+
+async def record_histories(client: Client, out: Path, *, per_shape: int = 1) -> int:
+    """Save one closed history per distinct shape (workflow type and the steps it ran) for the
+    release replay gate (tests/fixtures/histories). Run the suite with RECORD_HISTORIES=<dir>."""
+    out.mkdir(parents=True, exist_ok=True)
+    shapes: dict[tuple[str, ...], int] = {}
+    saved = 0
+    query = "(WorkflowType = 'AgentSession' or WorkflowType = 'SubagentJob') and ExecutionStatus != 'Running'"
+    async for run in client.list_workflows(query):
+        history = await client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
+        if not any(e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED for e in history.events):
+            continue
+        steps = sorted({
+            e.activity_task_scheduled_event_attributes.activity_type.name
+            for e in history.events
+            if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+        })
+        markers = sorted({
+            e.marker_recorded_event_attributes.marker_name
+            for e in history.events
+            if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+        })
+        shape = (run.workflow_type, *steps, "|", *markers)
+        if shapes.get(shape, 0) >= per_shape:
+            continue
+        shapes[shape] = shapes.get(shape, 0) + 1
+        doc = {"workflow_id": history.workflow_id, "history": json.loads(history.to_json())}
+        (out / f"{run.workflow_type}-{saved:03d}.json").write_text(json.dumps(doc, separators=(",", ":")))
+        saved += 1
+    return saved

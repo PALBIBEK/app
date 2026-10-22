@@ -42,7 +42,6 @@ from temporalio.workflow import ParentClosePolicy
 from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
     JOB_FINISHED_SIGNAL,
-    NON_RETRYABLE,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
     Accepted,
@@ -88,25 +87,12 @@ with workflow.unsafe.imports_passed_through():
     # Pure, deterministic policy code: the loop guard runs inside the workflow.
     from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard
     from supervisor.policy.types import is_allow_choice
+    from supervisor.temporal.policies import RETRIES, Retry, policy
 
 SEEN_COMMANDS_WINDOW = 1_000
 
-_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=1),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(seconds=30),
-    maximum_attempts=5,
-    non_retryable_error_types=list(NON_RETRYABLE),
-)
-# A retried whole turn may repeat side effects; run_turn refuses to resend after tools ran.
-_TURN_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=2),
-    maximum_attempts=3,
-    non_retryable_error_types=list(NON_RETRYABLE),
-)
-_ONCE = RetryPolicy(maximum_attempts=1)
-_SHORT = timedelta(minutes=2)
-_MODEL_CALL = timedelta(minutes=10)
+# Each step's time limit, retries and heartbeat come from one table (supervisor.temporal.policies).
+_ONCE = RETRIES[Retry.ONCE]
 # Patch id (workflow.patched): histories recorded before lost calls were closed
 # ahead of adoption replay without the extra activity.
 _CLOSE_LOST_BEFORE_ADOPT = "close-lost-call-before-adopt"
@@ -168,7 +154,6 @@ class AgentSessionWorkflow:
         self._session_id = inp.session_id
         self._timing = inp.timing
         self._placement_timeout = timedelta(seconds=inp.timing.placement_timeout_s)
-        self._heartbeat = timedelta(seconds=inp.timing.heartbeat_timeout_s)
         self._state = inp.carried or Carried()
         self._running: Message | None = None
         self._turn: asyncio.Task[object] | None = None
@@ -227,8 +212,7 @@ class AgentSessionWorkflow:
                 activity,
                 arg,
                 result_type=Placement,
-                start_to_close_timeout=_SHORT,
-                retry_policy=_RETRY,
+                **self._options(activity),
             )
             self._state.phase = Phase.IDLE
         except ActivityError as err:
@@ -306,9 +290,7 @@ class AgentSessionWorkflow:
                 CaptureRequest(self._session_id, runs),
                 result_type=int,
                 task_queue=workflow.info().task_queue,  # journal-only: any worker
-                start_to_close_timeout=_MODEL_CALL,
-                heartbeat_timeout=self._heartbeat,
-                retry_policy=_RETRY,
+                **self._options(Activity.CAPTURE_MEMORY),
             )
         except ActivityError as err:
             # Capture is best effort: a failed burst is dropped, never blocks the session.
@@ -320,9 +302,6 @@ class AgentSessionWorkflow:
             Activity.RUN_TURN,
             TurnRequest(self._session_id, message),
             TurnOutcome,
-            start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
-            retry=_TURN_RETRY,
-            heartbeat=True,
             track=True,
             cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
         )
@@ -420,8 +399,6 @@ class AgentSessionWorkflow:
                 Activity.MODEL_STEP,
                 req,
                 StepResult,
-                start_to_close=_MODEL_CALL,
-                heartbeat=True,
                 track=True,
             )
         saving = asyncio.ensure_future(
@@ -432,9 +409,7 @@ class AgentSessionWorkflow:
             dataclasses.replace(req, checkpoint=False),
             result_type=StepResult,
             task_queue=workflow.info().task_queue,
-            start_to_close_timeout=_MODEL_CALL,
-            heartbeat_timeout=self._heartbeat,
-            retry_policy=_RETRY,
+            **self._options(Activity.MODEL_STEP),
             cancellation_type=workflow.ActivityCancellationType.TRY_CANCEL,
         )
         self._turn = thinking
@@ -454,9 +429,7 @@ class AgentSessionWorkflow:
             Activity.TOOL_CALL,
             ToolRequest(self._session_id, run_id, call.call_id, denied=denied),
             bool,
-            start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
-            retry=_ONCE if once else _RETRY,
-            heartbeat=True,
+            retry=_ONCE if once else None,
             track=True,
             # An at-most-once tool whose worker died is not re-run by the adopting worker.
             rerun_after_adopt=not once,
@@ -503,15 +476,22 @@ class AgentSessionWorkflow:
 
     # --- placement -----------------------------------------------------------
 
+    def _options(self, activity: Activity) -> dict[str, Any]:
+        """The step's time limit, heartbeat and retries (supervisor.temporal.policies)."""
+        p = policy(activity)
+        return {
+            "start_to_close_timeout": p.start_to_close(self._timing),
+            "heartbeat_timeout": p.heartbeat_timeout(self._timing),
+            "retry_policy": p.retry_policy,
+        }
+
     async def _session_activity[T](
         self,
         activity: Activity,
         arg: object,
         result_type: type[T],
         *,
-        start_to_close: timedelta = _SHORT,
-        retry: RetryPolicy = _RETRY,
-        heartbeat: bool = False,
+        retry: RetryPolicy | None = None,
         track: bool = False,
         rerun_after_adopt: bool = True,
         lost: LostCall | None = None,
@@ -519,7 +499,14 @@ class AgentSessionWorkflow:
             workflow.ActivityCancellationType.TRY_CANCEL
         ),
     ) -> T:
-        """Run an activity on the worker holding the session's runtime."""
+        """Run an activity on the worker holding the session's runtime.
+
+        Its time limit, heartbeat and retries are the step's policy; ``retry`` overrides the
+        retries for a call that must not repeat (an at-most-once tool or operation).
+        """
+        options = self._options(activity)
+        if retry is not None:
+            options["retry_policy"] = retry
 
         def start(queue: str) -> asyncio.Task[T]:
             return workflow.start_activity(
@@ -528,10 +515,8 @@ class AgentSessionWorkflow:
                 result_type=result_type,
                 task_queue=queue,
                 schedule_to_start_timeout=self._placement_timeout,
-                start_to_close_timeout=start_to_close,
-                heartbeat_timeout=self._heartbeat if heartbeat else None,
-                retry_policy=retry,
                 cancellation_type=cancellation_type,
+                **options,
             )
 
         return await self._on_session_worker(
@@ -571,15 +556,13 @@ class AgentSessionWorkflow:
                         Activity.CLOSE_LOST_CALL,
                         lost,
                         task_queue=workflow.info().task_queue,
-                        start_to_close_timeout=_SHORT,
-                        retry_policy=_RETRY,
+                        **self._options(Activity.CLOSE_LOST_CALL),
                     )
                 self._state.placement = await workflow.execute_activity(
                     Activity.ADOPT,
                     self._session_id,
                     result_type=Placement,
-                    start_to_close_timeout=_SHORT,
-                    retry_policy=_RETRY,
+                    **self._options(Activity.ADOPT),
                 )
                 if not rerun_after_adopt:
                     raise
@@ -637,10 +620,8 @@ class AgentSessionWorkflow:
                 Activity.SESSION_OP,
                 op,
                 OpResult,
-                start_to_close=timedelta(seconds=self._timing.turn_timeout_s),
                 # Side effects run at most once; a placement loss (never started) re-runs.
-                retry=_RETRY if op.kind in RETRYABLE_OPS else _ONCE,
-                heartbeat=True,
+                retry=None if op.kind in RETRYABLE_OPS else _ONCE,
                 lost=lost,
             )
         except ActivityError as err:
@@ -650,8 +631,7 @@ class AgentSessionWorkflow:
                     Activity.CLOSE_LOST_CALL,
                     lost,
                     task_queue=workflow.info().task_queue,
-                    start_to_close_timeout=_SHORT,
-                    retry_policy=_RETRY,
+                    **self._options(Activity.CLOSE_LOST_CALL),
                 )
                 raise ApplicationError(
                     f"tool call {op.op_id!r} outcome unknown: {_failure(err)[1]}",

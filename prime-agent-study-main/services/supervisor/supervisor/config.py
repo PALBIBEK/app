@@ -23,6 +23,13 @@ def _optional_float(name: str) -> float | None:
     return float(raw)
 
 
+def _rollout_mode(raw: str) -> str:
+    mode = raw.strip() or "auto"
+    if mode not in ("auto", "manual"):
+        raise ValueError(f"WORKER_ROLLOUT={raw!r}: use auto or manual")
+    return mode
+
+
 _TEMPORAL_ADDRESS = "localhost:7233"
 _TEMPORAL_NAMESPACE = "default"
 _TEMPORAL_TASK_QUEUE = "supervisor-sessions"
@@ -44,6 +51,16 @@ class TemporalSettings:
     worker_health_port: int = 0
     # Fleet health turns "degraded" once queued work has waited this long for a worker.
     backlog_alert_s: float = 30.0
+    # Worker versioning (supervisor.temporal.rollout): set both to register each deploy's
+    # workers as one version of a worker deployment; empty runs unversioned.
+    deployment_name: str = ""
+    build_id: str = ""
+    # auto: a new build promotes itself once polling; manual: `rollout ramp/promote` does.
+    rollout: str = "auto"
+
+    @property
+    def versioned(self) -> bool:
+        return bool(self.deployment_name and self.build_id)
 
     @classmethod
     def from_env(cls) -> TemporalSettings:
@@ -55,6 +72,9 @@ class TemporalSettings:
             max_concurrent_runs=int(os.environ.get("WORKER_MAX_CONCURRENT_RUNS", "50")),
             worker_health_port=int(os.environ.get("WORKER_HEALTH_PORT", "0")),
             backlog_alert_s=float(os.environ.get("WORKER_BACKLOG_ALERT_S", "30")),
+            deployment_name=os.environ.get("WORKER_DEPLOYMENT_NAME", "").strip(),
+            build_id=os.environ.get("WORKER_BUILD_ID", "").strip(),
+            rollout=_rollout_mode(os.environ.get("WORKER_ROLLOUT", "auto")),
         )
 
 
