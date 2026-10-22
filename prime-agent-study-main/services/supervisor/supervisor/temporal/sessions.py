@@ -9,12 +9,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, Final
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any, Final, Literal
 
 from temporalio.client import (
     Client,
     WithStartWorkflowOperation,
+    WorkflowExecutionStatus,
     WorkflowHandle,
     WorkflowUpdateFailedError,
 )
@@ -28,8 +32,10 @@ from supervisor.temporal.contracts import (
     CreateSession,
     ForkSpec,
     Message,
+    Phase,
     SessionInput,
     SessionOp,
+    SessionResult,
     SessionStatus,
     Timing,
     workflow_id,
@@ -48,6 +54,30 @@ class SessionCommandError(Exception):
 
 class TemporalUnavailable(Exception):
     """Temporal cannot be reached; the command was not delivered."""
+
+
+@dataclass(frozen=True, slots=True)
+class Startup:
+    """Where a session's start stands, answered by the Temporal server (no worker needed).
+
+    ``starting``: accepted, its workflow is setting it up (or waiting for a worker to);
+    ``ready``: it can take messages; ``failed``: it could not be created (``reason`` says why);
+    ``closed``: it ran and has ended.
+    """
+
+    status: Literal["starting", "ready", "failed", "closed"]
+    worker_available: bool
+    reason: str | None = None
+    kind: str | None = None
+    retrying: str | None = None
+    """The setup step failed unexpectedly and Temporal is retrying it: its last error."""
+
+
+_QUICK: Final = timedelta(seconds=3)
+UNSERVED_S: Final = 5.0
+"""Work queued this long with no worker taking it means no worker is serving the session."""
+WORKER_SEEN_WITHIN_S: Final = 90.0
+"""A worker that polled the queue this recently counts as running (they poll every ~minute)."""
 
 
 logger = logging.getLogger(__name__)
@@ -107,10 +137,131 @@ async def _commands() -> AsyncIterator[None]:
         raise
 
 
+def _pending(raw: Any) -> tuple[bool, str | None]:
+    """From a workflow's description: is work waiting with no worker to take it, and is a step
+    failing and being retried (its last error)?"""
+    from temporalio.api.enums.v1 import PendingActivityState, PendingWorkflowTaskState
+
+    now = time.time()
+
+    def waited(ts: Any) -> bool:
+        return bool(ts.seconds) and now - ts.ToSeconds() > UNSERVED_S
+
+    task = raw.pending_workflow_task
+    unserved = task.state == PendingWorkflowTaskState.PENDING_WORKFLOW_TASK_STATE_SCHEDULED and waited(
+        task.scheduled_time
+    )
+    retrying: str | None = None
+    for act in raw.pending_activities:
+        if act.state == PendingActivityState.PENDING_ACTIVITY_STATE_SCHEDULED and waited(act.scheduled_time):
+            unserved = True
+        if act.attempt > 1 and act.last_failure.message:
+            retrying = act.last_failure.message[:500]
+    return unserved, retrying
+
+
+@contextlib.asynccontextmanager
+async def _connecting() -> AsyncIterator[None]:
+    """A lazy client that cannot reach Temporal raises a plain RuntimeError: say so."""
+    try:
+        yield
+    except RuntimeError as exc:
+        if str(exc).startswith("Failed client connect"):
+            raise TemporalUnavailable(str(exc)) from exc
+        raise
+
+
 class SessionWorkflows:
     def __init__(self, client: Client, *, task_queue: str) -> None:
         self._client = client
         self._task_queue = task_queue
+
+    async def worker_available(self) -> bool:
+        """Whether any worker polled this session queue recently (a server-side answer)."""
+        from temporalio.api.enums.v1 import TaskQueueType
+        from temporalio.api.taskqueue.v1 import TaskQueue
+        from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
+
+        now = time.time()
+        for kind in (TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY):
+            try:
+                async with _connecting():
+                    resp = await self._client.workflow_service.describe_task_queue(
+                        DescribeTaskQueueRequest(
+                            namespace=self._client.namespace,
+                            task_queue=TaskQueue(name=self._task_queue),
+                            task_queue_type=kind,
+                        ),
+                        timeout=_QUICK,
+                    )
+            except RPCError as exc:
+                if exc.status in (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED):
+                    raise TemporalUnavailable(str(exc)) from exc
+                raise
+            if not any(
+                now - p.last_access_time.ToSeconds() <= WORKER_SEEN_WITHIN_S for p in resp.pollers
+            ):
+                return False
+        return True
+
+    async def start(
+        self, session_id: str, spec: CreateSession, *, timing: Timing | None = None
+    ) -> None:
+        """Start the session's workflow and return at once (``startup`` reports how it goes).
+
+        The production shape for long work: accept, answer with an id, and let the client
+        watch, rather than hold the request open while a worker sets the session up.
+        """
+        async with _commands():
+            await self._client.start_workflow(
+                AgentSessionWorkflow.run,
+                SessionInput(session_id, create=spec, timing=timing or Timing()),
+                id=workflow_id(session_id),
+                task_queue=self._task_queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                memo={"tenant_id": spec.tenant_id, "principal_id": spec.principal_id or ""},
+            )
+
+    async def startup(self, session_id: str) -> tuple[Startup, dict[str, Any]] | None:
+        """How the session's start went, and its workflow's memo (tenant, principal); None:
+        no such session. Answers whether or not a worker is running."""
+        handle = self._handle(session_id)
+        try:
+            async with _connecting():
+                desc = await handle.describe(rpc_timeout=_QUICK)
+        except RPCError as exc:
+            if exc.status is RPCStatusCode.NOT_FOUND:
+                return None
+            if exc.status in (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED):
+                raise TemporalUnavailable(str(exc)) from exc
+            raise
+        memo = dict(await desc.memo())
+        worker = await self.worker_available()
+        unserved, retrying = _pending(desc.raw_description)
+        worker = worker and not unserved
+        if desc.status is not WorkflowExecutionStatus.RUNNING:
+            try:
+                result: SessionResult = await handle.result(rpc_timeout=_QUICK)
+            except Exception:  # noqa: BLE001 — a crashed or cancelled workflow
+                return Startup("failed", worker, reason="the session's workflow ended unexpectedly"), memo
+            if result.phase is Phase.FAILED and result.error:
+                return Startup("failed", worker, reason=result.error, kind=result.error_kind), memo
+            return Startup("closed", worker), memo
+        if not worker:
+            return Startup("starting", False, retrying=retrying), memo
+        try:
+            # Answered by a worker: kept short, a worker that just died must not stall the answer.
+            st: SessionStatus = await handle.query(
+                AgentSessionWorkflow.status, rpc_timeout=timedelta(seconds=1.5)
+            )
+        except Exception:  # noqa: BLE001 — busy or replaying: still starting as far as we know
+            return Startup("starting", worker, retrying=retrying), memo
+        if st.phase is Phase.CREATING:
+            return Startup("starting", worker, retrying=retrying), memo
+        if st.phase is Phase.FAILED:
+            return Startup("failed", worker, reason=st.error or "the session could not start", kind=st.error_kind), memo
+        return Startup("ready", worker), memo
 
     def _handle(self, session_id: str) -> WorkflowHandle[AgentSessionWorkflow, Any]:
         return self._client.get_workflow_handle_for(

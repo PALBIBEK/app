@@ -189,8 +189,48 @@ async def require_session_access(
     manager = get_manager(request)
     principal_id = request_principal_id(request, tenant_id)
     info = await manager.get(session_id, tenant_id=tenant_id, principal_id=principal_id)
+    if info is None and await _still_starting(request, tenant_id, principal_id, session_id):
+        info = await manager.get(session_id, tenant_id=tenant_id, principal_id=principal_id)
     if info is None:
         raise HTTPException(status_code=404, detail="session not found")
+
+
+STARTING_WAIT_S = 30.0
+"""How long a request for a session that is still starting waits for it to be set up."""
+
+
+async def _still_starting(request: Request, tenant_id: str, principal_id: str, session_id: str) -> bool:
+    """The caller's session was accepted but is not set up yet (sessions start asynchronously):
+    wait until its start ends. True when it then exists (so the request can go on)."""
+    import asyncio
+
+    workflows = get_workflows(request)
+    if workflows is None:
+        return False
+    try:
+        found = await workflows.startup(session_id)
+    except Exception:  # noqa: BLE001 — no workflow to wait for: an ordinary 404
+        return False
+    if found is None:
+        return False
+    startup, memo = found
+    owner = str(memo.get("principal_id") or "")
+    if memo.get("tenant_id") != tenant_id or (owner and principal_id not in (owner, tenant_id)):
+        return False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STARTING_WAIT_S
+    while startup.status == "starting" and loop.time() < deadline:
+        await asyncio.sleep(0.25)
+        found = await workflows.startup(session_id)
+        if found is None:
+            return False
+        startup = found[0]
+    if startup.status == "failed":
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "session_failed_to_start", "message": startup.reason or "the session could not start"},
+        )
+    return startup.status == "ready"
 
 
 def get_manager(request: Request) -> SessionManager:

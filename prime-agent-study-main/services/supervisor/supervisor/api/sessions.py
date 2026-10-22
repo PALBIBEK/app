@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from supervisor.api import deps
 from supervisor.api.schemas import (
@@ -30,6 +34,34 @@ from supervisor.session import (
 from supervisor.temporal.contracts import CreateSession, Message, Op
 from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
 
+NO_WORKER = (
+    "No agent worker is running, so the session cannot start. Start the worker "
+    "(./dev.sh starts it; on its own: python -m supervisor.temporal.worker) and try again."
+)
+
+
+async def _worker_seen(workflows: Any, *, tries: int = 4, gap_s: float = 1.0) -> bool:
+    """A worker is polling (re-checked briefly: a worker that just started is not listed yet)."""
+    for attempt in range(tries):
+        if await workflows.worker_available():
+            return True
+        if attempt < tries - 1:
+            await asyncio.sleep(gap_s)
+    return False
+
+
+class StartupOut(BaseModel):
+    """How a session's start stands: ``starting``, ``ready``, ``failed`` (with ``reason``) or
+    ``closed``; ``worker_available`` says whether a worker is picking work up at all."""
+
+    session_id: str
+    status: str
+    worker_available: bool
+    reason: str | None = None
+    kind: str | None = None
+    retrying: str | None = None
+
+
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
 
@@ -39,26 +71,41 @@ async def create_session(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
     principal: Principal = Depends(deps.current_principal),
-) -> CreateSessionResponse:
+    prefer: str | None = Header(default=None),
+) -> CreateSessionResponse | JSONResponse:
+    """Create a session. With ``Prefer: respond-async`` it answers ``202`` with status
+    ``starting`` as soon as the session's workflow is started, and ``GET .../startup`` reports
+    how it goes (the production shape for work that runs on workers); without it, it waits
+    until the session is ready, but refuses at once when no worker is running."""
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     manager = deps.get_manager(request)
     if (workflows := deps.get_workflows(request)) is not None:
         session_id = uuid4().hex
+        spec = CreateSession(
+            tenant_id=tenant_id,
+            harness_version=body.harness_version,
+            runtime_name=body.runtime,
+            composition_id=body.composition_id,
+            composition_digest=body.composition_digest,
+            scope_id=body.scope_id,
+            principal_id=principal.id,
+            memory=body.memory.model_dump() if body.memory else None,
+        )
+        respond_async = "respond-async" in (prefer or "").lower()
         try:
-            await workflows.create(
-                session_id,
-                CreateSession(
-                    tenant_id=tenant_id,
+            if respond_async:
+                await workflows.start(session_id, spec)
+                started = CreateSessionResponse(
+                    session_id=session_id,
                     harness_version=body.harness_version,
-                    runtime_name=body.runtime,
-                    composition_id=body.composition_id,
-                    composition_digest=body.composition_digest,
-                    scope_id=body.scope_id,
-                    principal_id=principal.id,
-                    memory=body.memory.model_dump() if body.memory else None,
-                ),
-            )
+                    runtime=body.runtime or "",
+                    status="starting",
+                )
+                return JSONResponse(status_code=202, content=started.model_dump(), headers={"Preference-Applied": "respond-async"})
+            if not await _worker_seen(workflows):
+                raise HTTPException(status_code=503, detail={"reason": "no_worker", "message": NO_WORKER})
+            await workflows.create(session_id, spec)
         except (SessionCommandError, TemporalUnavailable) as exc:
             raise to_http(exc) from exc
         info = await manager.get(session_id, tenant_id=tenant_id)
@@ -333,3 +380,38 @@ async def terminate_session(
             raise to_http(exc) from exc
     else:
         await deps.get_manager(request).terminate(session_id)
+
+
+@router.get("/{session_id}/startup", response_model=StartupOut)
+async def session_startup(
+    session_id: str,
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> StartupOut:
+    """Answered by the Temporal server, so it works while no worker runs (it then says so)."""
+    workflows = deps.get_workflows(request)
+    if workflows is None:  # in-process mode: a session exists once created
+        info = await deps.get_manager(request).get(session_id, tenant_id=tenant_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return StartupOut(session_id=session_id, status="ready", worker_available=True)
+    try:
+        found = await workflows.startup(session_id)
+    except TemporalUnavailable as exc:
+        raise to_http(exc) from exc
+    caller = deps.request_principal_id(request, tenant_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    startup, memo = found
+    owner = str(memo.get("principal_id") or "")
+    if memo.get("tenant_id") != tenant_id or (owner and caller not in (owner, tenant_id)):
+        raise HTTPException(status_code=404, detail="session not found")
+    reason = startup.reason
+    if startup.status == "starting" and not startup.worker_available:
+        reason = NO_WORKER
+    elif startup.status == "starting" and startup.retrying:
+        reason = f"Starting the session keeps failing and is being retried: {startup.retrying}"
+    return StartupOut(
+        session_id=session_id, status=startup.status, worker_available=startup.worker_available,
+        reason=reason, kind=startup.kind, retrying=startup.retrying,
+    )

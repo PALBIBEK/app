@@ -239,6 +239,9 @@ jobs:
       - name: Chat journey (kills and restarts the backend mid-stream)
         working-directory: frontend
         run: e2e/ci-run.sh chat-journey.mjs
+      - name: Startup journey (stops the worker, then starts it again)
+        working-directory: frontend
+        run: e2e/ci-run.sh startup-journey.mjs
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v5

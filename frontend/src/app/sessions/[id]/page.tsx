@@ -4,7 +4,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, CircleNotch, WarningCircle } from '@phosphor-icons/react';
@@ -19,11 +19,46 @@ import { useHarness } from '@/lib/api/hooks/useHarnesses';
 import { useReleases } from '@/lib/api/hooks/useManifest';
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useSession } from '@/lib/api/hooks/useSessions';
+import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { getApiErrorMessage } from '@/lib/api/errors';
+import { startupMessage, waitUntilStarted, type SessionStartup } from '@/lib/session/startup';
+
+/** A session that is still starting: wait for it (or show why it could not start). */
+function StartingSession({ sessionId, onReady }: { sessionId: string; onReady: () => void }): JSX.Element {
+  const [progress, setProgress] = useState<SessionStartup | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    let stop = false;
+    void waitUntilStarted(() => sessionsAPI.startup(sessionId), (p) => !stop && setProgress(p), { shouldStop: () => stop })
+      .then((out) => {
+        if (stop) return;
+        if (out.ok) onReady();
+        else setFailed(out.reason);
+      })
+      .catch((err) => !stop && setFailed(getApiErrorMessage(err, 'Could not check the session')));
+    return () => {
+      stop = true;
+    };
+  }, [sessionId, onReady]);
+  return (
+    <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
+      {failed ? (
+        <span data-testid="session-error" className="max-w-2xl text-center text-red-600">{failed}</span>
+      ) : (
+        <>
+          <CircleNotch size={16} className="animate-spin text-primary-500" />
+          <span data-testid="session-starting">{startupMessage(progress)}</span>
+        </>
+      )}
+    </div>
+  );
+}
 
 function SessionPageContent(): JSX.Element {
   const params = useParams();
   const sessionId = typeof params.id === 'string' ? params.id : '';
-  const { data: session, isLoading, error } = useSession(sessionId);
+  const { data: session, isLoading, error, refetch } = useSession(sessionId);
+  const onReady = useCallback(() => void refetch(), [refetch]);
   const { data: harness } = useHarness(session?.harness_id ?? '');
   const { data: releases } = useReleases(session?.harness_id);
   const { data: platform } = usePlatformStatus();
@@ -44,6 +79,11 @@ function SessionPageContent(): JSX.Element {
         <Link href="/sessions" className="mt-3 inline-block font-medium text-primary-600">Back to sessions</Link>
       </div>
     );
+  }
+
+  if (session.status === 'starting') return <StartingSession sessionId={session.id} onReady={onReady} />;
+  if (session.status === 'failed' && !session.last_seq) {
+    return <StartingSession sessionId={session.id} onReady={onReady} />;  // shows why it failed
   }
 
   // The version this session runs (a session keeps its version when the harness is republished).

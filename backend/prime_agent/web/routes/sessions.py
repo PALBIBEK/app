@@ -20,6 +20,7 @@ from prime_agent.schemas.session import (
     SessionMessageRequest,
     SessionMessageResponse,
     SessionResponse,
+    SessionStartupResponse,
     SessionToolInvokeRequest,
     SessionToolInvokeResponse,
     SpawnSubagentRequest,
@@ -81,6 +82,22 @@ async def list_sessions(
         page_size=page_size,
         harness_id=harness_id,
     )
+
+
+@router.get("/{session_id}/startup", response_model=SessionStartupResponse)
+async def get_session_startup(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> SessionStartupResponse:
+    """Where a new session's start stands (poll this after create until ready or failed)."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().startup(
+            session_id=session_id, user_id=current_user.id, identity=identity, db=db
+        )
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

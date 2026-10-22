@@ -3,6 +3,7 @@
  */
 
 import { apiClient } from '../client';
+import type { SessionStartup } from '@/lib/session/startup';
 import { useAuthStore } from '../../store/authStore';
 import {
   Session,
@@ -73,6 +74,10 @@ export const sessionsAPI = {
    * BFF tools invoke — never call supervisor host from the browser (D6 F).
    * POST /sessions/:id/tools/invoke
    */
+  /** Where a new session's start stands: poll after create until `ready` or `failed`. */
+  startup: (sessionId: string): Promise<SessionStartup> =>
+    apiClient.get<SessionStartup>(`/sessions/${encodeURIComponent(sessionId)}/startup`),
+
   invokeTool: async (
     sessionId: string,
     body: { name: string; arguments?: Record<string, unknown>; tool_call_id?: string }

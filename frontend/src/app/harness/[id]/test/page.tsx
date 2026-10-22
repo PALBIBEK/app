@@ -14,6 +14,8 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { SessionChat } from '@/components/session/SessionChat';
 import { ConversationFiles } from '@/components/session/ConversationFiles';
+import { getApiErrorMessage } from '@/lib/api/errors';
+import { startupMessage, waitUntilStarted, type SessionStartup } from '@/lib/session/startup';
 import { WorkspacePanel } from '@/components/session/WorkspacePanel';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { workspaceAPI } from '@/lib/api/endpoints/workspace';
@@ -34,6 +36,7 @@ export default function TestHarnessPage(): JSX.Element {
   const [invoking, setInvoking] = useState<string | null>(null);
   const [invokeResult, setInvokeResult] = useState<string | null>(null);
   const [filesTick, setFilesTick] = useState(0);
+  const [starting, setStarting] = useState<SessionStartup | null>(null);
   const created = useRef<string | null>(null);
   const mounted = useRef(true);
 
@@ -63,10 +66,18 @@ export default function TestHarnessPage(): JSX.Element {
         const s = await sessionsAPI.create({ harness_id: harnessId, scope_id: scope });
         if (!mounted.current) return;
         setScopeId(scope);
-        setSession(s);
+        if (s.status === 'starting') {
+          // Created at once; the agent worker sets it up. Watch until it is ready (or why not).
+          const outcome = await waitUntilStarted(() => sessionsAPI.startup(s.id), (p) => mounted.current && setStarting(p), {
+            shouldStop: () => !mounted.current,
+          });
+          if (!mounted.current) return;
+          if (!outcome.ok) throw new Error(outcome.reason);
+        }
+        setSession({ ...s, status: 'active' });
       } catch (err) {
         created.current = null;
-        if (mounted.current) setError(err instanceof Error ? err.message : 'Failed to create a session');
+        if (mounted.current) setError(getApiErrorMessage(err, 'Failed to create a session'));
       }
     })();
   }, [canRun, harnessId]);
@@ -155,7 +166,8 @@ export default function TestHarnessPage(): JSX.Element {
               </span>
             ) : canRun ? (
               <>
-                <CircleNotch size={16} className="animate-spin text-primary-500" /> Creating session…
+                <CircleNotch size={16} className="animate-spin text-primary-500" />
+                <span data-testid="session-starting">{starting ? startupMessage(starting) : 'Creating session…'}</span>
               </>
             ) : (
               <span className="text-amber-700">{blockedReason}</span>
