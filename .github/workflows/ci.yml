@@ -236,6 +236,9 @@ jobs:
       - name: Memory journey
         working-directory: frontend
         run: e2e/ci-run.sh memory-journey.mjs
+      - name: Environment journey (a shared sandbox setup, built as the run begins)
+        working-directory: frontend
+        run: e2e/ci-run.sh environment-journey.mjs
       - name: Chat journey (kills and restarts the backend mid-stream)
         working-directory: frontend
         run: e2e/ci-run.sh chat-journey.mjs

@@ -60,6 +60,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "BackgroundResults": "event_on_turn",
     "HandProvisioned": "event_on_turn",
     "HandLost": "event_on_turn",
+    "HandStopped": "event_on_turn",
     "HandCheckpointed": "event_on_turn",
     "SubagentStart": "nested_invoke",
     "SubagentEnd": "close_nested",

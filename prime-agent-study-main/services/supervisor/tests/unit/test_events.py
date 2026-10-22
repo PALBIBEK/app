@@ -20,6 +20,7 @@ from supervisor.agent.events import (
     HandCheckpointed,
     HandLost,
     HandProvisioned,
+    HandStopped,
     JobEnd,
     JobStart,
     MemoryContext,
@@ -195,6 +196,7 @@ def test_agent_event_union_covers_all_payloads() -> None:
         HandProvisioned,
         HandCheckpointed,
         HandLost,
+        HandStopped,
         CompactionEnd,
         MemoryRecall,
     }

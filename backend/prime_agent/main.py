@@ -32,6 +32,7 @@ from prime_agent.web.routes import (
     ai,
     auth,
     catalog,
+    environments,
     harnesses,
     health,
     memory,
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     api_router = APIRouter(prefix=settings.api_v1_prefix)
     api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
     api_router.include_router(harnesses.router, prefix="/harnesses", tags=["harnesses"])
+    api_router.include_router(environments.router, prefix="/environments", tags=["environments"])
     api_router.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
     api_router.include_router(tools.router, prefix="/tools", tags=["tools"])
     api_router.include_router(users.router, prefix="/users", tags=["users"])

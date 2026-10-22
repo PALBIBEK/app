@@ -100,6 +100,8 @@ class ToolOps(ApprovalOps):
             )
         if key == session_id and (ws := self._workspace.get(session_id)) is not None:
             self._workspace_svc.assert_ready(ws)
+        if sandbox is not None:
+            self._hands.begin_use(key)  # an idle stop never lands under a running tool
         return HandForCall(hand_id=sandbox.id if sandbox is not None else None, key=key)
 
     async def _lease_refusal(self, key: str, borrower: Borrower | None) -> ToolResult | None:
@@ -124,6 +126,11 @@ class ToolOps(ApprovalOps):
         await self._leases.renew(live)  # acting keeps the lease alive
         return None
 
+    def call_ended(self, hand: HandForCall) -> None:
+        """A call that got a sandbox ended without ``after_call`` (cached, or it raised)."""
+        if hand.hand_id is not None:
+            self._hands.end_use(hand.key or "")
+
     def hand_workspace(self, key: str) -> HandWorkspace:
         """Where a tool acts in one of a session's hands (follows that hand's sandbox)."""
         return HandWorkspace(lambda: self._hands.sandbox(key))
@@ -144,6 +151,7 @@ class ToolOps(ApprovalOps):
         if hand.hand_id is None:
             return result
         key = hand.key or session_id
+        self._hands.end_use(key)
         if result.code == WorkspaceReset.code:
             await self._hands.lose(key, hand.hand_id, result.error or "the sandbox stopped")
             restored = (
@@ -310,6 +318,7 @@ class ToolOps(ApprovalOps):
             trace_id=run_trace,
         )
         if begin.action == "cached" and begin.cached is not None:
+            self.call_ended(hand)
             return ToolInvokeOutcome(tool_call_id=call_id, result=begin.cached)
 
         # Tools block (files, sandboxes, HTTP); off the loop so the worker's heartbeats
@@ -317,7 +326,11 @@ class ToolOps(ApprovalOps):
         if hand.unavailable is not None:
             result = hand.unavailable
         else:
-            result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
+            try:
+                result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
+            except BaseException:
+                self.call_ended(hand)
+                raise
             result = await self.after_call(session_id, hand, name, seams.tool_provider, result)
         result = await self._tool_outbox.complete(
             session_id,

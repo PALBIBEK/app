@@ -6,7 +6,9 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+from supervisor.agent.events import HandStopped
 from supervisor.db.models import SessionIndexRow, SessionRow
+from supervisor.hands.keys import split_key
 from supervisor.sandbox.base import Sandbox, SnapshotUnsupported
 from supervisor.seams.services import (
     WorkspaceConflictError,
@@ -27,7 +29,71 @@ from supervisor.session.manager_children import ChildOps
 
 
 class UpkeepOps(ChildOps):
-    """Keeping sessions healthy over time: idle reaping, deploy drain, workspace refresh."""
+    """Keeping sessions healthy over time: idle reaping, idle sandboxes, deploy drain,
+    workspace refresh."""
+
+    # --- sandbox lifecycle (supervisor.hands.lifecycle) ---------------------------------
+
+    def prewarm(self, session_id: str) -> None:
+        """A run is beginning: start building the session's sandbox (each hand set to start
+        ``with_run``) so the build overlaps the first model call. Never waits, never raises."""
+        for key in self._hands.keys_of(session_id):
+            if self.sandbox_lifecycle.starts_with_run(self._hands.recipe(key)):
+                self._hands.prewarm(key)
+
+    async def stop_idle_sandboxes(self, *, now: float | None = None) -> list[str]:
+        """Save and stop every sandbox idle past its limit; returns the hands stopped.
+
+        Skipped (and looked at again next sweep): a sandbox a tool is using, one lent to
+        another job, one with processes the agent left running (a server would be lost),
+        and one whose save failed: nothing is stopped that its next sandbox cannot restore.
+        """
+        if self._checkpoints is None:
+            return []  # without a store to save to, a stopped sandbox would lose its files
+        stopped: list[str] = []
+        for key in list(self._hands.live):
+            limit = self.sandbox_lifecycle.idle_limit(self._hands.recipe(key))
+            idle = self._hands.idle_for(key, now)
+            if limit <= 0 or idle < limit:
+                continue
+            if self._checkpoints.processes(key):
+                continue
+            try:
+                if await self._leases.current(key) is not None:
+                    continue
+            except Exception:
+                logger.warning("checking a hand's lease failed hand=%s", key, exc_info=True)
+                continue
+            sandbox = self._hands.sandbox(key)
+            if sandbox is None:
+                continue
+            try:
+                if self._checkpoints.due(key) is not None:
+                    await self._ensure_checkpoint_scope(key)
+                    await self._checkpoints.checkpoint(key, sandbox)
+            except Exception:
+                logger.exception("saving an idle sandbox failed; it keeps running hand=%s", key)
+                continue
+            if self._hands.in_use(key) or self._hands.sandbox(key) is not sandbox:
+                continue  # a tool started while it was being saved
+            self._hands.stop(key)
+            try:
+                await sandbox.destroy()
+            except Exception:
+                logger.warning("destroying an idle sandbox failed hand=%s", key, exc_info=True)
+            session_id, hand = split_key(key)
+            await self._record(
+                session_id,
+                HandStopped(
+                    hand_id=sandbox.id, provider=sandbox.info.provider, reason="idle",
+                    idle_s=round(idle, 1), hand=hand,
+                ),
+                turn_id=None,
+                trace_id=self._trace_for(session_id),
+                event_key=f"hand:{sandbox.id}:stopped",
+            )
+            stopped.append(key)
+        return stopped
 
     def reattach_sandbox(self, session_id: str, sandbox: Sandbox) -> None:
         """Bind a live sandbox discovered after supervisor restart."""

@@ -22,6 +22,10 @@ class HandRecipe:
     provider: SandboxProvider
     image: str | None
     labels: Mapping[str, str] = field(default_factory=dict)
+    start: str | None = None
+    """``with_run`` / ``on_first_tool`` (the sandbox profile's); None: the deployment default."""
+    idle_stop_s: int | None = None
+    """Stop after this long idle (0: never); None: the deployment default."""
 
     @property
     def provider_name(self) -> str:

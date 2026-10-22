@@ -176,6 +176,37 @@ starts as soon as a worker is free. `./dev.sh status` prints the same summary (`
 serving, 0/50 runs busy, 0 waiting`), and checks each process by its pid *and* start time, so a
 crashed worker shows as `down` and is not mistaken for another process that took over its pid.
 
+### Sandboxes: environments, start and idle stop
+
+This follows Claude Managed Agents: the sandbox definition is kept apart from the agent, the
+model doesn't wait for its sandbox, and an idle sandbox costs nothing.
+
+- **Environments** (sidebar → Environments) are named sandbox setups that several harnesses
+  share: the provider, file access, approvals, and the two settings below. Start from a preset
+  or build your own. In the builder's Sandbox tab, a harness picks an environment instead of
+  spelling out its sandbox. Publishing copies the environment's settings into the release, so
+  a published version never changes under its sessions. After you edit an environment, each
+  harness using it shows unpublished changes until it's republished. An environment can't be
+  deleted while a harness uses it.
+- **When it starts:**
+  - `with_run`: the sandbox starts building as each run begins, alongside the first model
+    call, so the first tool call doesn't wait.
+  - `on_first_tool`: a sandbox starts only when a tool needs one, so runs that never use a
+    tool never start a container.
+
+  The session bar shows which happened (for example *Sandbox ready · started with the run*).
+- **When it stops:** a sandbox unused for `idle_stop_s` (default 15 minutes, `0` never) is
+  saved and stopped. The session stays, and its next tool call gets a fresh sandbox with the
+  files restored. A sandbox isn't stopped while a tool is using it, while another job holds it,
+  while the agent has left processes running in it (a server would be lost), or if saving it
+  failed.
+
+| Deployment default | Default | For environments that don't say |
+|---|---|---|
+| `SANDBOX_START` | `on_first_tool` | When sandboxes start |
+| `SANDBOX_IDLE_STOP_S` | 900 | Seconds idle before a stop (0: never) |
+| `SANDBOX_IDLE_SWEEP_S` | 30 | How often each worker looks for idle sandboxes |
+
 ## Workspace files
 
 A workspace owns its files and decides who may see them (*Shared with*). Every save is a new
