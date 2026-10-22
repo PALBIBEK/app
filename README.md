@@ -176,6 +176,71 @@ starts as soon as a worker is free. `./dev.sh status` prints the same summary (`
 serving, 0/50 runs busy, 0 waiting`), and checks each process by its pid *and* start time, so a
 crashed worker shows as `down` and is not mistaken for another process that took over its pid.
 
+### Safe deploys
+
+A deploy should never break a run in progress. This follows Temporal's pattern, the one used
+by the OpenAI Agents SDK on Temporal: the workflow holds the plan, and each model call and
+tool call is its own step with its own limits. A crash or a deploy costs at most the step in
+flight.
+
+**Versioned workers.** Set `WORKER_DEPLOYMENT_NAME` and `WORKER_BUILD_ID` (for example the
+image tag), and each deploy's workers register as one version of a Temporal worker deployment.
+New sessions start on the deployment's *current* version. Running sessions move to the new
+build at their next step (every workflow auto-upgrades), so the old workers can stop as soon as
+the new build is current. A version's first worker promotes itself when the deployment has no
+current version. After that, `WORKER_ROLLOUT=auto` (the default) promotes each new build once
+it polls, and `manual` leaves it to you:
+
+| Command (`python -m supervisor rollout …`) | Does |
+|---|---|
+| `check` | The pre-deploy gate: replays the histories of running (then recent) workflows against the code about to ship, and exits 1 if any can't be reproduced |
+| `status` | Current and ramping builds, each version's state, and which old builds are safe to stop |
+| `ramp BUILD PCT` | Sends PCT % of new sessions to BUILD (0 stops the ramp) |
+| `promote BUILD` | Makes BUILD current |
+| `export DIR` / `check --dir DIR` | Saves histories, or replays saved ones |
+| `policies` | Prints the table below |
+
+`GET /v1/ops/rollout` shows the same status. A manual rollout looks like this: run `check`
+against production with the new image; start the new workers; `ramp` 10 %; watch
+`/v1/ops/workers` and the traces; `promote`; stop the old workers.
+
+**Changing workflow code.** A change that alters which steps a workflow schedules (adding,
+removing or reordering one) must be guarded with `workflow.patched("<id>")`, so histories
+recorded before it replay the old way. CI enforces this:
+`tests/unit/test_release_replay.py` replays every history in `tests/fixtures/histories/`
+(recorded by earlier releases) against the current code, and fails on any it can't
+reproduce. Record a release's histories after it merges with
+`RECORD_HISTORIES=tests/fixtures/histories/r<commit> pytest tests/integration`. Changing a
+time limit or a retry is always safe.
+
+**Each step's limits** (from `supervisor/temporal/policies.py`, which the workflows use; a test
+keeps this copy current). A step that stops heartbeating is treated as a dead worker. A step
+waiting for a session's worker that is gone (60 s placement limit) is adopted by another worker.
+
+<!-- step-policies:start -->
+| Step | Does | Where | Time limit | Heartbeat | Retries | If its worker dies |
+|---|---|---|---|---|---|---|
+| `session.create` | Set up a new session | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (creating is idempotent) |
+| `session.fork` | Copy a session's journal into a new one | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
+| `session.adopt` | Take over a session whose worker is gone | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
+| `session.prepare_turn` | Check budget and recovery before a message runs; start the sandbox (with_run) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.begin_run` | Open a run: journal the message, plan the steps | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.model_step` | One model call (needs no sandbox, so any worker thinks) | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the model call is retried on another worker |
+| `session.checkpoint` | Save what the last tools changed in the sandbox (beside the model call) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | skipped; a lost checkpoint costs a restore, never the turn |
+| `session.tool_call` | One tool call in the sandbox | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for at-most-once tools) | re-run on the adopting worker; an at-most-once tool is not: its call is closed as lost and the run ends, saying so |
+| `session.request_approval` | Ask a person (the wait itself is a durable timer, not a step) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.resolve_approval` | Record an answer, or the timeout's choice | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.end_run` | Close a run: final answer, usage, why it stopped | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | a call left half done is closed first, then the session is adopted |
+| `session.run_turn` | A whole runtime-driven turn (non-stepped harnesses) | session worker | turn limit (24 h) | every 30 s | 3 attempts, 2 s apart | heartbeats stop; retried after adoption, but never resent once tools ran |
+| `session.respond_approval` | Deliver an answer to a runtime-driven turn | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.op` | Tool invoke, memory, subagents, workspace | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for operations with side effects) | an operation with side effects is not re-run: a tool invoke is closed as lost and reported as outcome unknown |
+| `session.close_lost_call` | Close a call whose worker died | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (journal only) |
+| `session.terminate` | End the session: stop its runtime and sandbox | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.capture_memory` | Save durable facts from a burst of turns | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried elsewhere; a burst that keeps failing is dropped (best effort) |
+| `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the job is retried on another worker, never lost |
+| `subagent.end_job` | Record how a background job ended | any worker | 2 min | no | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
+<!-- step-policies:end -->
+
 ### Sandboxes: environments, start and idle stop
 
 This follows Claude Managed Agents: the sandbox definition is kept apart from the agent, the

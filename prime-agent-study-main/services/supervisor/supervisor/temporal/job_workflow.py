@@ -11,34 +11,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError, is_cancelled_exception
 
 with workflow.unsafe.imports_passed_through():
     from supervisor.temporal.contracts import (
         JOB_FINISHED_SIGNAL,
-        NON_RETRYABLE,
         Activity,
         JobEndRequest,
         JobOutcome,
         JobSpec,
         workflow_id,
     )
+    from supervisor.temporal.policies import policy
 
-# A failing provider is retried a few times, then the job ends in error.
-_JOB_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=2),
-    backoff_coefficient=2.0,
-    maximum_attempts=5,
-    non_retryable_error_types=list(NON_RETRYABLE),
-)
-_END_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=30)
-)
-_SHORT = timedelta(minutes=2)
+# Time limits, heartbeats and retries: supervisor.temporal.policies (RUN_JOB, END_JOB).
 
 
 @workflow.defn(name="SubagentJob")
@@ -50,9 +38,9 @@ class SubagentJobWorkflow:
                 Activity.RUN_JOB,
                 spec,
                 result_type=JobOutcome,
-                start_to_close_timeout=timedelta(seconds=spec.timing.turn_timeout_s),
-                heartbeat_timeout=timedelta(seconds=spec.timing.heartbeat_timeout_s),
-                retry_policy=_JOB_RETRY,
+                start_to_close_timeout=policy(Activity.RUN_JOB).start_to_close(spec.timing),
+                heartbeat_timeout=policy(Activity.RUN_JOB).heartbeat_timeout(spec.timing),
+                retry_policy=policy(Activity.RUN_JOB).retry_policy,
             )
         except (ActivityError, asyncio.CancelledError) as err:
             if is_cancelled_exception(err):  # interrupted: the session cancelled this job
@@ -75,6 +63,6 @@ class SubagentJobWorkflow:
             Activity.END_JOB,
             JobEndRequest(spec, stop_reason, output),
             result_type=JobOutcome,
-            start_to_close_timeout=_SHORT,
-            retry_policy=_END_RETRY,
+            start_to_close_timeout=policy(Activity.END_JOB).start_to_close(spec.timing),
+            retry_policy=policy(Activity.END_JOB).retry_policy,
         )

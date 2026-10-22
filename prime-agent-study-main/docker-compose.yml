@@ -46,6 +46,8 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-supervisor-sessions}
+      # Workers register as versions of this worker deployment (python -m supervisor rollout).
+      WORKER_DEPLOYMENT_NAME: ${WORKER_DEPLOYMENT_NAME:-yal-supervisor}
       # PROFILE=dev: local stack may run with auth relaxed. Staging/prod must not.
       PROFILE: ${PROFILE:-dev}
       ENV: ${ENV:-development}
@@ -117,6 +119,10 @@ services:
       <<: *supervisor-env
       WORKER_MAX_CONCURRENT_RUNS: ${WORKER_MAX_CONCURRENT_RUNS:-50}
       WORKER_HEALTH_PORT: "8081"
+      # This build's version (set it to the image tag); a new build promotes itself once it
+      # polls (WORKER_ROLLOUT=manual to ramp and promote by hand).
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-local}
+      WORKER_ROLLOUT: ${WORKER_ROLLOUT:-auto}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8081/readyz', timeout=3)"]
       interval: 10s

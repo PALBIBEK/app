@@ -1,0 +1,22 @@
+# The pre-deploy replay gate: run the NEW image against the cluster's Temporal before rolling
+# it out. It replays the histories of running (then recent) sessions with the new workflow code
+# and fails (exit 1) if any cannot be reproduced: that build would break runs in flight.
+#   kubectl -n yal-control apply -f rollout-check-job.yaml && kubectl -n yal-control wait --for=condition=complete job/yal-rollout-check
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: yal-rollout-check
+  namespace: yal-control
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: yal-supervisor:REPLACE_WITH_NEW_IMAGE_TAG
+          args: ["rollout", "check", "--limit", "200"]
+          envFrom:
+            - secretRef:
+                name: yal-gateway-credentials

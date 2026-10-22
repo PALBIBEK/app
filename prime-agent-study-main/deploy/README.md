@@ -85,6 +85,21 @@ wait in Temporal and nothing is lost.
 - Autoscaling on queue backlog and busy slots rather than CPU: `k8s/worker-autoscaling.yaml`
   (KEDA). A worker waiting on a model uses little CPU even when its slots are full.
 
+### Safe deploys
+
+Workers register as versions of the `yal-supervisor` worker deployment, with the image tag as
+the build id (`WORKER_DEPLOYMENT_NAME`, `WORKER_BUILD_ID`). Sessions auto-upgrade to each new
+build, so a rolling update of `worker-deployment.yaml` (with `WORKER_ROLLOUT=auto`) is safe.
+
+1. Before rolling out a new image, run `k8s/rollout-check-job.yaml` with that image. It
+   replays running sessions against the new code and fails if any would break.
+2. Roll out the image.
+3. Check with `python -m supervisor rollout status`, or `GET /v1/ops/rollout` on the API.
+
+For blue/green, run one Deployment per build with `WORKER_ROLLOUT=manual`, then use
+`rollout ramp BUILD 10` and `rollout promote BUILD`. The root README's "Safe deploys" has each
+step's time limit, retries and worker-death behaviour.
+
 ### Metrics
 
 ```bash

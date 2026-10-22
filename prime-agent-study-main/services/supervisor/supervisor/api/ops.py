@@ -43,6 +43,29 @@ async def workers(request: Request, _tenant: str = Depends(deps.current_tenant))
     return asdict(await fleet_status(request))
 
 
+@router.get("/rollout")
+async def rollout_status(request: Request, _tenant: str = Depends(deps.current_tenant)) -> dict[str, Any]:
+    """The worker deployment's versions (current, ramping, draining, drained); ``versioned``
+    is false where workers run unversioned (``WORKER_DEPLOYMENT_NAME`` unset)."""
+    from supervisor.config import TemporalSettings
+    from supervisor.temporal import rollout
+
+    state = getattr(request.app.state, "supervisor", None)
+    workflows = getattr(state, "workflows", None)
+    deployment = TemporalSettings.from_env().deployment_name
+    if not deployment:
+        return {"versioned": False}
+    if workflows is None:
+        raise HTTPException(status_code=503, detail="sessions do not run on Temporal here")
+    try:
+        found = await rollout.status(workflows.client, deployment)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Temporal is unreachable: {exc}") from exc
+    if found is None:
+        return {"versioned": True, "deployment": deployment, "current_build": None, "versions": []}
+    return {"versioned": True, **asdict(found)}
+
+
 @router.get("/workers/metrics", response_class=PlainTextResponse)
 async def workers_metrics(request: Request) -> PlainTextResponse:
     """The fleet as Prometheus gauges (counts only, like ``/metrics``)."""

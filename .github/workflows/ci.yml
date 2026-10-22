@@ -186,6 +186,9 @@ jobs:
             .venv/bin/python -m pytest -q tests/contract -p no:cacheprovider
       - name: End-to-end stages
         run: $PROJECT/e2e/run.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
+      - name: The replay gate against the live stack (every workflow the stages ran)
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: TEMPORAL_ADDRESS=127.0.0.1:7233 .venv/bin/python -m supervisor rollout check --limit 200
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v5

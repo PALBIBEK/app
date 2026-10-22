@@ -19,6 +19,8 @@ spec:
     metadata:
       labels:
         app: yal-supervisor-worker
+        # Set by your pipeline to the image tag: it becomes this build's worker version.
+        app.kubernetes.io/version: "REPLACE_WITH_IMAGE_TAG"
     spec:
       # In-flight steps get 30s to finish (graceful_shutdown_timeout), then live runtimes park.
       terminationGracePeriodSeconds: 75
@@ -34,6 +36,18 @@ spec:
               value: "50"
             - name: WORKER_HEALTH_PORT
               value: "8081"
+            # Safe deploys (README "Safe deploys"): each build is a version of this deployment.
+            - name: WORKER_DEPLOYMENT_NAME
+              value: yal-supervisor
+            - name: WORKER_BUILD_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            # auto suits this rolling Deployment: each new pod promotes its build once polling,
+            # and sessions move to it at their next step. For blue/green (one Deployment per
+            # build, e.g. with the Temporal Worker Controller) use manual and `rollout ramp/promote`.
+            - name: WORKER_ROLLOUT
+              value: auto
             - name: DRAIN_GRACE_S
               value: "30"
             - name: IDLE_REAP_MAX_SECONDS

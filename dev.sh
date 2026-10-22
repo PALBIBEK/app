@@ -199,9 +199,12 @@ s3.put_bucket_cors(Bucket="yal-workspace", CORSConfiguration={"CORSRules": [{
 EOF
 
   say "starting the supervisor (API :8080, memory :8092) and its worker"
-  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 '$SPY' -m supervisor api"
+  # Workers register as one version of the yal-dev worker deployment (supervisor.temporal.rollout):
+  # the git commit, so `python -m supervisor rollout status` shows what each restart runs.
+  BUILD_ID=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
+  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 WORKER_DEPLOYMENT_NAME=yal-dev '$SPY' -m supervisor api"
   wait_http supervisor http://127.0.0.1:8080/readyz 120
-  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv WORKER_HEALTH_PORT=8091 '$SPY' -m supervisor worker"
+  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv WORKER_HEALTH_PORT=8091 WORKER_DEPLOYMENT_NAME=yal-dev WORKER_BUILD_ID=$BUILD_ID '$SPY' -m supervisor worker"
 
   say "starting the backend (:8000) and the frontend (:3000)"
   start backend "cd '$ROOT/backend' && env -u OPENROUTER_API_KEY ENVIRONMENT=development \
