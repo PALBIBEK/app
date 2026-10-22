@@ -1,8 +1,9 @@
 'use client';
 
-import { WarningCircle } from '@phosphor-icons/react';
+import { Info, WarningCircle } from '@phosphor-icons/react';
 
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
+import { workersNotice } from '@/lib/platform/workers';
 import { cn } from '@/lib/utils';
 
 const REASON_COPY: Record<string, string> = {
@@ -26,8 +27,27 @@ const REASON_COPY: Record<string, string> = {
 export function AiPlatformBanner({ className }: { className?: string }): JSX.Element | null {
   const { data, isLoading, isError } = usePlatformStatus();
 
-  if (isLoading || isError || !data || data.run_allowed) {
+  if (isLoading || isError || !data) {
     return null;
+  }
+
+  if (data.run_allowed) {
+    // Runs are allowed, but they may wait: no worker, or workers behind.
+    const notice = workersNotice(data.workers);
+    if (!notice) return null;
+    return (
+      <div
+        role="status"
+        data-testid="workers-banner"
+        className={cn('flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900', className)}
+      >
+        <Info size={18} weight="fill" className="mt-0.5 flex-shrink-0 text-sky-600" />
+        <div>
+          <p className="font-semibold">{notice.title}</p>
+          <p className="mt-0.5 text-sky-800">{notice.message}</p>
+        </div>
+      </div>
+    );
   }
 
   const reason = data.components.supervisor?.reason ?? 'not_ready';

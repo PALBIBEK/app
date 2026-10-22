@@ -21,5 +21,7 @@ export function usePlatformStatus() {
     enabled: isAuthenticated,
     staleTime: 5_000,
     refetchOnWindowFocus: true,
+    // Check often while workers are missing or behind, so the notice clears once they recover.
+    refetchInterval: (query) => (query.state.data?.workers && query.state.data.workers.status !== 'ok' ? 5_000 : 30_000),
   });
 }

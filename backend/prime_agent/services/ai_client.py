@@ -204,6 +204,11 @@ class AiClient:
         """GET supervisor /readyz — returns structured ready/not-ready (no raise on 503)."""
         return await self._request("/readyz", identity, allow_not_ready=True)
 
+    async def worker_fleet(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """GET /v1/ops/workers: who serves the session queue, how busy, what waits."""
+        payload = await self._json_request("GET", "/v1/ops/workers", identity, expected=(200,), timeout=5.0)
+        return payload if isinstance(payload, dict) else {}
+
     async def get_artifact(
         self,
         identity: TenantPrincipal,

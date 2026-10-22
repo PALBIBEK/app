@@ -28,6 +28,7 @@ from supervisor.session import SessionManager, SessionRegistry
 from supervisor.vault import Keyring, Vault
 
 if TYPE_CHECKING:
+    from supervisor.temporal.fleet import WorkerHeartbeats
     from supervisor.temporal.sessions import SessionWorkflows
 
 
@@ -60,6 +61,8 @@ class SupervisorState:
     memory: MemoryPlatform | None = None
     # Every session runs as a Temporal workflow; None only in tests that drive the manager directly.
     workflows: SessionWorkflows | None = None
+    # Live workers' heartbeats (supervisor.temporal.fleet): slots and load per worker.
+    heartbeats: WorkerHeartbeats | None = None
 
 
 def build_supervisor(
@@ -128,6 +131,8 @@ def build_supervisor(
         vault=vault,
     )
 
+    from supervisor.temporal.fleet import WorkerHeartbeats
+
     async def check_db() -> bool:
         async with session_factory() as db:
             await db.execute(text("SELECT 1"))
@@ -166,4 +171,5 @@ def build_supervisor(
         runners=runners,
         writer=writer,
         memory=memory,
+        heartbeats=WorkerHeartbeats(session_factory),
     )

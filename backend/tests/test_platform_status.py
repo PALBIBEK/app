@@ -263,3 +263,42 @@ async def test_system_ready_still_200_when_ai_supervisor_unreachable(
     assert ready.json()["database"] == "connected"
     # unauthenticated status still 401 — AI down does not change that
     assert status.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_platform_status_reports_the_worker_fleet_in_counts_without_blocking_runs(
+    db_session, owner, platform_settings, monkeypatch
+):
+    fleet = {
+        "status": "down", "task_queue": "supervisor-sessions", "polling": 0,
+        "workers": [{"worker_id": "host-a-1", "host": "host-a"}], "slots_max": 0, "slots_busy": 0,
+        "backlog": 2, "backlog_age_s": 41.0, "add_rate": 0.1, "dispatch_rate": 0.0,
+        "alerts": [
+            {"code": "no_workers", "message": "No agent worker is running: new sessions and messages wait until one starts"},
+            {"code": "something_new", "message": "ignored"},
+        ],
+        "checked_at_ms": 1,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/ops/workers":
+            return httpx.Response(200, json=fleet)
+        return httpx.Response(200, json={"status": "ready"})
+
+    _patch_client(monkeypatch, platform_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        body = (await api.get("/api/v1/platform/status")).json()
+
+    assert body["run_allowed"] is True  # work waits in Temporal; it is not refused
+    assert body["workers"] == {
+        "status": "down", "polling": 0, "slots_busy": 0, "slots_max": 0, "backlog": 2, "backlog_age_s": 41.0,
+        "alerts": [{"code": "no_workers", "message": fleet["alerts"][0]["message"]}],
+    }
+    assert "host-a" not in str(body)  # no hosts or worker ids reach the product

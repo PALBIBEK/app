@@ -1,0 +1,26 @@
+# Optional: scale workers on the work waiting for them (needs KEDA and Prometheus scraping
+# the API's GET /v1/ops/workers/metrics). Queue backlog, not CPU, is the signal: a worker
+# waiting on a model is idle on CPU but its slots are full.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: yal-supervisor-worker
+  namespace: yal-control
+spec:
+  scaleTargetRef:
+    name: yal-supervisor-worker
+  minReplicaCount: 1  # never zero: sessions would wait for a cold start
+  maxReplicaCount: 20
+  cooldownPeriod: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        # Busy slots per worker: add a worker when the fleet passes 70% of its slots.
+        query: sum(yal_worker_slots_busy) / clamp_min(sum(yal_worker_slots), 1) * count(up{job="yal-supervisor-worker"})
+        threshold: "0.7"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        query: max(yal_task_queue_backlog)
+        threshold: "5"

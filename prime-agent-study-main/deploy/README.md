@@ -72,6 +72,19 @@ Kubernetes: template keys live in `k8s/external-secret-gateway.yaml` (ESO →
 
 Metrics snapshot: `GET /metrics` on each supervisor replica.
 
+### Session workers
+
+The supervisor image has two roles: `args: ["api"]` (supervisor-deployment.yaml) and
+`args: ["worker"]` (worker-deployment.yaml). Workers carry `WORKER_MAX_CONCURRENT_RUNS` runs
+each and answer `/healthz` and `/readyz` on `WORKER_HEALTH_PORT` (8081). Keep at least one
+worker running; the PodDisruptionBudget does this during drains. With none running, sessions
+wait in Temporal and nothing is lost.
+
+- Fleet health: `GET /v1/ops/workers` on the API (JSON), and `GET /v1/ops/workers/metrics`
+  (Prometheus) for `alerts/workers.rules.yml`.
+- Autoscaling on queue backlog and busy slots rather than CPU: `k8s/worker-autoscaling.yaml`
+  (KEDA). A worker waiting on a model uses little CPU even when its slots are full.
+
 ### Metrics
 
 ```bash

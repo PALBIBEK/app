@@ -435,3 +435,21 @@ class RunnerCommandRow(Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     claimed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class WorkerHeartbeatRow(Base):
+    """A live session worker: refreshed every few seconds, removed on a clean stop
+    (``supervisor.temporal.fleet``)."""
+
+    __tablename__ = "worker_heartbeats"
+    __table_args__ = (Index("ix_worker_heartbeats_queue", "task_queue", "last_seen_ms"),)
+
+    worker_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    task_queue: Mapped[str] = mapped_column(String(255), nullable=False)
+    home_queue: Mapped[str] = mapped_column(String(255), nullable=False)
+    max_runs: Mapped[int] = mapped_column(Integer, nullable=False)
+    busy: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    last_seen_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)

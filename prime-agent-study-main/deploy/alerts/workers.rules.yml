@@ -1,0 +1,30 @@
+# Prometheus alert rules for the session worker fleet. Scrape the supervisor API's
+# GET /v1/ops/workers/metrics (any API replica: the numbers come from Temporal and the
+# workers' heartbeats, so every replica reports the same fleet).
+groups:
+  - name: yal-workers
+    rules:
+      - alert: YalNoSessionWorkers
+        expr: max(yal_workers_serving) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: No session worker is polling {{ $labels.task_queue }}
+          description: New sessions and messages are waiting in Temporal (nothing is lost). Start a worker (python -m supervisor worker).
+      - alert: YalSessionBacklog
+        expr: max(yal_task_queue_backlog_age_seconds) > 60
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: Work has waited over a minute for a session worker
+          description: Add workers, or raise WORKER_MAX_CONCURRENT_RUNS if they have CPU and memory to spare.
+      - alert: YalWorkersAtCapacity
+        expr: sum(yal_worker_slots_busy) >= sum(yal_worker_slots) and sum(yal_worker_slots) > 0
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: Every session worker slot is busy
+          description: New runs wait for a free slot. Scale the worker Deployment.
