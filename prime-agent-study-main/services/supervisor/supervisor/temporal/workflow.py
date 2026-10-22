@@ -758,6 +758,16 @@ class AgentSessionWorkflow:
             self._turn.cancel()
 
     @workflow.update
+    async def cancel_queued(self, command_id: str) -> bool:
+        """Drop a message still waiting behind another run; False when it is not queued (it
+        is running, already ran, or was never sent)."""
+        for i, message in enumerate(self._state.pending):
+            if message.command_id == command_id:
+                del self._state.pending[i]
+                return True
+        return False
+
+    @workflow.update
     async def terminate(self) -> SessionStatus:
         self._terminate_requested = True
         await workflow.wait_condition(lambda: self._state.phase in (Phase.TERMINATED, Phase.FAILED))

@@ -17,6 +17,7 @@ from prime_agent.schemas.session import (
     CreateSessionFromHarness,
     ForkSessionRequest,
     ForkSessionResponse,
+    RunResponse,
     SessionApprovalChoice,
     SessionApprovalOut,
     SessionChildOut,
@@ -195,6 +196,28 @@ class SessionService:
     ) -> SessionResponse:
         link = await self._get_owned(session_id, user_id, db)
         return await self._maybe_refresh(link, identity=identity, db=db)
+
+    async def _run_call(self, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession, call):  # noqa: ANN001
+        link = await self._get_owned(session_id, user_id, db)
+        try:
+            return await call(link.ai_session_id)
+        except AiUpstreamError as exc:
+            raise HTTPException(
+                status_code=exc.status_code or 503,
+                detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
+            ) from exc
+
+    async def list_runs(self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession, limit: int = 20) -> list[RunResponse]:
+        rows = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.list_runs(identity, sid, limit=limit))
+        return [RunResponse.model_validate(r) for r in rows]
+
+    async def get_run(self, *, session_id: str, run_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> RunResponse:
+        raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.get_run(identity, sid, run_id))
+        return RunResponse.model_validate(raw)
+
+    async def cancel_run(self, *, session_id: str, run_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> RunResponse:
+        raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.cancel_run(identity, sid, run_id))
+        return RunResponse.model_validate(raw)
 
     async def startup(
         self,

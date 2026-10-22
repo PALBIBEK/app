@@ -54,6 +54,31 @@ export const SessionMessageResponseSchema = z.object({
   queued: z.boolean().default(false),
 });
 
+/** One run: what happened to one message (fetched by the turn_id its message got). */
+export const RunSchema = z.object({
+  run_id: z.string(),
+  command_id: z.string(),
+  status: z.enum(['queued', 'in_progress', 'requires_action', 'completed', 'failed', 'cancelled', 'incomplete']),
+  created_at_ms: z.number(),
+  started_at_ms: z.number().nullable().default(null),
+  ended_at_ms: z.number().nullable().default(null),
+  stop_reason: z.string().nullable().default(null),
+  output_text: z.string().nullable().default(null),
+  error: z.record(z.string()).nullable().default(null),
+  usage: z
+    .object({
+      input_tokens: z.number().default(0),
+      output_tokens: z.number().default(0),
+      total_tokens: z.number().default(0),
+      cost: z.number().default(0),
+    })
+    .partial()
+    .default({}),
+  steps: z.number().default(0),
+  tool_calls: z.number().default(0),
+  pending_approval_id: z.string().nullable().default(null),
+});
+
 export const WireEventSchema = z.object({
   seq: z.number(),
   event_id: z.string(),
@@ -67,6 +92,7 @@ export type Session = z.infer<typeof SessionSchema>;
 export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
 export type SessionMessageResponse = z.infer<typeof SessionMessageResponseSchema>;
 export type WireEvent = z.infer<typeof WireEventSchema>;
+export type Run = z.infer<typeof RunSchema>;
 
 export interface SessionCreateRequest {
   harness_id: string;

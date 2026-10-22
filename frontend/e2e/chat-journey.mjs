@@ -101,6 +101,35 @@ await p.getByTestId('queued').first().waitFor({ state: 'detached', timeout: 1500
 check(await p.getByTestId('queued').count() === 0, 'no queued badge left once it ran');
 console.log('5 queued message ran');
 
+// Runs by id: a queued message is cancelled before it runs; Stop cancels the run going now (by
+// its id, safe to repeat); the runs panel shows each run's status.
+await box.fill('/tool bash {"command": "echo never"}');
+await box.press('Enter');
+await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });
+await p.getByPlaceholder(/Send another/).fill('this one never runs');
+await p.getByPlaceholder(/Send another/).press('Enter');
+await p.getByTestId('queued-cancel').click({ timeout: 10000 });
+await p.getByTestId('never-ran').waitFor({ timeout: 15000 });
+await p.getByTestId('runs-toggle').click();
+await p.locator('[data-testid=run-row][data-status=requires_action]').waitFor({ timeout: 15000 });
+check(await p.locator('[data-testid=run-row][data-status=cancelled]').count() >= 1, 'the queued run shows as cancelled');
+const going = await p.locator('[data-testid=run-row][data-status=requires_action]').getAttribute('data-run-id');
+await p.getByTestId('stop').click();
+await p.locator(`[data-testid=run-row][data-run-id="${going}"][data-status=cancelled]`).waitFor({ timeout: 30000 });
+await p.getByTestId('approval-banner').waitFor({ state: 'detached', timeout: 30000 });
+await p.waitForTimeout(2000);
+check(await p.getByText('echo:this one never runs').count() === 0, 'the cancelled message never ran');
+const A2 = await apiHeaders();
+const sessions = await (await fetch(`${API}/sessions?harness_id=${hid}`, { headers: A2 })).json();
+check(sessions.data.length === 1, `one session for the harness (${sessions.data.length})`);
+const sid = sessions.data[0].id;
+const fetched = await fetch(`${API}/sessions/${sid}/runs/${going}`, { headers: A2 });
+const again = await fetch(`${API}/sessions/${sid}/runs/${going}/cancel`, { method: 'POST', headers: A2 });
+check(fetched.status === 200 && (await fetched.json()).status === 'cancelled', `fetch by id: 200 once ended (${fetched.status})`);
+check(again.status === 200 && (await again.json()).stop_reason === 'aborted', 'cancel again is a no-op');
+console.log('5b runs:', (await p.getByTestId('run-history').innerText()).split('\n').slice(0, 6).join(' | '));
+await p.getByTestId('runs-toggle').click();
+
 // Drop the connection and come back: no duplicates, nothing lost.
 const before = await p.locator('text=echo:hello there').count();
 // Kill the backend (as a crash would) and start it again with ./dev.sh: the stream

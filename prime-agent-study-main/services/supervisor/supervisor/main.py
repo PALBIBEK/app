@@ -27,6 +27,7 @@ from supervisor.api import (
     models,
     notebooks,
     runners,
+    runs,
     scopes,
     session_files,
     sessions,
@@ -179,6 +180,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(harness.router)
     app.include_router(workspace.router)
     app.include_router(session_files.router)
+    app.include_router(runs.router)
     app.include_router(scopes.router)
     app.include_router(memory.router)
     app.include_router(notebooks.router)

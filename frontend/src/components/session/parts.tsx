@@ -172,7 +172,21 @@ export function ApprovalCard({
   );
 }
 
-export function MessageBubble({ message, queued, onFork }: { message: ChatMessage; queued?: boolean; onFork?: () => void }): JSX.Element {
+export function MessageBubble({
+  message,
+  queued,
+  cancelled,
+  onCancel,
+  onFork,
+}: {
+  message: ChatMessage;
+  queued?: boolean;
+  /** Its run was cancelled before it started: the message never ran. */
+  cancelled?: boolean;
+  /** Cancel a queued message's run. */
+  onCancel?: () => void;
+  onFork?: () => void;
+}): JSX.Element {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const ts = new Date(message.timestamp);
@@ -210,6 +224,12 @@ export function MessageBubble({ message, queued, onFork }: { message: ChatMessag
         ) : null}
         <p className={cn('text-xs text-slate-400', isUser && 'text-right')}>
           {queued ? <span data-testid="queued" className="mr-2 rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Queued: runs after the current turn</span> : null}
+          {queued && onCancel ? (
+            <button type="button" onClick={onCancel} data-testid="queued-cancel" className="mr-2 rounded-full px-2 py-0.5 text-red-600 hover:bg-red-50">
+              Cancel
+            </button>
+          ) : null}
+          {cancelled ? <span data-testid="never-ran" className="mr-2 rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">Cancelled: never ran</span> : null}
           {ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           {onFork ? (
             <button type="button" onClick={onFork} className="ml-3 inline-flex items-center gap-1 text-slate-400 opacity-0 transition-opacity hover:text-primary-600 group-hover/msg:opacity-100">

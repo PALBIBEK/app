@@ -67,6 +67,28 @@ class SessionStartupResponse(BaseModel):
     kind: str | None = None
 
 
+RUN_TERMINAL = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+class RunResponse(BaseModel):
+    """One run (what happened to one message): queued, in_progress, requires_action, then
+    completed, failed, cancelled or incomplete; with its final answer, usage and error."""
+
+    run_id: str
+    command_id: str
+    status: str
+    created_at_ms: int
+    started_at_ms: int | None = None
+    ended_at_ms: int | None = None
+    stop_reason: str | None = None
+    output_text: str | None = None
+    error: dict[str, str] | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    steps: int = 0
+    tool_calls: int = 0
+    pending_approval_id: str | None = None
+
+
 class SessionListResponse(BaseModel):
     data: list[SessionResponse]
     total: int

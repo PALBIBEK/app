@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
@@ -13,6 +13,8 @@ from prime_agent.schemas.session import (
     CreateSessionFromHarness,
     ForkSessionRequest,
     ForkSessionResponse,
+    RUN_TERMINAL,
+    RunResponse,
     SessionApprovalChoice,
     SessionApprovalOut,
     SessionChildOut,
@@ -82,6 +84,45 @@ async def list_sessions(
         page_size=page_size,
         harness_id=harness_id,
     )
+
+
+def _run_answer(run: RunResponse) -> JSONResponse:
+    """202 while the run is queued or going, 200 once it has ended (the body is the run)."""
+    return JSONResponse(status_code=200 if run.status in RUN_TERMINAL else 202, content=run.model_dump())
+
+
+@router.get("/{session_id}/runs", response_model=list[RunResponse])
+async def list_session_runs(
+    session_id: str, db: DbSession, current_user: CurrentUser, limit: int = Query(default=20, ge=1, le=100)
+) -> list[RunResponse]:
+    """The session's runs, newest first."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().list_runs(session_id=session_id, user_id=current_user.id, identity=identity, db=db, limit=limit)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.get("/{session_id}/runs/{run_id}", response_model=RunResponse, responses={202: {"model": RunResponse}})
+async def get_session_run(session_id: str, run_id: str, db: DbSession, current_user: CurrentUser) -> JSONResponse:
+    """One run by the id its message got: 202 while queued or going, 200 once ended."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        run = await _service().get_run(session_id=session_id, run_id=run_id, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+    return _run_answer(run)
+
+
+@router.post("/{session_id}/runs/{run_id}/cancel", response_model=RunResponse, responses={202: {"model": RunResponse}})
+async def cancel_session_run(session_id: str, run_id: str, db: DbSession, current_user: CurrentUser) -> JSONResponse:
+    """Stop a run (a queued one never runs). Idempotent: an ended run comes back unchanged."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        run = await _service().cancel_run(session_id=session_id, run_id=run_id, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+    return _run_answer(run)
 
 
 @router.get("/{session_id}/startup", response_model=SessionStartupResponse)

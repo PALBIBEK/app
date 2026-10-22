@@ -17,7 +17,6 @@ from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 from temporalio import activity
 
@@ -72,6 +71,7 @@ from supervisor.temporal.contracts import (
     ToolRequest,
     TurnOutcome,
     TurnRequest,
+    run_id_for,
 )
 from supervisor.temporal.subagent_tools import (
     SUBAGENT_RESULT,
@@ -133,9 +133,6 @@ def refusal(
     return None
 
 
-def run_id_for(session_id: str, command_id: str) -> str:
-    """One run per (session, command): a retried or re-homed begin_run finds the same run."""
-    return uuid5(NAMESPACE_URL, f"yal-run:{session_id}:{command_id}").hex
 
 
 async def heartbeating[T](work: Awaitable[T]) -> T:

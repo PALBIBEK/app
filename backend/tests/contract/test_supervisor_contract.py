@@ -116,6 +116,13 @@ async def test_a_turn_runs_and_streams_to_its_end(client, user, pin) -> None:
     turn_end = next(e for e in events if e["type"] == "turn_end")
     assert turn_end["data"]["stop_reason"] == "stop"
 
+    # The message's turn_id names its run: fetched by id once ended, listed, cancel is a no-op.
+    run = await client.get_run(user, sid, sent["turn_id"])
+    assert run["run_id"] == sent["turn_id"] and run["status"] == "completed", run
+    assert run["output_text"] and run["started_at_ms"] <= run["ended_at_ms"]
+    assert [r["run_id"] for r in await client.list_runs(user, sid)] == [sent["turn_id"]]
+    assert await client.cancel_run(user, sid, sent["turn_id"]) == run
+
     detail = await client.get_session(user, sid)  # what the session list refreshes from
     for key in ("status", "message_count", "total_cost", "last_seq"):
         assert key in detail, key

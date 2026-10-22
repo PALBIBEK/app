@@ -309,6 +309,27 @@ class AiClient:
             extra_headers={"Prefer": "respond-async"},
         )
 
+    async def list_runs(self, identity: TenantPrincipal, ai_session_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        payload = await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/runs", identity,
+            expected=(200,), params={"limit": str(limit)},
+        )
+        return payload if isinstance(payload, list) else []
+
+    async def get_run(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
+        """GET .../runs/{run_id}: 202 while queued or going, 200 once ended (the body has the run)."""
+        return await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}", identity,
+            expected=(200, 202),
+        )
+
+    async def cancel_run(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
+        """Idempotent: an ended run comes back unchanged."""
+        return await self._json_request(
+            "POST", f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/cancel",
+            identity, expected=(200, 202), timeout=15.0,
+        )
+
     async def session_startup(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:
         """GET /v1/sessions/{id}/startup — starting / ready / failed (with why), and whether a
         worker is running; answered by the Temporal server, so it works without one."""
