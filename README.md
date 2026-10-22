@@ -119,6 +119,23 @@ queued for more than 5 seconds with nobody taking it, and when the setup step ke
 being retried it shows the last error. The start waits in Temporal: when a worker comes back,
 the same page carries on by itself. A message sent while the session starts waits for it too.
 
+**Every message is a run with an id.** Sending a message answers at once with its `turn_id`,
+which is the run's id (the same id is on the run's journal events). A run is `queued` (behind
+another), `in_progress`, `requires_action` (waiting for an approval), then `completed`,
+`failed`, `cancelled` or `incomplete` (stopped by a step or budget limit). This is the shape of
+OpenAI's background responses and xAI's deferred completions:
+
+| Call | Answers |
+|---|---|
+| `GET /sessions/{id}/runs/{run_id}` | `202` while queued or going, `200` once ended; always the run: status, final answer, usage, error |
+| `GET /sessions/{id}/runs` | The session's runs, newest first |
+| `POST /sessions/{id}/runs/{run_id}/cancel` | Stops it; a queued run is dropped and never runs. Safe to repeat: an ended run comes back unchanged |
+
+Any client holding a run id can fetch the result later without keeping the stream open. In the
+chat, **Stop** cancels the run going now by its id (pressing it twice, or after the run ended,
+does nothing), a queued message has its own **Cancel**, and **Runs** lists each run with its
+status, duration, steps, tokens and cost.
+
 Run more workers to serve more sessions (each polls the same queue). `./dev.sh status` checks
 each process by its pid *and* start time, so a crashed worker shows as `down` and is not
 mistaken for another process that took over its pid.

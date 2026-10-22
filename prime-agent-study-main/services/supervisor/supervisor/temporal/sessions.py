@@ -339,6 +339,16 @@ class SessionWorkflows:
         async with _commands():
             await self._handle(session_id).signal(AgentSessionWorkflow.abort)
 
+    async def cancel_queued(self, session_id: str, command_id: str) -> bool:
+        """Remove a queued message before it runs; False if it is not waiting in the queue."""
+        handle = self._handle(session_id)
+        async with _commands():
+            return await _delivered(
+                lambda: handle.execute_update(
+                    AgentSessionWorkflow.cancel_queued, command_id, id=f"cancel:{command_id}"
+                )
+            )
+
     async def terminate(self, session_id: str) -> None:
         try:
             handle = self._handle(session_id)

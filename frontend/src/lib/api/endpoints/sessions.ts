@@ -6,6 +6,8 @@ import { apiClient } from '../client';
 import type { SessionStartup } from '@/lib/session/startup';
 import { useAuthStore } from '../../store/authStore';
 import {
+  Run,
+  RunSchema,
   Session,
   SessionCreateRequest,
   SessionListResponse,
@@ -59,6 +61,26 @@ export const sessionsAPI = {
     );
     return SessionMessageResponseSchema.parse(response);
   },
+
+  /** The session's runs, newest first. */
+  runs: async (sessionId: string, limit = 20): Promise<Run[]> => {
+    const response = await apiClient.get<unknown[]>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
+      params: { limit },
+    });
+    return RunSchema.array().parse(response);
+  },
+
+  /** One run by the turn_id its message got (the server answers 202 until it has ended). */
+  getRun: async (sessionId: string, runId: string): Promise<Run> =>
+    RunSchema.parse(
+      await apiClient.get(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`)
+    ),
+
+  /** Stop a run; a queued one never runs. Safe to repeat: an ended run comes back unchanged. */
+  cancelRun: async (sessionId: string, runId: string): Promise<Run> =>
+    RunSchema.parse(
+      await apiClient.post(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`)
+    ),
 
   abort: async (sessionId: string): Promise<void> => {
     await apiClient.post(`/sessions/${sessionId}/abort`);

@@ -31,7 +31,7 @@ from supervisor.session import (
     SessionNotFound,
     SessionTerminated,
 )
-from supervisor.temporal.contracts import CreateSession, Message, Op
+from supervisor.temporal.contracts import CreateSession, Message, Op, run_id_for
 from supervisor.temporal.sessions import SessionCommandError, TemporalUnavailable
 
 NO_WORKER = (
@@ -224,7 +224,11 @@ async def post_message(
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
             raise to_http(exc) from exc
-        _, response = await deps.claim_command(request, session_id, body.command_id, body.text)
+        # The run id the workflow gives this message's run: the client can fetch the run by it.
+        _, response = await deps.claim_command(
+            request, session_id, body.command_id, body.text,
+            turn_id=run_id_for(session_id, body.command_id),
+        )
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),
             status=str(response.get("status", "accepted")),

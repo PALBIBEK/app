@@ -15,6 +15,12 @@ from typing import Any
 WORKFLOW_ID_PREFIX = "session/"
 
 
+def run_id_for(session_id: str, command_id: str) -> str:
+    """One run per (session, message): the id a client gets back for its message, and the
+    ``turn_id`` on every event of that run (a retried or re-homed run finds the same id)."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"yal-run:{session_id}:{command_id}").hex
+
+
 def workflow_id(session_id: str) -> str:
     return f"{WORKFLOW_ID_PREFIX}{session_id}"
 

@@ -715,3 +715,57 @@ async def test_create_answers_at_once_and_startup_reports_how_it_goes(
                               "reason": "No agent worker is running", "kind": None}
     assert failed.json()["status"] == "failed" and failed.json()["reason"] == "Docker is not reachable"
     assert after.json()["status"] == "failed"  # recorded on the session
+
+
+@pytest.mark.asyncio
+async def test_runs_pass_through_with_202_until_ended_and_cancel(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    run = {"run_id": "r1", "command_id": "c1", "status": "in_progress", "created_at_ms": 1, "started_at_ms": 2}
+    cancels: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cat = _catalog_ok(request)
+        if cat:
+            return cat
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/v1/sessions"):
+            return httpx.Response(201, json={"session_id": "ai-runs-1", "harness_version": "githi-v1",
+                                             "runtime": "githi", "status": "ready"})
+        if path.endswith("/ai-runs-1/runs") and request.method == "GET":
+            assert request.url.params["limit"] == "5"
+            return httpx.Response(200, json=[run])
+        if path.endswith("/ai-runs-1/runs/r1") and request.method == "GET":
+            return httpx.Response(202 if run["status"] == "in_progress" else 200, json=run)
+        if path.endswith("/ai-runs-1/runs/r1/cancel"):
+            cancels.append(path)
+            run.update(status="cancelled", stop_reason="aborted", ended_at_ms=3)
+            return httpx.Response(200, json=run)
+        if path.endswith("/runs/nope"):
+            return httpx.Response(404, json={"detail": "run not found"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        sid = (await api.post("/api/v1/sessions", json={"harness_id": harness.id})).json()["id"]
+        going = await api.get(f"/api/v1/sessions/{sid}/runs/r1")
+        listed = await api.get(f"/api/v1/sessions/{sid}/runs?limit=5")
+        stopped = await api.post(f"/api/v1/sessions/{sid}/runs/r1/cancel")
+        again = await api.post(f"/api/v1/sessions/{sid}/runs/r1/cancel")
+        ended = await api.get(f"/api/v1/sessions/{sid}/runs/r1")
+        missing = await api.get(f"/api/v1/sessions/{sid}/runs/nope")
+        stranger = await api.get("/api/v1/sessions/not-mine/runs/r1")
+    assert going.status_code == 202 and going.json()["status"] == "in_progress"
+    assert [r["run_id"] for r in listed.json()] == ["r1"]
+    assert stopped.status_code == 200 and stopped.json()["status"] == "cancelled"
+    assert again.status_code == 200 and again.json() == stopped.json()
+    assert ended.status_code == 200 and ended.json()["stop_reason"] == "aborted"
+    assert missing.status_code == 404
+    assert stranger.status_code == 404

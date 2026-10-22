@@ -9,15 +9,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
-import { CircleNotch, GitBranch, PaperPlaneTilt, Robot, Sparkle, Stop, XCircle } from '@phosphor-icons/react';
+import { CircleNotch, ClockCounterClockwise, GitBranch, PaperPlaneTilt, Robot, Sparkle, Stop, XCircle } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import type { Session } from '@/lib/api/types/session.types';
+import { runToStop } from '@/lib/session/runs';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { cn } from '@/lib/utils';
 
 import { ApprovalCard, MessageBubble, SubagentChip, ToolCard } from './parts';
+import { RunHistory } from './RunHistory';
 
 const ENDED = new Set(['terminated', 'failed', 'budget_exceeded']);
 
@@ -47,8 +49,12 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
   const ended = ENDED.has(status);
   const { state, connection, addLocalMessage } = useSessionStream(session.id);
   const [input, setInput] = useState('');
-  const [queuedText, setQueuedText] = useState<Set<string>>(new Set());
+  /** Queued messages by text: the run id each got, and whether that run was cancelled. */
+  const [queuedRuns, setQueuedRuns] = useState<Map<string, { runId: string; cancelled: boolean }>>(new Map());
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [showRuns, setShowRuns] = useState(false);
+  const [runsKey, setRunsKey] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const pendingTools = Array.from(state.pendingTools.values());
   const subagents = Array.from(state.pendingSubagents.values());
@@ -57,6 +63,7 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
   const wasRunning = useRef(false);
   useEffect(() => {
     if (wasRunning.current && !state.running) onRunEnd?.();
+    if (wasRunning.current !== state.running) setRunsKey((k) => k + 1);
     wasRunning.current = state.running;
   }, [state.running, onRunEnd]);
   useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [state.messages.length, pendingTools.length]);
@@ -73,7 +80,8 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
     setInput('');
     try {
       const sent = await sessionsAPI.sendMessage(session.id, text);
-      if (sent.queued) setQueuedText((q) => new Set(q).add(text));
+      if (sent.queued) setQueuedRuns((q) => new Map(q).set(text, { runId: sent.turn_id, cancelled: false }));
+      setRunsKey((k) => k + 1);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send');
     } finally {
@@ -89,11 +97,20 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
     }
   }
 
+  // Stop cancels the run going now, by its id: safe to press twice, and it never stops a
+  // later run by mistake. Without a run to name (none recorded yet), it aborts the session's turn.
   async function stop(): Promise<void> {
+    if (stopping) return;
+    setStopping(true);
     try {
-      await sessionsAPI.abort(session.id);
+      const run = runToStop(await sessionsAPI.runs(session.id, 5));
+      if (run) await sessionsAPI.cancelRun(session.id, run.run_id);
+      else await sessionsAPI.abort(session.id);
+      setRunsKey((k) => k + 1);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to stop');
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -118,9 +135,28 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
     }
   }
 
-  // A queued message stops being queued once the journal confirms it (its run started).
+  // A queued message stops being queued once the journal confirms it (its run started), or
+  // once its run is cancelled (it then never runs).
   const confirmed = new Set(state.messages.filter((m) => !m.id.startsWith('local-')).map((m) => m.content));
-  const isQueued = (content: string, id: string) => id.startsWith('local-') && queuedText.has(content) && !confirmed.has(content);
+  const queuedRun = (content: string, id: string) => (id.startsWith('local-') && !confirmed.has(content) ? queuedRuns.get(content) : undefined);
+
+  function markCancelled(runId: string): void {
+    setQueuedRuns((q) => {
+      const next = new Map(q);
+      for (const [text, v] of q) if (v.runId === runId) next.set(text, { runId, cancelled: true });
+      return next;
+    });
+  }
+
+  async function cancelQueued(content: string, runId: string): Promise<void> {
+    try {
+      const run = await sessionsAPI.cancelRun(session.id, runId);
+      if (run.status === 'cancelled') markCancelled(runId);
+      setRunsKey((k) => k + 1);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not cancel the message');
+    }
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -137,10 +173,13 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
         <span data-testid="cost">${Math.max(state.usage.cost, session.total_cost).toFixed(4)}</span>
         <span className="ml-auto flex items-center gap-1">
           {state.running && !ended ? (
-            <button type="button" onClick={() => void stop()} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-red-600 hover:bg-red-50">
-              <Stop size={14} weight="fill" /> Stop
+            <button type="button" onClick={() => void stop()} disabled={stopping} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50" data-testid="stop">
+              <Stop size={14} weight="fill" /> {stopping ? 'Stopping…' : 'Stop'}
             </button>
           ) : null}
+          <button type="button" onClick={() => setShowRuns((v) => !v)} aria-expanded={showRuns} className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-slate-100', showRuns && 'bg-slate-100 text-slate-700')} data-testid="runs-toggle">
+            <ClockCounterClockwise size={14} /> Runs
+          </button>
           <button type="button" onClick={() => void fork()} disabled={state.lastSeq < 0} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-slate-100 disabled:opacity-40">
             <GitBranch size={14} /> Fork
           </button>
@@ -152,6 +191,7 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
         </span>
       </div>
 
+      {showRuns ? <RunHistory sessionId={session.id} refreshKey={runsKey} onCancelled={markCancelled} /> : null}
       {blocked && !ended && blockedReason ? (
         <div className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-center text-sm text-amber-800">{blockedReason}</div>
       ) : null}
@@ -199,7 +239,9 @@ export function SessionChat({ session, canRun = true, blockedReason, maxSteps, o
                 <MessageBubble
                   key={m.id}
                   message={m}
-                  queued={isQueued(m.content, m.id)}
+                  queued={queuedRun(m.content, m.id)?.cancelled === false}
+                  cancelled={queuedRun(m.content, m.id)?.cancelled === true}
+                  onCancel={queuedRun(m.content, m.id) ? () => void cancelQueued(m.content, queuedRun(m.content, m.id)!.runId) : undefined}
                   onFork={m.role === 'assistant' && m.seq != null ? () => void fork(m.seq) : undefined}
                 />
               ))}

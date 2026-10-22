@@ -274,12 +274,13 @@ async def recorded_command(
 
 
 async def claim_command(
-    request: Request, session_id: str, command_id: str, text: str
+    request: Request, session_id: str, command_id: str, text: str, *, turn_id: str | None = None
 ) -> tuple[bool, dict[str, Any]]:
-    """Claim ``command_id`` for this message: (claimed, response); 409 if it names another."""
+    """Claim ``command_id`` for this message: (claimed, response); 409 if it names another.
+    ``turn_id`` is the run id the client gets back (the one its run's events carry)."""
     try:
         return await get_commands(request).claim(
-            session_id, command_id, payload_fingerprint=fingerprint(text)
+            session_id, command_id, turn_id=turn_id, payload_fingerprint=fingerprint(text)
         )
     except CommandConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
