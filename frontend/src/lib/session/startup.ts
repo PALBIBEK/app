@@ -25,9 +25,19 @@ export async function waitUntilStarted(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let waited = 0;
   let last: SessionStartup | null = null;
+  let errors = 0;
   while (waited <= timeout) {
     if (opts.shouldStop?.()) return { ok: false, reason: 'stopped' };
-    last = await check();
+    try {
+      last = await check();
+      errors = 0;
+    } catch (err) {
+      // A status check can fail while things restart: keep watching, unless it keeps failing.
+      if (++errors >= 5) throw err;
+      await sleep(interval);
+      waited += interval;
+      continue;
+    }
     onProgress(last);
     if (last.status === 'ready') return { ok: true };
     if (last.status === 'failed') return { ok: false, reason: last.reason || 'The session could not start.' };

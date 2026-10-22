@@ -313,7 +313,8 @@ class AiClient:
         """GET /v1/sessions/{id}/startup — starting / ready / failed (with why), and whether a
         worker is running; answered by the Temporal server, so it works without one."""
         return await self._json_request(
-            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/startup", identity, expected=(200,)
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/startup", identity, expected=(200,),
+            timeout=15.0,  # a few Temporal round trips, each bounded by the supervisor
         )
 
     async def get_session(

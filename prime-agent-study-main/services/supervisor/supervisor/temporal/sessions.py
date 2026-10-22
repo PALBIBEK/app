@@ -251,7 +251,10 @@ class SessionWorkflows:
         if not worker:
             return Startup("starting", False, retrying=retrying), memo
         try:
-            st: SessionStatus = await handle.query(AgentSessionWorkflow.status, rpc_timeout=_QUICK)
+            # Answered by a worker: kept short, a worker that just died must not stall the answer.
+            st: SessionStatus = await handle.query(
+                AgentSessionWorkflow.status, rpc_timeout=timedelta(seconds=1.5)
+            )
         except Exception:  # noqa: BLE001 — busy or replaying: still starting as far as we know
             return Startup("starting", worker, retrying=retrying), memo
         if st.phase is Phase.CREATING:

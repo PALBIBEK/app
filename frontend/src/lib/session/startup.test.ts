@@ -36,6 +36,21 @@ describe('waitUntilStarted', () => {
   });
 });
 
+describe('waitUntilStarted errors', () => {
+  it('keeps watching through a few failed checks, then gives up', async () => {
+    let n = 0;
+    const flaky = async (): Promise<SessionStartup> => {
+      n += 1;
+      if (n <= 2) throw new Error('503');
+      return { status: 'ready', worker_available: true };
+    };
+    expect(await waitUntilStarted(flaky, () => {}, { sleep: noSleep })).toEqual({ ok: true });
+    await expect(
+      waitUntilStarted(async () => { throw new Error('down'); }, () => {}, { sleep: noSleep })
+    ).rejects.toThrow('down');
+  });
+});
+
 describe('startupMessage', () => {
   it('says what is happening', () => {
     expect(startupMessage(null)).toBe('Starting the agent…');
