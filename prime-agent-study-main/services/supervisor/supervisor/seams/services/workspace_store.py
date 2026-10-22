@@ -95,6 +95,8 @@ class WorkspaceFileVersion:
     created_at: datetime
     author: str | None = None
     restored_from: int | None = None
+    source: str | None = None
+    """``run:<session>/<turn>`` (an agent's edit) or ``artifact:<id>`` (a saved run output)."""
 
 
 def normalize_workspace_path(path: str) -> str:
@@ -165,6 +167,7 @@ class WorkspaceStore(Protocol):
         mime_type: str | None = None,
         expected_version: int | None = None,
         author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord: ...
 
     async def commit_object(
@@ -179,6 +182,7 @@ class WorkspaceStore(Protocol):
         expected_version: int | None = None,
         author: str | None = None,
         restored_from: int | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord:
         """Make ``path`` a new version holding the bytes already stored at ``object_key``."""
         ...
@@ -207,6 +211,8 @@ class WorkspaceStore(Protocol):
         tree: WorkspaceTreeIO,
         *,
         base: Mapping[str, tuple[int, str]] | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport:
         """Commit what the tree changed since ``base`` (see providers.workspace.sync)."""
         ...

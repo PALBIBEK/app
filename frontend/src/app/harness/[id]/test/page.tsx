@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { SessionChat } from '@/components/session/SessionChat';
+import { ConversationFiles } from '@/components/session/ConversationFiles';
 import { WorkspacePanel } from '@/components/session/WorkspacePanel';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { workspaceAPI } from '@/lib/api/endpoints/workspace';
@@ -117,6 +118,9 @@ export default function TestHarnessPage(): JSX.Element {
         </div>
 
         {scopeId ? <WorkspacePanel scopeId={scopeId} sessionId={session?.id} disabled={!canRun} refreshKey={filesTick} /> : null}
+        {scopeId && session ? (
+          <ConversationFiles sessionId={session.id} scopeId={scopeId} disabled={!canRun} refreshKey={filesTick} onWorkspaceChanged={() => setFilesTick((t) => t + 1)} />
+        ) : null}
 
         {live?.manifest.tools.length ? (
           <div data-testid="harness-test-tools-invoke" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/70 px-6 py-2 text-xs">

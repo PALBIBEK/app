@@ -72,6 +72,7 @@ from supervisor.session.errors import (
     SessionNotFound,
     SessionTerminated,
 )
+from supervisor.session.files import SessionFiles
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.modes import SessionMode
 from supervisor.session.recovery import Recovery, ResumeState
@@ -176,6 +177,10 @@ class SessionManagerBase:
             else None
         )
         self._checkpoint_scopes: set[str] = set()
+        # Attachments, run inputs and artifacts (supervisor.session.files), with a store.
+        self.files: SessionFiles | None = (
+            SessionFiles(session_factory, workspace_store) if workspace_store is not None else None
+        )
         self._creating: set[str] = set()  # sessions whose journal row does not exist yet
         self._modes: dict[str, SessionMode] = {}
         self._seams: dict[str, RuntimeSeams] = {}
@@ -393,6 +398,8 @@ class SessionManagerBase:
         if isinstance(payload, RunStart) and trace_id:
             self._run_traces[session_id] = trace_id
         ws = self._workspace.get(session_id)
+        if isinstance(payload, RunStart) and self.files is not None and turn_id:
+            await self._run_starts(session_id, turn_id, ws)
         if (
             isinstance(payload, ToolEnd)
             and not payload.is_error
@@ -403,9 +410,18 @@ class SessionManagerBase:
         if isinstance(payload, RunEnd):
             self._run_traces.pop(session_id, None)
             sbx = self._hands.sandbox(session_id)
+            if self.files is not None and sbx is not None and turn_id:
+                try:
+                    await self.files.collect(session_id, turn_id, sbx)
+                except Exception:
+                    logger.exception("collecting the run's outputs failed session=%s", session_id)
             if ws is not None and ws.dirty and sbx is not None:
                 try:
-                    await self._workspace_svc.sync_if_dirty(ws, sbx)
+                    await self._workspace_svc.sync_if_dirty(
+                        ws, sbx,
+                        author=ws.principal.id if ws.principal is not None else None,
+                        source=f"run:{session_id}/{turn_id}" if turn_id else f"run:{session_id}",
+                    )
                 except WorkspaceConflictError as conflict:
                     await self._workspace_conflict(
                         session_id, ws, sbx, conflict, turn_id=turn_id, trace_id=trace_id,
@@ -413,6 +429,18 @@ class SessionManagerBase:
                     )
                 except Exception:
                     logger.exception("workspace sync after run failed session=%s", session_id)
+
+    async def _run_starts(
+        self, session_id: str, turn_id: str, ws: SessionWorkspaceState | None
+    ) -> None:
+        """A run starts: record what it starts from, and give a live sandbox its attachments."""
+        assert self.files is not None
+        try:
+            await self.files.snapshot(session_id, turn_id, ws.scope_id if ws is not None else None)
+            if (sbx := self._hands.sandbox(session_id)) is not None:
+                await self.files.deliver(session_id, sbx)
+        except Exception:
+            logger.exception("recording the run's inputs failed session=%s", session_id)
 
     async def _workspace_conflict(
         self,
@@ -610,9 +638,13 @@ class _HandHooks:
             await m._checkpoints.restore(key, sandbox, processes=m._hand_isolated(key))
             if state is not None and state.scope_id is not None:
                 state.ready = True  # the checkpoint mirrors the scope's files and the edits since
+            if hand == DEFAULT_HAND and m.files is not None:
+                await m.files.deliver(session_id, sandbox)
             return
         if state is not None and state.scope_id is not None:
             await m._workspace_svc.ensure_hydrated(state, sandbox, force=True)
+        if hand == DEFAULT_HAND and m.files is not None:
+            await m.files.deliver(session_id, sandbox)  # this session's attachments, read-only
 
     async def provisioned(self, key: str, sandbox: Sandbox, cause: str) -> None:
         if split_key(key)[0] in self._m._creating:

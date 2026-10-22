@@ -58,6 +58,32 @@ await p.getByRole('button', { name: 'View data.txt' }).click();
 await p.getByTestId('file-preview').filter({ hasText: marker }).waitFor({ timeout: 15000 });
 console.log('1c version history: restored version 1 as version 3');
 
+// Attach a file to the conversation (pinned, read-only for the agent), have the agent read it,
+// write an output (collected as an artifact when the run ends), and save that to the workspace.
+const conv = p.getByTestId('conversation-files');
+await p.getByTestId('attach-upload').setInputFiles({ name: 'sales.csv', mimeType: 'text/csv', buffer: Buffer.from(`q4,${marker}\n`) });
+await conv.getByTestId('attachments').getByText('sales.csv').waitFor({ timeout: 30000 });
+await box.fill('/tool read {"file_path": ".attachments/sales.csv"}');
+await box.press('Enter');
+await p.getByText(`q4,${marker}`, { exact: false }).first().waitFor({ timeout: 30000 });
+await box.fill(`/tool write {"file_path": ".outputs/report.md", "content": "report ${marker}"}`);
+await box.press('Enter');
+await conv.getByTestId('artifacts').getByText('report.md').waitFor({ timeout: 30000 });
+await conv.getByRole('button', { name: 'Save report.md to the workspace' }).click();
+await conv.getByLabel('Save as path').fill('Reports/report.md');
+await conv.getByRole('button', { name: 'Save', exact: true }).click();
+await conv.getByTestId('artifact-saved').waitFor({ timeout: 30000 });
+check(!(await p.getByTestId('agent-workspace-file-list').innerText()).includes('.outputs'), 'session folders stay out of the workspace');
+console.log('1d attached, read, output collected and saved to Reports/report.md');
+
+// The agent's own edit to a workspace file is a version marked as the agent's.
+await box.fill('/tool write {"file_path": "agent-note.txt", "content": "from the agent"}');
+await box.press('Enter');
+await p.getByTestId('agent-workspace-file-list').getByText('agent-note.txt', { exact: true }).waitFor({ timeout: 30000 });
+await p.getByRole('button', { name: 'History of agent-note.txt' }).click();
+await p.getByTestId('file-history').getByText('by the agent').waitFor({ timeout: 15000 });
+console.log('1e the agent\'s edit is in the history as the agent\'s');
+
 await box.fill('/tool bash {"command": "echo from-chat > chat.txt && cat chat.txt"}');
 await box.press('Enter');
 await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });

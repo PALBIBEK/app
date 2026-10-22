@@ -46,6 +46,7 @@ def _version_of(row: WorkspaceFileVersionRow) -> WorkspaceFileVersion:
         created_at=row.created_at,
         author=row.author,
         restored_from=row.restored_from,
+        source=row.source,
     )
 
 
@@ -124,6 +125,7 @@ class PostgresWorkspaceStore:
         mime_type: str | None = None,
         expected_version: int | None = None,
         author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord:
         digest = _sha256(data)
         key = await self.find_object(scope_id, digest, len(data))
@@ -139,6 +141,7 @@ class PostgresWorkspaceStore:
             mime_type=mime_type,
             expected_version=expected_version,
             author=author,
+            source=source,
         )
 
     async def find_object(self, scope_id: str, content_sha256: str, size_bytes: int) -> str | None:
@@ -189,6 +192,7 @@ class PostgresWorkspaceStore:
         expected_version: int | None = None,
         author: str | None = None,
         restored_from: int | None = None,
+        source: str | None = None,
     ) -> WorkspaceFileRecord:
         path = normalize_workspace_path(path)
         async with self._db() as db:
@@ -238,6 +242,7 @@ class PostgresWorkspaceStore:
                     mime_type=mime_type,
                     author=author,
                     restored_from=restored_from,
+                    source=source,
                     created_at=_utcnow(),
                 )
             )
@@ -301,9 +306,12 @@ class PostgresWorkspaceStore:
         tree: WorkspaceTreeIO,
         *,
         base: Mapping[str, tuple[int, str]] | None = None,
+        author: str | None = None,
+        source: str | None = None,
     ) -> WorkspaceSyncReport:
         return await three_way_sync(
-            self, scope_id, tree, base, before_cas=self.before_sync_cas  # type: ignore[arg-type]
+            self, scope_id, tree, base, before_cas=self.before_sync_cas,  # type: ignore[arg-type]
+            author=author, source=source,
         )
 
 

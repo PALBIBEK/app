@@ -109,6 +109,40 @@ The key contains neither the file's name nor its content hash; names, folders an
 in PostgreSQL. Identical bytes are stored once **per workspace**. No answer depends on what
 another workspace holds, so uploading a file never reveals that someone else has the same one.
 
+### Conversations, runs and artifacts
+
+Each part has one job:
+
+| Part | What it decides |
+|---|---|
+| Workspace | Who owns the files and who may see them |
+| File and version | Durable content: every save is a version, kept with its author and source |
+| Attachment | A workspace file used in one conversation, **pinned to a version** |
+| Run | What one turn started from: its attachments and every workspace file, by version (`run_inputs`) |
+| Artifact | A file a run made for the user, and which run made it |
+| Sandbox | Where the agent works for now; never the place anything is kept |
+
+**Attach** a file in *This conversation*, from the workspace or by uploading it (it is saved
+in the workspace's `Attachments` folder first). The agent reads exactly that version,
+read-only, in `.attachments/`. A note after the harness's own prompt tells the model where the
+attachments are and that files it makes for the user go in `.outputs/`.
+
+When a run ends, the supervisor (never the agent) **collects** what is new or changed in
+`.outputs/`. It reads each file through the sandbox's path checks, so a symlink can't reach
+outside the sandbox. It caps each file at 100 MiB and 50 files a run, stores each one under a
+private key (`sessions/<session>/artifacts/<id>`), and records which run made it. *Save* puts
+an artifact into a workspace folder as a new version whose source is that artifact. The agent's
+own edits to workspace files are copied back at the end of the run as versions marked as its
+own.
+
+`.attachments/` and `.outputs/` are the session's folders, not workspace paths: they are never
+copied into the workspace, refreshing the workspace leaves them alone, and uploads refuse them.
+
+Routes (backend, per session): `GET/POST .../sessions/{id}/attachments`,
+`DELETE .../attachments/{attachment}`, `GET .../artifacts`, `GET .../artifacts/{artifact}/content`,
+`POST .../artifacts/{artifact}/save` with `{"path": "Reports/q4.md"}`, and
+`GET .../runs/{turn}/inputs`.
+
 ### Uploads
 
 Files go straight from the browser to object storage, and the API servers never hold the

@@ -132,3 +132,82 @@ async def test_history_names_authors_by_email_and_restore_goes_to_the_supervisor
         "/v1/scopes/s1/restore/notes/my%20plan.md",
     ]
     assert json.loads(seen[2][2]) == {"version": 1}
+
+
+async def _link(db, owner):
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from prime_agent.db.models.session_link import SessionLink
+    from prime_agent.services.harness_service import HarnessService
+
+    harness = await HarnessService.acreate(
+        {"name": f"h-{uuid4().hex[:6]}", "model": "gateway/echo", "mode": "sticky", "user_id": owner.id, "created_by": owner.id}, db
+    )
+    link = SessionLink(
+        id=str(uuid4()), user_id=owner.id, harness_id=harness.id, ai_session_id="ai-files-1", tenant_id=owner.id,
+        harness_version="h-r1", runtime="githi", status="active", scope_id="ws-1",
+        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    db.add(link)
+    await db.flush()
+    return link
+
+
+async def test_attachments_and_artifacts_go_to_the_owners_session_only(db_session, make_user, monkeypatch):
+    owner = await make_user(email="files@example.com", name="Files")
+    other = await make_user(email="other-files@example.com", name="Other")
+    link = await _link(db_session, owner)
+    seen: list[tuple[str, str, bytes]] = []
+    artifact = {"id": "a1", "turn_id": "t1", "name": "report.md", "content_sha256": "c" * 64, "size_bytes": 4,
+                "mime_type": "text/markdown", "created_at": "2026-10-22T00:00:00+00:00",
+                "saved_scope_id": None, "saved_path": None, "saved_version": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.content))
+        path = request.url.path
+        if path.endswith("/attachments") and request.method == "POST":
+            return httpx.Response(201, json={"id": "att1", "scope_id": "ws-1", "path": "data/sales.csv", "version": 2,
+                                             "content_sha256": "d" * 64, "size_bytes": 6, "mime_type": "text/csv",
+                                             "name": "sales.csv", "sandbox_path": ".attachments/sales.csv",
+                                             "attached_by": owner.id, "created_at": "2026-10-22T00:00:00+00:00"})
+        if path.endswith("/artifacts"):
+            return httpx.Response(200, json=[artifact])
+        if path.endswith("/content"):
+            return httpx.Response(200, content=b"# Q4")
+        if path.endswith("/save"):
+            return httpx.Response(200, json={"artifact": {**artifact, "saved_path": "reports/q4.md", "saved_version": 1,
+                                                          "saved_scope_id": "ws-1"},
+                                             "path": "reports/q4.md", "version": 1, "scope_id": "ws-1"})
+        if path.endswith("/inputs"):
+            return httpx.Response(200, json=[{"kind": "attachment", "scope_id": "ws-1", "path": "data/sales.csv",
+                                              "version": 2, "content_sha256": "d" * 64}])
+        return httpx.Response(204)
+
+    base = f"/api/v1/workspace/sessions/{link.id}"
+    async with _api(db_session, owner, handler, monkeypatch) as api:
+        attached = await api.post(f"{base}/attachments", json={"path": "data/sales.csv"})
+        listed = await api.get(f"{base}/artifacts")
+        content = await api.get(f"{base}/artifacts/a1/content")
+        saved = await api.post(f"{base}/artifacts/a1/save", json={"path": "reports/q4.md"})
+        inputs = await api.get(f"{base}/runs/t1/inputs")
+        detached = await api.delete(f"{base}/attachments/att1")
+    assert attached.status_code == 201, attached.text
+    assert attached.json()["sandbox_path"] == ".attachments/sales.csv"
+    assert listed.json()[0]["name"] == "report.md" and content.content == b"# Q4"
+    assert saved.json()["path"] == "reports/q4.md" and saved.json()["artifact"]["saved_version"] == 1
+    assert inputs.json()[0]["kind"] == "attachment" and detached.status_code == 204
+    assert [(m, p) for m, p, _ in seen] == [
+        ("POST", "/v1/sessions/ai-files-1/attachments"),
+        ("GET", "/v1/sessions/ai-files-1/artifacts"),
+        ("GET", "/v1/sessions/ai-files-1/artifacts/a1/content"),
+        ("POST", "/v1/sessions/ai-files-1/artifacts/a1/save"),
+        ("GET", "/v1/sessions/ai-files-1/runs/t1/inputs"),
+        ("DELETE", "/v1/sessions/ai-files-1/attachments/att1"),
+    ]
+    assert json.loads(seen[0][2]) == {"path": "data/sales.csv"}
+
+    calls_before = len(seen)
+    async with _api(db_session, other, handler, monkeypatch) as api:
+        theirs = await api.get(f"{base}/artifacts")
+    assert theirs.status_code == 404 and len(seen) == calls_before  # refused before the supervisor

@@ -641,6 +641,33 @@ class AiClient:
             expected=(200,),
         )
 
+    async def session_files(
+        self,
+        identity: TenantPrincipal,
+        ai_session_id: str,
+        method: str,
+        sub: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> Any:
+        """/v1/sessions/{id}/{attachments|artifacts|runs}... — a session's attachments,
+        artifacts and run inputs (JSON)."""
+        return await self._json_request(
+            method, f"/v1/sessions/{quote(ai_session_id, safe='')}/{sub}", identity,
+            json_body=json_body, expected=expected, allow_empty=method == "DELETE",
+        )
+
+    async def session_artifact_bytes(
+        self, identity: TenantPrincipal, ai_session_id: str, artifact_id: str
+    ) -> bytes:
+        return await self._bytes_request(
+            "GET",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/artifacts/{quote(artifact_id, safe='')}/content",
+            identity,
+            expected=(200,),
+        )
+
     async def list_scope_members(
         self,
         identity: TenantPrincipal,

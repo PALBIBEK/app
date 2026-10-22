@@ -257,7 +257,73 @@ class WorkspaceFileVersionRow(Base):
     mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
     restored_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Where the bytes came from when not a person's save: ``run:<session>/<turn>`` for an
+    agent's edits, ``artifact:<id>`` for a saved run output."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class SessionAttachmentRow(Base):
+    """A workspace file attached to a conversation, pinned to one version (contextual use).
+    The session's runs see exactly that version, read-only, in ``.attachments/``."""
+
+    __tablename__ = "session_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scope_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    """Its file name in ``.attachments/`` (unique among the session's attachments)."""
+    attached_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RunInputRow(Base):
+    """What one run (turn) started from: each attachment and each workspace file it could
+    read, by version and SHA-256. Recorded at the run's start; never changed."""
+
+    __tablename__ = "run_inputs"
+    __table_args__ = (Index("ix_run_inputs_session_turn", "session_id", "turn_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    """``attachment`` or ``workspace``."""
+    scope_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class ArtifactRow(Base):
+    """A file an agent run produced for the user (from ``.outputs/``), collected and checked
+    by the supervisor, never by the agent. The user may save it into a workspace folder."""
+
+    __tablename__ = "artifacts"
+    __table_args__ = (Index("ix_artifacts_session", "session_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    """Its path under ``.outputs/``."""
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    saved_scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    saved_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    saved_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ScopeMembershipRow(Base):

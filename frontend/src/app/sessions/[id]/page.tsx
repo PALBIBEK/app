@@ -13,6 +13,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SessionChat } from '@/components/session/SessionChat';
+import { ConversationFiles } from '@/components/session/ConversationFiles';
 import { WorkspacePanel } from '@/components/session/WorkspacePanel';
 import { useHarness } from '@/lib/api/hooks/useHarnesses';
 import { useReleases } from '@/lib/api/hooks/useManifest';
@@ -65,6 +66,9 @@ function SessionPageContent(): JSX.Element {
         </div>
       </div>
       {session.scope_id ? <WorkspacePanel scopeId={session.scope_id} sessionId={session.id} refreshKey={filesTick} /> : null}
+      {session.scope_id ? (
+        <ConversationFiles sessionId={session.id} scopeId={session.scope_id} refreshKey={filesTick} onWorkspaceChanged={() => setFilesTick((t) => t + 1)} />
+      ) : null}
       <SessionChat
         session={session}
         canRun={platform?.run_allowed !== false}

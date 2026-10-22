@@ -271,7 +271,8 @@ export function WorkspacePanel({
                         <span className="font-medium text-slate-800">Version {v.version}</span>
                         {v.current ? <span className="rounded bg-primary-100 px-1 text-primary-700">current</span> : null}
                         <span>{ago(v.created_at)}</span>
-                        <span>{v.author === me ? 'by you' : v.author_email ? `by ${v.author_email}` : v.author ? 'by the agent' : ''}</span>
+                        <span>{v.source?.startsWith('run:') ? 'by the agent' : v.author === me ? 'by you' : v.author_email ? `by ${v.author_email}` : ''}</span>
+                        {v.source?.startsWith('artifact:') ? <span className="rounded bg-violet-50 px-1 text-violet-700">saved from the agent&apos;s output</span> : null}
                         {v.restored_from ? <span>restored from version {v.restored_from}</span> : null}
                         <span className="text-slate-400">{size(v.size_bytes)}</span>
                         <span className="ml-auto inline-flex items-center gap-1">

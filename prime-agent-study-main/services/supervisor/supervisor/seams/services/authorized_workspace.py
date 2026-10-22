@@ -37,8 +37,10 @@ async def authorized_sync(
     tree: WorkspaceTreeIO,
     *,
     base: Mapping[str, tuple[int, str]] | None = None,
+    author: str | None = None,
+    source: str | None = None,
 ) -> WorkspaceSyncReport:
     await authz.require(principal, scope_id, Grant.WORKSPACE_WRITE)
-    return await hydrator.sync(scope_id, tree, base=base)
+    return await hydrator.sync(scope_id, tree, base=base, author=author, source=source)
 
 

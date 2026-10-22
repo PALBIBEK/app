@@ -6,6 +6,8 @@ Browser never talks to supervisor or sandbox FS. Distinct from tenant Settings
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,10 +17,16 @@ from prime_agent.db.models.session_link import SessionLink
 from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.workspace import (
+    ArtifactOut,
+    AttachIn,
+    AttachmentOut,
     EnsureScopeResponse,
     FileVersionOut,
     InviteScopeMemberIn,
     RestoreVersionIn,
+    RunInputOut,
+    SaveArtifactIn,
+    SavedArtifactOut,
     ScopeMemberOut,
     WorkspaceFileOut,
     WorkspaceRehydrateResponse,
@@ -134,7 +142,7 @@ class WorkspaceService:
         emails: dict[str, str] = {}
         if ids:
             found = await db.execute(select(User.id, User.email).where(User.id.in_(ids)))
-            emails = {uid: email for uid, email in found.all()}
+            emails = dict(found.all())
         return [FileVersionOut.model_validate({**r, "author_email": emails.get(r.get("author") or "")}) for r in rows]
 
     async def get_version_bytes(
@@ -257,6 +265,60 @@ class WorkspaceService:
             await self._client.revoke_scope_member(identity, scope_id, principal_id)
         except AiUpstreamError as exc:
             raise_workspace_upstream_http(exc)
+
+    # --- a session's attachments, artifacts and run inputs ------------------------------
+
+    async def _session_call(
+        self, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession,
+        method: str, sub: str, *, json_body: dict | None = None, expected: tuple[int, ...] = (200,),
+    ):
+        link = await self._owned_session(session_id, user_id, db)
+        try:
+            return await self._client.session_files(
+                identity, link.ai_session_id, method, sub, json_body=json_body, expected=expected
+            )
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+
+    async def list_attachments(self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> list[AttachmentOut]:
+        rows = await self._session_call(session_id, user_id, identity, db, "GET", "attachments")
+        return [AttachmentOut.model_validate(r) for r in rows or []]
+
+    async def attach(self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession, body: AttachIn) -> AttachmentOut:
+        raw = await self._session_call(
+            session_id, user_id, identity, db, "POST", "attachments",
+            json_body=body.model_dump(exclude_none=True), expected=(201,),
+        )
+        return AttachmentOut.model_validate(raw)
+
+    async def detach(self, *, session_id: str, attachment_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> None:
+        await self._session_call(
+            session_id, user_id, identity, db, "DELETE", f"attachments/{quote(attachment_id, safe='')}", expected=(204,)
+        )
+
+    async def list_artifacts(self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> list[ArtifactOut]:
+        rows = await self._session_call(session_id, user_id, identity, db, "GET", "artifacts")
+        return [ArtifactOut.model_validate(r) for r in rows or []]
+
+    async def artifact_bytes(self, *, session_id: str, artifact_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> bytes:
+        link = await self._owned_session(session_id, user_id, db)
+        try:
+            return await self._client.session_artifact_bytes(identity, link.ai_session_id, artifact_id)
+        except AiUpstreamError as exc:
+            raise_workspace_upstream_http(exc)
+
+    async def save_artifact(self, *, session_id: str, artifact_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession, body: SaveArtifactIn) -> SavedArtifactOut:
+        raw = await self._session_call(
+            session_id, user_id, identity, db, "POST", f"artifacts/{quote(artifact_id, safe='')}/save",
+            json_body=body.model_dump(exclude_none=True),
+        )
+        return SavedArtifactOut.model_validate(raw)
+
+    async def run_inputs(self, *, session_id: str, turn_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> list[RunInputOut]:
+        rows = await self._session_call(
+            session_id, user_id, identity, db, "GET", f"runs/{quote(turn_id, safe='')}/inputs"
+        )
+        return [RunInputOut.model_validate(r) for r in rows or []]
 
     async def _owned_session(
         self, session_id: str, user_id: str, db: AsyncSession

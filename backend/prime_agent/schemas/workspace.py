@@ -77,6 +77,7 @@ class FileVersionOut(BaseModel):
     author: str | None = None
     author_email: str | None = None
     restored_from: int | None = None
+    source: str | None = None
     current: bool = False
 
 
@@ -85,6 +86,74 @@ class RestoreVersionIn(BaseModel):
 
     version: int = Field(ge=1)
     expected_version: int | None = Field(default=None, ge=0)
+
+
+class AttachIn(BaseModel):
+    """Attach a workspace file to the conversation, pinned to a version (default: current)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    version: int | None = Field(default=None, ge=1)
+
+
+class AttachmentOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    scope_id: str
+    path: str
+    version: int
+    content_sha256: str
+    size_bytes: int
+    mime_type: str | None = None
+    name: str
+    sandbox_path: str
+    attached_by: str | None = None
+    created_at: str
+
+
+class ArtifactOut(BaseModel):
+    """A file a run made for the user (from its ``.outputs/`` folder)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    turn_id: str
+    name: str
+    content_sha256: str
+    size_bytes: int
+    mime_type: str | None = None
+    created_at: str
+    saved_scope_id: str | None = None
+    saved_path: str | None = None
+    saved_version: int | None = None
+
+
+class SaveArtifactIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class SavedArtifactOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact: ArtifactOut
+    path: str
+    version: int
+    scope_id: str
+
+
+class RunInputOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    scope_id: str
+    path: str
+    version: int
+    content_sha256: str
 
 
 class WorkspaceUploadCompleteIn(BaseModel):
