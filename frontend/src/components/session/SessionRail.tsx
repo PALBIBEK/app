@@ -4,6 +4,8 @@
  * The live session's right rail: its sandboxes, and what it has used against its limits.
  */
 
+import { useEffect } from 'react';
+
 import { Card, Meter, Mono, StatusPill, type StatusKind } from '@/components/ui';
 import { useSandboxes } from '@/lib/api/hooks/useOperate';
 import type { SandboxItem } from '@/lib/api/types/operate.types';
@@ -94,11 +96,15 @@ export function SessionRail({
   sessionCost: number;
   children?: React.ReactNode;
 }): JSX.Element {
-  const { data: boxes, isLoading } = useSandboxes({ sessionId, poll: true });
+  const { data: boxes, isLoading, refetch } = useSandboxes({ sessionId, poll: true });
+  // The stream saw the sandbox start, stop or get lost: read its state now rather than at the next poll.
+  useEffect(() => {
+    if (live) void refetch();
+  }, [live, refetch]);
   const cost = Math.max(usage.cost, sessionCost);
   return (
     <aside aria-label="Session resources" className="flex min-w-0 flex-col gap-4">
-      <Section title="Sandboxes" aside={boxes ? `${boxes.length} attached` : undefined}>
+      <Section title="Sandboxes" aside={boxes?.length ? `${boxes.length} attached` : undefined}>
         {boxes && boxes.length ? (
           boxes.map((b) => <SandboxRow key={b.hand} box={b} />)
         ) : (

@@ -82,7 +82,7 @@ await shot(p, '09-chat-approval');
 await p.getByTestId('approval-approve').click();
 await p.getByText('echo:Then summarize what you found').waitFor({ timeout: 30000 });
 await p.waitForTimeout(2500);
-await p.getByTestId('tool-card').first().click();
+await p.getByTestId('tool-card').first().getByRole('button').first().click();
 await p.waitForTimeout(500);
 await shot(p, '10-chat-tool-output');
 
@@ -131,7 +131,24 @@ await shot(p, '16-subagents');
 await p.goto(`${BASE}/traces`, { waitUntil: 'domcontentloaded' }); await p.waitForTimeout(3000);
 await shot(p, '17-traces');
 
-// The dashboard last, so its counts include the sessions above.
+// The operating pages, with one run left waiting on an approval.
+await p.goto(`${BASE}/harness/${hid}/test`, { waitUntil: 'domcontentloaded' });
+await p.getByTestId('connection').filter({ hasText: 'Live' }).waitFor({ timeout: 60000 });
+box = p.getByPlaceholder(/Send a message|Send another/);
+await box.fill('/tool bash {"command": "python3 -m pytest -q"}'); await box.press('Enter');
+await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });
+await p.waitForTimeout(1500);
+await shot(p, '18-live-session');
+for (const [path, name] of [['overview', '19-overview'], ['approvals', '20-approvals'], ['sandboxes', '21-sandboxes'], ['usage', '22-usage'], ['policies', '23-policies']]) {
+  await p.goto(`${BASE}/${path}`, { waitUntil: 'domcontentloaded' }); await p.waitForTimeout(3000);
+  await shot(p, name);
+}
+await p.goto(`${BASE}/harness/${hid}`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('button', { name: 'Check' }).click();
+await p.getByTestId('publish-checks').getByText(/All pass|to fix/).waitFor({ timeout: 30000 });
+await shot(p, '24-publish-checks');
+
+// The agent list last, so its counts include the sessions above.
 await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' }); await p.waitForTimeout(3000);
 await shot(p, '02-harnesses');
 await b.close();
