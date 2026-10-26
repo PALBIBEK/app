@@ -33,3 +33,15 @@ async def list_models(current_user: CurrentUser) -> list[dict[str, Any]]:
     """The models the gateway serves (id, label, limits, prices); never an endpoint or a key."""
     client = AiClient.from_settings(get_settings())
     return await _call(client.list_models(TenantPrincipal.from_user(current_user)))
+
+
+_CHECKABLE = ("prompt_pack", "tool_set", "composition", "sandbox_profile", "memory_profile")
+
+
+@router.post("/{kind}/check")
+async def check_artifact(kind: str, body: dict[str, Any], current_user: CurrentUser) -> dict[str, Any]:
+    """Every check publishing ``body`` would run, without publishing it: ``{ok, digest, checks}``."""
+    if kind not in _CHECKABLE:
+        raise HTTPException(status_code=404, detail=f"unknown artifact kind {kind!r}")
+    client = AiClient.from_settings(get_settings())
+    return await _call(client.check_artifact(TenantPrincipal.from_user(current_user), kind, body))

@@ -119,3 +119,37 @@ async def test_ownership_survives_a_restart(boot: Boot) -> None:
     assert (await _publish(first, T1, "prompt_pack", body)).status_code == 200
     second = await boot()  # a new process: ownership comes back from the database
     assert (await _publish(second, T2, "prompt_pack", body | {"semver": "9.9.9"})).status_code == 403
+
+
+async def test_a_check_runs_every_publish_check_and_claims_nothing(boot: Boot) -> None:
+    client = await boot()
+    draft = _shipped("prompt_packs", "coding-prompt") | {"name": "t1-draft"}
+    r = await client.post("/v1/catalog/prompt_pack/check", json=draft, headers=T1)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["digest"].startswith("sha256:")
+    assert all(c["ok"] for c in body["checks"]) and len(body["checks"]) >= 4
+    # Nothing was stored or claimed: the other tenant can still take the name.
+    assert (await client.get(f"/v1/catalog/prompt_pack/t1-draft/{body['digest']}", headers=T1)).status_code == 404
+    assert (await _publish(client, T2, "prompt_pack", draft)).status_code == 200
+
+
+async def test_a_check_shows_all_its_problems_at_once(boot: Boot) -> None:
+    client = await boot()
+    tools = _shipped("tool_sets", "githi-tools") | {"name": "t1-tools", "surprise": 1}
+    tools["definitions"] = dict(tools["definitions"]) | {"weather": {"name": "weather", "description": "x", "parameters": {"type": "object"}}}
+    tools["tools"] = [*tools["tools"], "weather"]
+    body = (await client.post("/v1/catalog/tool_set/check", json=tools, headers=T1)).json()
+    failed = {c["check"]: c for c in body["checks"] if not c["ok"]}
+    assert body["ok"] is False
+    assert "Every field is known and every setting can work" in failed  # the unknown field
+    assert "weather" in failed["Every tool has an implementation"]["message"]
+
+
+async def test_a_check_says_when_the_name_is_someone_elses(boot: Boot) -> None:
+    client = await boot()
+    mine = _shipped("prompt_packs", "coding-prompt") | {"name": "t1-owned"}
+    assert (await _publish(client, T1, "prompt_pack", mine)).status_code == 200
+    body = (await client.post("/v1/catalog/prompt_pack/check", json=mine | {"semver": "2.0.0"}, headers=T2)).json()
+    owned = next(c for c in body["checks"] if c["check"] == "The name is yours to publish under")
+    assert body["ok"] is False and owned["code"] == "CATALOG_OWNERSHIP_REQUIRED"

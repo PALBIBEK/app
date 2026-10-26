@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 from supervisor.api import deps
 from supervisor.api.schemas import CatalogArtifactOut
 from supervisor.catalog import CatalogError, ToolSet
+from supervisor.catalog.core.digests import content_digest, is_unset_digest
 from supervisor.catalog.core.errors import CatalogOwnershipRequired, NotOffered
 from supervisor.catalog.repository import (
     artifact_summary,
@@ -74,6 +76,87 @@ async def publish_artifact(
     )
     summary = artifact_summary(offered)
     return CatalogArtifactOut(kind=kind, **summary)
+
+
+class CheckOut(BaseModel):
+    check: str
+    ok: bool
+    message: str = ""
+    code: str | None = None
+
+
+class PublishCheckOut(BaseModel):
+    ok: bool
+    digest: str | None = None
+    checks: list[CheckOut]
+
+
+@router.post("/{kind}/check", response_model=PublishCheckOut)
+async def check_artifact(
+    kind: KindPath,
+    body: dict[str, Any],
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> PublishCheckOut:
+    """What publishing ``body`` would find, without publishing it (nothing is stored or claimed).
+
+    Every check runs, so a draft shows all its problems at once; the digest is
+    the one it would be published under.
+    """
+    catalog: CompositionCatalog = deps.get_composition_catalog(request)
+    factory = deps.get_session_factory(request)
+    checks: list[CheckOut] = []
+
+    def failed(check: str, exc: Exception) -> CheckOut:
+        code = getattr(exc, "error_code", None) or type(exc).__name__
+        return CheckOut(check=check, ok=False, message=str(exc), code=str(code))
+
+    try:
+        artifact = artifact_from_dict(kind, body)
+    except (CatalogError, KeyError, TypeError, ValueError) as exc:
+        return PublishCheckOut(ok=False, checks=[failed("It reads as a valid " + kind.replace("_", " "), exc)])
+    checks.append(CheckOut(check="It reads as a valid " + kind.replace("_", " "), ok=True))
+
+    try:
+        check_publishable(kind, body, artifact)
+        checks.append(CheckOut(check="Every field is known and every setting can work", ok=True))
+    except CatalogError as exc:
+        checks.append(failed("Every field is known and every setting can work", exc))
+
+    if isinstance(artifact, ToolSet):
+        try:
+            require_implemented(artifact)
+            checks.append(CheckOut(check="Every tool has an implementation", ok=True))
+        except CatalogError as exc:
+            checks.append(failed("Every tool has an implementation", exc))
+
+    # Ownership without claim(): claiming would record the caller as the owner.
+    owner = await persisted_owner(factory, kind, artifact.name) or catalog.owner(kind, artifact.name)
+    if owner in (None, tenant_id):
+        checks.append(CheckOut(check="The name is yours to publish under", ok=True))
+    else:
+        checks.append(
+            CheckOut(
+                check="The name is yours to publish under",
+                ok=False,
+                message=f"{artifact.name!r} belongs to another owner; publish it under a new name",
+                code="CATALOG_OWNERSHIP_REQUIRED",
+            )
+        )
+
+    expected = content_digest(artifact.body_for_digest())
+    if is_unset_digest(artifact.digest) or artifact.digest == expected:
+        checks.append(CheckOut(check="Its digest matches its content", ok=True))
+    else:
+        checks.append(
+            CheckOut(
+                check="Its digest matches its content",
+                ok=False,
+                message=f"the body hashes to {expected}, not {artifact.digest}",
+                code="DIGEST_MISMATCH",
+            )
+        )
+    return PublishCheckOut(ok=all(c.ok for c in checks), digest=expected, checks=checks)
 
 
 @router.post("/{kind}/{artifact_id}/{digest}/deprecate", status_code=204)

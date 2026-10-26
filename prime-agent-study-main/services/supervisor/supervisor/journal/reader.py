@@ -168,6 +168,33 @@ class JournalReader:
         assert isinstance(event, RunEnd)
         return list(event.messages)
 
+    async def read_types(
+        self,
+        session_ids: list[str],
+        types: list[str],
+        *,
+        since_ms: int | None = None,
+        until_ms: int | None = None,
+        limit: int = 200_000,
+    ) -> list[Envelope]:
+        """Events of ``types`` across ``session_ids`` (oldest first), optionally in a time window.
+
+        For views over many sessions (sandboxes, usage): one query, filtered by the
+        event-type column, instead of reading each session's whole journal.
+        """
+        if not session_ids or not types:
+            return []
+        query = select(EventRow).where(EventRow.session_id.in_(session_ids), EventRow.type.in_(types))
+        if since_ms is not None:
+            query = query.where(EventRow.ts_ms >= since_ms)
+        if until_ms is not None:
+            query = query.where(EventRow.ts_ms < until_ms)
+        async with self._factory() as db:
+            rows = (
+                await db.execute(query.order_by(EventRow.ts_ms.asc(), EventRow.seq.asc()).limit(limit))
+            ).scalars().all()
+        return [self._to_envelope(row) for row in rows]
+
     def _to_envelope(self, row: EventRow) -> Envelope:
         payload = decode_event(self._load_payload(row.payload))
         return Envelope(

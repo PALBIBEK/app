@@ -36,6 +36,7 @@ from prime_agent.web.routes import (
     harnesses,
     health,
     memory,
+    operate,
     platform,
     sessions,
     tools,
@@ -251,6 +252,7 @@ def create_app() -> FastAPI:
     api_router.include_router(memory.router, prefix="/memory", tags=["memory"])
     api_router.include_router(workspace.router, prefix="/workspace", tags=["workspace"])
     api_router.include_router(traces.router, prefix="/traces", tags=["traces"])
+    api_router.include_router(operate.router, tags=["operate"])
     app.include_router(api_router)
 
     logger.info("Application factory complete")
