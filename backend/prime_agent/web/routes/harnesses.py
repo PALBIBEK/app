@@ -1,8 +1,10 @@
 """Authenticated, owner-scoped harness CRUD + D3 bind routes."""
 
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
+from pydantic import BaseModel
 
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
@@ -203,6 +205,31 @@ async def publish_harness(harness_id: str, db: DbSession, current_user: CurrentU
         release=HarnessReleaseView.model_validate(published.release, from_attributes=True),
         created=published.created,
     )
+
+
+class DraftCheckView(BaseModel):
+    section: str
+    check: str
+    ok: bool
+    message: str = ""
+    code: str | None = None
+
+
+class DraftCheckResponse(BaseModel):
+    ok: bool
+    checks: list[DraftCheckView]
+
+
+@router.post("/{harness_id}/check", response_model=DraftCheckResponse)
+async def check_harness(harness_id: str, db: DbSession, current_user: CurrentUser) -> DraftCheckResponse:
+    """Every check publishing the saved draft would run; nothing is published or registered."""
+    harness = await HarnessService.get_owned(harness_id, current_user.id, db)
+    try:
+        checks = await _publisher().check(harness, identity=TenantPrincipal.from_user(current_user), db=db)
+    except PublishError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+    views = [DraftCheckView(**asdict(c)) for c in checks]
+    return DraftCheckResponse(ok=all(c.ok for c in views), checks=views)
 
 
 @router.get("/{harness_id}/releases", response_model=list[HarnessReleaseView])

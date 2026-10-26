@@ -96,9 +96,34 @@ async def releases(harness_id: str, db: AsyncSession) -> list[HarnessRelease]:
     return list(rows.scalars().all())
 
 
+@dataclass(frozen=True)
+class DraftCheck:
+    """One check publishing the draft would run: which tab it is about, and what it found."""
+
+    section: str
+    check: str
+    ok: bool
+    message: str = ""
+    code: str | None = None
+
+
 class HarnessPublisher:
     def __init__(self, client: AiClient) -> None:
         self._client = client
+        self._checks: list[DraftCheck] | None = None  # set while checking: nothing is published
+
+    async def check(self, harness: Harness, *, identity: TenantPrincipal, db: AsyncSession) -> list[DraftCheck]:
+        """Every check publishing the draft would run, without publishing or registering anything."""
+        manifest = await EnvironmentService.resolve(await load_draft(harness.id, db), harness.user_id, db)
+        history = await releases(harness.id, db)
+        version = (history[0].version if history else 0) + 1
+        self._checks = []
+        try:
+            await self._artifacts(harness, manifest, version, identity)
+        except PublishError as exc:
+            self._checks.append(DraftCheck(exc.section, "The supervisor accepts the draft", False, str(exc), "PUBLISH_REFUSED"))
+        checks, self._checks = self._checks, None
+        return checks
 
     async def publish(
         self, harness: Harness, *, user_id: str, identity: TenantPrincipal, db: AsyncSession
@@ -153,7 +178,14 @@ class HarnessPublisher:
         base_manifest: dict[str, Any] = base.get("manifest") or {}
         registry = {t["name"]: t for t in await self._call("tools", self._client.list_tools(identity))}
         if unknown := [t for t in m.tools if t not in registry]:
-            raise PublishError("tools", f"the supervisor cannot run: {', '.join(unknown)}")
+            if self._checks is None:
+                raise PublishError("tools", f"the supervisor cannot run: {', '.join(unknown)}")
+            self._checks.append(
+                DraftCheck("tools", "Every tool can run", False, f"the supervisor cannot run: {', '.join(unknown)}", "UNKNOWN_TOOL")
+            )
+            m = m.model_copy(update={"tools": [t for t in m.tools if t in registry]})
+        elif self._checks is not None:
+            self._checks.append(DraftCheck("tools", "Every tool can run", True))
 
         prompt = await self._publish(identity, "prompt_pack", {
             "name": f"{prefix}-prompt",
@@ -218,7 +250,7 @@ class HarnessPublisher:
 
         harness_version = f"{prefix}-r{version}"
         p = m.policy
-        registered = await self._call("policy", self._client.register_harness_version(identity, {
+        version_body: dict[str, Any] = {
             "harness_version": harness_version,
             "protocol_version": 1,
             "runtime": base_manifest.get("runtime", "githi"),
@@ -240,7 +272,12 @@ class HarnessPublisher:
             },
             "loop": {"max_steps": p.max_steps, "warn_steps_remaining": min(3, p.max_steps - 1), "force_answer_on_final_step": True},
             **({"subagents": base_manifest["subagents"]} if base_manifest.get("subagents") else {}),
-        }))
+        }
+        if self._checks is None:
+            registered = await self._call("policy", self._client.register_harness_version(identity, version_body))
+        else:
+            registered = {}  # registering is not undone: a check only says the policy reads
+            self._checks.append(DraftCheck("policy", "The policy and limits are valid", True))
         runtime = str(registered.get("runtime") or base_manifest.get("runtime") or "githi")
 
         composition: dict[str, Any] = {
@@ -264,9 +301,23 @@ class HarnessPublisher:
         }
 
     async def _publish(self, identity: TenantPrincipal, kind: str, body: dict[str, Any]) -> dict[str, str]:
+        if self._checks is not None:
+            return await self._check(identity, kind, body)
         out = await self._call(SECTION_OF_KIND[kind], self._client.publish_artifact(identity, kind, body))
         artifact_id = out.get("artifact_id") or body["name"]
         return {"id": str(artifact_id), "digest": str(out["digest"])}
+
+    async def _check(self, identity: TenantPrincipal, kind: str, body: dict[str, Any]) -> dict[str, str]:
+        assert self._checks is not None
+        section = SECTION_OF_KIND[kind]
+        out = await self._call(section, self._client.check_artifact(identity, kind, body))
+        what = kind.replace("_", " ")
+        for c in out.get("checks") or []:
+            self._checks.append(
+                DraftCheck(section, f"{what[:1].upper()}{what[1:]}: {c.get('check', '')}", bool(c.get("ok")), str(c.get("message") or ""), c.get("code"))
+            )
+        digest = str(out.get("digest") or "sha256:" + "0" * 64)
+        return {"id": str(body["name"]), "digest": digest}
 
     @staticmethod
     async def _call(section: str, coro: Any) -> Any:

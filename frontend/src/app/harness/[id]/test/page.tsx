@@ -7,10 +7,11 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, CircleNotch, ClockCounterClockwise, Robot, Wrench } from '@phosphor-icons/react';
+import { ArrowLeft, CircleNotch, ClockCounterClockwise, Wrench } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
-import { AuthGuard } from '@/components/auth/AuthGuard';
+import { AppShell } from '@/components/layout/AppShell';
+import { Card, LinkButton } from '@/components/ui';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { SessionChat } from '@/components/session/SessionChat';
 import { ConversationFiles } from '@/components/session/ConversationFiles';
@@ -98,83 +99,102 @@ export default function TestHarnessPage(): JSX.Element {
   }
 
   return (
-    <AuthGuard>
-      <div className="flex h-[100dvh] flex-col bg-gradient-subtle">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/90 px-6 backdrop-blur-md">
-          <div className="flex items-center gap-5">
-            <Link href={`/harness/${harnessId}`} className="group flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-700">
-              <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" /> Back
-            </Link>
-            <div className="h-6 w-px bg-slate-200" />
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/25">
-                <Robot size={20} weight="fill" className="text-white" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900">{harness?.name ?? 'Harness'}</p>
-                <p className="text-xs text-slate-500">
-                  {live ? `Version ${live.version} · ${live.manifest.model}` : 'Not published'}
-                  {session ? ` · session ${session.id.slice(0, 8)}` : ''}
-                </p>
-              </div>
-            </div>
-          </div>
-          <Link href={`/harness/${harnessId}/sessions`} className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">
-            <ClockCounterClockwise size={16} /> History
-          </Link>
-        </header>
-
-        <div className="shrink-0 border-b border-slate-200/80 bg-white/70 px-6 py-2">
-          <AiPlatformBanner />
-        </div>
-
-        {scopeId ? <WorkspacePanel scopeId={scopeId} sessionId={session?.id} disabled={!canRun} refreshKey={filesTick} /> : null}
-        {scopeId && session ? (
-          <ConversationFiles sessionId={session.id} scopeId={scopeId} disabled={!canRun} refreshKey={filesTick} onWorkspaceChanged={() => setFilesTick((t) => t + 1)} />
-        ) : null}
-
-        {live?.manifest.tools.length ? (
-          <div data-testid="harness-test-tools-invoke" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/70 px-6 py-2 text-xs">
-            <Wrench size={14} className="text-slate-500" />
-            <span className="text-slate-500">Run a tool directly:</span>
-            {live.manifest.tools.map((name) => (
-              <button key={name} type="button" disabled={!session || invoking !== null} onClick={() => void invoke(name)} className="rounded-lg border border-primary-200 bg-primary-50 px-2 py-0.5 font-mono text-primary-800 disabled:opacity-50">
-                {invoking === name ? `${name}…` : name}
-              </button>
-            ))}
-            {invokeResult ? <span className="ml-2 max-w-md truncate font-mono text-slate-600">{invokeResult}</span> : null}
-          </div>
-        ) : null}
-
-        {session ? (
-          <SessionChat
-            session={session}
-            canRun={canRun}
-            blockedReason={blockedReason}
-            maxSteps={live?.manifest.policy.max_steps}
-            onApprovalTimeout={live?.manifest.policy.on_approval_timeout}
-            onRunEnd={() => setFilesTick((t) => t + 1)}
-          />
-        ) : (
-          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
-            {error ? (
-              <span className="flex max-w-2xl flex-col items-center gap-3 text-center">
-                <span data-testid="session-error" className="text-red-600">{error}</span>
-                <Link href={`/harness/${harnessId}`} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50">
-                  Open the builder
-                </Link>
-              </span>
-            ) : canRun ? (
-              <>
-                <CircleNotch size={16} className="animate-spin text-primary-500" />
-                <span data-testid="session-starting">{starting ? startupMessage(starting) : 'Creating session…'}</span>
-              </>
-            ) : (
-              <span className="text-amber-700">{blockedReason}</span>
-            )}
-          </div>
-        )}
+    <AppShell fullHeight mainClassName="flex min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0 px-4 pt-4 empty:hidden sm:px-6">
+        <AiPlatformBanner />
       </div>
-    </AuthGuard>
+
+      {live?.manifest.tools.length && session ? (
+        <div data-testid="harness-test-tools-invoke" className="mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-2 rounded-card border border-line bg-surface px-4 py-2.5 text-[13px] sm:mx-6">
+          <Wrench size={14} className="text-ink-2" aria-hidden="true" />
+          <span className="text-ink-2">Run a tool directly:</span>
+          {live.manifest.tools.map((name) => (
+            <button
+              key={name}
+              type="button"
+              disabled={invoking !== null}
+              onClick={() => void invoke(name)}
+              className="rounded-md border border-line-soft bg-canvas px-2 py-0.5 font-mono text-xs text-ink hover:border-line-strong disabled:opacity-50"
+            >
+              {invoking === name ? `${name}…` : name}
+            </button>
+          ))}
+          {invokeResult ? <span className="ml-2 max-w-md truncate font-mono text-xs text-ink-2">{invokeResult}</span> : null}
+        </div>
+      ) : null}
+
+      {session ? (
+        <SessionChat
+          session={session}
+          agentName={harness?.name}
+          canRun={canRun}
+          blockedReason={blockedReason}
+          maxSteps={live?.manifest.policy.max_steps}
+          maxCost={live?.manifest.policy.max_cost_per_session || undefined}
+          onApprovalTimeout={live?.manifest.policy.on_approval_timeout}
+          onRunEnd={() => setFilesTick((t) => t + 1)}
+          heading={{
+            crumb: (
+              <>
+                <Link href={`/harness/${harnessId}`} className="inline-flex items-center gap-1 hover:text-ink">
+                  <ArrowLeft size={12} /> {harness?.name ?? 'Agent'}
+                </Link>
+                <span aria-hidden="true">/</span>
+                <span>Test</span>
+              </>
+            ),
+            title: `Test ${harness?.name ?? 'agent'}`,
+            meta: (
+              <>
+                <span className="font-mono text-[12.5px] text-ink">{live ? `v${live.version} · ${live.manifest.model}` : 'Not published'}</span>
+                <Link href={`/harness/${harnessId}/sessions`} className="inline-flex items-center gap-1 hover:text-ink">
+                  <ClockCounterClockwise size={13} /> History
+                </Link>
+              </>
+            ),
+          }}
+          railExtra={
+            scopeId ? (
+              <>
+                <Card>
+                  <ConversationFiles
+                    sessionId={session.id}
+                    scopeId={scopeId}
+                    disabled={!canRun}
+                    refreshKey={filesTick}
+                    onWorkspaceChanged={() => setFilesTick((t) => t + 1)}
+                    className="px-[18px] py-4 text-sm"
+                  />
+                </Card>
+                <Card>
+                  <WorkspacePanel scopeId={scopeId} sessionId={session.id} disabled={!canRun} refreshKey={filesTick} className="px-[18px] py-4 text-sm" />
+                </Card>
+              </>
+            ) : null
+          }
+        />
+      ) : (
+        <div className="flex flex-1 items-center justify-center gap-2 p-6 text-sm text-ink-2">
+          {error ? (
+            <Card className="flex max-w-2xl flex-col items-center gap-3 px-6 py-8 text-center">
+              <span className="h-2.5 w-2.5 rotate-45 bg-bad" aria-hidden="true" />
+              <span data-testid="session-error" className="text-ink">
+                {error}
+              </span>
+              <LinkButton href={`/harness/${harnessId}`} size="sm">
+                Open the builder
+              </LinkButton>
+            </Card>
+          ) : canRun ? (
+            <>
+              <CircleNotch size={16} className="animate-spin text-accent-600" />
+              <span data-testid="session-starting">{starting ? startupMessage(starting) : 'Creating session…'}</span>
+            </>
+          ) : (
+            <span>{blockedReason}</span>
+          )}
+        </div>
+      )}
+    </AppShell>
   );
 }

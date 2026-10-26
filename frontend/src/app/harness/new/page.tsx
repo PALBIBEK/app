@@ -71,7 +71,7 @@ export default function CreateHarnessPage(): JSX.Element {
           <motion.div variants={itemVariants}>
             <Link
               href="/"
-              className="group inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+              className="group inline-flex items-center gap-2 text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
             >
               <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
               Back to Harnesses
@@ -81,14 +81,14 @@ export default function CreateHarnessPage(): JSX.Element {
           {/* Page header */}
           <motion.div className="mt-6" variants={itemVariants}>
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/25">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500">
                 <Sparkle size={20} weight="fill" className="text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">
                   Create New Harness
                 </h1>
-                <p className="mt-0.5 text-sm text-slate-500">
+                <p className="mt-0.5 text-sm text-ink-2">
                   Name it, then set its prompt, tools, model, sandbox, memory and policy
                 </p>
               </div>
@@ -108,7 +108,7 @@ export default function CreateHarnessPage(): JSX.Element {
                 <div className="space-y-6">
                   {/* Name input */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700">
+                    <label className="block text-sm font-medium text-ink-2">
                       Harness Name
                     </label>
                     <motion.input
@@ -119,20 +119,20 @@ export default function CreateHarnessPage(): JSX.Element {
                       whileFocus={{ scale: 1.01 }}
                       className={cn(
                         'mt-2 h-12 w-full rounded-xl px-4',
-                        'text-[15px] text-slate-900 placeholder:text-slate-400',
-                        'bg-slate-50/50 border-2 border-slate-200',
-                        'shadow-sm transition-all duration-200',
-                        'hover:border-slate-300 hover:bg-white',
-                        'focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                        'text-[15px] text-ink placeholder:text-ink-3',
+                        'bg-canvas border border-line',
+                        'transition-all duration-200',
+                        'hover:border-line-strong hover:bg-surface',
+                        'focus:border-accent-500 focus:bg-surface focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                       )}
                     />
-                    <p className="mt-2 text-xs text-slate-500">
+                    <p className="mt-2 text-xs text-ink-2">
                       Use lowercase letters, numbers, and hyphens
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-slate-700">
+                    <label className="block text-sm font-medium text-ink-2">
                       Description
                     </label>
                     <input
@@ -142,9 +142,9 @@ export default function CreateHarnessPage(): JSX.Element {
                       placeholder="Optional"
                       className={cn(
                         'mt-2 h-12 w-full rounded-xl px-4',
-                        'text-[15px] text-slate-900 placeholder:text-slate-400',
-                        'bg-slate-50/50 border-2 border-slate-200',
-                        'focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                        'text-[15px] text-ink placeholder:text-ink-3',
+                        'bg-canvas border border-line',
+                        'focus:border-accent-500 focus:bg-surface focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                       )}
                     />
                   </div>
@@ -158,11 +158,11 @@ export default function CreateHarnessPage(): JSX.Element {
           {/* Actions */}
           <motion.div
             variants={itemVariants}
-            className="mt-10 flex items-center justify-between border-t border-slate-200 pt-6"
+            className="mt-10 flex items-center justify-between border-t border-line pt-6"
           >
             <Link
               href="/"
-              className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+              className="text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
             >
               Cancel
             </Link>
@@ -171,14 +171,12 @@ export default function CreateHarnessPage(): JSX.Element {
                 type="button"
                 disabled={createHarness.isPending || !name.trim()}
                 onClick={() => void handleCreate()}
-                whileHover={{ scale: 1.02, x: 2 }}
-                whileTap={{ scale: 0.98 }}
                 className={cn(
                   'inline-flex items-center gap-2 rounded-xl px-6 py-3',
                   'text-sm font-medium text-white',
-                  'bg-gradient-to-br from-primary-500 to-primary-600',
-                  'shadow-lg shadow-primary-500/25',
-                  'transition-shadow hover:shadow-xl hover:shadow-primary-500/30',
+                  'bg-accent-500',
+                  '',
+                  'transition- hover:',
                   'disabled:opacity-60'
                 )}
               >
@@ -205,23 +203,22 @@ interface FormSectionProps {
 function FormSection({ icon: Icon, title, description, number, action, children }: FormSectionProps): JSX.Element {
   return (
     <motion.div
-      whileHover={{ y: -2 }}
       transition={{ duration: 0.2 }}
-      className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+      className="rounded-card border border-line bg-surface p-6 transition-"
     >
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-4">
           <div className="relative">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-50">
-              <Icon size={20} weight="regular" className="text-slate-600" />
+              <Icon size={20} weight="regular" className="text-ink-2" />
             </div>
-            <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary-500 text-[10px] font-bold text-white shadow-sm">
+            <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-accent-500 text-[10px] font-bold text-white">
               {number}
             </div>
           </div>
           <div>
-            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-            <p className="mt-0.5 text-sm text-slate-500">{description}</p>
+            <h2 className="text-base font-semibold text-ink">{title}</h2>
+            <p className="mt-0.5 text-sm text-ink-2">{description}</p>
           </div>
         </div>
         {action}

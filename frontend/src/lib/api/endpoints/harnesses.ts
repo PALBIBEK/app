@@ -139,6 +139,9 @@ export const harnessesAPI = {
   saveManifest: async (id: string, manifest: Manifest): Promise<ManifestView> =>
     ManifestViewSchema.parse(await apiClient.put(`/harnesses/${id}/manifest`, manifest)),
 
+  /** Every check publishing the saved draft would run; nothing is published. */
+  checkDraft: async (id: string): Promise<DraftCheckResult> => apiClient.post<DraftCheckResult>(`/harnesses/${id}/check`),
+
   /** Publish the draft as the next release (an unchanged draft publishes nothing). */
   publish: async (id: string): Promise<PublishResponse> =>
     PublishResponseSchema.parse(await apiClient.post(`/harnesses/${id}/publish`)),
@@ -152,3 +155,17 @@ export const catalogAPI = {
   tools: async (): Promise<CatalogTool[]> => CatalogToolSchema.array().parse(await apiClient.get('/catalog/tools')),
   models: async (): Promise<CatalogModel[]> => CatalogModelSchema.array().parse(await apiClient.get('/catalog/models')),
 };
+
+export interface DraftCheck {
+  /** The builder tab it is about: prompt, tools, model, sandbox, memory, policy. */
+  section: string;
+  check: string;
+  ok: boolean;
+  message: string;
+  code: string | null;
+}
+
+export interface DraftCheckResult {
+  ok: boolean;
+  checks: DraftCheck[];
+}

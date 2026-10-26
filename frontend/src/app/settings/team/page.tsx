@@ -35,7 +35,7 @@ export default function TeamSettingsPage(): JSX.Element {
           <motion.div variants={itemVariants}>
             <Link
               href="/settings"
-              className="group inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+              className="group inline-flex items-center gap-2 text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
             >
               <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
               Back to Settings
@@ -45,16 +45,15 @@ export default function TeamSettingsPage(): JSX.Element {
           <motion.div variants={itemVariants} className="mt-6">
             <div className="flex items-start gap-4">
               <motion.div
-                whileHover={{ scale: 1.05, rotate: -5 }}
-                className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-secondary-400 to-secondary-600 shadow-lg shadow-secondary-500/25"
+                className="flex h-14 w-14 items-center justify-center rounded-card bg-ink"
               >
                 <Users size={26} weight="fill" className="text-white" />
               </motion.div>
               <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">
                   Team Management
                 </h1>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-ink-2">
                   Product harness roles — not agent workspace scope grants
                 </p>
               </div>
@@ -64,27 +63,27 @@ export default function TeamSettingsPage(): JSX.Element {
           <motion.div
             variants={itemVariants}
             className={cn(
-              'mt-8 rounded-2xl bg-white p-6',
-              'border-2 border-slate-200/80 shadow-sm'
+              'mt-8 rounded-card bg-surface p-6',
+              'border border-line'
             )}
             data-testid="team-settings-unavailable"
           >
-            <h3 className="text-sm font-semibold text-slate-900 mb-2">
+            <h3 className="text-sm font-semibold text-ink mb-2">
               Team invites not wired
             </h3>
-            <p className="text-sm text-slate-600 leading-relaxed">
+            <p className="text-sm text-ink-2 leading-relaxed">
               Settings Team roles (Owner / Admin / Member) are product harness RBAC — they do
               not map to agent scope grants such as{' '}
-              <code className="text-xs bg-slate-100 px-1 rounded">workspace:read</code>,{' '}
-              <code className="text-xs bg-slate-100 px-1 rounded">sandbox:exec</code>, or{' '}
-              <code className="text-xs bg-slate-100 px-1 rounded">scope:admin</code>.
+              <code className="text-xs bg-line-soft px-1 rounded">workspace:read</code>,{' '}
+              <code className="text-xs bg-line-soft px-1 rounded">sandbox:exec</code>, or{' '}
+              <code className="text-xs bg-line-soft px-1 rounded">scope:admin</code>.
               Shared agent scopes are managed via the BFF{' '}
-              <code className="text-xs bg-slate-100 px-1 rounded">/api/v1/workspace/scopes/…/members</code>{' '}
+              <code className="text-xs bg-line-soft px-1 rounded">/api/v1/workspace/scopes/…/members</code>{' '}
               proxy (service JWT + durable Postgres grants).
             </p>
-            <motion.div className="mt-4 flex items-start gap-3 rounded-xl border-2 border-slate-200 bg-slate-50 p-4">
-              <Info size={18} className="text-slate-500 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-600 leading-relaxed">
+            <motion.div className="mt-4 flex items-start gap-3 rounded-xl border border-line bg-canvas p-4">
+              <Info size={18} className="text-ink-2 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-ink-2 leading-relaxed">
                 This tab is disabled intentionally (no mock invite theater). A future Scopes admin
                 UI will surface agent grant membership separately from harness Team roles.
               </p>

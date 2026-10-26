@@ -129,21 +129,20 @@ export default function TracesPage(): JSX.Element {
             <motion.div variants={itemVariants} className="flex items-start justify-between">
               <div className="flex items-start gap-4">
                 <motion.div
-                  whileHover={{ scale: 1.05, rotate: -5 }}
-                  className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 shadow-lg shadow-primary-500/25"
+                  className="flex h-14 w-14 items-center justify-center rounded-card bg-accent-500"
                 >
                   <ChartLine size={26} weight="fill" className="text-white" />
                 </motion.div>
                 <div>
                   <div className="flex items-center gap-3">
-                    <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                    <h1 className="text-2xl font-semibold tracking-tight text-ink">
                       Traces
                     </h1>
                     <span className="rounded-lg bg-accent-100 px-2.5 py-1 text-xs font-semibold text-accent-700 ring-1 ring-inset ring-accent-200">
                       Sessions
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-slate-500">
+                  <p className="mt-1 text-sm text-ink-2">
                     Session event timelines (live + journal replay)
                   </p>
                 </div>
@@ -166,36 +165,35 @@ export default function TracesPage(): JSX.Element {
                 return (
                   <motion.div
                     key={stat.label}
-                    whileHover={{ y: -4, scale: 1.02 }}
                     className={cn(
-                      'rounded-2xl p-5',
-                      'border-2 border-slate-200/80 bg-white',
-                      'shadow-sm transition-all duration-200',
-                      'hover:border-slate-300 hover:shadow-lg'
+                      'rounded-card p-5',
+                      'border border-line bg-surface',
+                      'transition-all duration-200',
+                      'hover:border-line-strong'
                     )}
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-                        <p className="mt-1 text-2xl font-semibold text-slate-900">{stat.value}</p>
+                        <p className="text-sm font-medium text-ink-2">{stat.label}</p>
+                        <p className="mt-1 text-2xl font-semibold text-ink">{stat.value}</p>
                       </div>
                       <div
                         className={cn(
                           'flex h-12 w-12 items-center justify-center rounded-xl',
-                          stat.color === 'primary' && 'bg-primary-100',
+                          stat.color === 'primary' && 'bg-accent-100',
                           stat.color === 'accent' && 'bg-accent-100',
-                          stat.color === 'secondary' && 'bg-secondary-100',
-                          stat.color === 'slate' && 'bg-slate-100'
+                          stat.color === 'secondary' && 'bg-line-soft',
+                          stat.color === 'slate' && 'bg-line-soft'
                         )}
                       >
                         <Icon
                           size={24}
                           weight="regular"
                           className={cn(
-                            stat.color === 'primary' && 'text-primary-600',
+                            stat.color === 'primary' && 'text-accent-600',
                             stat.color === 'accent' && 'text-accent-600',
-                            stat.color === 'secondary' && 'text-secondary-600',
-                            stat.color === 'slate' && 'text-slate-600'
+                            stat.color === 'secondary' && 'text-good',
+                            stat.color === 'slate' && 'text-ink-2'
                           )}
                         />
                       </div>
@@ -209,7 +207,7 @@ export default function TracesPage(): JSX.Element {
               <div className="relative flex-1 max-w-md">
                 <MagnifyingGlass
                   size={16}
-                  className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-3"
                 />
                 <motion.input
                   whileFocus={{ scale: 1.01 }}
@@ -219,11 +217,11 @@ export default function TracesPage(): JSX.Element {
                   placeholder="Search traces..."
                   className={cn(
                     'h-11 w-full rounded-xl pl-11 pr-4',
-                    'text-sm text-slate-900 placeholder:text-slate-400',
-                    'bg-white border-2 border-slate-200',
-                    'shadow-sm transition-all duration-200',
-                    'hover:border-slate-300',
-                    'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                    'text-sm text-ink placeholder:text-ink-3',
+                    'bg-surface border border-line',
+                    'transition-all duration-200',
+                    'hover:border-line-strong',
+                    'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                   )}
                 />
               </div>
@@ -232,15 +230,13 @@ export default function TracesPage(): JSX.Element {
                 {['all', 'active', 'terminated', 'failed'].map((filter) => (
                   <motion.button
                     key={filter}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
                     onClick={() => setStatusFilter(filter)}
                     className={cn(
                       'rounded-xl px-4 py-2',
                       'text-sm font-medium transition-all',
                       statusFilter === filter
-                        ? 'bg-primary-600 text-white shadow-md shadow-primary-500/25'
-                        : 'bg-white text-slate-600 border-2 border-slate-200 hover:border-slate-300'
+                        ? 'bg-accent-600 text-white'
+                        : 'bg-surface text-ink-2 border border-line hover:border-line-strong'
                     )}
                   >
                     <span className="capitalize">{filter}</span>
@@ -249,14 +245,12 @@ export default function TracesPage(): JSX.Element {
               </div>
 
               <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
                 type="button"
                 className={cn(
                   'flex items-center gap-2 rounded-xl px-4 py-2.5',
-                  'text-sm font-medium text-slate-600',
-                  'bg-white border-2 border-slate-200',
-                  'shadow-sm transition-all hover:border-slate-300 hover:shadow'
+                  'text-sm font-medium text-ink-2',
+                  'bg-surface border border-line',
+                  'transition-all hover:border-line-strong hover:'
                 )}
               >
                 <SortAscending size={16} />
@@ -264,14 +258,14 @@ export default function TracesPage(): JSX.Element {
               </motion.button>
             </motion.div>
 
-            {isLoading && <p className="mt-6 text-sm text-slate-500">Loading traces…</p>}
+            {isLoading && <p className="mt-6 text-sm text-ink-2">Loading traces…</p>}
             {error && (
-              <p className="mt-6 text-sm text-red-600">
+              <p className="mt-6 text-sm text-bad">
                 {error instanceof Error ? error.message : 'Failed to load traces'}
               </p>
             )}
             {!isLoading && !error && filtered.length === 0 && (
-              <p className="mt-6 text-sm text-slate-500">No session traces yet.</p>
+              <p className="mt-6 text-sm text-ink-2">No session traces yet.</p>
             )}
 
             <motion.div variants={itemVariants} className="mt-6 space-y-3">
@@ -294,12 +288,11 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
     <Link href={`/traces/${session.id}`}>
       <motion.div
         variants={cardVariants}
-        whileHover={{ x: 4, scale: 1.005 }}
         className={cn(
-          'rounded-2xl p-5',
-          'border-2 border-slate-200/80 bg-white',
-          'shadow-sm transition-all duration-200',
-          'hover:border-slate-300 hover:shadow-lg'
+          'rounded-card p-5',
+          'border border-line bg-surface',
+          'transition-all duration-200',
+          'hover:border-line-strong'
         )}
       >
         <div className="flex items-start justify-between">
@@ -307,11 +300,11 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
             <div
               className={cn(
                 'flex h-11 w-11 items-center justify-center rounded-xl',
-                tone === 'secondary' && 'bg-secondary-100',
-                tone === 'red' && 'bg-red-100',
-                tone === 'primary' && 'bg-primary-100',
-                tone === 'amber' && 'bg-amber-100',
-                tone === 'slate' && 'bg-slate-100'
+                tone === 'secondary' && 'bg-line-soft',
+                tone === 'red' && 'bg-canvas',
+                tone === 'primary' && 'bg-accent-100',
+                tone === 'amber' && 'bg-accent-50',
+                tone === 'slate' && 'bg-line-soft'
               )}
             >
               {isActive ? (
@@ -323,11 +316,11 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
                     size={20}
                     weight="fill"
                     className={cn(
-                      tone === 'secondary' && 'text-secondary-600',
-                      tone === 'red' && 'text-red-600',
-                      tone === 'primary' && 'text-primary-600',
-                      tone === 'amber' && 'text-amber-600',
-                      tone === 'slate' && 'text-slate-600'
+                      tone === 'secondary' && 'text-good',
+                      tone === 'red' && 'text-bad',
+                      tone === 'primary' && 'text-accent-600',
+                      tone === 'amber' && 'text-ink',
+                      tone === 'slate' && 'text-ink-2'
                     )}
                   />
                 </motion.div>
@@ -336,11 +329,11 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
                   size={20}
                   weight="fill"
                   className={cn(
-                    tone === 'secondary' && 'text-secondary-600',
-                    tone === 'red' && 'text-red-600',
-                    tone === 'primary' && 'text-primary-600',
-                    tone === 'amber' && 'text-amber-600',
-                    tone === 'slate' && 'text-slate-600'
+                    tone === 'secondary' && 'text-good',
+                    tone === 'red' && 'text-bad',
+                    tone === 'primary' && 'text-accent-600',
+                    tone === 'amber' && 'text-ink',
+                    tone === 'slate' && 'text-ink-2'
                   )}
                 />
               )}
@@ -348,21 +341,21 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
 
             <div className="flex-1">
               <div className="flex items-center gap-3">
-                <p className="text-sm font-semibold text-slate-900">
+                <p className="text-sm font-semibold text-ink">
                   {session.title || session.harness_id}
                 </p>
                 <span
                   className={cn(
                     'flex items-center gap-1.5 rounded-full px-2.5 py-1',
                     tone === 'secondary' &&
-                      'bg-secondary-50 text-secondary-700 ring-1 ring-inset ring-secondary-200',
-                    tone === 'red' && 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
+                      'bg-line-soft text-good ring-1 ring-inset ring-secondary-200',
+                    tone === 'red' && 'bg-canvas text-bad ring-1 ring-inset ring-red-200',
                     tone === 'primary' &&
-                      'bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200',
+                      'bg-primary-50 text-accent-700 ring-1 ring-inset ring-accent-200',
                     tone === 'amber' &&
-                      'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+                      'bg-accent-50 text-ink ring-1 ring-inset ring-amber-200',
                     tone === 'slate' &&
-                      'bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200'
+                      'bg-canvas text-ink-2 ring-1 ring-inset ring-slate-200'
                   )}
                 >
                   <span className="text-xs font-semibold capitalize">
@@ -370,17 +363,17 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
                   </span>
                 </span>
               </div>
-              <p className="mt-1 text-xs font-mono text-slate-500">
+              <p className="mt-1 text-xs font-mono text-ink-2">
                 Session: {session.id} · seq {session.last_seq}
               </p>
-              <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
+              <div className="mt-3 flex items-center gap-4 text-xs text-ink-2">
                 <span className="flex items-center gap-1">
-                  <ChatCircle size={12} className="text-slate-400" />
+                  <ChatCircle size={12} className="text-ink-3" />
                   {session.message_count} messages
                 </span>
                 <span>•</span>
                 <span className="flex items-center gap-1">
-                  <Clock size={12} className="text-slate-400" />
+                  <Clock size={12} className="text-ink-3" />
                   {formatTimestamp(session.created_at)}
                 </span>
               </div>
@@ -389,8 +382,8 @@ function TraceRow({ session }: { session: Session }): JSX.Element {
 
           <div className="flex items-center gap-6">
             <div className="text-right">
-              <p className="text-xs font-medium text-slate-500">Cost</p>
-              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+              <p className="text-xs font-medium text-ink-2">Cost</p>
+              <p className="mt-0.5 text-sm font-semibold text-ink">
                 ${session.total_cost.toFixed(4)}
               </p>
             </div>

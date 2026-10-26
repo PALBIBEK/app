@@ -147,14 +147,14 @@ function ToolsLibraryContent(): JSX.Element {
     >
       <motion.div variants={itemVariants} className="flex items-start justify-between">
         <div className="flex items-start gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 shadow-lg shadow-primary-500/25">
+          <div className="flex h-14 w-14 items-center justify-center rounded-card bg-accent-500">
             <Wrench size={26} weight="fill" className="text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
               Tools Library
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-ink-2">
               Create and manage custom tools attached to harnesses
             </p>
           </div>
@@ -165,8 +165,8 @@ function ToolsLibraryContent(): JSX.Element {
           className={cn(
             'flex items-center gap-2 rounded-xl px-5 py-2.5',
             'text-sm font-medium text-white',
-            'bg-gradient-to-br from-primary-500 to-primary-600',
-            'shadow-lg shadow-primary-500/25'
+            'bg-accent-500',
+            ''
           )}
         >
           <Plus size={16} weight="bold" />
@@ -180,20 +180,20 @@ function ToolsLibraryContent(): JSX.Element {
           return (
             <div
               key={stat.label}
-              className="rounded-2xl border-2 border-slate-200/80 bg-white p-5 shadow-sm"
+              className="rounded-card border border-line bg-surface p-5"
             >
               <div className="flex items-center gap-3">
                 <div
                   className={cn(
                     'flex h-10 w-10 items-center justify-center rounded-xl',
-                    stat.accent === 'green' ? 'bg-secondary-50' : 'bg-slate-100'
+                    stat.accent === 'green' ? 'bg-line-soft' : 'bg-line-soft'
                   )}
                 >
                   <Icon
                     size={18}
                     weight="fill"
                     className={
-                      stat.accent === 'green' ? 'text-secondary-600' : 'text-slate-500'
+                      stat.accent === 'green' ? 'text-good' : 'text-ink-2'
                     }
                   />
                 </div>
@@ -201,12 +201,12 @@ function ToolsLibraryContent(): JSX.Element {
                   <p
                     className={cn(
                       'text-xl font-semibold',
-                      stat.accent === 'green' ? 'text-secondary-600' : 'text-slate-900'
+                      stat.accent === 'green' ? 'text-good' : 'text-ink'
                     )}
                   >
                     {stat.value}
                   </p>
-                  <p className="text-xs text-slate-500">{stat.label}</p>
+                  <p className="text-xs text-ink-2">{stat.label}</p>
                 </div>
               </div>
             </div>
@@ -218,7 +218,7 @@ function ToolsLibraryContent(): JSX.Element {
         <div className="relative max-w-md flex-1">
           <MagnifyingGlass
             size={16}
-            className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-3"
           />
           <input
             type="text"
@@ -227,9 +227,9 @@ function ToolsLibraryContent(): JSX.Element {
             placeholder="Search tools..."
             className={cn(
               'h-11 w-full rounded-xl pl-11 pr-4',
-              'text-sm text-slate-900 placeholder:text-slate-400',
-              'border-2 border-slate-200 bg-white',
-              'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+              'text-sm text-ink placeholder:text-ink-3',
+              'border border-line bg-surface',
+              'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
             )}
           />
         </div>
@@ -244,8 +244,8 @@ function ToolsLibraryContent(): JSX.Element {
             className={cn(
               'rounded-xl px-4 py-2 text-sm font-medium transition-all',
               selectedCategory === filter.id
-                ? 'bg-primary-600 text-white shadow-md shadow-primary-500/25'
-                : 'border-2 border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                ? 'bg-accent-600 text-white'
+                : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
             )}
           >
             {filter.label}
@@ -253,8 +253,8 @@ function ToolsLibraryContent(): JSX.Element {
               className={cn(
                 'ml-2 rounded-full px-2 py-0.5 text-xs font-semibold',
                 selectedCategory === filter.id
-                  ? 'bg-white/20 text-white'
-                  : 'bg-slate-100 text-slate-500'
+                  ? 'bg-surface text-white'
+                  : 'bg-line-soft text-ink-2'
               )}
             >
               {filter.count}
@@ -264,14 +264,14 @@ function ToolsLibraryContent(): JSX.Element {
       </motion.div>
 
       {isLoading ? (
-        <div className="mt-16 flex items-center justify-center gap-3 text-slate-500">
+        <div className="mt-16 flex items-center justify-center gap-3 text-ink-2">
           <SpinnerGap size={24} className="animate-spin" />
           Loading tools…
         </div>
       ) : error ? (
-        <div className="mt-12 rounded-2xl border border-red-200 bg-red-50/80 p-8 text-center">
+        <div className="mt-12 rounded-card border border-line bg-canvas p-8 text-center">
           <WarningCircle size={32} className="mx-auto text-red-500" />
-          <p className="mt-3 text-sm font-semibold text-red-800">
+          <p className="mt-3 text-sm font-semibold text-bad">
             Could not load tools. Check that you are signed in.
           </p>
         </div>
@@ -291,48 +291,48 @@ function ToolsLibraryContent(): JSX.Element {
                 <Link href={`/tools/${tool.id}`} className="block">
                   <div
                     className={cn(
-                      'group flex items-start gap-4 rounded-2xl p-5',
-                      'border-2 border-slate-200/80 bg-white',
-                      'shadow-sm transition-all hover:border-slate-300 hover:shadow-lg'
+                      'group flex items-start gap-4 rounded-card p-5',
+                      'border border-line bg-surface',
+                      'transition-all hover:border-line-strong'
                     )}
                   >
                     <div
                       className={cn(
-                        'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl shadow-md',
+                        'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl',
                         badge.tone === 'primary' &&
-                          'bg-gradient-to-br from-primary-400 to-primary-600 shadow-primary-500/25',
+                          'bg-accent-500',
                         badge.tone === 'secondary' &&
-                          'bg-gradient-to-br from-secondary-400 to-secondary-600 shadow-secondary-500/25',
+                          'bg-ink',
                         badge.tone === 'accent' &&
-                          'bg-gradient-to-br from-accent-400 to-accent-600 shadow-accent-500/25'
+                          'bg-line-soft'
                       )}
                     >
                       <Icon size={22} weight="fill" className="text-white" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-slate-900">{tool.name}</h3>
+                        <h3 className="text-sm font-semibold text-ink">{tool.name}</h3>
                         <span
                           className={cn(
                             'flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold capitalize',
                             badge.tone === 'primary' &&
-                              'bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200',
+                              'bg-primary-50 text-accent-700 ring-1 ring-inset ring-accent-200',
                             badge.tone === 'secondary' &&
-                              'bg-secondary-50 text-secondary-700 ring-1 ring-inset ring-secondary-200',
+                              'bg-line-soft text-good ring-1 ring-inset ring-secondary-200',
                             badge.tone === 'accent' &&
                               'bg-accent-50 text-accent-700 ring-1 ring-inset ring-accent-200'
                           )}
                         >
                           {badge.label}
                         </span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                        <span className="rounded-full bg-line-soft px-2 py-0.5 text-xs text-ink-2">
                           {tool.category}
                         </span>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                      <p className="mt-1 line-clamp-2 text-xs text-ink-2">
                         {tool.description}
                       </p>
-                      <div className="mt-3 flex items-center gap-4 text-xs text-slate-400">
+                      <div className="mt-3 flex items-center gap-4 text-xs text-ink-3">
                         <span className="flex items-center gap-1">
                           <Cube size={12} />
                           {tool.status}
@@ -342,7 +342,7 @@ function ToolsLibraryContent(): JSX.Element {
                     <ArrowRight
                       size={18}
                       weight="bold"
-                      className="self-center text-slate-300 group-hover:text-slate-500"
+                      className="self-center text-ink-3 group-hover:text-ink-2"
                     />
                   </div>
                 </Link>
@@ -354,16 +354,16 @@ function ToolsLibraryContent(): JSX.Element {
 
       {!isLoading && !error && filteredTools.length === 0 && (
         <div className="mt-12 flex flex-col items-center justify-center text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100">
-            <Wrench size={28} className="text-slate-400" />
+          <div className="flex h-16 w-16 items-center justify-center rounded-card bg-line-soft">
+            <Wrench size={28} className="text-ink-3" />
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-700">No tools found</p>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-4 text-sm font-medium text-ink-2">No tools found</p>
+          <p className="mt-1 text-sm text-ink-2">
             Create a custom tool to attach it to a harness
           </p>
           <Link
             href="/tools/new"
-            className="mt-4 text-sm font-medium text-primary-600 hover:text-primary-700"
+            className="mt-4 text-sm font-medium text-accent-600 hover:text-accent-700"
           >
             New Tool
           </Link>

@@ -88,7 +88,7 @@ function ToolDetailContent(): JSX.Element {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center gap-3 text-slate-500">
+      <div className="flex min-h-[40vh] items-center justify-center gap-3 text-ink-2">
         <SpinnerGap size={24} className="animate-spin" />
         Loading tool…
       </div>
@@ -97,14 +97,14 @@ function ToolDetailContent(): JSX.Element {
 
   if (error || !tool) {
     return (
-      <div className="mx-auto max-w-lg rounded-2xl border border-red-200 bg-red-50/80 p-8 text-center">
+      <div className="mx-auto max-w-lg rounded-card border border-line bg-canvas p-8 text-center">
         <WarningCircle size={32} className="mx-auto text-red-500" />
-        <p className="mt-3 text-sm font-semibold text-red-800">
+        <p className="mt-3 text-sm font-semibold text-bad">
           Tool not found or you do not have access.
         </p>
         <Link
           href="/tools"
-          className="mt-4 inline-flex text-sm font-medium text-primary-600 hover:text-primary-700"
+          className="mt-4 inline-flex text-sm font-medium text-accent-600 hover:text-accent-700"
         >
           Back to tools
         </Link>
@@ -126,7 +126,7 @@ function ToolDetailContent(): JSX.Element {
       <motion.div variants={itemVariants}>
         <Link
           href="/tools"
-          className="group inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+          className="group inline-flex items-center gap-2 text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
         >
           <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
           Back to Tools
@@ -136,19 +136,19 @@ function ToolDetailContent(): JSX.Element {
       <motion.div variants={itemVariants} className="mt-6">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-secondary-400 to-secondary-600 shadow-lg shadow-secondary-500/25">
+            <div className="flex h-14 w-14 items-center justify-center rounded-card bg-ink">
               <Wrench size={26} weight="fill" className="text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">
                   {tool.name}
                 </h1>
-                <span className="rounded-full bg-secondary-50 px-2.5 py-1 text-xs font-semibold capitalize text-secondary-700 ring-1 ring-inset ring-secondary-200">
+                <span className="rounded-full bg-line-soft px-2.5 py-1 text-xs font-semibold capitalize text-good ring-1 ring-inset ring-secondary-200">
                   {tool.category}
                 </span>
               </div>
-              <p className="mt-1 text-sm text-slate-500">{tool.description}</p>
+              <p className="mt-1 text-sm text-ink-2">{tool.description}</p>
             </div>
           </div>
 
@@ -166,8 +166,8 @@ function ToolDetailContent(): JSX.Element {
               className={cn(
                 'flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium',
                 isEditing
-                  ? 'bg-primary-600 text-white shadow-md shadow-primary-500/25'
-                  : 'border-2 border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                  ? 'bg-accent-600 text-white'
+                  : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
               )}
             >
               <PencilSimple size={16} />
@@ -183,8 +183,8 @@ function ToolDetailContent(): JSX.Element {
               disabled={deleteTool.isPending}
               className={cn(
                 'flex h-10 w-10 items-center justify-center rounded-xl',
-                'border-2 border-slate-200 bg-white text-slate-400',
-                'hover:border-red-200 hover:bg-red-50 hover:text-red-600'
+                'border border-line bg-surface text-ink-3',
+                'hover:border-line hover:bg-canvas hover:text-bad'
               )}
               aria-label="Delete tool"
             >
@@ -195,52 +195,52 @@ function ToolDetailContent(): JSX.Element {
       </motion.div>
 
       <motion.div variants={itemVariants} className="mt-8 grid grid-cols-3 gap-4">
-        <div className="rounded-2xl border-2 border-slate-200/80 bg-white p-5 shadow-sm">
+        <div className="rounded-card border border-line bg-surface p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary-50">
-              <CheckCircle size={18} weight="fill" className="text-secondary-600" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-line-soft">
+              <CheckCircle size={18} weight="fill" className="text-good" />
             </div>
             <div>
-              <p className="text-xl font-semibold capitalize text-secondary-600">
+              <p className="text-xl font-semibold capitalize text-good">
                 {tool.status}
               </p>
-              <p className="text-xs text-slate-500">Status</p>
+              <p className="text-xs text-ink-2">Status</p>
             </div>
           </div>
         </div>
-        <div className="rounded-2xl border-2 border-slate-200/80 bg-white p-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-900">{createdLabel}</p>
-          <p className="text-xs text-slate-500">Created</p>
+        <div className="rounded-card border border-line bg-surface p-5">
+          <p className="text-sm font-semibold text-ink">{createdLabel}</p>
+          <p className="text-xs text-ink-2">Created</p>
         </div>
-        <div className="rounded-2xl border-2 border-slate-200/80 bg-white p-5 shadow-sm">
-          <p className="truncate font-mono text-xs text-slate-700">{tool.id}</p>
-          <p className="text-xs text-slate-500">UUID</p>
+        <div className="rounded-card border border-line bg-surface p-5">
+          <p className="truncate font-mono text-xs text-ink-2">{tool.id}</p>
+          <p className="text-xs text-ink-2">UUID</p>
         </div>
       </motion.div>
 
       <motion.div
         variants={itemVariants}
-        className="mt-8 space-y-6 rounded-2xl border-2 border-slate-200/80 bg-white p-6 shadow-sm"
+        className="mt-8 space-y-6 rounded-card border border-line bg-surface p-6"
       >
-        <h3 className="text-sm font-semibold text-slate-900">Metadata</h3>
+        <h3 className="text-sm font-semibold text-ink">Metadata</h3>
         {isEditing ? (
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Description</label>
+              <label className="mb-1 block text-xs text-ink-2">Description</label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
-                className="w-full rounded-xl border-2 border-slate-200 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-xl border border-line px-3 py-2 text-sm focus:border-accent-500 focus:outline-none"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="mb-1 block text-xs text-slate-500">Category</label>
+                <label className="mb-1 block text-xs text-ink-2">Category</label>
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value as ToolCategory)}
-                  className="h-10 w-full rounded-xl border-2 border-slate-200 px-3 text-sm"
+                  className="h-10 w-full rounded-xl border border-line px-3 text-sm"
                 >
                   {TOOL_CATEGORIES.map((c) => (
                     <option key={c} value={c}>
@@ -250,13 +250,13 @@ function ToolDetailContent(): JSX.Element {
                 </select>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-slate-500">Status</label>
+                <label className="mb-1 block text-xs text-ink-2">Status</label>
                 <select
                   value={status}
                   onChange={(e) =>
                     setStatus(e.target.value as typeof status)
                   }
-                  className="h-10 w-full rounded-xl border-2 border-slate-200 px-3 text-sm"
+                  className="h-10 w-full rounded-xl border border-line px-3 text-sm"
                 >
                   {(['active', 'inactive', 'deprecated', 'beta'] as const).map((s) => (
                     <option key={s} value={s}>
@@ -267,12 +267,12 @@ function ToolDetailContent(): JSX.Element {
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Endpoint</label>
+              <label className="mb-1 block text-xs text-ink-2">Endpoint</label>
               <input
                 type="url"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
-                className="h-10 w-full rounded-xl border-2 border-slate-200 px-3 text-sm"
+                className="h-10 w-full rounded-xl border border-line px-3 text-sm"
                 placeholder="https://…"
               />
             </div>
@@ -280,20 +280,20 @@ function ToolDetailContent(): JSX.Element {
         ) : (
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="mb-1 text-xs text-slate-500">Tool Name</p>
-              <p className="font-mono text-sm text-slate-900">{tool.name}</p>
+              <p className="mb-1 text-xs text-ink-2">Tool Name</p>
+              <p className="font-mono text-sm text-ink">{tool.name}</p>
             </div>
             <div>
-              <p className="mb-1 text-xs text-slate-500">Category</p>
-              <p className="text-sm text-slate-900">{tool.category}</p>
+              <p className="mb-1 text-xs text-ink-2">Category</p>
+              <p className="text-sm text-ink">{tool.category}</p>
             </div>
             <div>
-              <p className="mb-1 text-xs text-slate-500">Endpoint</p>
-              <p className="truncate text-sm text-slate-900">{tool.endpoint || '—'}</p>
+              <p className="mb-1 text-xs text-ink-2">Endpoint</p>
+              <p className="truncate text-sm text-ink">{tool.endpoint || '—'}</p>
             </div>
             <div>
-              <p className="mb-1 text-xs text-slate-500">Auth required</p>
-              <p className="text-sm text-slate-900">{tool.auth_required ? 'Yes' : 'No'}</p>
+              <p className="mb-1 text-xs text-ink-2">Auth required</p>
+              <p className="text-sm text-ink">{tool.auth_required ? 'Yes' : 'No'}</p>
             </div>
           </div>
         )}

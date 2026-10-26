@@ -101,21 +101,21 @@ function SubagentsListContent(): JSX.Element {
         >
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-50">
-                <GitBranch size={26} weight="fill" className="text-primary-600" />
+              <div className="flex h-14 w-14 items-center justify-center rounded-card bg-primary-50">
+                <GitBranch size={26} weight="fill" className="text-accent-600" />
               </div>
               <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">
                   Subagents
                 </h1>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-ink-2">
                   Live children for a parent session via BFF (not mock data)
                 </p>
               </div>
             </div>
             <Link
               href="/subagents/spawn"
-              className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700"
+              className="inline-flex items-center gap-2 rounded-xl bg-accent-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-accent-700"
             >
               <Plus size={16} weight="bold" />
               Spawn Subagent
@@ -123,12 +123,12 @@ function SubagentsListContent(): JSX.Element {
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-slate-600">Parent session</label>
+            <label className="text-sm font-medium text-ink-2">Parent session</label>
             <select
               value={selectedSessionId}
               onChange={(e) => setSelectedSessionId(e.target.value)}
               disabled={sessionsLoading || sessions.length === 0}
-              className="h-10 min-w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-100"
+              className="h-10 min-w-[240px] rounded-xl border border-line bg-surface px-3 text-sm outline-none focus:border-accent-300 focus:ring-2 focus:ring-accent-100"
             >
               {sessions.length === 0 && <option value="">No sessions</option>}
               {sessions.map((s) => (
@@ -140,7 +140,7 @@ function SubagentsListContent(): JSX.Element {
             <button
               type="button"
               onClick={() => void loadChildren(selectedSessionId)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-ink-2 hover:bg-canvas"
             >
               Refresh
             </button>
@@ -149,25 +149,25 @@ function SubagentsListContent(): JSX.Element {
           <div className="relative mt-4 max-w-md">
             <MagnifyingGlass
               size={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
             />
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Filter children…"
-              className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-100"
+              className="w-full rounded-xl border border-line bg-surface py-2.5 pl-9 pr-3 text-sm outline-none focus:border-accent-300 focus:ring-2 focus:ring-accent-100"
             />
           </div>
 
           {(sessionsError || loadError) && (
             <div
-              className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+              className="mt-6 flex items-start gap-3 rounded-card border border-accent-200 bg-accent-50 p-4 text-sm text-ink"
               role="alert"
             >
               <WarningCircle size={20} className="shrink-0" />
               <div>
                 <p className="font-medium">Could not load subagents from the BFF</p>
-                <p className="mt-1 text-amber-800/90">
+                <p className="mt-1 text-ink/90">
                   {loadError ||
                     (sessionsError instanceof Error
                       ? sessionsError.message
@@ -180,7 +180,7 @@ function SubagentsListContent(): JSX.Element {
           )}
 
           {(sessionsLoading || loading) && (
-            <div className="mt-10 flex items-center gap-2 text-sm text-slate-500">
+            <div className="mt-10 flex items-center gap-2 text-sm text-ink-2">
               <SpinnerGap size={18} className="animate-spin" />
               Loading children…
             </div>
@@ -188,18 +188,18 @@ function SubagentsListContent(): JSX.Element {
 
           {!sessionsLoading && !loading && !loadError && filtered.length === 0 && (
             <div className="mt-12 flex flex-col items-center justify-center text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100">
-                <GitBranch size={28} className="text-slate-400" />
+              <div className="flex h-16 w-16 items-center justify-center rounded-card bg-line-soft">
+                <GitBranch size={28} className="text-ink-3" />
               </div>
-              <p className="mt-4 text-sm font-medium text-slate-700">No children yet</p>
-              <p className="mt-1 max-w-sm text-sm text-slate-500">
+              <p className="mt-4 text-sm font-medium text-ink-2">No children yet</p>
+              <p className="mt-1 max-w-sm text-sm text-ink-2">
                 {sessions.length === 0
                   ? 'Create a Test session first, then spawn a child.'
                   : 'Spawn a lab_echo child from this session, or wait for the agent to spawn one.'}
               </p>
               <Link
                 href="/subagents/spawn"
-                className="mt-4 text-sm font-medium text-primary-600 hover:text-primary-700"
+                className="mt-4 text-sm font-medium text-accent-600 hover:text-accent-700"
               >
                 Spawn Subagent →
               </Link>
@@ -218,27 +218,27 @@ function SubagentsListContent(): JSX.Element {
                 >
                   <div
                     className={cn(
-                      'group flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4',
-                      'transition-all hover:border-slate-300 hover:shadow-md'
+                      'group flex items-center gap-4 rounded-card border border-line bg-surface p-4',
+                      'transition-all hover:border-line-strong'
                     )}
                   >
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50">
-                      <Cube size={18} className="text-primary-600" />
+                      <Cube size={18} className="text-accent-600" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-slate-900">
+                        <p className="truncate text-sm font-semibold text-ink">
                           {child.label || child.id}
                         </p>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold capitalize text-slate-600">
+                        <span className="rounded-full bg-line-soft px-2 py-0.5 text-[11px] font-semibold capitalize text-ink-2">
                           {child.mode.replace(/_/g, ' ')}
                         </span>
                         <span
                           className={cn(
                             'rounded-full px-2 py-0.5 text-[11px] font-semibold',
                             provider.isLab
-                              ? 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200'
-                              : 'bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200'
+                              ? 'bg-accent-50 text-ink ring-1 ring-inset ring-amber-200'
+                              : 'bg-canvas text-ink-2 ring-1 ring-inset ring-slate-200'
                           )}
                           title={
                             provider.isLab
@@ -249,18 +249,18 @@ function SubagentsListContent(): JSX.Element {
                           {provider.label}
                           {provider.isLab ? ' · Lab' : ''}
                         </span>
-                        <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium capitalize text-slate-500">
+                        <span className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-medium capitalize text-ink-2">
                           {child.activity}
                         </span>
                       </div>
-                      <p className="mt-1 truncate font-mono text-xs text-slate-400">
+                      <p className="mt-1 truncate font-mono text-xs text-ink-3">
                         {child.id}
                         {child.run_id ? ` · run ${child.run_id}` : ''}
                       </p>
                     </div>
                     <ArrowRight
                       size={18}
-                      className="text-slate-300 group-hover:text-slate-500"
+                      className="text-ink-3 group-hover:text-ink-2"
                     />
                   </div>
                 </Link>

@@ -26,10 +26,10 @@ export default function SettingsPage(): JSX.Element {
     <AuthGuard>
       <AppShell>
           <div className="mx-auto max-w-4xl px-8 py-8">
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Settings</h1>
-            <p className="mt-2 text-sm text-slate-500">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">Settings</h1>
+            <p className="mt-2 text-sm text-ink-2">
               Product settings. Team chrome lives under{' '}
-              <Link href="/settings/team" className="text-primary-600 hover:underline">
+              <Link href="/settings/team" className="text-accent-600 hover:underline">
                 Team
               </Link>
               .
@@ -48,7 +48,7 @@ export default function SettingsPage(): JSX.Element {
                       'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium',
                       active
                         ? 'bg-slate-900 text-white'
-                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                        : 'bg-surface text-ink-2 border border-line hover:bg-canvas'
                     )}
                   >
                     <Icon size={16} />
@@ -58,19 +58,19 @@ export default function SettingsPage(): JSX.Element {
               })}
             </div>
 
-            <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mt-6 rounded-xl border border-line bg-surface p-6">
               {activeTab === 'general' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <h3 className="text-sm font-semibold text-slate-900 mb-2">General</h3>
-                  <p className="text-sm text-slate-500">
+                  <h3 className="text-sm font-semibold text-ink mb-2">General</h3>
+                  <p className="text-sm text-ink-2">
                     Profile and org defaults are managed via the authenticated user API.
                   </p>
                 </motion.div>
               )}
               {activeTab === 'api-keys' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <h3 className="text-sm font-semibold text-slate-900 mb-2">API keys</h3>
-                  <p className="text-sm text-slate-500">
+                  <h3 className="text-sm font-semibold text-ink mb-2">API keys</h3>
+                  <p className="text-sm text-ink-2">
                     BYOK is not required for local demo. Model keys stay on the AI plane / gateway.
                   </p>
                 </motion.div>
@@ -81,8 +81,8 @@ export default function SettingsPage(): JSX.Element {
                   animate={{ opacity: 1 }}
                   data-testid="budget-settings-unavailable"
                 >
-                  <h3 className="text-sm font-semibold text-slate-900 mb-2">Budget</h3>
-                  <p className="text-sm text-slate-500">
+                  <h3 className="text-sm font-semibold text-ink mb-2">Budget</h3>
+                  <p className="text-sm text-ink-2">
                     Monthly budget controls are not wired here — disabled intentionally (D8). Session
                     spend surfaces as <code className="text-xs">total_cost</code> on live sessions;
                     BudgetSpec / VK caps stay on the AI plane.
@@ -91,8 +91,8 @@ export default function SettingsPage(): JSX.Element {
               )}
               {activeTab === 'workspace' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <h3 className="text-sm font-semibold text-slate-900 mb-4">Org defaults</h3>
-                  <p className="text-sm text-slate-500">
+                  <h3 className="text-sm font-semibold text-ink mb-4">Org defaults</h3>
+                  <p className="text-sm text-ink-2">
                     This is org chrome (runtime defaults), not the agent{' '}
                     <code className="text-xs">/workspace</code> file tree. Upload durable agent files
                     from a live Test session scope.

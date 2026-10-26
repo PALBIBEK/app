@@ -43,20 +43,20 @@ export default function RegisterPage(): JSX.Element {
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-gradient-subtle px-4">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 shadow-card">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-canvas px-4">
+      <div className="w-full max-w-md rounded-card border border-line bg-surface p-8">
         <div className="mb-8 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-sm shadow-primary-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500">
             <Command size={18} weight="bold" className="text-white" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-slate-900">Create account</h1>
-            <p className="text-sm text-slate-500">Harness Lab</p>
+            <h1 className="text-lg font-semibold text-ink">Create account</h1>
+            <p className="text-sm text-ink-2">Harness Lab</p>
           </div>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="name" className="block text-sm font-medium text-ink-2">
               Name
             </label>
             <input
@@ -68,13 +68,13 @@ export default function RegisterPage(): JSX.Element {
               value={name}
               onChange={(e) => setName(e.target.value)}
               className={cn(
-                'mt-1 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm',
-                'focus:border-primary-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20'
+                'mt-1 h-11 w-full rounded-xl border border-line bg-canvas px-3 text-sm',
+                'focus:border-accent-400 focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent-500/20'
               )}
             />
           </div>
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="email" className="block text-sm font-medium text-ink-2">
               Email
             </label>
             <input
@@ -85,13 +85,13 @@ export default function RegisterPage(): JSX.Element {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className={cn(
-                'mt-1 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm',
-                'focus:border-primary-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20'
+                'mt-1 h-11 w-full rounded-xl border border-line bg-canvas px-3 text-sm',
+                'focus:border-accent-400 focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent-500/20'
               )}
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="password" className="block text-sm font-medium text-ink-2">
               Password
             </label>
             <input
@@ -103,28 +103,28 @@ export default function RegisterPage(): JSX.Element {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className={cn(
-                'mt-1 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm',
-                'focus:border-primary-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20'
+                'mt-1 h-11 w-full rounded-xl border border-line bg-canvas px-3 text-sm',
+                'focus:border-accent-400 focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent-500/20'
               )}
             />
-            <p className="mt-1 text-xs text-slate-400">At least 12 characters</p>
+            <p className="mt-1 text-xs text-ink-3">At least 12 characters</p>
           </div>
           {error && (
-            <p className="text-sm text-red-600" role="alert">
+            <p className="text-sm text-bad" role="alert">
               {error}
             </p>
           )}
           <button
             type="submit"
             disabled={submitting}
-            className="h-11 w-full rounded-xl bg-primary-600 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-60"
+            className="h-11 w-full rounded-xl bg-accent-600 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-60"
           >
             {submitting ? 'Creating account…' : 'Register'}
           </button>
         </form>
-        <p className="mt-6 text-center text-sm text-slate-500">
+        <p className="mt-6 text-center text-sm text-ink-2">
           Already have an account?{' '}
-          <Link href="/login" className="font-medium text-primary-600 hover:text-primary-700">
+          <Link href="/login" className="font-medium text-accent-600 hover:text-accent-700">
             Sign in
           </Link>
         </p>

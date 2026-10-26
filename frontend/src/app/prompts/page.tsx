@@ -19,37 +19,37 @@ function HarnessPrompt({ harness }: { harness: Harness }): JSX.Element {
   const prompt = data?.manifest.prompt;
 
   return (
-    <section data-testid="harness-prompt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section data-testid="harness-prompt" className="rounded-card border border-line bg-surface p-5">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-base font-semibold text-slate-900">{harness.name}</h2>
-        {prompt && <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">persona: {prompt.persona}</span>}
+        <h2 className="text-base font-semibold text-ink">{harness.name}</h2>
+        {prompt && <span className="rounded-md bg-line-soft px-2 py-0.5 text-xs text-ink-2">persona: {prompt.persona}</span>}
         {data && (
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-ink-2">
             {data.published_version != null ? `version ${data.published_version}` : 'not published yet'}
             {data.unpublished_changes ? ' · draft has changes' : ''}
           </span>
         )}
         <Link
           href={`/harness/${harness.id}`}
-          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-canvas"
         >
           <PencilSimple size={14} /> Edit prompt
         </Link>
       </div>
 
-      {isLoading && <div className="mt-4 h-16 animate-pulse rounded-xl bg-slate-100" />}
+      {isLoading && <div className="mt-4 h-16 animate-pulse rounded-xl bg-line-soft" />}
       {error && (
-        <p className="mt-4 flex items-center gap-2 text-sm text-red-600">
+        <p className="mt-4 flex items-center gap-2 text-sm text-bad">
           <WarningCircle size={16} /> Could not load this harness&apos;s prompt.
         </p>
       )}
-      {prompt && prompt.sections.length === 0 && <p className="mt-4 text-sm text-slate-500">No prompt sections yet.</p>}
+      {prompt && prompt.sections.length === 0 && <p className="mt-4 text-sm text-ink-2">No prompt sections yet.</p>}
       {prompt && prompt.sections.length > 0 && (
         <ol className="mt-4 space-y-3">
           {prompt.sections.map((s) => (
             <li key={s.id}>
-              <div className="font-mono text-xs text-slate-500">{s.id}</div>
-              <p className="mt-1 whitespace-pre-wrap rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-800">{s.text}</p>
+              <div className="font-mono text-xs text-ink-2">{s.id}</div>
+              <p className="mt-1 whitespace-pre-wrap rounded-xl bg-canvas px-3 py-2 text-sm text-ink">{s.text}</p>
             </li>
           ))}
         </ol>
@@ -67,20 +67,20 @@ function PromptsContent(): JSX.Element {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-50 text-accent-600"><TextAa size={22} weight="bold" /></div>
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Prompts</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Prompts</h1>
+          <p className="text-sm text-ink-2">
             The system prompt of each harness, sent in this order. <code>{'{cwd}'}</code> becomes the working directory.
           </p>
         </div>
       </div>
 
       <div className="mt-6 space-y-4">
-        {isLoading && <div className="h-32 animate-pulse rounded-2xl bg-slate-100" />}
-        {error && <p className="text-sm text-red-600">Could not load your harnesses.</p>}
+        {isLoading && <div className="h-32 animate-pulse rounded-card bg-line-soft" />}
+        {error && <p className="text-sm text-bad">Could not load your harnesses.</p>}
         {!isLoading && !error && harnesses.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 p-8 text-center text-sm text-slate-500">
+          <div className="rounded-card border border-dashed border-line bg-surface p-8 text-center text-sm text-ink-2">
             No harnesses yet.{' '}
-            <Link href="/harness/new" className="font-medium text-primary-600 hover:text-primary-700">Create one</Link>{' '}
+            <Link href="/harness/new" className="font-medium text-accent-600 hover:text-accent-700">Create one</Link>{' '}
             and write its prompt in the builder.
           </div>
         )}

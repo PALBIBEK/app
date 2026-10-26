@@ -1,5 +1,6 @@
 /**
- * One session: its conversation, live, and continued from here (or forked, once ended).
+ * One session: its conversation, live, and continued from here (or forked, once ended);
+ * beside it, its sandboxes, what it has used, and its files.
  */
 
 'use client';
@@ -7,20 +8,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, CircleNotch, WarningCircle } from '@phosphor-icons/react';
+import { CircleNotch } from '@phosphor-icons/react';
 
-import { AuthGuard } from '@/components/auth/AuthGuard';
-import { SessionChat } from '@/components/session/SessionChat';
+import { AppShell } from '@/components/layout/AppShell';
 import { ConversationFiles } from '@/components/session/ConversationFiles';
+import { SessionChat } from '@/components/session/SessionChat';
 import { WorkspacePanel } from '@/components/session/WorkspacePanel';
+import { Card, ErrorNote, LinkButton, Mono, shortHash } from '@/components/ui';
+import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { getApiErrorMessage } from '@/lib/api/errors';
 import { useHarness } from '@/lib/api/hooks/useHarnesses';
 import { useReleases } from '@/lib/api/hooks/useManifest';
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useSession } from '@/lib/api/hooks/useSessions';
-import { sessionsAPI } from '@/lib/api/endpoints/sessions';
-import { getApiErrorMessage } from '@/lib/api/errors';
 import { startupMessage, waitUntilStarted, type SessionStartup } from '@/lib/session/startup';
-import { AppShell } from '@/components/layout/AppShell';
+import { formatDuration, formatStamp, versionLabel } from '@/lib/utils';
 
 /** A session that is still starting: wait for it (or show why it could not start). */
 function StartingSession({ sessionId, onReady }: { sessionId: string; onReady: () => void }): JSX.Element {
@@ -40,17 +42,35 @@ function StartingSession({ sessionId, onReady }: { sessionId: string; onReady: (
     };
   }, [sessionId, onReady]);
   return (
-    <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
+    <div className="flex flex-1 items-center justify-center p-6">
       {failed ? (
-        <span data-testid="session-error" className="max-w-2xl text-center text-red-600">{failed}</span>
+        <Card className="flex max-w-xl flex-col items-center gap-3 px-6 py-8 text-center">
+          <span className="h-2.5 w-2.5 rotate-45 bg-bad" aria-hidden="true" />
+          <p className="font-medium">This session could not start</p>
+          <p data-testid="session-error" className="text-sm text-ink-2">
+            {failed}
+          </p>
+          <LinkButton href="/sessions" size="sm">
+            Back to sessions
+          </LinkButton>
+        </Card>
       ) : (
-        <>
-          <CircleNotch size={16} className="animate-spin text-primary-500" />
+        <div className="flex items-center gap-2 text-sm text-ink-2">
+          <CircleNotch size={16} className="animate-spin text-accent-600" />
           <span data-testid="session-starting">{startupMessage(progress)}</span>
-        </>
+        </div>
       )}
     </div>
   );
+}
+
+function Elapsed({ from }: { from: string }): JSX.Element {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return <span className="tabular">{formatDuration(now - new Date(from).getTime())}</span>;
 }
 
 function SessionPageContent(): JSX.Element {
@@ -62,70 +82,110 @@ function SessionPageContent(): JSX.Element {
   const { data: releases } = useReleases(session?.harness_id);
   const { data: platform } = usePlatformStatus();
   const [filesTick, setFilesTick] = useState(0);
+  const bump = useCallback(() => setFilesTick((t) => t + 1), []);
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
+      <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-2">
         <CircleNotch size={16} className="animate-spin" /> Loading the session…
       </div>
     );
   }
   if (error || !session) {
     return (
-      <div className="mx-auto mt-16 max-w-md rounded-2xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
-        <WarningCircle size={28} className="mx-auto text-red-500" />
-        <p className="mt-2">This session could not be loaded.</p>
-        <Link href="/sessions" className="mt-3 inline-block font-medium text-primary-600">Back to sessions</Link>
+      <div className="mx-auto mt-16 w-full max-w-md px-4">
+        <ErrorNote message="This session could not be loaded. It may have been deleted, or belong to someone else." />
+        <Link href="/sessions" className="mt-3 inline-block text-sm font-medium text-accent-700">
+          Back to sessions
+        </Link>
       </div>
     );
   }
 
   if (session.status === 'starting') return <StartingSession sessionId={session.id} onReady={onReady} />;
   if (session.status === 'failed' && !session.last_seq) {
-    return <StartingSession sessionId={session.id} onReady={onReady} />;  // shows why it failed
+    return <StartingSession sessionId={session.id} onReady={onReady} />; // shows why it failed
   }
 
   // The version this session runs (a session keeps its version when the harness is republished).
   const release = releases?.find((r) => r.composition_digest === session.composition_digest);
+  const ended = ['terminated', 'failed', 'budget_exceeded'].includes(session.status);
+  const agent = harness?.name ?? 'agent';
+  const version = release ? `v${release.version}` : versionLabel(session.harness_version);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200/80 bg-white/80 px-6 py-3">
-        <Link href="/sessions" className="group flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700">
-          <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-1" /> Sessions
-        </Link>
-        <div className="h-5 w-px bg-slate-200" />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">
-            {session.title || (harness ? <Link href={`/harness/${harness.id}`} className="hover:text-primary-700">{harness.name}</Link> : 'Session')}
-          </p>
-          <p className="truncate text-xs text-slate-500">
-            {release ? `Version ${release.version} · ` : ''}
-            {session.harness_version} · <span className="font-mono">{session.id.slice(0, 8)}</span>
-          </p>
-        </div>
-      </div>
-      {session.scope_id ? <WorkspacePanel scopeId={session.scope_id} sessionId={session.id} refreshKey={filesTick} /> : null}
-      {session.scope_id ? (
-        <ConversationFiles sessionId={session.id} scopeId={session.scope_id} refreshKey={filesTick} onWorkspaceChanged={() => setFilesTick((t) => t + 1)} />
-      ) : null}
-      <SessionChat
-        session={session}
-        canRun={platform?.run_allowed !== false}
-        blockedReason="The AI platform is not ready."
-        maxSteps={release?.manifest.policy.max_steps}
-        onApprovalTimeout={release?.manifest.policy.on_approval_timeout}
-        onRunEnd={() => setFilesTick((t) => t + 1)}
-      />
-    </div>
+    <SessionChat
+      session={session}
+      agentName={harness?.name}
+      canRun={platform?.run_allowed !== false}
+      blockedReason="The AI platform is not ready."
+      maxSteps={release?.manifest.policy.max_steps}
+      maxCost={release?.manifest.policy.max_cost_per_session || undefined}
+      onApprovalTimeout={release?.manifest.policy.on_approval_timeout}
+      onRunEnd={bump}
+      heading={{
+        crumb: (
+          <>
+            <Link href="/sessions" className="hover:text-ink">
+              Sessions
+            </Link>
+            <span aria-hidden="true">/</span>
+            <Mono className="text-[12.5px]">{session.id.slice(0, 13)}</Mono>
+          </>
+        ),
+        title: session.title || (harness ? `${harness.name} session` : 'Session'),
+        meta: (
+          <>
+            {harness ? (
+              <Link href={`/harness/${harness.id}`} className="font-mono text-[12.5px] text-ink hover:text-accent-700">
+                {agent}@{version}
+              </Link>
+            ) : (
+              <Mono>{version}</Mono>
+            )}
+            {session.composition_digest ? (
+              <Mono copy={session.composition_digest} title={session.composition_digest}>
+                sha256:{shortHash(session.composition_digest)}
+              </Mono>
+            ) : null}
+            <span>
+              Started {formatStamp(session.created_at)}
+              {!ended ? (
+                <>
+                  {' · '}
+                  <Elapsed from={session.created_at} />
+                </>
+              ) : null}
+            </span>
+          </>
+        ),
+      }}
+      railExtra={
+        session.scope_id ? (
+          <>
+            <Card>
+              <ConversationFiles
+                sessionId={session.id}
+                scopeId={session.scope_id}
+                refreshKey={filesTick}
+                onWorkspaceChanged={bump}
+                className="px-[18px] py-4 text-sm"
+              />
+            </Card>
+            <Card>
+              <WorkspacePanel scopeId={session.scope_id} sessionId={session.id} refreshKey={filesTick} className="px-[18px] py-4 text-sm" />
+            </Card>
+          </>
+        ) : null
+      }
+    />
   );
 }
 
 export default function SessionPage(): JSX.Element {
   return (
-    <AuthGuard>
-      <AppShell fullHeight mainClassName="flex min-h-0 flex-col overflow-hidden">
-          <SessionPageContent />
-        </AppShell>
-    </AuthGuard>
+    <AppShell fullHeight mainClassName="flex min-h-0 flex-col overflow-hidden">
+      <SessionPageContent />
+    </AppShell>
   );
 }

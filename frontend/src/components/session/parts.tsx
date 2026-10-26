@@ -11,15 +11,17 @@ import {
   CaretDown,
   CaretRight,
   Check,
-  CheckCircle,
   CircleNotch,
   Code,
   Copy,
+  FileText,
   GitBranch,
-  Robot,
+  MagnifyingGlass,
+  PencilSimple,
   ShieldWarning,
-  User,
+  TerminalWindow,
   Warning,
+  Wrench,
 } from '@phosphor-icons/react';
 
 import type { ChatMessage, ToolCallView } from '@/lib/api/types/session.types';
@@ -28,9 +30,9 @@ import { displaySubagentProvider, type SubagentChipView } from '@/lib/session/wi
 import { cn } from '@/lib/utils';
 
 const messageVariants = {
-  hidden: { opacity: 0, y: 12 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.25 } },
-  exit: { opacity: 0, transition: { duration: 0.15 } },
+  hidden: { opacity: 0, y: 8 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.2 } },
+  exit: { opacity: 0, transition: { duration: 0.12 } },
 };
 
 function show(value: unknown): string {
@@ -46,45 +48,91 @@ function show(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+/** The one argument that says what a call did (a path, a command, a pattern), else the args in brief. */
+function argSummary(args: Record<string, unknown> | null | undefined): string {
+  if (!args) return '';
+  for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'name']) {
+    const v = args[key];
+    if (typeof v === 'string' && v) return v;
+  }
+  const s = Object.keys(args).length ? JSON.stringify(args) : '';
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+}
+
+function ToolIcon({ name }: { name: string }): JSX.Element {
+  const n = name.toLowerCase();
+  const props = { size: 15, className: 'shrink-0 text-ink-2', 'aria-hidden': true } as const;
+  if (/(bash|shell|exec|command|run)/.test(n)) return <TerminalWindow {...props} />;
+  if (/(grep|search|find|glob)/.test(n)) return <MagnifyingGlass {...props} />;
+  if (/(edit|write|patch)/.test(n)) return <PencilSimple {...props} />;
+  if (/(read|file|cat|view)/.test(n)) return <FileText {...props} />;
+  return <Wrench {...props} />;
+}
+
+function exitCode(output: unknown): number | null {
+  if (output && typeof output === 'object' && 'exit_code' in (output as Record<string, unknown>)) {
+    const c = (output as Record<string, unknown>).exit_code;
+    return typeof c === 'number' ? c : null;
+  }
+  return null;
+}
+
 /** A tool call: what it was asked to do, what came back, and a refusal in plain words. */
 export function ToolCard({ tool }: { tool: ToolCallView }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const args = tool.args && Object.keys(tool.args).length ? JSON.stringify(tool.args) : '';
+  const summary = argSummary(tool.args);
   const output = show(tool.output);
+  const code = exitCode(tool.output);
   return (
-    <div data-testid="tool-card" className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm shadow-sm">
-      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 text-left">
-        <span
-          className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
-            tool.status === 'success' && 'bg-secondary-100',
-            tool.status === 'running' && 'bg-primary-100',
-            tool.status === 'error' && 'bg-red-100'
+    <div data-testid="tool-card" className="overflow-hidden rounded-[10px] border border-line bg-surface text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label={`${open ? 'Collapse' : 'Expand'} ${tool.name} output`}
+        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left hover:bg-canvas/60"
+      >
+        <ToolIcon name={tool.name} />
+        <span className="font-mono text-[13px] font-medium text-ink">{tool.name}</span>
+        {summary ? <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-2">{summary}</span> : <span className="flex-1" />}
+        <span className="inline-flex items-center gap-1 text-xs text-ink-2">
+          {tool.status === 'running' ? (
+            <>
+              <CircleNotch size={13} className="animate-spin text-accent-600" /> Running
+            </>
+          ) : tool.status === 'error' ? (
+            <>
+              <span className="h-2 w-2 rotate-45 bg-bad" aria-hidden="true" /> Refused
+            </>
+          ) : (
+            <>
+              <Check size={13} weight="bold" className="text-ink" /> {code != null ? `Exit ${code}` : 'Done'}
+            </>
           )}
-        >
-          {tool.status === 'success' && <CheckCircle size={15} weight="fill" className="text-secondary-600" />}
-          {tool.status === 'running' && <CircleNotch size={15} className="animate-spin text-primary-600" />}
-          {tool.status === 'error' && <Warning size={15} weight="fill" className="text-red-600" />}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="font-mono font-medium text-slate-800">{tool.name}</span>
-          {args ? <span className="ml-2 truncate font-mono text-xs text-slate-500">{args.length > 80 ? `${args.slice(0, 80)}…` : args}</span> : null}
-        </span>
-        {open ? <CaretDown size={14} className="text-slate-400" /> : <CaretRight size={14} className="text-slate-400" />}
+        {open ? <CaretDown size={14} className="text-ink-2" /> : <CaretRight size={14} className="text-ink-2" />}
       </button>
       {tool.status === 'error' ? (
-        <p data-testid="tool-explanation" className="mt-2 text-xs text-red-700">
+        <p data-testid="tool-explanation" className="border-t border-line-soft px-3 py-2 text-[13px] text-ink">
           {tool.explanation ?? tool.error}
-          {tool.code ? <span className="ml-1 font-mono text-[10px] text-red-400">{tool.code}</span> : null}
+          {tool.code ? <span className="ml-1.5 font-mono text-[11px] text-ink-3">{tool.code}</span> : null}
         </p>
       ) : null}
       {open ? (
-        <div className="mt-3 space-y-2">
-          {args ? <pre className="overflow-x-auto rounded-lg bg-white p-2 font-mono text-[11px] text-slate-700">{JSON.stringify(tool.args, null, 2)}</pre> : null}
-          {output ? <pre data-testid="tool-output" className="max-h-80 overflow-auto rounded-lg bg-slate-900 p-2 font-mono text-[11px] text-slate-100">{clip(output)}</pre> : null}
+        <div className="space-y-0 border-t border-line-soft">
+          {tool.args && Object.keys(tool.args).length ? (
+            <pre className="overflow-x-auto bg-canvas px-3.5 py-2.5 font-mono text-[12px] leading-relaxed text-ink-2">{JSON.stringify(tool.args, null, 2)}</pre>
+          ) : null}
+          {output ? (
+            <pre data-testid="tool-output" className="max-h-80 overflow-auto border-t border-line-soft bg-[#F9FAFB] px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.7] text-ink">
+              {clip(output)}
+            </pre>
+          ) : null}
         </div>
       ) : output && tool.status === 'success' ? (
-        <p data-testid="tool-output" className="mt-1.5 truncate font-mono text-xs text-slate-500">{output.split('\n')[0]}</p>
+        <p data-testid="tool-output" className="truncate border-t border-line-soft bg-[#F9FAFB] px-3 py-1.5 font-mono text-xs text-ink-2">
+          {output.split('\n')[0]}
+        </p>
       ) : null}
     </div>
   );
@@ -97,21 +145,18 @@ export function SubagentChip({ chip, sessionId }: { chip: SubagentChipView; sess
       ? `/subagents/${encodeURIComponent(chip.child_session_id)}?session=${encodeURIComponent(sessionId)}`
       : '/subagents';
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 shadow-sm">
-      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100">
-        {chip.status === 'running' ? <CircleNotch size={15} className="animate-spin text-primary-600" /> : <GitBranch size={15} weight="fill" className="text-amber-700" />}
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[10px] border border-dashed border-line-strong px-3 py-2 text-sm">
+      {chip.status === 'running' ? <CircleNotch size={15} className="animate-spin text-accent-600" /> : <GitBranch size={15} className="text-ink-2" />}
+      <span className="font-medium">
+        Subagent {chip.status}
+        {chip.label ? ` · ${chip.label}` : ''}
       </span>
-      <div className="min-w-0 flex-1 text-sm">
-        <p className="font-medium text-slate-800">
-          Subagent {chip.status}
-          {chip.label ? ` · ${chip.label}` : ''}
-        </p>
-        <p className="text-xs text-slate-500">
-          {chip.mode.replace(/_/g, ' ')} · {provider.label}
-          {chip.stop_reason ? ` · ${chip.stop_reason}` : ''}
-        </p>
-      </div>
-      <Link href={href} className="text-xs font-medium text-primary-600 hover:text-primary-700">
+      <span className="text-[13px] text-ink-2">
+        {chip.mode.replace(/_/g, ' ')} · {provider.label}
+        {chip.stop_reason ? ` · ${chip.stop_reason}` : ''}
+      </span>
+      <span className="flex-1" />
+      <Link href={href} className="text-[13px] font-medium text-accent-700 hover:text-accent-600">
         Open
       </Link>
     </div>
@@ -129,6 +174,10 @@ function useSecondsLeft(deadline?: number): number | undefined {
   return deadline == null ? undefined : Math.max(0, Math.round((deadline - now) / 1000));
 }
 
+const ALLOW = /^(approve|allow|yes|y|ok)$/i;
+const DENY = /^(deny|reject|no|n)$/i;
+
+/** The question a paused run asks: accent-bordered, the one thing on the page that needs you. */
 export function ApprovalCard({
   prompt,
   options,
@@ -143,31 +192,61 @@ export function ApprovalCard({
   onAnswer: (choice: string) => void;
 }): JSX.Element {
   const left = useSecondsLeft(deadline);
-  const allow = options.find((o) => /^(approve|allow|yes|y|ok)$/i.test(o)) ?? options[0];
-  const deny = options.find((o) => /^(deny|reject|no|n)$/i.test(o)) ?? options[options.length - 1];
+  const allow = options.find((o) => ALLOW.test(o)) ?? options[0];
+  const deny = options.find((o) => DENY.test(o)) ?? options[options.length - 1];
+  const others = options.filter((o) => o !== allow && o !== deny);
   return (
-    <div data-testid="approval-banner" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-start gap-3">
-        <ShieldWarning size={22} weight="fill" className="mt-0.5 text-amber-600" />
-        <div>
-          <p className="text-sm font-semibold text-slate-900">Approval required</p>
-          <p className="mt-1 text-sm text-slate-600">{prompt}</p>
-          {left != null ? (
-            <p data-testid="approval-countdown" className="mt-1 text-xs text-amber-700">
-              {left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left` : 'Timing out'}
-              {onTimeout ? ` · then it is ${onTimeout === 'allow' ? 'allowed' : 'denied'}` : ''}
-            </p>
-          ) : null}
+    <div data-testid="approval-banner" role="group" aria-label="Approval required" className="overflow-hidden rounded-card border border-accent-500 bg-surface">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-accent-50 px-4 py-3 text-accent-700">
+        <ShieldWarning size={16} aria-hidden="true" />
+        <span className="font-semibold">Approval required</span>
+        <span className="flex-1" />
+        {left != null ? (
+          <span data-testid="approval-countdown" className="font-mono text-xs">
+            {left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left` : 'Timing out'}
+            {onTimeout ? ` · then it is ${onTimeout === 'allow' ? 'allowed' : 'denied'}` : ''}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex flex-col gap-3.5 p-4">
+        <p className="whitespace-pre-wrap break-words">{prompt}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="approval-approve"
+            onClick={() => onAnswer(allow)}
+            className="h-11 rounded-lg bg-accent-500 px-[18px] font-medium text-white hover:bg-accent-600"
+          >
+            {ALLOW.test(allow) ? 'Approve once' : allow}
+          </button>
+          {others.map((o) => (
+            <button key={o} type="button" onClick={() => onAnswer(o)} className="h-11 rounded-lg border border-line-strong bg-surface px-4 font-medium hover:bg-canvas">
+              {o}
+            </button>
+          ))}
+          <span className="flex-1" />
+          <button
+            type="button"
+            data-testid="approval-deny"
+            onClick={() => onAnswer(deny)}
+            className="h-11 rounded-lg border border-line-strong bg-surface px-4 font-medium hover:bg-canvas"
+          >
+            {DENY.test(deny) ? 'Deny' : deny}
+          </button>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <button type="button" data-testid="approval-deny" onClick={() => onAnswer(deny)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-          {deny}
-        </button>
-        <button type="button" data-testid="approval-approve" onClick={() => onAnswer(allow)} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">
-          {allow}
-        </button>
-      </div>
+    </div>
+  );
+}
+
+function Avatar({ user, initials }: { user: boolean; initials?: string }): JSX.Element {
+  return user ? (
+    <div aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-line text-[11px] font-semibold">
+      {initials || 'You'.slice(0, 1)}
+    </div>
+  ) : (
+    <div aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-ink text-white">
+      <TerminalWindow size={14} />
     </div>
   );
 }
@@ -178,6 +257,8 @@ export function MessageBubble({
   cancelled,
   onCancel,
   onFork,
+  agentName,
+  userInitials,
 }: {
   message: ChatMessage;
   queued?: boolean;
@@ -186,59 +267,73 @@ export function MessageBubble({
   /** Cancel a queued message's run. */
   onCancel?: () => void;
   onFork?: () => void;
+  agentName?: string;
+  userInitials?: string;
 }): JSX.Element {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const ts = new Date(message.timestamp);
   return (
-    <motion.div variants={messageVariants} initial="hidden" animate="visible" exit="exit" className={cn('group/msg flex items-start gap-4', isUser && 'flex-row-reverse')}>
-      <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-md', isUser ? 'bg-gradient-to-br from-slate-700 to-slate-800' : 'bg-gradient-to-br from-primary-500 to-primary-600')}>
-        {isUser ? <User size={18} weight="fill" className="text-white" /> : <Robot size={18} weight="fill" className="text-white" />}
-      </div>
-      <div className={cn('min-w-0 flex-1 space-y-3', isUser && 'flex flex-col items-end')}>
-        <div className={cn('group relative rounded-2xl px-5 py-4', isUser ? 'max-w-[85%] bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-lg shadow-primary-500/20' : 'max-w-full border border-slate-200 bg-white shadow-md')}>
-          {!isUser && (
+    <motion.article variants={messageVariants} initial="hidden" animate="visible" exit="exit" className="group/msg flex items-start gap-3">
+      <Avatar user={isUser} initials={userInitials} />
+      <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+        <div className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-ink-3">
+          <span className="font-medium text-ink">{isUser ? 'You' : agentName || 'Agent'}</span>
+          <span>· {ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          {queued ? (
+            <span data-testid="queued" className="rounded-full bg-accent-50 px-2 py-px font-medium text-accent-700">
+              Queued: runs after the current turn
+            </span>
+          ) : null}
+          {queued && onCancel ? (
+            <button type="button" onClick={onCancel} data-testid="queued-cancel" className="rounded-full px-2 py-px font-medium text-ink hover:bg-line-soft">
+              Cancel
+            </button>
+          ) : null}
+          {cancelled ? (
+            <span data-testid="never-ran" className="rounded-full bg-line-soft px-2 py-px text-ink-2">
+              Cancelled: never ran
+            </span>
+          ) : null}
+          <span className="flex-1" />
+          {!isUser ? (
             <button
               type="button"
               aria-label="Copy"
               onClick={() => {
                 void navigator.clipboard.writeText(message.content);
                 setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
+                setTimeout(() => setCopied(false), 1500);
               }}
-              className="absolute right-3 top-3 rounded-lg p-1.5 text-slate-400 opacity-0 transition-all hover:bg-slate-100 group-hover:opacity-100"
+              className="rounded-md p-1 text-ink-3 opacity-0 transition-opacity hover:bg-line-soft hover:text-ink focus-visible:opacity-100 group-hover/msg:opacity-100"
             >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? <Check size={13} /> : <Copy size={13} />}
             </button>
-          )}
-          <div className={cn('text-[15px] leading-relaxed', !isUser && 'text-slate-700')}>
+          ) : null}
+          {onFork ? (
+            <button
+              type="button"
+              onClick={onFork}
+              className="inline-flex items-center gap-1 rounded-md px-1 text-ink-3 opacity-0 transition-opacity hover:text-accent-700 focus-visible:opacity-100 group-hover/msg:opacity-100"
+            >
+              <GitBranch size={12} /> Fork from here
+            </button>
+          ) : null}
+        </div>
+        {message.content ? (
+          <div className={cn('leading-relaxed', isUser ? 'w-fit max-w-full rounded-[10px] border border-line-soft bg-canvas px-3.5 py-2.5' : '', cancelled && 'text-ink-3 line-through')}>
             <MessageContent content={message.content} />
           </div>
-        </div>
+        ) : null}
         {message.toolCalls?.length ? (
-          <div className="w-full space-y-2">
+          <div className="flex w-full flex-col gap-2">
             {message.toolCalls.map((tool) => (
               <ToolCard key={tool.id} tool={tool} />
             ))}
           </div>
         ) : null}
-        <p className={cn('text-xs text-slate-400', isUser && 'text-right')}>
-          {queued ? <span data-testid="queued" className="mr-2 rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Queued: runs after the current turn</span> : null}
-          {queued && onCancel ? (
-            <button type="button" onClick={onCancel} data-testid="queued-cancel" className="mr-2 rounded-full px-2 py-0.5 text-red-600 hover:bg-red-50">
-              Cancel
-            </button>
-          ) : null}
-          {cancelled ? <span data-testid="never-ran" className="mr-2 rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">Cancelled: never ran</span> : null}
-          {ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          {onFork ? (
-            <button type="button" onClick={onFork} className="ml-3 inline-flex items-center gap-1 text-slate-400 opacity-0 transition-opacity hover:text-primary-600 group-hover/msg:opacity-100">
-              <GitBranch size={11} /> Fork from here
-            </button>
-          ) : null}
-        </p>
       </div>
-    </motion.div>
+    </motion.article>
   );
 }
 
@@ -251,14 +346,19 @@ function MessageContent({ content }: { content: string }): JSX.Element {
         if (match) {
           const [, lang, code] = match;
           return (
-            <div key={index} className="my-4 overflow-hidden rounded-xl bg-slate-900 shadow-lg">
-              <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2 text-xs text-slate-400">
-                <span className="flex items-center gap-2"><Code size={12} />{lang || 'code'}</span>
-                <button type="button" aria-label="Copy code" onClick={() => void navigator.clipboard.writeText(code.trim())} className="rounded p-1 hover:bg-slate-800 hover:text-slate-200">
+            <div key={index} className="my-3 overflow-hidden rounded-lg bg-ink">
+              <div className="flex items-center justify-between border-b border-white/10 px-3.5 py-1.5 text-xs text-white/60">
+                <span className="flex items-center gap-2">
+                  <Code size={12} />
+                  {lang || 'code'}
+                </span>
+                <button type="button" aria-label="Copy code" onClick={() => void navigator.clipboard.writeText(code.trim())} className="rounded p-1 hover:bg-white/10 hover:text-white">
                   <Copy size={12} />
                 </button>
               </div>
-              <pre className="overflow-x-auto p-4"><code className="font-mono text-sm leading-relaxed text-slate-100">{code.trim()}</code></pre>
+              <pre className="overflow-x-auto px-3.5 py-3">
+                <code className="font-mono text-[12.5px] leading-[1.7] text-canvas">{code.trim()}</code>
+              </pre>
             </div>
           );
         }
@@ -269,5 +369,15 @@ function MessageContent({ content }: { content: string }): JSX.Element {
         );
       })}
     </>
+  );
+}
+
+/** A line in the conversation for something that happened (an approval answered, a run stopped). */
+export function EventNote({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[10px] border border-dashed border-line-strong px-3 py-2 text-[13px] text-ink-2">
+      {icon ?? <Warning size={15} aria-hidden="true" />}
+      <span>{children}</span>
+    </div>
   );
 }

@@ -52,6 +52,11 @@ export function useSaveManifest(id: string) {
   });
 }
 
+/** Run the publish checks on the saved draft (save first: the server checks what it has). */
+export function useCheckDraft(id: string) {
+  return useMutation({ mutationFn: () => harnessesAPI.checkDraft(id) });
+}
+
 export function usePublishHarness(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
