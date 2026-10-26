@@ -13,7 +13,7 @@ export function Table({
   className?: string;
 }): JSX.Element {
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
       <table aria-label={label} className={cn('w-full border-collapse text-sm', className)} style={{ minWidth }}>
         {children}
       </table>

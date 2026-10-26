@@ -3,25 +3,38 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Archive,
   Brain,
+  ChartBar,
   ChartLine,
   ClockCounterClockwise,
+  Cpu,
   Cube,
+  Desktop,
+  FolderOpen,
   Gear,
   GitBranch,
+  House,
   Plus,
+  ShieldCheck,
+  ShieldWarning,
   Stack,
+  TerminalWindow,
   TextAa,
   Wrench,
   X,
 } from '@phosphor-icons/react';
 
+import { useApprovalInbox } from '@/lib/api/hooks/useOperate';
+import { useAuthStore } from '@/lib/store/authStore';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
+  /** Shown to owners and admins only (the server enforces it too). */
+  ops?: boolean;
 }
 
 interface NavGroup {
@@ -34,7 +47,13 @@ interface NavGroup {
 const groups: NavGroup[] = [
   {
     label: 'Work',
-    items: [{ label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise }],
+    items: [
+      { label: 'Overview', href: '/overview', icon: House },
+      { label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise },
+      { label: 'Approvals', href: '/approvals', icon: ShieldWarning },
+      { label: 'Files', href: '/files', icon: FolderOpen },
+      { label: 'Artifacts', href: '/artifacts', icon: Archive },
+    ],
   },
   {
     label: 'Build',
@@ -49,13 +68,20 @@ const groups: NavGroup[] = [
   {
     label: 'Operate',
     items: [
+      { label: 'Sandboxes', href: '/sandboxes', icon: TerminalWindow },
       { label: 'Environments', href: '/environments', icon: Cube },
+      { label: 'Runners', href: '/runners', icon: Desktop },
+      { label: 'Usage', href: '/usage', icon: ChartBar },
       { label: 'Traces', href: '/traces', icon: ChartLine },
     ],
   },
   {
     label: 'Admin',
-    items: [{ label: 'Settings', href: '/settings', icon: Gear }],
+    items: [
+      { label: 'Policies & secrets', href: '/policies', icon: ShieldCheck },
+      { label: 'Fleet', href: '/fleet', icon: Cpu, ops: true },
+      { label: 'Settings', href: '/settings', icon: Gear },
+    ],
   },
 ];
 
@@ -74,6 +100,10 @@ interface SidebarProps {
 
 export function Sidebar({ open = false, onClose }: SidebarProps): JSX.Element {
   const pathname = usePathname() ?? '/';
+  const role = useAuthStore((s) => s.user?.role);
+  const { data: inbox } = useApprovalInbox();
+  const waiting = inbox?.length ?? 0;
+  const ops = role === 'owner' || role === 'admin';
 
   const nav = (
     <nav aria-label="Main" className="flex h-full flex-col">
@@ -101,10 +131,10 @@ export function Sidebar({ open = false, onClose }: SidebarProps): JSX.Element {
 
       <div className="flex-1 overflow-y-auto px-3 py-3">
         {groups.map((group) => (
-          <div key={group.label} className="mb-4">
+          <div key={group.label} className="mb-3">
             <p className="px-3 pb-1.5 text-2xs font-medium text-ink-3">{group.label}</p>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
+              {group.items.filter((item) => !item.ops || ops).map((item) => {
                 const active = isActive(pathname, item.href);
                 const Icon = item.icon;
                 return (
@@ -121,7 +151,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps): JSX.Element {
                       )}
                     >
                       <Icon size={17} weight={active ? 'fill' : 'regular'} aria-hidden="true" />
-                      {item.label}
+                      <span className="flex-1">{item.label}</span>
+                      {item.href === '/approvals' && waiting ? (
+                        <span className="tabular rounded-full bg-accent-500 px-1.5 text-[11px] font-semibold leading-[18px] text-white" aria-label={`${waiting} waiting`}>
+                          {waiting}
+                        </span>
+                      ) : null}
                     </Link>
                   </li>
                 );
@@ -147,7 +182,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps): JSX.Element {
   return (
     <>
       {/* Wide screens: a fixed column. */}
-      <aside className="hidden w-[232px] shrink-0 border-r border-line bg-surface md:block">{nav}</aside>
+      <aside className="sticky top-0 hidden h-[100dvh] w-[232px] shrink-0 self-start border-r border-line bg-surface md:block">{nav}</aside>
       {/* Narrow screens: a drawer over the page. */}
       {open ? (
         <div className="fixed inset-0 z-40 md:hidden">

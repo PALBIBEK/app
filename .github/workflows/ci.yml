@@ -242,6 +242,9 @@ jobs:
       - name: Environment journey (a shared sandbox setup, built as the run begins)
         working-directory: frontend
         run: e2e/ci-run.sh environment-journey.mjs
+      - name: Operate journey (approvals inbox, sandboxes, usage, secrets, runners, publish checks)
+        working-directory: frontend
+        run: e2e/ci-run.sh operate-journey.mjs
       - name: Chat journey (kills and restarts the backend mid-stream)
         working-directory: frontend
         run: e2e/ci-run.sh chat-journey.mjs

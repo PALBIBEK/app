@@ -4,7 +4,7 @@
 - ``GET /sandboxes``: their sessions' sandboxes and what state each is in;
 - ``GET /usage``: tokens and cost, by day, agent or session;
 - ``/runners`` and ``/secrets``: the user's runners and tenant secrets;
-- ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (admins only).
+- ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (owners and admins).
 
 The supervisor names sessions by its own ids; the browser knows this product's
 session ids. Every row is translated through the user's session links (with the
@@ -14,9 +14,9 @@ agent's name), and a supervisor session the user has no link to is left out.
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,11 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from prime_agent.config import get_settings
 from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.session_link import SessionLink
+from prime_agent.db.models.user import User
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
-from prime_agent.web.dependencies import AdminUser, CurrentUser, DbSession
+from prime_agent.web.dependencies import CurrentUser, DbSession
+from prime_agent.web.dependencies.auth import require_any_role
 
 router = APIRouter()
+
+OpsUser = Annotated[User, Depends(require_any_role("owner", "admin"))]
+"""Who sees the worker fleet: owners and admins."""
 
 _RUNNER_NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _SECRET_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,127}")
@@ -214,10 +219,13 @@ async def usage(
 
     def label(key: str) -> str:
         if by == "agent":
-            return by_agent.get(key, key)
+            # A composition this product named (h-…) that no agent of the user's has any more.
+            return by_agent.get(key) or (f"{key} (removed)" if key.startswith("h-") else key)
         if by == "session":
             link = links.get(key)
-            return (link.title or link.session_id) if link else key
+            if link is None:
+                return key
+            return link.title or (f"{link.harness_name} session" if link.harness_name else link.session_id[:13])
         return key
 
     def row(r: dict[str, Any], key: str | None = None) -> UsageRow:
@@ -323,14 +331,14 @@ async def delete_secret(name: str, current_user: CurrentUser) -> Response:
 
 
 @router.get("/ops/workers")
-async def ops_workers(current_user: AdminUser) -> dict[str, Any]:
+async def ops_workers(current_user: OpsUser) -> dict[str, Any]:
     """Who serves the session queue, how busy each worker is, what waits."""
     result: dict[str, Any] = await _call(_client().worker_fleet(TenantPrincipal.from_user(current_user)))
     return result
 
 
 @router.get("/ops/rollout")
-async def ops_rollout(current_user: AdminUser) -> dict[str, Any]:
+async def ops_rollout(current_user: OpsUser) -> dict[str, Any]:
     """Which worker versions serve, and how far a deploy has got."""
     result: dict[str, Any] = await _call(_client().rollout_status(TenantPrincipal.from_user(current_user)))
     return result
