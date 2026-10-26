@@ -54,6 +54,14 @@ class FakeSupervisor:
             if kind == self.refuse:
                 return httpx.Response(422, json={"detail": {"message": f"invalid {kind}: nope", "code": "INVALID_ARTIFACT"}})
             return httpx.Response(200, json={"kind": kind, "artifact_id": body["name"], "digest": f"sha256:{kind}{len(self.calls)}", "status": "offered", "semver": body["semver"]})
+        if path.startswith("/v1/catalog/") and path.endswith("/check"):
+            kind = path.split("/")[3]
+            self.calls.append((f"check:{kind}", body))
+            ok = kind != self.refuse
+            return httpx.Response(200, json={"ok": ok, "digest": f"sha256:would-be-{kind}", "checks": [
+                {"check": "It reads", "ok": True, "message": "", "code": None},
+                {"check": "Every field is known", "ok": ok, "message": "" if ok else "unknown field(s): x", "code": None if ok else "INVALID_ARTIFACT"},
+            ]})
         if path == "/v1/harness_versions":
             self.calls.append(("harness_version", body))
             return httpx.Response(201, json={"harness_version": body["harness_version"], "runtime": body["runtime"]})
@@ -189,6 +197,38 @@ async def test_another_users_harness_is_not_found(db_session, owner, make_user, 
     harness = await _harness(db_session, owner)
     other = await make_user(email="other-builder@example.com", name="Other")
     async with _api(db_session, other, FakeSupervisor(), monkeypatch) as api:
-        for method, path in (("get", "manifest"), ("post", "publish"), ("get", "releases")):
+        for method, path in (("get", "manifest"), ("post", "publish"), ("post", "check"), ("get", "releases")):
             r = await getattr(api, method)(f"/api/v1/harnesses/{harness.id}/{path}")
             assert r.status_code == 404, (path, r.status_code)
+
+
+async def test_check_runs_every_publish_check_and_publishes_nothing(db_session, owner, monkeypatch):
+    harness = await _harness(db_session, owner)
+    supervisor = FakeSupervisor(refuse="sandbox_profile")
+    async with _api(db_session, owner, supervisor, monkeypatch) as api:
+        manifest = (await api.get(f"/api/v1/harnesses/{harness.id}/manifest")).json()["manifest"]
+        manifest["tools"].append("teleport")
+        await api.put(f"/api/v1/harnesses/{harness.id}/manifest", json=manifest)
+        r = await api.post(f"/api/v1/harnesses/{harness.id}/check")
+        releases = await api.get(f"/api/v1/harnesses/{harness.id}/releases")
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["ok"] is False
+    failed = {(c["section"], c["code"]) for c in out["checks"] if not c["ok"]}
+    assert failed == {("tools", "UNKNOWN_TOOL"), ("sandbox", "INVALID_ARTIFACT")}  # every problem at once
+    kinds = [k for k, _ in supervisor.calls]
+    assert kinds == ["check:prompt_pack", "check:tool_set", "check:sandbox_profile", "check:memory_profile", "check:composition"]
+    comp = dict(supervisor.calls)["check:composition"]
+    assert comp["sandbox_profile"]["digest"] == "sha256:would-be-sandbox_profile"  # the digests it would pin
+    assert "teleport" not in dict(supervisor.calls)["check:tool_set"]["tools"]
+    assert releases.json() == []  # nothing published, nothing registered, nothing bound
+    await db_session.refresh(harness)
+    assert harness.bind_status == "unbound"
+
+
+async def test_a_clean_draft_checks_ok(db_session, owner, monkeypatch):
+    harness = await _harness(db_session, owner)
+    async with _api(db_session, owner, FakeSupervisor(), monkeypatch) as api:
+        r = await api.post(f"/api/v1/harnesses/{harness.id}/check")
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert {c["section"] for c in r.json()["checks"]} >= {"prompt", "tools", "sandbox", "memory", "policy", "model"}

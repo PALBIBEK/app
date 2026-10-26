@@ -120,21 +120,21 @@ function SpawnSubagentContent(): JSX.Element {
         >
           <Link
             href="/subagents"
-            className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-700"
+            className="inline-flex items-center gap-2 text-sm font-medium text-ink-2 hover:text-ink-2"
           >
             <ArrowLeft size={16} />
             Back to Subagents
           </Link>
 
           <div className="mt-6 flex items-start gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-50">
-              <Sparkle size={26} weight="fill" className="text-primary-600" />
+            <div className="flex h-14 w-14 items-center justify-center rounded-card bg-primary-50">
+              <Sparkle size={26} weight="fill" className="text-accent-600" />
             </div>
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">
                 Spawn Subagent
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-ink-2">
                 Creates a child via product BFF → supervisor (service JWT). Default provider is
                 lab_echo (Lab).
               </p>
@@ -143,7 +143,7 @@ function SpawnSubagentContent(): JSX.Element {
 
           {(sessionsError || submitError) && (
             <div
-              className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+              className="mt-6 flex items-start gap-3 rounded-card border border-accent-200 bg-accent-50 p-4 text-sm text-ink"
               role="alert"
             >
               <WarningCircle size={20} className="shrink-0" />
@@ -163,20 +163,20 @@ function SpawnSubagentContent(): JSX.Element {
 
           <div className="mt-8 space-y-8">
             <section>
-              <h2 className="text-sm font-semibold text-slate-800">Execution mode</h2>
-              <p className="mt-2 text-sm text-slate-600">
+              <h2 className="text-sm font-semibold text-ink">Execution mode</h2>
+              <p className="mt-2 text-sm text-ink-2">
                 One-shot spawn only (<code className="text-xs">PRODUCT_SPAWN_MODE=spawn</code>).
                 Fork, background, and continuable are not offered in product UI.
               </p>
             </section>
 
             <section>
-              <h2 className="text-sm font-semibold text-slate-800">Parent session</h2>
+              <h2 className="text-sm font-semibold text-ink">Parent session</h2>
               <select
                 value={selectedParent}
                 onChange={(e) => setSelectedParent(e.target.value)}
                 disabled={sessionsLoading || sessions.length === 0}
-                className="mt-3 h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm"
+                className="mt-3 h-11 w-full rounded-xl border border-line bg-surface px-4 text-sm"
               >
                 {sessions.length === 0 && (
                   <option value="">No sessions — open Test chat first</option>
@@ -190,8 +190,8 @@ function SpawnSubagentContent(): JSX.Element {
             </section>
 
             <section>
-              <h2 className="text-sm font-semibold text-slate-800">Provider</h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <h2 className="text-sm font-semibold text-ink">Provider</h2>
+              <p className="mt-1 text-xs text-ink-2">
                 lab_echo is the Lab echo stub. Never confuse it with Durable Memory.
               </p>
               <div className="mt-3 space-y-2">
@@ -205,22 +205,22 @@ function SpawnSubagentContent(): JSX.Element {
                       className={cn(
                         'flex w-full items-start gap-3 rounded-xl border p-3 text-left',
                         selected
-                          ? 'border-primary-400 bg-primary-50'
-                          : 'border-slate-200 bg-white'
+                          ? 'border-accent-400 bg-primary-50'
+                          : 'border-line bg-surface'
                       )}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-semibold text-slate-900">
+                          <span className="font-mono text-sm font-semibold text-ink">
                             {p.name}
                           </span>
                           {p.badge && (
-                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-inset ring-amber-200">
+                            <span className="rounded-full bg-accent-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink ring-1 ring-inset ring-amber-200">
                               {p.badge}
                             </span>
                           )}
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">{p.hint}</p>
+                        <p className="mt-1 text-xs text-ink-2">{p.hint}</p>
                       </div>
                     </button>
                   );
@@ -230,40 +230,40 @@ function SpawnSubagentContent(): JSX.Element {
 
             <section className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-slate-700">Task label</label>
+                <label className="text-sm font-medium text-ink-2">Task label</label>
                 <input
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="Optional description"
-                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-4 text-sm"
+                  className="mt-2 h-11 w-full rounded-xl border border-line px-4 text-sm"
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700">Task prompt</label>
+                <label className="text-sm font-medium text-ink-2">Task prompt</label>
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   rows={6}
                   placeholder="Describe the child task…"
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                  className="mt-2 w-full rounded-xl border border-line px-4 py-3 text-sm"
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700">Depth limit</label>
+                <label className="text-sm font-medium text-ink-2">Depth limit</label>
                 <input
                   type="number"
                   min={1}
                   max={10}
                   value={depthLimit}
                   onChange={(e) => setDepthLimit(e.target.value)}
-                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-4 text-sm"
+                  className="mt-2 h-11 w-full rounded-xl border border-line px-4 text-sm"
                 />
               </div>
             </section>
           </div>
 
-          <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-6">
-            <Link href="/subagents" className="text-sm text-slate-500 hover:text-slate-700">
+          <div className="mt-8 flex items-center justify-between border-t border-line pt-6">
+            <Link href="/subagents" className="text-sm text-ink-2 hover:text-ink-2">
               Cancel
             </Link>
             <button
@@ -272,7 +272,7 @@ function SpawnSubagentContent(): JSX.Element {
               onClick={() => void onSpawn()}
               className={cn(
                 'inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-medium text-white',
-                'bg-primary-600 hover:bg-primary-700 disabled:opacity-50'
+                'bg-accent-600 hover:bg-accent-700 disabled:opacity-50'
               )}
             >
               {submitting ? (

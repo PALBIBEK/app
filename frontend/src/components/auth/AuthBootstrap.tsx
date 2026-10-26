@@ -78,7 +78,7 @@ export function AuthBootstrap({ children }: { children: React.ReactNode }): JSX.
 
   if (!sessionReady) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-slate-50 text-sm text-slate-500">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-canvas text-sm text-ink-2">
         Loading…
       </div>
     );

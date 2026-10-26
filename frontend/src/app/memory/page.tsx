@@ -10,9 +10,8 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { isAxiosError } from 'axios';
-import { Archive, Brain, ClockCounterClockwise, MagnifyingGlass, PencilSimple, Plus, Trash, WarningCircle } from '@phosphor-icons/react';
+import { Archive, ClockCounterClockwise, MagnifyingGlass, PencilSimple, Plus, Trash, WarningCircle } from '@phosphor-icons/react';
 
-import { AuthGuard } from '@/components/auth/AuthGuard';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import {
   useAddFacts,
@@ -29,9 +28,10 @@ import {
 } from '@/lib/api/hooks/useMemory';
 import type { Notebook } from '@/lib/api/types/memory.types';
 import { cn } from '@/lib/utils';
-import { AppShell } from '@/components/layout/AppShell';
+import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { PageHeader, Select } from '@/components/ui';
 
-const input = 'rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none';
+const input = 'h-10 rounded-lg border border-line-strong bg-surface px-3 text-base text-ink placeholder:text-ink-3';
 
 function unavailable(error: unknown): string | null {
   if (!error) return null;
@@ -58,56 +58,14 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
   const states = useMemo(() => [...new Set(revisions.map((r) => r.revision))].sort((a, b) => b - a), [revisions]);
 
   return (
-    <section data-testid="notebook" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section data-testid="notebook" className="rounded-card border border-line bg-surface p-5">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-base font-semibold text-slate-900">{notebook.label || notebook.name}</h2>
         <span className="text-xs text-slate-500">
           {notebook.facts} facts · revision {notebook.revision}
-          {notebook.version != null ? ` · version ${notebook.version}` : ''}
-        </span>
-        <span className="ml-auto flex items-center gap-1">
-          <button type="button" onClick={() => setShowHistory((s) => !s)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
-            <ClockCounterClockwise size={14} /> History
-          </button>
-          <button
-            type="button"
-            onClick={() => window.confirm('Forget every fact in this notebook? You can restore it from its history.') && clear.mutate(notebook.id)}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-          >
-            <Trash size={14} /> Clear
-          </button>
-          <button type="button" onClick={() => archive.mutate({ notebookId: notebook.id, archived: !notebook.archived })} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
-            <Archive size={14} /> {notebook.archived ? 'Unarchive' : 'Archive'}
-          </button>
-        </span>
-      </div>
-
-      {isLoading ? (
-        <p className="mt-4 text-sm text-slate-500">Loading…</p>
-      ) : facts.length === 0 ? (
-        <p className="mt-4 text-sm text-slate-500">Nothing remembered yet.</p>
-      ) : (
-        <ul data-testid="facts" className="mt-4 divide-y divide-slate-100">
-          {facts.map((f) => (
-            <li key={f.id} className="flex items-start gap-3 py-2">
-              {editing?.id === f.id ? (
-                <form
-                  className="flex flex-1 gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    edit.mutate({ notebookId: notebook.id, edits: [{ id: f.id, text: editing.text }] }, { onSuccess: () => setEditing(null) });
-                  }}
-                >
-                  <input aria-label="Edit fact" className={cn(input, 'flex-1')} value={editing.text} onChange={(e) => setEditing({ id: f.id, text: e.target.value })} autoFocus />
-                  <button type="submit" className="rounded-lg bg-primary-600 px-3 text-xs font-medium text-white">Save</button>
-                  <button type="button" onClick={() => setEditing(null)} className="text-xs text-slate-500">Cancel</button>
-                </form>
-              ) : (
-                <>
-                  <span className="flex-1 text-sm text-slate-800">{f.text}</span>
-                  {['sensitive', 'restricted'].includes(f.sensitivity) ? <span className="rounded-full bg-slate-100 px-2 text-[10px] text-slate-600">{f.sensitivity}</span> : null}
+          {notebook.version != null ? ` · version ${notebook.version}` : ''} </span> <span className="ml-auto flex items-center gap-1"> <button type="button" onClick={() => setShowHistory((s) => !s)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <ClockCounterClockwise size={14} /> History </button> <button type="button" onClick={() => window.confirm('Forget every fact in this notebook? You can restore it from its history.') && clear.mutate(notebook.id)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas" > <Trash size={14} /> Clear </button> <button type="button" onClick={() => archive.mutate({ notebookId: notebook.id, archived: !notebook.archived })} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <Archive size={14} /> {notebook.archived ?'Unarchive' : 'Archive'} </button> </span> </div> {isLoading ? ( <p className="mt-4 text-sm text-ink-2">Loading…</p> ) : facts.length === 0 ? ( <p className="mt-4 text-sm text-ink-2">Nothing remembered yet.</p> ) : ( <ul data-testid="facts" className="mt-4 divide-y divide-line-soft"> {facts.map((f) => ( <li key={f.id} className="flex items-start gap-3 py-2"> {editing?.id === f.id ? ( <form className="flex flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); edit.mutate({ notebookId: notebook.id, edits: [{ id: f.id, text: editing.text }] }, { onSuccess: () => setEditing(null) }); }} > <input aria-label="Edit fact" className={cn(input,'flex-1')} value={editing.text} onChange={(e) => setEditing({ id: f.id, text: e.target.value })} autoFocus /> <button type="submit" className="h-10 rounded-lg bg-accent-500 px-3.5 text-sm font-medium text-white hover:bg-accent-600">Save</button> <button type="button" onClick={() => setEditing(null)} className="text-xs text-ink-2">Cancel</button> </form> ) : ( <> <span className="flex-1 text-sm text-ink">{f.text}</span> {['sensitive', 'restricted'].includes(f.sensitivity) ? <span className="rounded-full bg-slate-100 px-2 text-[10px] text-slate-600">{f.sensitivity}</span> : null}
                   <button type="button" aria-label={`Edit ${f.text}`} onClick={() => setEditing({ id: f.id, text: f.text })} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><PencilSimple size={14} /></button>
-                  <button type="button" aria-label={`Forget ${f.text}`} onClick={() => forget.mutate({ notebookId: notebook.id, ids: [f.id] })} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash size={14} /></button>
+                  <button type="button" aria-label={`Forget ${f.text}`} onClick={() => forget.mutate({ notebookId: notebook.id, ids: [f.id] })} className="rounded p-1 text-slate-400 hover:bg-line-soft hover:text-bad"><Trash size={14} /></button>
                 </>
               )}
             </li>
@@ -124,13 +82,13 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
         }}
       >
         <input aria-label="New fact" placeholder="Something to remember, e.g. I prefer tabs" className={cn(input, 'flex-1')} value={draft} onChange={(e) => setDraft(e.target.value)} />
-        <button type="submit" disabled={!draft.trim()} className="inline-flex items-center gap-1 rounded-lg bg-primary-600 px-3 text-sm font-medium text-white disabled:opacity-50">
+        <button type="submit" disabled={!draft.trim()} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-accent-500 px-4 text-sm font-medium text-white hover:bg-accent-600 disabled:opacity-50">
           <Plus size={14} /> Add
         </button>
       </form>
 
       {showHistory ? (
-        <div data-testid="history" className="mt-4 rounded-xl bg-slate-50 p-3">
+        <div data-testid="history" className="mt-4 rounded-[10px] border border-line-soft bg-canvas p-3">
           <p className="text-xs font-medium text-slate-600">History, newest first: restore the notebook to how it was after a change.</p>
           {states.map((rev) => (
             <div key={rev} className="mt-2 border-t border-slate-200 pt-2 first:border-0">
@@ -148,7 +106,7 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
               <ul className="mt-1 space-y-0.5">
                 {revisions.filter((r) => r.revision === rev).map((r, i) => (
                   <li key={`${r.fact_id}-${i}`} className="text-xs text-slate-600">
-                    <span className={cn('mr-1 font-mono', r.op === 'delete' ? 'text-red-600' : r.op === 'insert' ? 'text-secondary-700' : 'text-amber-700')}>{r.op}</span>
+                    <span className={cn('mr-1 font-mono', r.op === 'delete' ? 'text-bad' : r.op === 'insert' ? 'text-good' : 'text-warn')}>{r.op}</span>
                     {r.text}
                   </li>
                 ))}
@@ -195,97 +153,39 @@ function MemoryContent(): JSX.Element {
 
   const problem = unavailable(error);
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-50 text-accent-600"><Brain size={22} weight="fill" /></div>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Memory</h1>
-          <p className="text-sm text-slate-500">What each harness remembers about you. Only you see your notebooks.</p>
-        </div>
-        <select aria-label="Harness" className={cn(input, 'ml-auto')} value={harnessId ?? ''} onChange={(e) => go({ harness: e.target.value, notebook: undefined })}>
-          {harnesses.length === 0 ? <option value="">No published harness</option> : null}
-          {harnesses.map((h) => (
-            <option key={h.id} value={h.id}>{h.name}</option>
-          ))}
-        </select>
-      </div>
-
-      {problem ? (
-        <div role="alert" data-testid="memory-unavailable" className="mt-6 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <WarningCircle size={18} className="mt-0.5 shrink-0" /> {problem}
-        </div>
-      ) : null}
-
-      {harnessId && !problem ? (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[16rem_1fr]">
-          <aside className="space-y-4">
-            <form
-              className="flex gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (query.trim()) search.mutate({ harness_id: harnessId, query: query.trim() });
-              }}
-            >
-              <input aria-label="Search memory" placeholder="Search what it remembers" className={cn(input, 'min-w-0 flex-1')} value={query} onChange={(e) => setQuery(e.target.value)} />
-              <button type="submit" aria-label="Search" className="rounded-lg border border-slate-200 bg-white px-2"><MagnifyingGlass size={14} /></button>
-            </form>
-            {search.data ? (
-              <ul data-testid="search-results" className="space-y-1 text-xs">
-                {search.data.length === 0 ? <li className="text-slate-500">No match in the live version&apos;s notebooks.</li> : null}
-                {search.data.map((hit, i) => (
-                  <li key={i}>
-                    <button type="button" onClick={() => go({ notebook: hit.notebook_id })} className="text-left text-slate-700 hover:text-primary-700">{hit.fact.replace(/^#\d+ \(\d{4}-\d{2}-\d{2}\) /, '')}</button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {isLoading ? <p className="text-sm text-slate-500">Loading…</p> : null}
-            {byVersion.map(([label, list]) => (
-              <div key={label}>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-                <ul className="mt-1 space-y-1">
-                  {list.map((nb) => (
-                    <li key={nb.id}>
-                      <button type="button" onClick={() => go({ notebook: nb.id })} className={cn('flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm', nb.id === selected?.id ? 'bg-primary-50 text-primary-800' : 'text-slate-700 hover:bg-slate-100')}>
-                        <span className="truncate">{nb.label || nb.name}{nb.archived ? ' (archived)' : ''}</span>
-                        <span className="text-xs text-slate-400">{nb.facts}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            <form
-              className="flex gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const name = newName.trim();
-                if (name) create.mutate({ harness_id: harnessId, name }, { onSuccess: (nb) => { setNewName(''); go({ notebook: nb.id }); } });
+    <PageBody>
+      <PageHeader
+        title="Memory"
+        description="What each agent remembers about you, by notebook and version. Only you see your notebooks."
+        actions={
+          <Select
+            label="Agent"
+            value={harnessId ?? ''}
+            onChange={(v) => go({ harness: v, notebook: undefined })}
+            options={harnesses.length ? harnesses.map((h) => ({ value: h.id, label: h.name })) : [{ value: '', label: 'No published agent'}]} /> } /> {problem ? ( <div role="alert" data-testid="memory-unavailable" className="flex items-start gap-3 rounded-card border border-line bg-surface px-4 py-3 text-sm"> <WarningCircle size={18} className="mt-0.5 shrink-0 text-warn" /> {problem} </div> ) : null} {harnessId && !problem ? ( <div className="grid gap-5 lg:grid-cols-[18rem_1fr]"> <aside className="space-y-4 rounded-card border border-line bg-surface p-3"> <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); if (query.trim()) search.mutate({ harness_id: harnessId, query: query.trim() }); }} > <input aria-label="Search memory" placeholder="Search what it remembers" className={cn(input,'min-w-0 flex-1')} value={query} onChange={(e) => setQuery(e.target.value)} /> <button type="submit" aria-label="Search" className="h-10 rounded-lg border border-line-strong bg-surface px-3 hover:bg-canvas"><MagnifyingGlass size={14} /></button> </form> {search.data ? ( <ul data-testid="search-results" className="space-y-1 text-xs"> {search.data.length === 0 ? <li className="text-ink-2">No match in the live version&apos;s notebooks.</li> : null} {search.data.map((hit, i) => ( <li key={i}> <button type="button" onClick={() => go({ notebook: hit.notebook_id })} className="text-left text-ink-2 hover:text-accent-700">{hit.fact.replace(/^#\d+ \(\d{4}-\d{2}-\d{2}\) /,'')}</button> </li> ))} </ul> ) : null} {isLoading ? <p className="text-sm text-ink-2">Loading…</p> : null} {byVersion.map(([label, list]) => ( <div key={label}> <p className="px-3 text-xs text-ink-3">{label}</p> <ul className="mt-1 space-y-1"> {list.map((nb) => ( <li key={nb.id}> <button type="button" onClick={() => go({ notebook: nb.id })} className={cn('flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm', nb.id === selected?.id ? 'bg-accent-50 font-medium text-accent-700' : 'text-ink hover:bg-canvas')}>
+                        <span className="truncate">{nb.label || nb.name}{nb.archived ? ' (archived)' : ''}</span> <span className="text-xs text-ink-3">{nb.facts}</span> </button> </li> ))} </ul> </div> ))} <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); const name = newName.trim(); if (name) create.mutate({ harness_id: harnessId, name }, { onSuccess: (nb) => { setNewName(''); go({ notebook: nb.id }); } });
               }}
             >
               <input aria-label="New notebook" placeholder="New notebook" className={cn(input, 'min-w-0 flex-1')} value={newName} onChange={(e) => setNewName(e.target.value)} />
-              <button type="submit" disabled={!newName.trim()} className="rounded-lg bg-primary-600 px-2 text-white disabled:opacity-50"><Plus size={14} /></button>
+              <button type="submit" aria-label="Create notebook" disabled={!newName.trim()} className="h-10 rounded-lg border border-dashed border-[#C4C9D2] px-3 text-ink hover:bg-canvas disabled:opacity-50"><Plus size={14} /></button>
             </form>
-            <label className="flex items-center gap-2 text-xs text-slate-500">
+            <label className="flex items-center gap-2 text-xs text-ink-2">
               <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived
             </label>
           </aside>
-          <div>{selected ? <NotebookView key={selected.id} notebook={selected} /> : <p className="text-sm text-slate-500">No notebooks yet: chatting with the harness creates one.</p>}</div>
+          <div>{selected ? <NotebookView key={selected.id} notebook={selected} /> : <p className="text-sm text-ink-2">No notebooks yet: chatting with the harness creates one.</p>}</div>
         </div>
       ) : null}
-    </div>
+    </PageBody>
   );
 }
 
 export default function MemoryPage(): JSX.Element {
   return (
-    <AuthGuard>
-      <AppShell>
-          <Suspense fallback={null}>
-            <MemoryContent />
-          </Suspense>
-        </AppShell>
-    </AuthGuard>
+    <AppShell>
+      <Suspense fallback={null}>
+        <MemoryContent />
+      </Suspense>
+    </AppShell>
   );
 }

@@ -31,3 +31,47 @@ export function formatRelativeTime(iso: string | Date | null | undefined): strin
   const day = Math.round(hr / 24);
   return `${day}d ago`;
 }
+
+/** "14m 08s", "2h 05m", "3d 4h": how long something ran. */
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+/** Dollars: cents for amounts over a dollar, more digits for the small ones a single run costs. */
+export function formatMoney(amount: number | null | undefined): string {
+  const n = amount ?? 0;
+  if (n === 0) return '$0.00';
+  if (Math.abs(n) < 0.01) return `$${n.toFixed(4)}`;
+  if (Math.abs(n) < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** 1.2k, 3.4M: token counts at a glance. */
+export function formatCount(n: number | null | undefined): string {
+  const v = n ?? 0;
+  if (Math.abs(v) < 1000) return String(v);
+  if (Math.abs(v) < 1_000_000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)}k`;
+  return `${(v / 1_000_000).toFixed(1)}M`;
+}
+
+/** "Oct 21, 18:04" in the viewer's time zone. */
+export function formatStamp(at: string | number | Date | null | undefined): string {
+  if (at == null) return '—';
+  const d = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** A published version's label: the BFF names them `<prefix>-r<N>`; shipped ones keep their name. */
+export function versionLabel(harnessVersion: string | null | undefined): string {
+  if (!harnessVersion) return '—';
+  const m = /-r(\d+)$/.exec(harnessVersion);
+  return m ? `v${m[1]}` : harnessVersion;
+}

@@ -45,12 +45,15 @@ export function WorkspacePanel({
   sessionId,
   disabled,
   refreshKey,
+  className,
 }: {
   scopeId: string;
   /** A live session on this scope: reloaded after a change so the agent sees it. */
   sessionId?: string;
   disabled?: boolean;
   refreshKey?: number;
+  /** The section's own box (borders, padding); a strip under the header by default. */
+  className?: string;
 }): JSX.Element {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [members, setMembers] = useState<ScopeMember[]>([]);
@@ -171,20 +174,7 @@ export function WorkspacePanel({
   const empty = here.folders.length === 0 && here.files.length === 0;
 
   return (
-    <section data-testid="workspace-panel" className="border-b border-slate-200/80 bg-slate-50/80 px-6 py-3 text-sm">
-      <div className="flex flex-wrap items-center gap-3">
-        <FolderOpen size={18} className="text-slate-500" />
-        <p className="font-semibold text-slate-800">Workspace</p>
-        <p className="text-xs text-slate-500">{scopeId}</p>
-        <input
-          ref={input}
-          type="file"
-          className="hidden"
-          data-testid="agent-workspace-upload"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void upload(file);
-            e.target.value = '';
+    <section data-testid="workspace-panel" className={className ?? 'border-b border-slate-200/80 bg-slate-50/80 px-6 py-3 text-sm'}> <div className="flex flex-wrap items-center gap-3"> <FolderOpen size={18} className="text-ink-2" /> <p className="font-semibold text-ink">Workspace</p> <p className="text-xs text-ink-2">{scopeId}</p> <input ref={input} type="file" className="hidden" data-testid="agent-workspace-upload" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value ='';
           }}
         />
         <button type="button" disabled={disabled || busy || !scopeId} onClick={() => input.current?.click()} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
@@ -214,32 +204,7 @@ export function WorkspacePanel({
           </span>
         ))}
         {newFolder === null ? (
-          <button type="button" disabled={disabled} onClick={() => setNewFolder('')} className="ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100 disabled:opacity-40">
-            <FolderPlus size={13} /> New folder
-          </button>
-        ) : (
-          <form
-            className="ml-2 inline-flex items-center gap-1"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const name = validName(newFolder);
-              if (!name) return void toast.error('A folder name is one name, without "/"');
-              const path = joinPath(folder, name);
-              setMadeFolders((m) => (m.includes(path) ? m : [...m, path]));
-              setNewFolder(null);
-              setFolder(path);
-            }}
-          >
-            <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)} aria-label="New folder name" placeholder="folder name" className="w-32 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs" />
-            <button type="submit" className="rounded border border-slate-200 bg-white px-1.5 py-0.5">Create</button>
-            <button type="button" onClick={() => setNewFolder(null)} aria-label="Cancel new folder" className="text-slate-400"><X size={12} /></button>
-          </form>
-        )}
-      </nav>
-
-      {empty ? (
-        <p className="mt-2 text-xs text-slate-400">
-          {folder ? 'Empty folder: upload a file to keep it.' : 'No files yet.'}
+          <button type="button" disabled={disabled} onClick={() => setNewFolder('')} className="ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-ink-2 hover:bg-line-soft disabled:opacity-40"> <FolderPlus size={13} /> New folder </button> ) : ( <form className="ml-2 inline-flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const name = validName(newFolder); if (!name) return void toast.error('A folder name is one name, without "/"'); const path = joinPath(folder, name); setMadeFolders((m) => (m.includes(path) ? m : [...m, path])); setNewFolder(null); setFolder(path); }} > <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)} aria-label="New folder name" placeholder="folder name" className="w-32 rounded border border-line bg-surface px-1.5 py-0.5 text-xs" /> <button type="submit" className="rounded border border-line bg-surface px-1.5 py-0.5">Create</button> <button type="button" onClick={() => setNewFolder(null)} aria-label="Cancel new folder" className="text-ink-3"><X size={12} /></button> </form> )} </nav> {empty ? ( <p className="mt-2 text-xs text-ink-3"> {folder ?'Empty folder: upload a file to keep it.' : 'No files yet.'}
         </p>
       ) : (
         <ul data-testid="agent-workspace-file-list" className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
@@ -322,8 +287,8 @@ export function WorkspacePanel({
             if (who) void run(() => workspaceAPI.inviteMember(scopeId, who), `Shared with ${who}`).then(() => setEmail(''));
           }}
         >
-          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="email to share with" aria-label="Email to share with" className="w-44 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" />
-          <button type="submit" disabled={disabled || busy || !email.trim()} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 disabled:opacity-50">
+          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="email to share with" aria-label="Email to share with" className="w-44 rounded-lg border border-line bg-surface px-2 py-1 text-xs" />
+          <button type="submit" disabled={disabled || busy || !email.trim()} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface px-2 py-1 text-xs text-ink-2 disabled:opacity-50">
             <UserPlus size={12} /> Share
           </button>
         </form>

@@ -75,7 +75,7 @@ function NewToolContent(): JSX.Element {
       <motion.div variants={itemVariants}>
         <Link
           href="/tools"
-          className="group inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+          className="group inline-flex items-center gap-2 text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
         >
           <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
           Back to Tools
@@ -83,14 +83,14 @@ function NewToolContent(): JSX.Element {
       </motion.div>
 
       <motion.div variants={itemVariants} className="mt-6 flex items-start gap-4">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 shadow-lg shadow-primary-500/25">
+        <div className="flex h-14 w-14 items-center justify-center rounded-card bg-accent-500">
           <Sparkle size={26} weight="fill" className="text-white" />
         </div>
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">
             Create New Tool
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-ink-2">
             Describe a custom HTTP tool (harnesses cannot run custom tools yet)
           </p>
         </div>
@@ -99,12 +99,12 @@ function NewToolContent(): JSX.Element {
       <div className="mt-8 space-y-8">
         <motion.div variants={itemVariants}>
           <div className="flex items-start gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100">
-              <Tag size={20} className="text-slate-600" />
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-line-soft">
+              <Tag size={20} className="text-ink-2" />
             </div>
             <div className="flex-1">
-              <h2 className="text-lg font-semibold text-slate-900">Basic information</h2>
-              <p className="mt-0.5 text-sm text-slate-500">
+              <h2 className="text-lg font-semibold text-ink">Basic information</h2>
+              <p className="mt-0.5 text-sm text-ink-2">
                 Name becomes the catalog tool name after publish
               </p>
             </div>
@@ -112,9 +112,9 @@ function NewToolContent(): JSX.Element {
 
           <div className="mt-4 space-y-4">
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+              <label className="mb-2 block text-sm font-medium text-ink-2">
                 Tool name
-                <span className="ml-1 text-xs text-slate-400">(lowercase, underscores)</span>
+                <span className="ml-1 text-xs text-ink-3">(lowercase, underscores)</span>
               </label>
               <input
                 type="text"
@@ -123,21 +123,21 @@ function NewToolContent(): JSX.Element {
                 placeholder="local_demo_custom_echo"
                 className={cn(
                   'h-11 w-full rounded-xl px-4 text-sm',
-                  'border-2 border-slate-200 bg-white',
-                  'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                  'border border-line bg-surface',
+                  'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                 )}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">Category</label>
+              <label className="mb-2 block text-sm font-medium text-ink-2">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as ToolCategory)}
                 className={cn(
                   'h-11 w-full rounded-xl px-4 text-sm',
-                  'border-2 border-slate-200 bg-white',
-                  'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                  'border border-line bg-surface',
+                  'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                 )}
               >
                 {TOOL_CATEGORIES.map((c) => (
@@ -149,7 +149,7 @@ function NewToolContent(): JSX.Element {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+              <label className="mb-2 block text-sm font-medium text-ink-2">
                 Description
               </label>
               <textarea
@@ -159,15 +159,15 @@ function NewToolContent(): JSX.Element {
                 rows={3}
                 className={cn(
                   'w-full rounded-xl px-4 py-3 text-sm',
-                  'border-2 border-slate-200 bg-white',
-                  'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10',
+                  'border border-line bg-surface',
+                  'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10',
                   'resize-none'
                 )}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+              <label className="mb-2 block text-sm font-medium text-ink-2">
                 Endpoint URL (optional HTTP custom tool)
               </label>
               <input
@@ -177,18 +177,18 @@ function NewToolContent(): JSX.Element {
                 placeholder="https://api.example.com/tool"
                 className={cn(
                   'h-11 w-full rounded-xl px-4 text-sm',
-                  'border-2 border-slate-200 bg-white',
-                  'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                  'border border-line bg-surface',
+                  'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                 )}
               />
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+            <label className="flex items-center gap-2 text-sm text-ink-2">
               <input
                 type="checkbox"
                 checked={authRequired}
                 onChange={(e) => setAuthRequired(e.target.checked)}
-                className="rounded border-slate-300"
+                className="rounded border-line-strong"
               />
               Auth required
             </label>
@@ -197,14 +197,14 @@ function NewToolContent(): JSX.Element {
 
         <motion.div
           variants={itemVariants}
-          className="flex items-start gap-4 rounded-xl border-2 border-slate-200 bg-white p-5"
+          className="flex items-start gap-4 rounded-xl border border-line bg-surface p-5"
         >
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-50">
             <Info size={20} className="text-accent-600" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-slate-900">Not runnable by a harness yet</p>
-            <p className="mt-1 text-sm leading-relaxed text-slate-500">
+            <p className="text-sm font-semibold text-ink">Not runnable by a harness yet</p>
+            <p className="mt-1 text-sm leading-relaxed text-ink-2">
               The supervisor runs only its own tools, which you pick on a harness&apos;s Tools tab.
               A tool saved here is kept for when custom HTTP tools are supported.
             </p>
@@ -214,11 +214,11 @@ function NewToolContent(): JSX.Element {
 
       <motion.div
         variants={itemVariants}
-        className="mt-8 flex items-center justify-between border-t-2 border-slate-200 pt-6"
+        className="mt-8 flex items-center justify-between border-t-2 border-line pt-6"
       >
         <Link
           href="/tools"
-          className="text-sm font-medium text-slate-500 hover:text-slate-700"
+          className="text-sm font-medium text-ink-2 hover:text-ink-2"
         >
           Cancel
         </Link>
@@ -229,8 +229,8 @@ function NewToolContent(): JSX.Element {
           className={cn(
             'flex items-center gap-2 rounded-xl px-5 py-2.5',
             'text-sm font-medium text-white',
-            'bg-gradient-to-br from-primary-500 to-primary-600',
-            'shadow-lg shadow-primary-500/25 disabled:opacity-60'
+            'bg-accent-500',
+            'disabled:opacity-60'
           )}
         >
           {createTool.isPending ? 'Creating…' : 'Create Tool'}

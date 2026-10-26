@@ -39,6 +39,7 @@ export function ConversationFiles({
   refreshKey,
   disabled,
   onWorkspaceChanged,
+  className,
 }: {
   sessionId: string;
   scopeId: string;
@@ -47,6 +48,8 @@ export function ConversationFiles({
   disabled?: boolean;
   /** Called after something was added to the workspace (an upload, a saved output). */
   onWorkspaceChanged?: () => void;
+  /** The section's own box (borders, padding); a strip under the header by default. */
+  className?: string;
 }): JSX.Element {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -142,21 +145,7 @@ export function ConversationFiles({
   const attachedPaths = new Set(attachments.map((a) => a.path));
 
   return (
-    <section data-testid="conversation-files" className="border-b border-slate-200/80 bg-white/60 px-6 py-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <Paperclip size={16} className="text-slate-500" />
-        <p className="font-semibold text-slate-800">This conversation</p>
-        <p className="text-xs text-slate-500">attached files are read-only for the agent; files it makes appear here</p>
-        <span className="ml-auto inline-flex items-center gap-1.5">
-          <input
-            ref={input}
-            type="file"
-            className="hidden"
-            data-testid="attach-upload"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void uploadAndAttach(file);
-              e.target.value = '';
+    <section data-testid="conversation-files" className={className ?? 'border-b border-slate-200/80 bg-white/60 px-6 py-3 text-sm'}> <div className="flex flex-wrap items-center gap-2"> <Paperclip size={16} className="text-ink-2" /> <p className="font-semibold text-ink">This conversation</p> <p className="text-xs text-ink-2">attached files are read-only for the agent; files it makes appear here</p> <span className="ml-auto inline-flex items-center gap-1.5"> <input ref={input} type="file" className="hidden" data-testid="attach-upload" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadAndAttach(file); e.target.value ='';
             }}
           />
           <button type="button" disabled={disabled || busy} onClick={() => void openPicker()} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 disabled:opacity-50">
@@ -213,7 +202,7 @@ export function ConversationFiles({
                 ) : null}
                 <button type="button" aria-label={`View ${a.name}`} onClick={() => void view(a)} className="rounded p-1 text-slate-500 hover:bg-slate-100"><Eye size={14} /></button>
                 <button type="button" aria-label={`Download ${a.name}`} onClick={() => void download(a)} className="rounded p-1 text-slate-500 hover:bg-slate-100"><DownloadSimple size={14} /></button>
-                <button type="button" aria-label={`Save ${a.name} to the workspace`} disabled={disabled || busy} onClick={() => setSaving(saving?.id === a.id ? null : { id: a.id, path: a.saved_path ?? joinPath('Agent outputs', a.name) })} className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-40"><FloppyDisk size={14} /></button>
+                <button type="button" aria-label={`Save ${a.name} to the workspace`} disabled={disabled || busy} onClick={() => setSaving(saving?.id === a.id ? null : { id: a.id, path: a.saved_path ?? joinPath('Agent outputs', a.name) })} className="rounded p-1 text-ink-2 hover:bg-line-soft disabled:opacity-40"><FloppyDisk size={14} /></button>
               </div>
               {saving?.id === a.id ? (
                 <form
@@ -230,9 +219,9 @@ export function ConversationFiles({
                     });
                   }}
                 >
-                  <span className="text-slate-500">Save as</span>
-                  <input autoFocus aria-label="Save as path" value={saving.path} onChange={(e) => setSaving({ ...saving, path: e.target.value })} className="flex-1 rounded border border-slate-200 px-1.5 py-0.5 font-mono" />
-                  <button type="submit" className="rounded bg-primary-600 px-2 py-0.5 text-white">Save</button>
+                  <span className="text-ink-2">Save as</span>
+                  <input autoFocus aria-label="Save as path" value={saving.path} onChange={(e) => setSaving({ ...saving, path: e.target.value })} className="flex-1 rounded border border-line px-1.5 py-0.5 font-mono" />
+                  <button type="submit" className="rounded bg-accent-600 px-2 py-0.5 text-white">Save</button>
                 </form>
               ) : null}
             </li>
@@ -241,12 +230,12 @@ export function ConversationFiles({
       ) : null}
 
       {preview ? (
-        <div className="mt-2 rounded-lg border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5">
-            <span className="font-mono text-xs text-slate-600">{preview.name}</span>
-            <button type="button" aria-label="Close preview" onClick={() => setPreview(null)} className="rounded p-1 text-slate-400 hover:bg-slate-100"><X size={14} /></button>
+        <div className="mt-2 rounded-lg border border-line bg-surface">
+          <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
+            <span className="font-mono text-xs text-ink-2">{preview.name}</span>
+            <button type="button" aria-label="Close preview" onClick={() => setPreview(null)} className="rounded p-1 text-ink-3 hover:bg-line-soft"><X size={14} /></button>
           </div>
-          <pre data-testid="artifact-preview" className="max-h-64 overflow-auto p-3 font-mono text-[11px] text-slate-800">{preview.text}</pre>
+          <pre data-testid="artifact-preview" className="max-h-64 overflow-auto p-3 font-mono text-[11px] text-ink">{preview.text}</pre>
         </div>
       ) : null}
     </section>

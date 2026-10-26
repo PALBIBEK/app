@@ -13,44 +13,11 @@ import { cn } from '@/lib/utils';
 type Edit = (next: Manifest) => void;
 
 export const input =
-  'w-full rounded-xl border-2 border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10';
-
-export function Field({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  hint?: React.ReactNode;
-  htmlFor?: string;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-slate-700">
-        {label}
-      </label>
-      <div className="mt-1.5">{children}</div>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
-    </div>
-  );
-}
-
-export function Errors({ messages }: { messages?: string[] }): JSX.Element | null {
-  if (!messages?.length) return null;
-  return (
-    <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-      {messages.map((m) => (
-        <p key={m}>{m}</p>
-      ))}
-    </div>
-  );
-}
-
-export function PromptTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX.Element {
-  const sections = m.prompt.sections;
-  const setSections = (next: Manifest['prompt']['sections']) => onChange({ ...m, prompt: { ...m.prompt, sections: next } });
+  'w-full rounded-xl border-2 border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10'; export function Field({ label, hint, htmlFor, children,
+}: { label: string; hint?: React.ReactNode; htmlFor?: string; children: React.ReactNode;
+}): JSX.Element { return ( <div> <label htmlFor={htmlFor} className="block text-sm font-medium text-ink-2"> {label} </label> <div className="mt-1.5">{children}</div> {hint ? <p className="mt-1 text-xs text-ink-2">{hint}</p> : null} </div> );
+} export function Errors({ messages }: { messages?: string[] }): JSX.Element | null { if (!messages?.length) return null; return ( <div role="alert" className="mb-5 rounded-xl border border-line bg-canvas px-4 py-3 text-sm text-bad"> {messages.map((m) => ( <p key={m}>{m}</p> ))} </div> );
+} export function PromptTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX.Element { const sections = m.prompt.sections; const setSections = (next: Manifest['prompt']['sections']) => onChange({ ...m, prompt: { ...m.prompt, sections: next } });
   const move = (i: number, by: number) => {
     const next = [...sections];
     const [s] = next.splice(i, 1);
@@ -108,43 +75,11 @@ export function PromptTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX
         ))}
         <button
           type="button"
-          onClick={() => setSections([...sections, { id: freshId(), text: '' }])}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700"
-        >
-          <Plus size={14} weight="bold" /> Add section
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function IconButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
-    >
-      {children}
-    </button>
-  );
-}
-
-const CLASS_HINT: Record<string, string> = {
-  pure: 'reads only',
+          onClick={() => setSections([...sections, { id: freshId(), text: ''}])} className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:text-accent-700" > <Plus size={14} weight="bold" /> Add section </button> </div> </div> );
+} function IconButton({ label, disabled, onClick, children,
+}: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode;
+}): JSX.Element { return ( <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="rounded-lg p-1.5 text-ink-2 hover:bg-line-soft disabled:opacity-30" > {children} </button> );
+} const CLASS_HINT: Record<string, string> = { pure:'reads only',
   idempotent: 'safe to repeat',
   transactional: 'all or nothing',
   non_atomic: 'can change anything it touches',
@@ -313,13 +248,7 @@ export function PolicyTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX
       {guard('oscillation', 'Calls going back and forth')}
       <NumberField id="approval_timeout" label="Wait for an approval (seconds)" value={p.approval_timeout_s} onChange={(v) => set({ approval_timeout_s: v })} />
       <Field label="If nobody answers" htmlFor="on_timeout">
-        <select id="on_timeout" className={input} value={p.on_approval_timeout} onChange={(e) => set({ on_approval_timeout: e.target.value as 'deny' | 'allow' })}>
-          <option value="deny">Deny the call</option>
-          <option value="allow">Allow the call</option>
-        </select>
-      </Field>
-      <p className="text-xs text-slate-500 sm:col-span-2">
-        Tools that ask first: {p.require_approval.length ? p.require_approval.join(', ') : 'none'} (set on the Tools tab).
+        <select id="on_timeout" className={input} value={p.on_approval_timeout} onChange={(e) => set({ on_approval_timeout: e.target.value as 'deny' | 'allow'})}> <option value="deny">Deny the call</option> <option value="allow">Allow the call</option> </select> </Field> <p className="text-xs text-ink-2 sm:col-span-2"> Tools that ask first: {p.require_approval.length ? p.require_approval.join(', ') : 'none'} (set on the Tools tab).
       </p>
     </div>
   );

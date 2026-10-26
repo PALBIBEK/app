@@ -1,291 +1,344 @@
 /**
- * Dashboard Page - Production Edition
- *
- * Design: Elegant asymmetric grid, refined typography, subtle depth
- * Icons: Phosphor
- * Pattern: Following corridor-platforms RestService pattern
- *
- * Architecture:
- * - TanStack Query for data fetching (equivalent to corridor's RxJS)
- * - Loading states with skeletons
- * - Error boundaries
- * - Real-time stats calculation
+ * Agents: every agent the user has built, what version is live, and (for the one picked)
+ * its settings and version history, with a way to start a session on it.
  */
 
 'use client';
 
-import { FunnelSimple, TrendUp, Pulse, Timer, Stack, WarningCircle } from '@phosphor-icons/react';
 import Link from 'next/link';
-import { HarnessCard } from '@/components/harness/HarnessCard';
-import { AuthGuard } from '@/components/auth/AuthGuard';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, X } from '@phosphor-icons/react';
+
+import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
-import { cn } from '@/lib/utils';
+import {
+  Card,
+  EmptyState,
+  ErrorNote,
+  LinkButton,
+  Mono,
+  PageHeader,
+  SearchInput,
+  Segmented,
+  SkeletonRows,
+  Table,
+  Td,
+  Th,
+  Tr,
+  shortHash,
+} from '@/components/ui';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
-import { useMemo } from 'react';
+import { useReleases } from '@/lib/api/hooks/useManifest';
+import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useSessions } from '@/lib/api/hooks/useSessions';
-import { dashboardStats } from '@/lib/dashboard/stats';
-import { AppShell } from '@/components/layout/AppShell';
+import type { Harness } from '@/lib/api/types/harness.types';
+import { cn, formatMoney, formatRelativeTime, formatStamp, versionLabel } from '@/lib/utils';
 
-export default function DashboardPage(): JSX.Element {
-  const { data, isLoading, error } = useHarnesses();
+type Filter = 'all' | 'live' | 'draft' | 'stale';
 
-  const { data: sessions } = useSessions({ page: 1, page_size: 100 });
-  const stats = useMemo(() => dashboardStats(data?.data, sessions), [data, sessions]);
+function stateOf(h: Harness): Exclude<Filter, 'all'> {
+  const s = h.bind?.bind_status ?? 'unbound';
+  if (s === 'bound') return 'live';
+  if (s === 'stale' || s === 'error') return 'stale';
+  return 'draft';
+}
 
+const STATE_LABEL: Record<Exclude<Filter, 'all'>, string> = { live: 'Published', draft: 'Draft', stale: 'Needs republish' };
+
+function StateMark({ state }: { state: Exclude<Filter, 'all'> }): JSX.Element {
   return (
-    <AuthGuard>
-    <AppShell>
-        <div className="mx-auto max-w-6xl px-8 py-8">
-          <AiPlatformBanner className="mb-6" />
-          {/* Page header */}
-          <div className="grid grid-cols-12 items-end gap-6">
-            <div className="col-span-8">
-              <p className="text-sm font-medium text-primary-600">Dashboard</p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-                Your Harnesses
-              </h1>
-              <p className="mt-2 text-[15px] text-slate-500">
-                Build, test, and manage your agent configurations
-              </p>
-            </div>
-            <div className="col-span-4 flex items-center justify-end gap-3">
-              <button
-                className={cn(
-                  'inline-flex items-center gap-2 rounded-xl px-4 py-2.5',
-                  'text-sm font-medium text-slate-700',
-                  'bg-white border border-slate-200',
-                  'shadow-sm',
-                  'transition-all duration-150',
-                  'hover:bg-slate-50 hover:border-slate-300',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/20',
-                  'active:scale-[0.98]'
-                )}
-              >
-                <FunnelSimple size={16} />
-                Filter
-              </button>
-            </div>
-          </div>
-
-          {/* Stats row - Production pattern: Loading skeletons */}
-          <div className="mt-8 grid grid-cols-4 gap-4">
-            {isLoading ? (
-              // Loading skeletons (corridor pattern)
-              <>
-                <StatCardSkeleton />
-                <StatCardSkeleton />
-                <StatCardSkeleton />
-                <StatCardSkeleton />
-              </>
-            ) : (
-              <>
-                <StatCard
-                  icon={Stack}
-                  label="Total Harnesses"
-                  value={stats.harnesses.toString()}
-                  sublabel="configurations"
-                />
-                <StatCard
-                  icon={Pulse}
-                  label="Live"
-                  value={stats.live.toString()}
-                  sublabel="published and ready"
-                  accent="green"
-                />
-                <StatCard
-                  icon={TrendUp}
-                  label="Sessions"
-                  value={stats.sessions.toString()}
-                  sublabel="all time"
-                />
-                <StatCard
-                  icon={Timer}
-                  label="Today"
-                  value={`${stats.today}${stats.todayCapped ? '+' : ''}`}
-                  sublabel="sessions"
-                  accent="blue"
-                />
-              </>
-            )}
-          </div>
-
-          {/* Section header */}
-          <div className="mt-10 flex items-center justify-between">
-            <h2 className="text-lg font-semibold tracking-tight text-slate-900">
-              All Harnesses
-            </h2>
-            <div className="flex items-center gap-2">
-              <button className="rounded-lg px-3 py-1.5 text-sm font-medium text-primary-600 hover:bg-primary-50 transition-colors">
-                Recent
-              </button>
-              <button className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors">
-                Name
-              </button>
-              <button className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors">
-                Status
-              </button>
-            </div>
-          </div>
-
-          {/* Harness list - Production pattern: Loading, Error, Empty, Data states */}
-          <div className="mt-4 space-y-3">
-            {isLoading && (
-              // Loading state (corridor pattern: skeleton loaders)
-              <>
-                <HarnessCardSkeleton />
-                <HarnessCardSkeleton />
-                <HarnessCardSkeleton />
-              </>
-            )}
-
-            {error && (
-              // Error state (corridor pattern: user-friendly error messages)
-              <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-red-100">
-                    <WarningCircle size={20} className="text-red-600" weight="fill" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-red-900">
-                      Failed to load harnesses
-                    </p>
-                    <p className="mt-1 text-sm text-red-700">
-                      {error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.'}
-                    </p>
-                    <button
-                      onClick={() => window.location.reload()}
-                      className="mt-3 text-sm font-medium text-red-600 hover:text-red-700 transition-colors"
-                    >
-                      Reload page
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!isLoading && !error && data?.data && data.data.length === 0 && (
-              // Empty state
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 p-8 text-center">
-                <div className="flex h-12 w-12 mx-auto items-center justify-center rounded-xl bg-slate-100">
-                  <Stack size={20} className="text-slate-500" />
-                </div>
-                <p className="mt-4 text-sm font-medium text-slate-700">
-                  No harnesses yet
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Get started by creating your first agent configuration
-                </p>
-                <Link
-                  href="/harness/new"
-                  className="mt-4 inline-flex rounded-xl bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-                >
-                  Create Harness
-                </Link>
-              </div>
-            )}
-
-            {!isLoading && !error && data?.data && data.data.map((harness) => (
-              <HarnessCard key={harness.id} harness={harness} />
-            ))}
-          </div>
-
-        </div>
-      </AppShell>
-    </AuthGuard>
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[13px]">
+      {state === 'live' ? (
+        <span className="h-2 w-2 rounded-full bg-ink" aria-hidden="true" />
+      ) : state === 'draft' ? (
+        <span className="box-border h-2 w-2 rounded-full border-[1.5px] border-ink" aria-hidden="true" />
+      ) : (
+        <span className="h-2 w-2 rotate-45 bg-accent-500" aria-hidden="true" />
+      )}
+      {STATE_LABEL[state]}
+    </span>
   );
 }
 
-interface StatCardProps {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-  sublabel?: string;
-  accent?: 'blue' | 'green' | 'amber';
-  trend?: string;
-}
+export default function AgentsPage(): JSX.Element {
+  const { data, isLoading, error, refetch } = useHarnesses();
+  const { data: sessions } = useSessions({ page: 1, page_size: 100 });
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [picked, setPicked] = useState<string | null>(null);
 
-function StatCard({ icon: Icon, label, value, sublabel, accent, trend }: StatCardProps): JSX.Element {
+  const agents = useMemo(() => data?.data ?? [], [data]);
+  const liveCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sessions?.data ?? []) if (s.status === 'active' || s.status === 'awaiting_approval') m.set(s.harness_id, (m.get(s.harness_id) ?? 0) + 1);
+    return m;
+  }, [sessions]);
+
+  const counts = useMemo(() => {
+    const c = { all: agents.length, live: 0, draft: 0, stale: 0 };
+    for (const a of agents) c[stateOf(a)] += 1;
+    return c;
+  }, [agents]);
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase().replace(/^sha256:/, '');
+    return agents.filter((a) => {
+      if (filter !== 'all' && stateOf(a) !== filter) return false;
+      if (!q) return true;
+      return [a.name, a.description ?? '', a.bind?.composition_digest ?? '', a.model].some((v) => v.toLowerCase().includes(q));
+    });
+  }, [agents, query, filter]);
+
+  // Pick the first agent once they load (on wide screens the detail is always beside the list).
+  useEffect(() => {
+    if (picked && agents.some((a) => a.id === picked)) return;
+    if (agents.length && typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches) setPicked(agents[0].id);
+  }, [agents, picked]);
+
+  const selected = agents.find((a) => a.id === picked) ?? null;
+
   return (
-    <div
-      className={cn(
-        'rounded-2xl bg-white p-5',
-        'border border-slate-200/80',
-        'shadow-card transition-all duration-200',
-        'hover:shadow-card-hover'
-      )}
-    >
-      <div className="flex items-start justify-between">
-        <div
-          className={cn(
-            'flex h-10 w-10 items-center justify-center rounded-xl',
-            accent === 'green' && 'bg-secondary-50',
-            accent === 'blue' && 'bg-primary-50',
-            accent === 'amber' && 'bg-accent-50',
-            !accent && 'bg-slate-100'
-          )}
-        >
-          <Icon
-            size={18}
-            weight="fill"
-            className={cn(
-              accent === 'green' && 'text-secondary-600',
-              accent === 'blue' && 'text-primary-600',
-              accent === 'amber' && 'text-accent-600',
-              !accent && 'text-slate-500'
-            )}
+    <AppShell>
+      <PageBody>
+        <AiPlatformBanner />
+        <PageHeader
+          title="Agents"
+          description="Each published version is fixed and addressed by its content hash; sessions keep the version they started on."
+          actions={
+            <LinkButton href="/harness/new" variant="primary">
+              <Plus size={16} /> New agent
+            </LinkButton>
+          }
+        />
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
+          <SearchInput value={query} onChange={setQuery} label="Search agents or hashes" placeholder="Search by name, model or sha256:…" />
+          <Segmented
+            label="Filter by status"
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: 'all', label: 'All', count: counts.all },
+              { value: 'live', label: 'Published', count: counts.live },
+              { value: 'draft', label: 'Draft', count: counts.draft },
+              { value: 'stale', label: 'Needs republish', count: counts.stale },
+            ]}
           />
         </div>
-        {trend && (
-          <span className="rounded-full bg-secondary-50 px-2 py-0.5 text-[11px] font-semibold text-secondary-600">
-            {trend}
-          </span>
-        )}
-      </div>
-      <div className="mt-4">
-        <p className="text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
-        <p className="mt-0.5 text-sm text-slate-500">{label}</p>
-        {sublabel && (
-          <p className="text-xs text-slate-400">{sublabel}</p>
-        )}
-      </div>
-    </div>
-  );
-}
 
-/**
- * Loading Skeleton Components
- * Following corridor-platforms pattern for loading states
- */
-function StatCardSkeleton(): JSX.Element {
-  return (
-    <div className="rounded-2xl bg-white p-5 border border-slate-200/80 shadow-card">
-      <div className="flex items-start justify-between">
-        <div className="h-10 w-10 rounded-xl bg-slate-100 animate-pulse" />
-      </div>
-      <div className="mt-4 space-y-2">
-        <div className="h-8 w-16 bg-slate-100 rounded animate-pulse" />
-        <div className="h-4 w-24 bg-slate-100 rounded animate-pulse" />
-        <div className="h-3 w-20 bg-slate-100 rounded animate-pulse" />
-      </div>
-    </div>
-  );
-}
+        <div className="flex flex-wrap items-start gap-5">
+          <Card aria-label="Agent list" className="min-w-0 flex-[999_1_620px]">
+            {isLoading ? (
+              <SkeletonRows rows={6} />
+            ) : error ? (
+              <div className="p-4">
+                <ErrorNote message={error instanceof Error ? error.message : 'Could not load agents'} onRetry={() => void refetch()} />
+              </div>
+            ) : agents.length === 0 ? (
+              <EmptyState
+                title="No agents yet"
+                description="An agent is a prompt, a model, tools, a sandbox and a policy. Build one, publish it, then start sessions on it."
+                action={
+                  <LinkButton href="/harness/new" variant="primary">
+                    Create your first agent
+                  </LinkButton>
+                }
+              />
+            ) : rows.length === 0 ? (
+              <EmptyState title="Nothing matches" description="Try another status or search." />
+            ) : (
+              <Table minWidth={560} label="Agents">
+                <thead>
+                  <tr>
+                    <Th>Agent</Th>
+                    <Th>Version</Th>
+                    <Th className="hidden 2xl:table-cell">Content hash</Th>
+                    <Th>Status</Th>
+                    <Th align="right">Live</Th>
+                    <Th>Updated</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((a) => {
+                    const on = a.id === picked;
+                    return (
+                      <Tr key={a.id} className={cn('cursor-pointer', on && 'bg-accent-50 shadow-[inset_3px_0_0_theme(colors.accent.500)] hover:bg-accent-50')}>
+                        <Td>
+                          <button type="button" onClick={() => setPicked(a.id)} aria-pressed={on} className="block text-left" data-testid="agent-row">
+                            <span className="font-medium text-ink">{a.name}</span>
+                            <span className="block max-w-[300px] truncate text-[12.5px] text-ink-3">{a.description || a.model}</span>
+                          </button>
+                        </Td>
+                        <Td mono>{versionLabel(a.bind?.harness_version)}</Td>
+                        <Td mono className="hidden text-ink-2 2xl:table-cell">
+                          {a.bind?.composition_digest ? `sha256:${shortHash(a.bind.composition_digest)}` : '—'}
+                        </Td>
+                        <Td>
+                          <StateMark state={stateOf(a)} />
+                        </Td>
+                        <Td mono align="right">
+                          {liveCount.get(a.id) ?? 0}
+                        </Td>
+                        <Td className="whitespace-nowrap text-ink-2">{formatRelativeTime(a.updated_at)}</Td>
+                      </Tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            )}
+          </Card>
 
-function HarnessCardSkeleton(): JSX.Element {
-  return (
-    <div className="rounded-2xl bg-white p-6 border border-slate-200/80 shadow-card">
-      <div className="flex items-start justify-between">
-        <div className="flex-1 space-y-3">
-          <div className="h-6 w-48 bg-slate-100 rounded animate-pulse" />
-          <div className="h-4 w-32 bg-slate-100 rounded animate-pulse" />
-          <div className="flex gap-2 mt-4">
-            <div className="h-6 w-20 bg-slate-100 rounded-lg animate-pulse" />
-            <div className="h-6 w-20 bg-slate-100 rounded-lg animate-pulse" />
-            <div className="h-6 w-20 bg-slate-100 rounded-lg animate-pulse" />
-          </div>
+          {selected ? <AgentDetail agent={selected} onClose={() => setPicked(null)} live={liveCount.get(selected.id) ?? 0} /> : null}
         </div>
-        <div className="h-8 w-8 bg-slate-100 rounded-lg animate-pulse" />
+      </PageBody>
+    </AppShell>
+  );
+}
+
+const SANDBOX_LABEL: Record<string, string> = {
+  none: 'No sandbox',
+  local_process: 'Local process',
+  local_docker: 'Docker',
+  e2b: 'E2B',
+};
+
+function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => void; live: number }): JSX.Element {
+  const { data: releases, isLoading } = useReleases(agent.id);
+  const { data: platform } = usePlatformStatus();
+  const current = releases?.[0];
+  const digest = current?.composition_digest ?? agent.bind?.composition_digest ?? null;
+  const published = stateOf(agent) !== 'draft';
+  const canRun = published && platform?.run_allowed !== false;
+  const m = current?.manifest;
+
+  return (
+    <Card as="aside" aria-label="Agent detail" className="flex min-w-0 flex-[1_1_340px] flex-col xl:max-w-[420px]">
+      <div className="flex flex-col gap-2.5 border-b border-line-soft px-5 py-[18px]">
+        <div className="flex items-center gap-2.5">
+          <h2 className="min-w-0 truncate text-lg font-semibold tracking-[-0.01em]">{agent.name}</h2>
+          {current ? <span className="rounded-md bg-accent-50 px-2 py-0.5 font-mono text-xs text-accent-700">v{current.version}</span> : null}
+          <span className="flex-1" />
+          <button type="button" aria-label="Close detail" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 hover:bg-line-soft">
+            <X size={16} />
+          </button>
+        </div>
+        {agent.description ? <p className="text-ink-2">{agent.description}</p> : null}
+        {digest ? (
+          <div className="rounded-lg border border-line-soft bg-canvas px-2.5 py-1.5">
+            <Mono copy={digest} className="break-all text-xs">
+              sha256:{digest.replace(/^sha256:/, '')}
+            </Mono>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {canRun ? (
+            <LinkButton href={`/harness/${agent.id}/test`} variant="primary">
+              Start session
+            </LinkButton>
+          ) : null}
+          <LinkButton href={`/harness/${agent.id}`}>{published ? 'Open builder' : 'Finish and publish'}</LinkButton>
+          <LinkButton href={`/harness/${agent.id}/sessions`}>Sessions{live ? ` · ${live} live` : ''}</LinkButton>
+        </div>
+        {!canRun && published ? <p className="text-xs text-ink-3">The AI platform is not ready, so sessions cannot start right now.</p> : null}
       </div>
-    </div>
+
+      {m ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5 border-b border-line-soft px-5 py-4">
+          <div>
+            <dt className="text-xs text-ink-3">Model</dt>
+            <dd className="mt-0.5 font-mono text-[12.5px]">{m.model}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-ink-3">Sandbox</dt>
+            <dd className="mt-0.5 font-mono text-[12.5px]">
+              {SANDBOX_LABEL[m.sandbox.provider] ?? m.sandbox.provider} · {m.sandbox.file_effects.replace(/_/g, ' ')}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-ink-3">Budget per session</dt>
+            <dd className="mt-0.5 font-mono text-[12.5px]">
+              {m.policy.max_cost_per_session ? formatMoney(m.policy.max_cost_per_session) : 'no cap'} · {m.policy.max_steps} steps
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-ink-3">Unanswered approvals</dt>
+            <dd className="mt-0.5 font-mono text-[12.5px]">
+              {m.policy.on_approval_timeout} after {Math.round(m.policy.approval_timeout_s / 60) || 1}m
+            </dd>
+          </div>
+          <div className="col-span-2">
+            <dt className="text-xs text-ink-3">Tools</dt>
+            <dd className="mt-1.5 flex flex-wrap gap-1.5">
+              {m.tools.length ? (
+                m.tools.map((t) => (
+                  <Mono key={t} chip className="text-xs">
+                    {t}
+                  </Mono>
+                ))
+              ) : (
+                <span className="text-[13px] text-ink-2">None</span>
+              )}
+            </dd>
+          </div>
+          <div className="col-span-2">
+            <dt className="text-xs text-ink-3">Requires approval</dt>
+            <dd className="mt-0.5 text-[13px]">
+              {m.policy.require_approval.length ? (
+                m.policy.require_approval.map((t, i) => (
+                  <span key={t}>
+                    {i ? ', ' : ''}
+                    <span className="font-mono text-[12.5px]">{t}</span>
+                  </span>
+                ))
+              ) : m.sandbox.approval_default === 'ask' ? (
+                'Every sandbox action asks first'
+              ) : (
+                'Nothing'
+              )}
+            </dd>
+          </div>
+        </dl>
+      ) : null}
+
+      <div className="flex flex-col gap-3 px-5 pb-5 pt-4">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold">Version history</h3>
+          {releases && releases.length > 4 ? (
+            <Link href={`/harness/${agent.id}`} className="text-[12.5px] text-ink-2 hover:text-ink">
+              All {releases.length} versions
+            </Link>
+          ) : null}
+        </div>
+        {isLoading ? (
+          <SkeletonRows rows={3} />
+        ) : !releases?.length ? (
+          <p className="text-[13px] text-ink-2">Not published yet. Publishing fixes a version that sessions can run.</p>
+        ) : (
+          <ol className="flex flex-col">
+            {releases.slice(0, 4).map((r, i) => (
+              <li key={r.version} className="flex gap-3 border-t border-line-soft py-2.5">
+                <div className="flex-none pt-[5px]">
+                  <span
+                    aria-hidden="true"
+                    className={cn('block h-2.5 w-2.5 rounded-full', i === 0 ? 'bg-accent-500' : 'box-border border-[1.5px] border-[#8A9099]')}
+                  />
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                    <span className="font-mono text-[13px] font-medium">v{r.version}</span>
+                    <span className="font-mono text-xs text-ink-2">{shortHash(r.composition_digest)}</span>
+                    {i === 0 ? <span className="rounded-full bg-accent-50 px-[7px] py-px text-[11.5px] text-accent-700">live</span> : null}
+                  </div>
+                  <div className="text-[13px]">
+                    {r.manifest.model} · {r.manifest.tools.length} tool{r.manifest.tools.length === 1 ? '' : 's'} · {r.manifest.policy.max_steps} steps
+                  </div>
+                  <div className="text-xs text-ink-3">{formatStamp(r.created_at)}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </Card>
   );
 }

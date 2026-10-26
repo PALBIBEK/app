@@ -260,23 +260,23 @@ export default function TraceDetailPage(): JSX.Element {
               <div className="flex items-start gap-4">
                 <Link
                   href="/traces"
-                  className="mt-1 flex h-10 w-10 items-center justify-center rounded-xl border-2 border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                  className="mt-1 flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-ink-2 hover:border-line-strong"
                   aria-label="Back to traces"
                 >
                   <ArrowLeft size={18} />
                 </Link>
                 <div>
                   <div className="flex items-center gap-3">
-                    <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                    <h1 className="text-2xl font-semibold tracking-tight text-ink">
                       Session journal timeline
                     </h1>
-                    <span className="rounded-lg bg-secondary-50 px-2.5 py-1 text-xs font-semibold text-secondary-700 ring-1 ring-inset ring-secondary-200">
+                    <span className="rounded-lg bg-line-soft px-2.5 py-1 text-xs font-semibold text-good ring-1 ring-inset ring-secondary-200">
                       Journal
                     </span>
                   </div>
-                  <p className="mt-1 font-mono text-xs text-slate-500">{id || '—'}</p>
+                  <p className="mt-1 font-mono text-xs text-ink-2">{id || '—'}</p>
                   {session?.status ? (
-                    <p className="mt-1 text-xs capitalize text-slate-500">
+                    <p className="mt-1 text-xs capitalize text-ink-2">
                       {String(session.status).replace(/_/g, ' ')}
                     </p>
                   ) : null}
@@ -287,9 +287,9 @@ export default function TraceDetailPage(): JSX.Element {
                   href={`/sessions/${id}`}
                   className={cn(
                     'inline-flex items-center gap-2 rounded-xl px-4 py-2.5',
-                    'text-sm font-medium text-slate-700',
-                    'border-2 border-slate-200 bg-white',
-                    'hover:border-slate-300 hover:shadow-sm'
+                    'text-sm font-medium text-ink-2',
+                    'border border-line bg-surface',
+                    'hover:border-line-strong'
                   )}
                 >
                   <ChartLine size={16} />
@@ -306,7 +306,7 @@ export default function TraceDetailPage(): JSX.Element {
                   'rounded-xl px-4 py-2 text-sm font-medium',
                   tab === 'journal'
                     ? 'bg-slate-900 text-white'
-                    : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
                 )}
               >
                 Journal
@@ -318,7 +318,7 @@ export default function TraceDetailPage(): JSX.Element {
                   'rounded-xl px-4 py-2 text-sm font-medium',
                   tab === 'waterfall'
                     ? 'bg-slate-900 text-white'
-                    : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
                 )}
               >
                 Span waterfall
@@ -333,31 +333,31 @@ export default function TraceDetailPage(): JSX.Element {
                 {journalLoading && events.length === 0 && (
                   <motion.p
                     variants={itemVariants}
-                    className="mt-10 flex items-center gap-2 text-sm text-slate-500"
+                    className="mt-10 flex items-center gap-2 text-sm text-ink-2"
                   >
-                    <CircleNotch size={16} className="animate-spin text-primary-500" />
+                    <CircleNotch size={16} className="animate-spin text-accent-500" />
                     Loading session journal…
                   </motion.p>
                 )}
                 {journalError && (
-                  <motion.p variants={itemVariants} className="mt-10 text-sm text-red-600">
+                  <motion.p variants={itemVariants} className="mt-10 text-sm text-bad">
                     {journalError}
                   </motion.p>
                 )}
                 {!journalLoading && !journalError && orderedEvents.length === 0 && (
                   <motion.div
                     variants={itemVariants}
-                    className="mt-10 rounded-2xl border-2 border-dashed border-slate-200 bg-white/80 px-6 py-10 text-center"
+                    className="mt-10 rounded-card border border-dashed border-line bg-surface px-6 py-10 text-center"
                   >
-                    <p className="text-sm font-medium text-slate-800">No journal events yet</p>
-                    <p className="mt-1 text-sm text-slate-500">
+                    <p className="text-sm font-medium text-ink">No journal events yet</p>
+                    <p className="mt-1 text-sm text-ink-2">
                       Run a Test chat for this session, then reopen Traces. Full session
                       timeline remains on the dedicated page.
                     </p>
                     {id ? (
                       <Link
                         href={`/sessions/${id}`}
-                        className="mt-5 inline-flex text-sm font-medium text-primary-600 hover:underline"
+                        className="mt-5 inline-flex text-sm font-medium text-accent-600 hover:underline"
                       >
                         Open session timeline
                       </Link>
@@ -369,16 +369,16 @@ export default function TraceDetailPage(): JSX.Element {
                     {orderedEvents.map((ev, idx) => (
                       <li
                         key={`${ev.type}-${ev.seq ?? idx}-${idx}`}
-                        className="rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-sm"
+                        className="rounded-xl border border-line bg-surface px-4 py-3"
                       >
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-semibold text-slate-900">{ev.type}</p>
-                          <span className="font-mono text-[11px] text-slate-400">
+                          <p className="text-sm font-semibold text-ink">{ev.type}</p>
+                          <span className="font-mono text-[11px] text-ink-3">
                             seq {ev.seq ?? '—'}
                           </span>
                         </div>
                         {viewState.messages.length > 0 && ev.type === 'message_end' ? (
-                          <p className="mt-1 truncate text-xs text-slate-500">
+                          <p className="mt-1 truncate text-xs text-ink-2">
                             message settled
                           </p>
                         ) : null}
@@ -394,15 +394,15 @@ export default function TraceDetailPage(): JSX.Element {
                 {spansLoading && (
                   <motion.p
                     variants={itemVariants}
-                    className="mt-10 flex items-center gap-2 text-sm text-slate-500"
+                    className="mt-10 flex items-center gap-2 text-sm text-ink-2"
                   >
-                    <CircleNotch size={16} className="animate-spin text-primary-500" />
+                    <CircleNotch size={16} className="animate-spin text-accent-500" />
                     Loading spans…
                   </motion.p>
                 )}
 
                 {!spansLoading && spansError && (
-                  <motion.p variants={itemVariants} className="mt-10 text-sm text-red-600">
+                  <motion.p variants={itemVariants} className="mt-10 text-sm text-bad">
                     {spansError}
                   </motion.p>
                 )}
@@ -410,20 +410,20 @@ export default function TraceDetailPage(): JSX.Element {
                 {!spansLoading && !spansError && spans !== null && spans.length === 0 && (
                   <motion.div
                     variants={itemVariants}
-                    className="mt-10 rounded-2xl border-2 border-dashed border-slate-200 bg-white/80 px-6 py-10 text-center"
+                    className="mt-10 rounded-card border border-dashed border-line bg-surface px-6 py-10 text-center"
                   >
-                    <TreeStructure size={28} className="mx-auto text-slate-400" />
-                    <p className="mt-3 text-sm font-medium text-slate-800">
+                    <TreeStructure size={28} className="mx-auto text-ink-3" />
+                    <p className="mt-3 text-sm font-medium text-ink">
                       No spans for this id
                     </p>
-                    <p className="mt-1 text-sm text-slate-500">
+                    <p className="mt-1 text-sm text-ink-2">
                       Jaeger/Trace API returned no tenant-scoped spans. Session journal
                       timeline remains available.
                     </p>
                     {id ? (
                       <Link
                         href={`/sessions/${id}`}
-                        className="mt-5 inline-flex text-sm font-medium text-primary-600 hover:underline"
+                        className="mt-5 inline-flex text-sm font-medium text-accent-600 hover:underline"
                       >
                         Open session timeline
                       </Link>
@@ -442,26 +442,26 @@ export default function TraceDetailPage(): JSX.Element {
                       return (
                         <div
                           key={spanIdOf(node.span) || operationOf(node.span)}
-                          className="rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-sm"
+                          className="rounded-xl border border-line bg-surface px-4 py-3"
                           style={{ marginLeft: node.depth * 16 }}
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900">
+                              <p className="truncate text-sm font-semibold text-ink">
                                 {operationOf(node.span)}
                               </p>
-                              <p className="mt-0.5 font-mono text-[11px] text-slate-500">
+                              <p className="mt-0.5 font-mono text-[11px] text-ink-2">
                                 {spanIdOf(node.span) || '—'}
                               </p>
                             </div>
-                            <span className="flex shrink-0 items-center gap-1 text-xs text-slate-500">
+                            <span className="flex shrink-0 items-center gap-1 text-xs text-ink-2">
                               <Clock size={12} />
                               {dur != null ? `${(dur / 1000).toFixed(1)} ms` : '—'}
                             </span>
                           </div>
-                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line-soft">
                             <div
-                              className="h-full rounded-full bg-primary-500/80"
+                              className="h-full rounded-full bg-accent-500/80"
                               style={{ width: `${widthPct}%` }}
                             />
                           </div>

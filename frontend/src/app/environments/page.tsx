@@ -31,35 +31,7 @@ function EnvironmentForm({ initial, id, onDone }: { initial: EnvironmentWrite; i
       toast.success(id ? 'Environment saved: harnesses that use it show an unpublished change' : 'Environment created');
       onDone();
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'Could not save the environment'));
-    }
-  }
-
-  return (
-    <form onSubmit={(e) => void submit(e)} className="space-y-5 rounded-2xl border border-primary-200 bg-white p-5 shadow-sm" data-testid="environment-form">
-      {!id ? (
-        <div className="flex flex-wrap gap-2">
-          <span className="text-xs font-medium text-slate-500">Start from:</span>
-          {PRESETS.map((p) => (
-            <button key={p.name} type="button" onClick={() => setDraft({ ...p })} className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:border-primary-300 hover:bg-primary-50">
-              {p.name}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Name" htmlFor="env-name">
-          <input id="env-name" className={input} value={draft.name} maxLength={80} required onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-        </Field>
-        <Field label="Description" htmlFor="env-description">
-          <input id="env-description" className={input} value={draft.description} maxLength={500} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-        </Field>
-      </div>
-      <SandboxFields value={draft.sandbox} onChange={(sandbox) => setDraft({ ...draft, sandbox })} idPrefix="env" />
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onDone} className="rounded-xl px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
-        <button type="submit" disabled={save.isPending || !draft.name.trim()} className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" data-testid="environment-save">
-          {save.isPending ? 'Saving…' : id ? 'Save' : 'Create environment'}
+      toast.error(getApiErrorMessage(err, 'Could not save the environment')); } } return ( <form onSubmit={(e) => void submit(e)} className="space-y-5 rounded-card border border-accent-200 bg-surface p-5 " data-testid="environment-form"> {!id ? ( <div className="flex flex-wrap gap-2"> <span className="text-xs font-medium text-ink-2">Start from:</span> {PRESETS.map((p) => ( <button key={p.name} type="button" onClick={() => setDraft({ ...p })} className="rounded-full border border-line px-3 py-1 text-xs text-ink-2 hover:border-accent-300 hover:bg-primary-50"> {p.name} </button> ))} </div> ) : null} <div className="grid gap-4 sm:grid-cols-2"> <Field label="Name" htmlFor="env-name"> <input id="env-name" className={input} value={draft.name} maxLength={80} required onChange={(e) => setDraft({ ...draft, name: e.target.value })} /> </Field> <Field label="Description" htmlFor="env-description"> <input id="env-description" className={input} value={draft.description} maxLength={500} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /> </Field> </div> <SandboxFields value={draft.sandbox} onChange={(sandbox) => setDraft({ ...draft, sandbox })} idPrefix="env" /> <div className="flex justify-end gap-2"> <button type="button" onClick={onDone} className="rounded-xl px-4 py-2 text-sm text-ink-2 hover:bg-line-soft">Cancel</button> <button type="submit" disabled={save.isPending || !draft.name.trim()} className="rounded-xl bg-accent-600 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-700 disabled:opacity-50" data-testid="environment-save"> {save.isPending ?'Saving…' : id ? 'Save' : 'Create environment'}
         </button>
       </div>
     </form>
@@ -110,45 +82,12 @@ function EnvironmentCard({ env }: { env: Environment }): JSX.Element {
                 <Link href={`/harness/${u.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">
                   {u.published ? <CheckCircle size={12} weight="fill" className="text-secondary-600" /> : <WarningCircle size={12} weight="fill" className="text-amber-500" />}
                   {u.name}
-                  <span className="text-slate-400">{u.published ? 'published' : 'republish to apply'}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function EnvironmentsContent(): JSX.Element {
-  const { data, isLoading, error } = useEnvironments();
-  const [creating, setCreating] = useState(false);
-  const environments = data ?? [];
-
-  return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-primary-600"><Cube size={22} weight="bold" /></div>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Environments</h1>
-          <p className="text-sm text-slate-500">
-            Sandbox setups your harnesses share: where commands run, what they may change, when the sandbox starts and when it stops.
-          </p>
-        </div>
-        {!creating ? (
-          <button type="button" onClick={() => setCreating(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" data-testid="environment-new">
-            <Plus size={16} weight="bold" /> New environment
-          </button>
-        ) : null}
-      </div>
-
-      <div className="mt-6 space-y-4">
-        {creating ? <EnvironmentForm initial={{ ...PRESETS[0], name: '' }} onDone={() => setCreating(false)} /> : null}
-        {isLoading && <div className="h-32 animate-pulse rounded-2xl bg-slate-100" />}
-        {error && <p className="text-sm text-red-600">Could not load your environments.</p>}
+                  <span className="text-slate-400">{u.published ? 'published' : 'republish to apply'}</span> </Link> </li> ))} </ul> )} </div> </section> );
+} function EnvironmentsContent(): JSX.Element { const { data, isLoading, error } = useEnvironments(); const [creating, setCreating] = useState(false); const environments = data ?? []; return ( <div className="mx-auto max-w-5xl px-8 py-8"> <div className="flex flex-wrap items-center gap-3"> <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-accent-600"><Cube size={22} weight="bold" /></div> <div className="flex-1"> <h1 className="text-2xl font-semibold tracking-tight text-ink">Environments</h1> <p className="text-sm text-ink-2"> Sandbox setups your harnesses share: where commands run, what they may change, when the sandbox starts and when it stops. </p> </div> {!creating ? ( <button type="button" onClick={() => setCreating(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" data-testid="environment-new"> <Plus size={16} weight="bold" /> New environment </button> ) : null} </div> <div className="mt-6 space-y-4"> {creating ? <EnvironmentForm initial={{ ...PRESETS[0], name:'' }} onDone={() => setCreating(false)} /> : null}
+        {isLoading && <div className="h-32 animate-pulse rounded-card bg-line-soft" />}
+        {error && <p className="text-sm text-bad">Could not load your environments.</p>}
         {!isLoading && !error && environments.length === 0 && !creating ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 p-8 text-center text-sm text-slate-500">
+          <div className="rounded-card border border-dashed border-line bg-surface p-8 text-center text-sm text-ink-2">
             No environments yet. Make one to give several harnesses the same sandbox, changed in one place.
           </div>
         ) : null}

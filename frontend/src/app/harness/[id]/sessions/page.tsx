@@ -161,7 +161,7 @@ export default function HarnessSessionsPage(): JSX.Element {
           <motion.div variants={itemVariants}>
             <Link
               href={`/harness/${params.id}`}
-              className="group inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700"
+              className="group inline-flex items-center gap-2 text-sm font-medium text-ink-2 transition-colors hover:text-ink-2"
             >
               <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
               Back to Harness
@@ -172,30 +172,29 @@ export default function HarnessSessionsPage(): JSX.Element {
           <motion.div variants={itemVariants} className="mt-6 flex items-start justify-between">
             <div className="flex items-start gap-4">
               <motion.div
-                whileHover={{ scale: 1.05, rotate: -5 }}
-                className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 shadow-lg shadow-primary-500/25"
+                className="flex h-14 w-14 items-center justify-center rounded-card bg-accent-500"
               >
                 <Clock size={26} weight="fill" className="text-white" />
               </motion.div>
               <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink">
                   Sessions
                 </h1>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-ink-2">
                   coding-v1 / {mockSessions.length} total sessions
                 </p>
               </div>
             </div>
 
-            <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
+            <motion.div>
               <Link
                 href={`/harness/${params.id}/test`}
                 className={cn(
                   'flex items-center gap-2 rounded-xl px-5 py-2.5',
                   'text-sm font-medium text-white',
-                  'bg-gradient-to-br from-primary-500 to-primary-600',
-                  'shadow-lg shadow-primary-500/25',
-                  'transition-shadow hover:shadow-xl hover:shadow-primary-500/30'
+                  'bg-accent-500',
+                  '',
+                  'transition- hover:'
                 )}
               >
                 <Play size={16} weight="fill" />
@@ -209,7 +208,7 @@ export default function HarnessSessionsPage(): JSX.Element {
             <div className="relative flex-1 max-w-md">
               <MagnifyingGlass
                 size={16}
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+                className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-3"
               />
               <motion.input
                 whileFocus={{ scale: 1.01 }}
@@ -219,23 +218,21 @@ export default function HarnessSessionsPage(): JSX.Element {
                 placeholder="Search sessions..."
                 className={cn(
                   'h-11 w-full rounded-xl pl-11 pr-4',
-                  'text-sm text-slate-900 placeholder:text-slate-400',
-                  'bg-white border-2 border-slate-200',
-                  'shadow-sm transition-all duration-200',
-                  'hover:border-slate-300',
-                  'focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10'
+                  'text-sm text-ink placeholder:text-ink-3',
+                  'bg-surface border border-line',
+                  'transition-all duration-200',
+                  'hover:border-line-strong',
+                  'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
                 )}
               />
             </div>
 
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
               className={cn(
                 'flex items-center gap-2 rounded-xl px-4 py-2.5',
-                'text-sm font-medium text-slate-600',
-                'bg-white border-2 border-slate-200',
-                'shadow-sm transition-all hover:border-slate-300 hover:shadow'
+                'text-sm font-medium text-ink-2',
+                'bg-surface border border-line',
+                'transition-all hover:border-line-strong hover:'
               )}
             >
               <FunnelSimple size={16} />
@@ -243,13 +240,11 @@ export default function HarnessSessionsPage(): JSX.Element {
             </motion.button>
 
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
               className={cn(
                 'flex items-center gap-2 rounded-xl px-4 py-2.5',
-                'text-sm font-medium text-slate-600',
-                'bg-white border-2 border-slate-200',
-                'shadow-sm transition-all hover:border-slate-300 hover:shadow'
+                'text-sm font-medium text-ink-2',
+                'bg-surface border border-line',
+                'transition-all hover:border-line-strong hover:'
               )}
             >
               <CalendarBlank size={16} />
@@ -264,36 +259,35 @@ export default function HarnessSessionsPage(): JSX.Element {
               return (
                 <motion.div
                   key={stat.label}
-                  whileHover={{ y: -4, scale: 1.02 }}
                   className={cn(
-                    'rounded-2xl bg-white p-5',
-                    'border-2 border-slate-200/80',
-                    'shadow-sm transition-all hover:border-slate-300 hover:shadow-md'
+                    'rounded-card bg-surface p-5',
+                    'border border-line',
+                    'transition-all hover:border-line-strong'
                   )}
                 >
                   <div className="flex items-center gap-3">
                     <div
                       className={cn(
                         'flex h-10 w-10 items-center justify-center rounded-xl',
-                        stat.accent === 'green' ? 'bg-secondary-50' : 'bg-slate-100'
+                        stat.accent === 'green' ? 'bg-line-soft' : 'bg-line-soft'
                       )}
                     >
                       <Icon
                         size={18}
                         weight="fill"
-                        className={stat.accent === 'green' ? 'text-secondary-600' : 'text-slate-500'}
+                        className={stat.accent === 'green' ? 'text-good' : 'text-ink-2'}
                       />
                     </div>
                     <div>
                       <p
                         className={cn(
                           'text-xl font-semibold',
-                          stat.accent === 'green' ? 'text-secondary-600' : 'text-slate-900'
+                          stat.accent === 'green' ? 'text-good' : 'text-ink'
                         )}
                       >
                         {stat.value}
                       </p>
-                      <p className="text-xs text-slate-500">{stat.label}</p>
+                      <p className="text-xs text-ink-2">{stat.label}</p>
                     </div>
                   </div>
                 </motion.div>
@@ -315,22 +309,20 @@ export default function HarnessSessionsPage(): JSX.Element {
                   className="block"
                 >
                   <motion.div
-                    whileHover={{ y: -4, scale: 1.005 }}
                     className={cn(
-                      'group flex items-center gap-5 rounded-2xl p-5',
-                      'border-2 border-slate-200/80 bg-white',
-                      'shadow-sm transition-all duration-200',
-                      'hover:border-slate-300 hover:shadow-lg'
+                      'group flex items-center gap-5 rounded-card p-5',
+                      'border border-line bg-surface',
+                      'transition-all duration-200',
+                      'hover:border-line-strong'
                     )}
                   >
                     {/* Status indicator */}
                     <motion.div
-                      whileHover={{ scale: 1.1, rotate: 5 }}
                       className={cn(
-                        'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl shadow-md',
-                        session.status === 'completed' && 'bg-gradient-to-br from-secondary-400 to-secondary-600 shadow-secondary-500/25',
-                        session.status === 'failed' && 'bg-gradient-to-br from-red-400 to-red-600 shadow-red-500/25',
-                        session.status === 'running' && 'bg-gradient-to-br from-primary-400 to-primary-600 shadow-primary-500/25'
+                        'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl',
+                        session.status === 'completed' && 'bg-ink',
+                        session.status === 'failed' && 'bg-gradient-to-br from-red-400 to-red-600',
+                        session.status === 'running' && 'bg-accent-500'
                       )}
                     >
                       {session.status === 'completed' && (
@@ -352,7 +344,7 @@ export default function HarnessSessionsPage(): JSX.Element {
                     {/* Main content */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3">
-                        <p className="text-sm font-semibold text-slate-900 truncate">
+                        <p className="text-sm font-semibold text-ink truncate">
                           {session.preview}
                         </p>
                         <motion.span
@@ -360,30 +352,30 @@ export default function HarnessSessionsPage(): JSX.Element {
                           animate={{ scale: 1 }}
                           className={cn(
                             'flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold',
-                            session.status === 'completed' && 'bg-secondary-50 text-secondary-700 ring-1 ring-inset ring-secondary-200',
-                            session.status === 'failed' && 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
-                            session.status === 'running' && 'bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200'
+                            session.status === 'completed' && 'bg-line-soft text-good ring-1 ring-inset ring-secondary-200',
+                            session.status === 'failed' && 'bg-canvas text-bad ring-1 ring-inset ring-red-200',
+                            session.status === 'running' && 'bg-primary-50 text-accent-700 ring-1 ring-inset ring-accent-200'
                           )}
                         >
                           {session.status}
                         </motion.span>
                       </div>
 
-                      <div className="mt-2 flex items-center gap-5 text-xs text-slate-500">
+                      <div className="mt-2 flex items-center gap-5 text-xs text-ink-2">
                         <span className="flex items-center gap-1.5">
-                          <Clock size={12} className="text-slate-400" />
+                          <Clock size={12} className="text-ink-3" />
                           {formatRelativeTime(session.startedAt)}
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <Timer size={12} className="text-slate-400" />
+                          <Timer size={12} className="text-ink-3" />
                           {formatDuration(session.startedAt, session.endedAt)}
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <ChatCircle size={12} className="text-slate-400" />
+                          <ChatCircle size={12} className="text-ink-3" />
                           {session.turns} turns
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <Coins size={12} className="text-slate-400" />
+                          <Coins size={12} className="text-ink-3" />
                           ${session.cost.toFixed(2)}
                         </span>
                       </div>
@@ -392,13 +384,12 @@ export default function HarnessSessionsPage(): JSX.Element {
                     {/* Arrow */}
                     <motion.div
                       initial={{ x: 0, opacity: 0.5 }}
-                      whileHover={{ x: 4, opacity: 1 }}
                       className="transition-all"
                     >
                       <CaretRight
                         size={20}
                         weight="bold"
-                        className="text-slate-300 group-hover:text-slate-500"
+                        className="text-ink-3 group-hover:text-ink-2"
                       />
                     </motion.div>
                   </motion.div>
@@ -410,9 +401,7 @@ export default function HarnessSessionsPage(): JSX.Element {
           {/* Load more */}
           <motion.div variants={itemVariants} className="mt-8 flex items-center justify-center">
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+              className="text-sm font-medium text-accent-600 hover:text-accent-700 transition-colors"
             >
               Load More Sessions
             </motion.button>

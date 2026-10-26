@@ -36,7 +36,7 @@ export function SandboxTab({ m, onChange }: { m: Manifest; onChange: (next: Mani
         hint={
           <>
             Share one sandbox setup between harnesses; change it once on{' '}
-            <Link href="/environments" className="font-medium text-primary-600 hover:text-primary-700">Environments</Link>.
+            <Link href="/environments" className="font-medium text-accent-600 hover:text-accent-700">Environments</Link>.
           </>
         }
       >
@@ -49,14 +49,14 @@ export function SandboxTab({ m, onChange }: { m: Manifest; onChange: (next: Mani
         </select>
       </Field>
       {chosen ? (
-        <div className="flex items-start gap-3 rounded-xl border border-primary-200 bg-primary-50/50 px-4 py-3 text-sm" data-testid="environment-summary">
-          <Cube size={18} className="mt-0.5 shrink-0 text-primary-600" />
+        <div className="flex items-start gap-3 rounded-xl border border-accent-200 bg-primary-50/50 px-4 py-3 text-sm" data-testid="environment-summary">
+          <Cube size={18} className="mt-0.5 shrink-0 text-accent-600" />
           <div className="min-w-0 flex-1">
-            <p className="font-semibold text-slate-900">{chosen.name}</p>
-            <p className="text-slate-600">{describeSandbox(chosen.sandbox)}</p>
-            <p className="mt-1 text-xs text-slate-500">Set by the environment; publishing copies these settings into the release.</p>
+            <p className="font-semibold text-ink">{chosen.name}</p>
+            <p className="text-ink-2">{describeSandbox(chosen.sandbox)}</p>
+            <p className="mt-1 text-xs text-ink-2">Set by the environment; publishing copies these settings into the release.</p>
           </div>
-          <Link href={`/environments#${chosen.id}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50">
+          <Link href={`/environments#${chosen.id}`} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs text-ink-2 hover:bg-canvas">
             <PencilSimple size={12} /> Edit
           </Link>
         </div>
