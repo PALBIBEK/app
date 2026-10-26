@@ -36,15 +36,21 @@ Other commands: `./dev.sh status`, `./dev.sh logs backend`, `./dev.sh stop`,
 
 ## A tour
 
-Screenshots from `./dev.sh` with a "code-reviewer" harness (two published versions and an
+Screenshots from `./dev.sh` with a "code-reviewer" agent (two published versions and an
 unpublished change). Regenerate them with `cd frontend && node e2e/tour.mjs` (writes `docs/tour/`).
 
-**Your harnesses.** Every harness you made, whether it is published, its model and tools, and
-how many sessions you ran.
+**Overview.** What needs you (approvals waiting), what is running, recent sessions, running
+sandboxes, and this week's spend.
 
-![Harness list](docs/tour/02-harnesses.png)
+![Overview](docs/tour/19-overview.png)
 
-**Build it.** The builder has one tab per part of the harness. *Prompt* holds the persona and the
+**Your agents.** Every agent you made: its live version and content hash, whether it is
+published, and how many sessions run on it. The side panel shows the picked agent's model,
+sandbox, budget, tools, what needs approval, and its version history.
+
+![Agents](docs/tour/02-harnesses.png)
+
+**Build it.** The composer has one tab per part of the agent. *Prompt* holds the persona and the
 system prompt sections in order (`{cwd}` becomes the working directory). *Tools* picks the
 built-in tools and which ones ask before running. *Model* picks a model route. *Sandbox* says where
 commands run and what they may touch. *Memory* and *Policy* set compaction, step limits and approvals.
@@ -55,20 +61,25 @@ A value the platform would refuse is shown on its own tab, before anything is pu
 
 ![Policy error](docs/tour/07-builder-policy-error.png)
 
+*Check* runs every check publishing would run (through the supervisor, nothing stored) and
+shows each problem on its tab.
+
+![Publish checks](docs/tour/24-publish-checks.png)
+
 **Publish versions.** *Publish* turns the draft into a numbered version that new sessions use.
 The side panel lists what changed since the live version and every earlier one.
-*Export* and *Import* move a harness between accounts as a file.
+*Export* and *Import* move an agent between accounts as a file.
 
 ![Versions](docs/tour/14-builder-versions.png)
 
-**Chat with it.** *Test* opens a session on the live version. A tool that needs approval waits
-for you, with a countdown before it is denied. Messages sent meanwhile queue up. The bar shows
-steps, tokens and cost, with *Stop*, *Fork* and *End*.
+**Run a session.** The conversation streams as it happens: tool calls with their argument and
+result, and an approval card when a tool needs you, with a countdown before it is denied.
+Messages sent meanwhile queue up. Beside it: the session's sandboxes and their state, spend
+against the version's cap, steps and tokens, and the session's files.
 
-![Approval](docs/tour/09-chat-approval.png)
+![Live session](docs/tour/18-live-session.png)
 
-Tool calls show their input and output. The workspace above the chat holds the session's files:
-view, download, upload or delete them, and share the session by email.
+Tool calls open to show their input and output:
 
 ![Tool output](docs/tour/10-chat-tool-output.png)
 
@@ -76,12 +87,25 @@ A refused call says why, in plain words:
 
 ![Denied call](docs/tour/11-chat-denied-explained.png)
 
-**Come back later.** *Sessions* lists every conversation. Opening one picks up where it left off,
-and *Fork from here* starts a new branch at any message.
+**Approvals.** Every question a paused run waits on, across your sessions, answered from one page.
+
+![Approvals](docs/tour/20-approvals.png)
+
+**Come back later.** *Sessions* lists every run, with what waits on you on top. Opening one picks
+up where it left off, and *Fork from here* starts a new branch at any message.
 
 ![Sessions](docs/tour/12-sessions.png)
 
-**Memory.** What each harness remembers about you, in notebooks per version. Add, edit, forget
+**Operate.** *Sandboxes* shows each sandbox's state (running, stopped when idle with its files
+saved, lost), *Usage* the spend by day, agent and session, and *Policies & secrets* each agent's
+approval rules and limits beside the secrets its tools use (names only). *Runners* registers
+your own machines for sandboxes, and *Fleet* (owners and admins) shows the workers.
+
+![Sandboxes](docs/tour/21-sandboxes.png)
+
+![Usage](docs/tour/22-usage.png)
+
+**Memory.** What each agent remembers about you, in notebooks per version. Add, edit, forget
 or search facts. *History* restores a notebook to how it was after any change.
 
 ![Memory](docs/tour/15-memory.png)
@@ -92,7 +116,7 @@ or search facts. *History* restores a notebook to how it was after any change.
 |---|---|
 | Backend tests | `cd backend && .venv/bin/python -m pytest -q tests` |
 | Frontend lint, types, tests | `cd frontend && npx next lint && npx tsc --noEmit && npx vitest run` |
-| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs` and `chat-journey.mjs` |
+| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs` and `startup-journey.mjs` |
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
 

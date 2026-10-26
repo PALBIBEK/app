@@ -52,6 +52,27 @@ function DailyBars({ rows, days, until }: { rows: UsageRow[]; days: number; unti
   );
 }
 
+/** Agents since deleted, as one row: their spend still counts, their names are gone. */
+function foldRemoved(rows: UsageRow[]): UsageRow[] {
+  const kept = rows.filter((r) => !r.label.endsWith('(removed)'));
+  const gone = rows.filter((r) => r.label.endsWith('(removed)'));
+  if (gone.length < 2) return rows;
+  const sum = (k: keyof UsageRow) => gone.reduce((t, r) => t + Number(r[k]), 0);
+  return [
+    ...kept,
+    {
+      key: 'removed',
+      label: `${gone.length} removed agents`,
+      input_tokens: sum('input_tokens'),
+      output_tokens: sum('output_tokens'),
+      total_tokens: sum('total_tokens'),
+      cost: sum('cost'),
+      model_calls: sum('model_calls'),
+      sessions: sum('sessions'),
+    },
+  ];
+}
+
 function Breakdown({ title, rows, total, link }: { title: string; rows: UsageRow[]; total: number; link?: (key: string) => string | null }): JSX.Element {
   const sorted = [...rows].sort((a, b) => b.cost - a.cost);
   return (
@@ -160,7 +181,7 @@ export default function UsagePage(): JSX.Element {
         </Card>
 
         <div className="grid gap-5 xl:grid-cols-2">
-          {byAgent.isLoading ? <SkeletonRows rows={4} /> : <Breakdown title="By agent" rows={byAgent.data?.rows ?? []} total={total?.cost ?? 0} />}
+          {byAgent.isLoading ? <SkeletonRows rows={4} /> : <Breakdown title="By agent" rows={foldRemoved(byAgent.data?.rows ?? [])} total={total?.cost ?? 0} />}
           {bySession.isLoading ? (
             <SkeletonRows rows={4} />
           ) : (
