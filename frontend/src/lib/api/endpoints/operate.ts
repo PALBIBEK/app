@@ -5,9 +5,10 @@
 import { apiClient } from '../client';
 import type {
   ArtifactKind,
-  FleetReport,
+  FleetStatus,
   InboxItem,
   PublishCheckResult,
+  RolloutStatus,
   Runner,
   RunnerToken,
   SandboxItem,
@@ -49,6 +50,6 @@ export const operateAPI = {
   checkArtifact: (kind: ArtifactKind, body: Record<string, unknown>): Promise<PublishCheckResult> =>
     apiClient.post<PublishCheckResult>(`/catalog/${kind}/check`, body),
 
-  workers: (): Promise<FleetReport> => apiClient.get<FleetReport>('/ops/workers'),
-  rollout: (): Promise<FleetReport> => apiClient.get<FleetReport>('/ops/rollout'),
+  workers: (): Promise<FleetStatus> => apiClient.get<FleetStatus>('/ops/workers'),
+  rollout: (): Promise<RolloutStatus> => apiClient.get<RolloutStatus>('/ops/rollout'),
 };

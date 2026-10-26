@@ -83,5 +83,41 @@ export interface PublishCheckResult {
   checks: PublishCheck[];
 }
 
-/** The worker fleet, as the supervisor reports it; shapes vary by version, so fields are loose. */
-export type FleetReport = Record<string, unknown>;
+/** One worker's heartbeat. */
+export interface WorkerBeat {
+  worker_id: string;
+  host: string;
+  task_queue: string;
+  home_queue: string;
+  max_runs: number;
+  busy: number;
+  started_at_ms: number;
+  last_seen_ms: number;
+  version?: string;
+}
+
+/** The session queue's health and who serves it (GET /ops/workers). */
+export interface FleetStatus {
+  status: 'ok' | 'degraded' | 'down' | string;
+  task_queue: string;
+  polling: number;
+  workers: WorkerBeat[];
+  slots_max: number;
+  slots_busy: number;
+  backlog: number;
+  backlog_age_s: number;
+  add_rate: number;
+  dispatch_rate: number;
+  alerts: { code: string; message: string }[];
+  checked_at_ms: number;
+}
+
+/** The worker deployment's versions (GET /ops/rollout); `versioned` false when workers are unversioned. */
+export interface RolloutStatus {
+  versioned: boolean;
+  deployment?: string;
+  current_build?: string | null;
+  ramping_build?: string | null;
+  ramping_percentage?: number;
+  versions?: { build_id: string; status: string; drainage?: string }[];
+}

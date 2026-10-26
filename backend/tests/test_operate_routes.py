@@ -154,6 +154,8 @@ async def test_usage_names_agents_and_sessions(db_session, owner, link, settings
         row = {"key": key, "input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost": 0.02,
                "model_calls": 2, "sessions": 1}
         rows = [row] + ([{**row, "key": "ai-not-mine"}] if by == "session" else [])
+        if by == "agent":
+            rows.append({**row, "key": "h-gone"})  # a composition no agent of the user's has now
         return httpx.Response(200, json={"since_ms": 0, "until_ms": 1, "by": by, "rows": rows,
                                          "total": {**row, "key": "total"}})
 
@@ -161,6 +163,7 @@ async def test_usage_names_agents_and_sessions(db_session, owner, link, settings
     async with _api(db_session, owner, settings, monkeypatch, handler, seen) as api:
         agent = (await api.get("/api/v1/usage", params={"by": "agent"})).json()
         assert agent["rows"][0]["label"] == "research-agent" and agent["total"]["total_tokens"] == 15
+        assert agent["rows"][1]["label"] == "h-gone (removed)"
         session = (await api.get("/api/v1/usage", params={"by": "session"})).json()
         assert [(r["key"], r["label"]) for r in session["rows"]] == [(link.id, "Quarterly research")]
         day = (await api.get("/api/v1/usage")).json()

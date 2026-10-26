@@ -74,7 +74,7 @@ export function Segmented<T extends string>({
   label: string;
 }): JSX.Element {
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap gap-1 rounded-[9px] bg-line-soft p-[3px]">
+    <div role="group" aria-label={label} className="flex w-fit max-w-full flex-wrap gap-1 rounded-[9px] bg-line-soft p-[3px]">
       {options.map((o) => {
         const on = o.value === value;
         return (
