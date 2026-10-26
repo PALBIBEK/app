@@ -209,6 +209,81 @@ class AiClient:
         payload = await self._json_request("GET", "/v1/ops/workers", identity, expected=(200,), timeout=5.0)
         return payload if isinstance(payload, dict) else {}
 
+    async def rollout_status(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """GET /v1/ops/rollout: which worker versions serve, and how far a deploy has got."""
+        payload = await self._json_request("GET", "/v1/ops/rollout", identity, expected=(200,), timeout=10.0)
+        return payload if isinstance(payload, dict) else {}
+
+    # --- views across the caller's sessions ----------------------------------------------------
+
+    async def approval_inbox(self, identity: TenantPrincipal, *, limit: int = 200) -> list[dict[str, Any]]:
+        """GET /v1/approvals: every pending approval in the caller's sessions, oldest first."""
+        payload = await self._json_request(
+            "GET", "/v1/approvals", identity, expected=(200,), params={"limit": str(limit)}
+        )
+        return payload if isinstance(payload, list) else []
+
+    async def list_sandboxes(
+        self, identity: TenantPrincipal, *, ai_session_id: str | None = None, include_ended: bool = False
+    ) -> list[dict[str, Any]]:
+        """GET /v1/sandboxes: each sandbox's state, for one session or all open ones."""
+        params = {"include_ended": "true" if include_ended else "false"}
+        if ai_session_id is not None:
+            params["session_id"] = ai_session_id
+        payload = await self._json_request("GET", "/v1/sandboxes", identity, expected=(200,), params=params)
+        return payload if isinstance(payload, list) else []
+
+    async def usage(
+        self, identity: TenantPrincipal, *, by: str, since_ms: int | None, until_ms: int | None
+    ) -> dict[str, Any]:
+        """GET /v1/usage: tokens and cost of every model call in a window, grouped."""
+        params = {"by": by}
+        if since_ms is not None:
+            params["since_ms"] = str(since_ms)
+        if until_ms is not None:
+            params["until_ms"] = str(until_ms)
+        payload = await self._json_request("GET", "/v1/usage", identity, expected=(200,), params=params)
+        return payload if isinstance(payload, dict) else {}
+
+    async def check_artifact(self, identity: TenantPrincipal, kind: str, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/catalog/{kind}/check: what publishing would find, nothing stored."""
+        payload = await self._json_request(
+            "POST", f"/v1/catalog/{quote(kind, safe='')}/check", identity, json_body=body, expected=(200,)
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    # --- runners and secrets (the caller's tenant) ----------------------------------------------
+
+    async def list_runners(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
+        payload = await self._json_request("GET", "/v1/runners", identity, expected=(200,))
+        return payload if isinstance(payload, list) else []
+
+    async def register_runner(self, identity: TenantPrincipal, name: str) -> dict[str, Any]:
+        """Register (or re-key) a runner; the token in the reply is shown once."""
+        payload = await self._json_request("POST", f"/v1/runners/{quote(name, safe='')}", identity, expected=(200,))
+        return payload if isinstance(payload, dict) else {}
+
+    async def remove_runner(self, identity: TenantPrincipal, name: str) -> None:
+        await self._json_request(
+            "DELETE", f"/v1/runners/{quote(name, safe='')}", identity, expected=(204,), allow_empty=True
+        )
+
+    async def list_secrets(self, identity: TenantPrincipal) -> list[str]:
+        """Names only: a secret's value never leaves the vault."""
+        payload = await self._json_request("GET", "/v1/secrets", identity, expected=(200,))
+        names = payload.get("names") if isinstance(payload, dict) else None
+        return [str(n) for n in names or [] if n]
+
+    async def put_secret(self, identity: TenantPrincipal, name: str, value: str) -> None:
+        await self._json_request(
+            "PUT", f"/v1/secrets/{quote(name, safe='/')}", identity, json_body={"value": value}, expected=(200,)
+        )
+
+    async def delete_secret(self, identity: TenantPrincipal, name: str) -> None:
+        await self._json_request(
+            "DELETE", f"/v1/secrets/{quote(name, safe='/')}", identity, expected=(204,), allow_empty=True
+        )
+
     async def get_artifact(
         self,
         identity: TenantPrincipal,
