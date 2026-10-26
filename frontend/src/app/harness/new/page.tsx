@@ -12,11 +12,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, CaretRight, Lightning, Sparkle } from '@phosphor-icons/react';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { useCreateHarness } from '@/lib/api/hooks/useHarnesses';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 // Animation variants
 const containerVariants = {
@@ -61,13 +60,7 @@ export default function CreateHarnessPage(): JSX.Element {
 
   return (
     <AuthGuard>
-    <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-      <div className="col-span-2">
-        <Header />
-      </div>
-      <Sidebar />
-
-      <main className="overflow-auto">
+    <AppShell>
         <motion.div
           className="mx-auto max-w-4xl px-8 py-8"
           initial="hidden"
@@ -195,8 +188,7 @@ export default function CreateHarnessPage(): JSX.Element {
             </div>
           </motion.div>
         </motion.div>
-      </main>
-    </div>
+      </AppShell>
     </AuthGuard>
   );
 }

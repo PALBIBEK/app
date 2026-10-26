@@ -17,8 +17,6 @@ import {
   TreeStructure,
 } from '@phosphor-icons/react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { tracesAPI, type TraceSpan } from '@/lib/api/endpoints/traces';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { useSession } from '@/lib/api/hooks/useSessions';
@@ -29,6 +27,7 @@ import {
   type SessionViewState,
 } from '@/lib/session/wireEventReducer';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const pageVariants = {
   hidden: { opacity: 0 },
@@ -250,13 +249,7 @@ export default function TraceDetailPage(): JSX.Element {
 
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-
-        <main className="overflow-auto">
+      <AppShell>
           <motion.div
             className="mx-auto max-w-5xl px-8 py-8"
             initial="hidden"
@@ -480,8 +473,7 @@ export default function TraceDetailPage(): JSX.Element {
               </>
             )}
           </motion.div>
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

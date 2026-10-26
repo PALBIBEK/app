@@ -14,10 +14,9 @@ import { ArrowLeft, Cube, SpinnerGap, Trash, WarningCircle } from '@phosphor-ico
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { HarnessBuilder } from '@/components/harness/builder/HarnessBuilder';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
 import { useDeleteHarness, useHarness } from '@/lib/api/hooks/useHarnesses';
+import { AppShell } from '@/components/layout/AppShell';
 
 function HarnessPageContent(): JSX.Element {
   const params = useParams();
@@ -98,15 +97,9 @@ function HarnessPageContent(): JSX.Element {
 export default function HarnessPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <HarnessPageContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

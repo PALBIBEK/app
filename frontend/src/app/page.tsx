@@ -16,8 +16,6 @@
 
 import { FunnelSimple, TrendUp, Pulse, Timer, Stack, WarningCircle } from '@phosphor-icons/react';
 import Link from 'next/link';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { HarnessCard } from '@/components/harness/HarnessCard';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AiPlatformBanner } from '@/components/platform/AiPlatformBanner';
@@ -26,6 +24,7 @@ import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useMemo } from 'react';
 import { useSessions } from '@/lib/api/hooks/useSessions';
 import { dashboardStats } from '@/lib/dashboard/stats';
+import { AppShell } from '@/components/layout/AppShell';
 
 export default function DashboardPage(): JSX.Element {
   const { data, isLoading, error } = useHarnesses();
@@ -35,17 +34,7 @@ export default function DashboardPage(): JSX.Element {
 
   return (
     <AuthGuard>
-    <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-      {/* Header spans full width */}
-      <div className="col-span-2">
-        <Header />
-      </div>
-
-      {/* Sidebar */}
-      <Sidebar />
-
-      {/* Main content */}
-      <main className="overflow-auto">
+    <AppShell>
         <div className="mx-auto max-w-6xl px-8 py-8">
           <AiPlatformBanner className="mb-6" />
           {/* Page header */}
@@ -201,8 +190,7 @@ export default function DashboardPage(): JSX.Element {
           </div>
 
         </div>
-      </main>
-    </div>
+      </AppShell>
     </AuthGuard>
   );
 }

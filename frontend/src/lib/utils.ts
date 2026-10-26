@@ -1,5 +1,18 @@
 import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+// The design's own tokens (tailwind.config.ts), so merging keeps the right one:
+// without them `text-2xs` reads as a colour and would knock out `text-ink`.
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: ['2xs'] }],
+      'text-color': [{ text: ['ink', 'ink-2', 'ink-3', 'good', 'warn', 'bad'] }],
+      'border-color': [{ border: ['line', 'line-soft', 'line-strong'] }],
+      rounded: [{ rounded: ['card'] }],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
