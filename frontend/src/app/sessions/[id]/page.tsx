@@ -10,8 +10,6 @@ import { useParams } from 'next/navigation';
 import { ArrowLeft, CircleNotch, WarningCircle } from '@phosphor-icons/react';
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { SessionChat } from '@/components/session/SessionChat';
 import { ConversationFiles } from '@/components/session/ConversationFiles';
 import { WorkspacePanel } from '@/components/session/WorkspacePanel';
@@ -22,6 +20,7 @@ import { useSession } from '@/lib/api/hooks/useSessions';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { getApiErrorMessage } from '@/lib/api/errors';
 import { startupMessage, waitUntilStarted, type SessionStartup } from '@/lib/session/startup';
+import { AppShell } from '@/components/layout/AppShell';
 
 /** A session that is still starting: wait for it (or show why it could not start). */
 function StartingSession({ sessionId, onReady }: { sessionId: string; onReady: () => void }): JSX.Element {
@@ -124,15 +123,9 @@ function SessionPageContent(): JSX.Element {
 export default function SessionPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="flex min-h-0 flex-col overflow-hidden">
+      <AppShell fullHeight mainClassName="flex min-h-0 flex-col overflow-hidden">
           <SessionPageContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

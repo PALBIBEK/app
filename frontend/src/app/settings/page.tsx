@@ -6,9 +6,8 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const tabs = [
   { id: 'general', label: 'General', icon: Gear },
@@ -25,12 +24,7 @@ export default function SettingsPage(): JSX.Element {
 
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <div className="mx-auto max-w-4xl px-8 py-8">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Settings</h1>
             <p className="mt-2 text-sm text-slate-500">
@@ -107,8 +101,7 @@ export default function SettingsPage(): JSX.Element {
               )}
             </div>
           </div>
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

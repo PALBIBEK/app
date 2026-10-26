@@ -17,8 +17,6 @@ import {
   SpinnerGap,
   WarningCircle,
 } from '@phosphor-icons/react';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import {
   useDeleteTool,
@@ -27,6 +25,7 @@ import {
 } from '@/lib/api/hooks/useTools';
 import { TOOL_CATEGORIES, type ToolCategory } from '@/lib/api/types/tool.types';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const pageVariants = {
   hidden: { opacity: 0 },
@@ -306,15 +305,9 @@ function ToolDetailContent(): JSX.Element {
 export default function ToolDetailPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <ToolDetailContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

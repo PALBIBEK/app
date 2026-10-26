@@ -2,7 +2,19 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Brain, ChartLine, ClockCounterClockwise, Cube, Gear, GitBranch, Lightning, Plus, Stack, TextAa, Wrench } from '@phosphor-icons/react';
+import {
+  Brain,
+  ChartLine,
+  ClockCounterClockwise,
+  Cube,
+  Gear,
+  GitBranch,
+  Plus,
+  Stack,
+  TextAa,
+  Wrench,
+  X,
+} from '@phosphor-icons/react';
 
 import { cn } from '@/lib/utils';
 
@@ -10,100 +22,139 @@ interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
-  badge?: string;
 }
 
-// Memory nav stays hidden — not available (D7 honesty) until durable stores ship product-ready.
-const navItems: NavItem[] = [
-  { label: 'Harnesses', href: '/', icon: Stack },
-  { label: 'Tools', href: '/tools', icon: Wrench },
-  { label: 'Environments', href: '/environments', icon: Cube },
-  { label: 'Prompts', href: '/prompts', icon: TextAa },
-  { label: 'Subagents', href: '/subagents', icon: GitBranch },
-  { label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise },
-  { label: 'Memory', href: '/memory', icon: Brain },
-  { label: 'Traces', href: '/traces', icon: ChartLine, badge: 'New' },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+// Grouped by what the user is doing: running agents, building them, operating
+// the platform. Every href must have a page (Sidebar.routes.test.ts checks it).
+const groups: NavGroup[] = [
+  {
+    label: 'Work',
+    items: [{ label: 'Sessions', href: '/sessions', icon: ClockCounterClockwise }],
+  },
+  {
+    label: 'Build',
+    items: [
+      { label: 'Agents', href: '/', icon: Stack },
+      { label: 'Prompts', href: '/prompts', icon: TextAa },
+      { label: 'Tools', href: '/tools', icon: Wrench },
+      { label: 'Subagents', href: '/subagents', icon: GitBranch },
+      { label: 'Memory', href: '/memory', icon: Brain },
+    ],
+  },
+  {
+    label: 'Operate',
+    items: [
+      { label: 'Environments', href: '/environments', icon: Cube },
+      { label: 'Traces', href: '/traces', icon: ChartLine },
+    ],
+  },
+  {
+    label: 'Admin',
+    items: [{ label: 'Settings', href: '/settings', icon: Gear }],
+  },
 ];
 
-const secondaryItems: NavItem[] = [
-  { label: 'Settings', href: '/settings', icon: Gear },
-];
+export const NAV_GROUPS = groups;
 
-export function Sidebar(): JSX.Element {
-  const pathname = usePathname();
+function isActive(pathname: string, href: string): boolean {
+  if (href === '/') return pathname === '/' || pathname.startsWith('/harness');
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+interface SidebarProps {
+  /** On narrow screens the menu is a drawer; these open and close it. */
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ open = false, onClose }: SidebarProps): JSX.Element {
+  const pathname = usePathname() ?? '/';
+
+  const nav = (
+    <nav aria-label="Main" className="flex h-full flex-col">
+      <div className="flex h-14 items-center gap-2.5 border-b border-line px-4">
+        <span className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] bg-accent-500" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 17l6-6-6-6" />
+            <path d="M12 19h8" />
+          </svg>
+        </span>
+        <Link href="/" className="font-semibold tracking-[-0.01em] text-ink hover:text-ink">
+          Prime Agent
+        </Link>
+        {onClose ? (
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={onClose}
+            className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-2 hover:bg-line-soft md:hidden"
+          >
+            <X size={18} />
+          </button>
+        ) : null}
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        {groups.map((group) => (
+          <div key={group.label} className="mb-4">
+            <p className="px-3 pb-1.5 text-2xs font-medium text-ink-3">{group.label}</p>
+            <ul className="space-y-0.5">
+              {group.items.map((item) => {
+                const active = isActive(pathname, item.href);
+                const Icon = item.icon;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={onClose}
+                      className={cn(
+                        'flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors',
+                        active
+                          ? 'bg-accent-50 font-medium text-accent-700 hover:text-accent-700'
+                          : 'text-ink-2 hover:bg-line-soft hover:text-ink',
+                      )}
+                    >
+                      <Icon size={17} weight={active ? 'fill' : 'regular'} aria-hidden="true" />
+                      {item.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-line p-3">
+        <Link
+          href="/harness/new"
+          onClick={onClose}
+          className="flex h-10 items-center justify-center gap-2 rounded-lg bg-accent-500 text-sm font-medium text-white hover:bg-accent-600 hover:text-white"
+        >
+          <Plus size={16} weight="bold" aria-hidden="true" />
+          New agent
+        </Link>
+      </div>
+    </nav>
+  );
 
   return (
-    <aside className="flex w-60 flex-col border-r border-slate-200 bg-white">
-      <div className="flex-1 overflow-y-auto px-3 py-4">
-        <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-          Product
-        </p>
-        <nav className="space-y-1">
-          {navItems.map((item) => {
-            const active =
-              item.href === '/'
-                ? pathname === '/'
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  active
-                    ? 'bg-primary-50 text-primary-600'
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                )}
-              >
-                <Icon size={18} weight={active ? 'fill' : 'regular'} />
-                <span className="flex-1">{item.label}</span>
-                {item.badge ? (
-                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                    {item.badge}
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="mt-6">
-          <Link
-            href="/harness/new"
-            className={cn(
-              'flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium',
-              'bg-slate-900 text-white hover:bg-slate-800'
-            )}
-          >
-            <Plus size={16} weight="bold" />
-            New harness
-          </Link>
+    <>
+      {/* Wide screens: a fixed column. */}
+      <aside className="hidden w-[232px] shrink-0 border-r border-line bg-surface md:block">{nav}</aside>
+      {/* Narrow screens: a drawer over the page. */}
+      {open ? (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <button type="button" aria-label="Close menu" className="absolute inset-0 bg-ink/30" onClick={onClose} />
+          <aside className="absolute inset-y-0 left-0 w-[264px] bg-surface shadow-xl">{nav}</aside>
         </div>
-      </div>
-
-      <div className="border-t border-slate-200 px-3 py-3">
-        {secondaryItems.map((item) => {
-          const Icon = item.icon;
-          const active = pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium',
-                active ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
-              )}
-            >
-              <Icon size={18} />
-              {item.label}
-            </Link>
-          );
-        })}
-        <p className="mt-2 flex items-center gap-1 px-3 text-[11px] text-slate-400">
-          <Lightning size={12} /> Local demo shell
-        </p>
-      </div>
-    </aside>
+      ) : null}
+    </>
   );
 }

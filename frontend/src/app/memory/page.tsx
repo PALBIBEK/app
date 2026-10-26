@@ -13,8 +13,6 @@ import { isAxiosError } from 'axios';
 import { Archive, Brain, ClockCounterClockwise, MagnifyingGlass, PencilSimple, Plus, Trash, WarningCircle } from '@phosphor-icons/react';
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import {
   useAddFacts,
@@ -31,6 +29,7 @@ import {
 } from '@/lib/api/hooks/useMemory';
 import type { Notebook } from '@/lib/api/types/memory.types';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const input = 'rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none';
 
@@ -282,17 +281,11 @@ function MemoryContent(): JSX.Element {
 export default function MemoryPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <Suspense fallback={null}>
             <MemoryContent />
           </Suspense>
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

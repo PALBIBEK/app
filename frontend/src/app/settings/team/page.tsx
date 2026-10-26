@@ -10,9 +10,8 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Users, Info } from '@phosphor-icons/react';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const pageVariants = {
   hidden: { opacity: 0 },
@@ -26,13 +25,7 @@ const itemVariants = {
 
 export default function TeamSettingsPage(): JSX.Element {
   return (
-    <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-      <div className="col-span-2">
-        <Header />
-      </div>
-      <Sidebar />
-
-      <main className="overflow-auto">
+    <AppShell>
         <motion.div
           className="mx-auto max-w-4xl px-8 py-8"
           initial="hidden"
@@ -98,7 +91,6 @@ export default function TeamSettingsPage(): JSX.Element {
             </motion.div>
           </motion.div>
         </motion.div>
-      </main>
-    </div>
+      </AppShell>
   );
 }

@@ -20,12 +20,11 @@ import {
   SpinnerGap,
   WarningCircle,
 } from '@phosphor-icons/react';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { useTools } from '@/lib/api/hooks/useTools';
 import type { Tool, ToolCategory } from '@/lib/api/types/tool.types';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const pageVariants = {
   hidden: { opacity: 0 },
@@ -377,15 +376,9 @@ function ToolsLibraryContent(): JSX.Element {
 export default function ToolsPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <ToolsLibraryContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

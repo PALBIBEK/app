@@ -15,12 +15,11 @@ import {
   Sparkle,
   Tag,
 } from '@phosphor-icons/react';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { useCreateTool } from '@/lib/api/hooks/useTools';
 import { TOOL_CATEGORIES, type ToolCategory } from '@/lib/api/types/tool.types';
 import { cn } from '@/lib/utils';
+import { AppShell } from '@/components/layout/AppShell';
 
 const pageVariants = {
   hidden: { opacity: 0 },
@@ -245,15 +244,9 @@ function NewToolContent(): JSX.Element {
 export default function NewToolPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <NewToolContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

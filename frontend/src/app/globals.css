@@ -6,6 +6,41 @@
   color-scheme: light;
 }
 
-body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-base text-ink antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply tracking-[-0.01em] text-ink;
+  }
+
+  a {
+    @apply text-ink-2 no-underline transition-colors hover:text-ink;
+  }
+
+  /* One visible focus ring for every control (keyboard users). */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-500/40 ring-offset-1 ring-offset-surface;
+  }
+
+  code,
+  kbd,
+  samp {
+    @apply font-mono;
+  }
+}
+
+@layer utilities {
+  /* Numbers that line up in columns (costs, durations, token counts). */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 }

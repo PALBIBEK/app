@@ -9,11 +9,10 @@ import Link from 'next/link';
 import { PencilSimple, TextAa, WarningCircle } from '@phosphor-icons/react';
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useManifest } from '@/lib/api/hooks/useManifest';
 import type { Harness } from '@/lib/api/types/harness.types';
+import { AppShell } from '@/components/layout/AppShell';
 
 function HarnessPrompt({ harness }: { harness: Harness }): JSX.Element {
   const { data, isLoading, error } = useManifest(harness.id);
@@ -96,15 +95,9 @@ function PromptsContent(): JSX.Element {
 export default function PromptsPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <PromptsContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }

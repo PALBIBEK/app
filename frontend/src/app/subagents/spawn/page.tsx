@@ -17,13 +17,12 @@ import {
   Sparkle,
 } from '@phosphor-icons/react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useSessions } from '@/lib/api/hooks/useSessions';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { AppShell } from '@/components/layout/AppShell';
 
 /** Product UI: one-shot spawn only (A4). Other modes are not wired on BFF. */
 const PRODUCT_SPAWN_MODE = 'spawn' as const;
@@ -113,13 +112,7 @@ function SpawnSubagentContent(): JSX.Element {
   };
 
   return (
-    <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-      <div className="col-span-2">
-        <Header />
-      </div>
-      <Sidebar />
-
-      <main className="overflow-auto">
+    <AppShell>
         <motion.div
           className="mx-auto max-w-3xl px-8 py-8"
           initial={{ opacity: 0, y: 12 }}
@@ -291,8 +284,7 @@ function SpawnSubagentContent(): JSX.Element {
             </button>
           </div>
         </motion.div>
-      </main>
-    </div>
+      </AppShell>
   );
 }
 

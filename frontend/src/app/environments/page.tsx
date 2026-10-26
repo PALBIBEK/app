@@ -14,12 +14,11 @@ import { toast } from 'sonner';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { SandboxFields } from '@/components/environments/SandboxFields';
 import { Field, input } from '@/components/harness/builder/tabs';
-import { Header } from '@/components/layout/Header';
-import { Sidebar } from '@/components/layout/Sidebar';
 import { useDeleteEnvironment, useEnvironments, useSaveEnvironment } from '@/lib/api/hooks/useEnvironments';
 import type { Environment, EnvironmentWrite } from '@/lib/api/types/environment.types';
 import { getApiErrorMessage } from '@/lib/api/errors';
 import { describeSandbox, PRESETS } from '@/lib/environments/sandbox';
+import { AppShell } from '@/components/layout/AppShell';
 
 function EnvironmentForm({ initial, id, onDone }: { initial: EnvironmentWrite; id?: string; onDone: () => void }): JSX.Element {
   const [draft, setDraft] = useState<EnvironmentWrite>(initial);
@@ -164,15 +163,9 @@ function EnvironmentsContent(): JSX.Element {
 export default function EnvironmentsPage(): JSX.Element {
   return (
     <AuthGuard>
-      <div className="grid min-h-[100dvh] grid-cols-[auto_1fr] grid-rows-[auto_1fr] bg-gradient-subtle">
-        <div className="col-span-2">
-          <Header />
-        </div>
-        <Sidebar />
-        <main className="overflow-auto">
+      <AppShell>
           <EnvironmentsContent />
-        </main>
-      </div>
+        </AppShell>
     </AuthGuard>
   );
 }
