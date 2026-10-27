@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from supervisor.obs.trace_context import current_outbound_traceparent
-from supervisor.seams.core.types import ChatMessage, Completion, StreamEvent
+from supervisor.seams.core.types import ChatMessage, Completion, ModelGatewayError, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,15 @@ def _map_tool_calls(raw: Any) -> list[dict[str, Any]] | None:
     if not isinstance(raw, list) or not raw:
         return None
     return [c for c in raw if isinstance(c, dict)]
+
+
+def _retry_after(resp: httpx.Response) -> float | None:
+    """The provider's ``Retry-After`` in seconds (a number of seconds; dates are ignored)."""
+    raw = resp.headers.get("retry-after")
+    try:
+        return max(0.0, float(raw)) if raw is not None else None
+    except ValueError:
+        return None
 
 
 class HttpModelGatewayClient:
@@ -98,7 +107,7 @@ class HttpModelGatewayClient:
             headers=self._headers(),
         )
         if resp.status_code >= 400:
-            raise RuntimeError(f"model gateway error {resp.status_code}: {resp.text}")
+            raise ModelGatewayError(resp.status_code, resp.text, _retry_after(resp))
         data = resp.json()
         choice = data["choices"][0]
         msg = choice["message"]
@@ -159,7 +168,7 @@ class HttpModelGatewayClient:
             if resp.status_code >= 400:
                 # Read error body for the message (stream response).
                 err = resp.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"model gateway error {resp.status_code}: {err}")
+                raise ModelGatewayError(resp.status_code, err, _retry_after(resp))
             finish: str | None = None
             stream_model = model or self._default_model
             for line in resp.iter_lines():

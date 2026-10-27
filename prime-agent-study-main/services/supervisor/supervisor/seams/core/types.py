@@ -103,6 +103,19 @@ class ChildInfo:
     live: bool = False
 
 
+class ModelGatewayError(RuntimeError):
+    """A model call the gateway (or the provider behind it) refused, with its HTTP status.
+
+    ``retry_after``: seconds the provider asked the caller to wait (``Retry-After``),
+    when it said. The message keeps the gateway's wording, so text matching still works.
+    """
+
+    def __init__(self, status: int, body: str, retry_after: float | None = None) -> None:
+        super().__init__(f"model gateway error {status}: {body}")
+        self.status = status
+        self.retry_after = retry_after
+
+
 INVALID_ARGUMENTS_KEY = "__invalid_json__"
 """Key of the one entry a tool call's arguments hold when the model's JSON did not
 parse: the raw text, kept so the loop can refuse the call and say why, rather than

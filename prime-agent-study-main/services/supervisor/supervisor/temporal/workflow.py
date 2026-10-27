@@ -43,6 +43,7 @@ from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
     COMPACT,
     JOB_FINISHED_SIGNAL,
+    RETRY,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
     Accepted,
@@ -347,8 +348,23 @@ class AgentSessionWorkflow:
                     req = StepRequest(
                         self._session_id, plan.run_id, st.step,
                         can_compact=True, compacted=st.compacted,
+                        can_retry=True, attempt=st.attempt,
                     )
                     result = await self._model_step(req)
+                    if result.kind == RETRY:
+                        # pi's auto-retry, on a durable timer: no worker is held while it
+                        # waits, a restart resumes the wait, and an abort ends it.
+                        try:
+                            await workflow.wait_condition(
+                                lambda: self._abort_requested,
+                                timeout=timedelta(seconds=result.delay_s),
+                            )
+                        except TimeoutError:
+                            pass
+                        if self._abort_requested:
+                            return await end("aborted")
+                        st.attempt += 1
+                        continue
                     if result.kind == COMPACT:
                         # githi's prepare phase: the request does not fit the window. Compact
                         # the conversation so far, then ask again; at most once per step.
@@ -374,7 +390,7 @@ class AgentSessionWorkflow:
                     if stopped is not None:
                         return stopped
                     st.step, st.calls, st.phase = st.step + 1, [], RunPhase.REQUEST
-                    st.compacted = False
+                    st.compacted, st.attempt = False, 0
         except (ActivityError, asyncio.CancelledError) as err:
             if is_cancelled_exception(err) and self._abort_requested:
                 return await end(

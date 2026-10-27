@@ -34,6 +34,7 @@ from supervisor.agent.events import (
     MemoryInjected,
     MemoryRecall,
     MessageEnd,
+    ModelRetry,
     RunEnd,
     RunStart,
     SubagentEnd,
@@ -441,6 +442,11 @@ class _Builder:
         target = self._parent()
         assert target is not None
         target.markers.append(Marker(ts_ms=env.ts_ms, name=name, text=text, seq=env.seq))
+
+    def _on_ModelRetry(self, env: Envelope, p: ModelRetry) -> None:
+        self._marker(env, "model_retry",
+                     f"model call failed ({p.error_class}); retrying in {p.delay_s:g}s, "
+                     f"attempt {p.attempt} of {p.max_attempts}")
 
     def _on_HandProvisioned(self, env: Envelope, p: HandProvisioned) -> None:
         cause = p.cause.replace("_", " ")

@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -28,6 +29,7 @@ from supervisor.agent.events import (
     MemoryInjected,
     MemoryRecall,
     MessageEnd,
+    ModelRetry,
     RunEnd,
     RunStart,
     ToolEnd,
@@ -39,8 +41,11 @@ from supervisor.agent.runtimes.githi.classify import (
     FINAL_STEP_NOTICE,
     is_context_overflow,
     is_final_step,
+    is_retryable,
     loop_spec,
     refusal,
+    retry_delay,
+    retry_spec,
     steps_left_notice,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoop
@@ -65,6 +70,7 @@ from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
 from supervisor.temporal.contracts import (
     COMPACT,
+    RETRY,
     ApprovalAsk,
     ApprovalDecision,
     ApprovalNeeded,
@@ -386,6 +392,8 @@ class GithiSteps:
                 # the request itself, which a summary cannot shrink.
                 if req.step > 0 and req.can_compact and is_context_overflow(exc):
                     return StepResult(calls=[], final=False, kind=COMPACT)
+                if req.can_retry:
+                    return await self._retry_or_fail(req, exc)
                 raise
             usage = AgentLoop.usage_from_completion(completion)
             assistant = MessageEnd(
@@ -414,6 +422,42 @@ class GithiSteps:
             for call in calls
         ]
         return StepResult(calls=plans, final=False)
+
+    async def _retry_or_fail(self, req: StepRequest, exc: Exception) -> StepResult:
+        """pi's auto-retry: a call that may pass is asked again after a durable wait.
+
+        Journals ``ModelRetry`` (keyed by step and attempt, so a re-run activity does not
+        announce it twice) and answers RETRY with the wait; the workflow sleeps on a
+        timer, then runs the step again. A call that will fail the same way, or one out
+        of retries, fails the step at once: no activity retries (Temporal's are for a
+        lost worker, not a provider's answer).
+        """
+        spec = retry_spec(await self._manifest(req.session_id))
+        attempt = req.attempt + 1
+        retryable = is_retryable(exc)
+        delay = retry_delay(spec, attempt, exc) if retryable else None
+        if delay is None:
+            if not retryable:
+                raise ApplicationError(str(exc), type=type(exc).__name__, non_retryable=True) from exc
+            raise ApplicationError(
+                f"the model provider kept failing ({req.attempt} retries): {exc}",
+                type="ModelUnavailable",
+                non_retryable=True,
+            ) from exc
+        await self._record(
+            req.session_id,
+            req.run_id,
+            f"{req.step}:retry:{attempt}",
+            ModelRetry(
+                step=req.step,
+                attempt=attempt,
+                max_attempts=spec.max_retries,
+                delay_s=delay,
+                error_class=type(exc).__name__,
+                detail=str(exc)[:500],
+            ),
+        )
+        return StepResult(calls=[], final=False, kind=RETRY, delay_s=delay)
 
     async def compact(self, req: StepRequest) -> bool:
         """Compact the conversation so far, this run included, before ``req.step``'s request."""
