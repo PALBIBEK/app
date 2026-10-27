@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 
 from supervisor.api import deps
 from supervisor.db.models import SessionRow
+from supervisor.traces.issues import list_issues
+from supervisor.traces.judges import delete_judge, list_judges, save_judge
 from supervisor.traces.model import RunStatus
 from supervisor.traces.scores import (
     Feedback,
@@ -23,7 +25,14 @@ from supervisor.traces.scores import (
     set_feedback,
     version_quality,
 )
-from supervisor.traces.store import TraceFilter, list_runs, load_run, run_events, session_runs
+from supervisor.traces.store import (
+    TraceFilter,
+    list_runs,
+    load_run,
+    run_events,
+    session_runs,
+    stored_summary,
+)
 
 router = APIRouter(tags=["traces"])
 
@@ -108,6 +117,7 @@ async def get_run_trace(
     out["composition_id"] = pins.get("composition_id")
     out["composition_digest"] = pins.get("composition_digest")
     out["scores"] = await run_scores(deps.get_session_factory(request), session_id, run_id)
+    out["summary"] = await stored_summary(deps.get_session_factory(request), session_id, run_id)
     return out
 
 
@@ -204,3 +214,68 @@ async def trace_versions(
         composition_id=composition_id,
     )
     return {"composition_id": composition_id, "versions": versions}
+
+
+@router.get("/v1/traces/issues")
+async def trace_issues(
+    request: Request,
+    composition_id: str | None = Query(default=None, max_length=255),
+    since_ms: int | None = None,
+    limit: int = Query(default=30, ge=1, le=100),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """The ways the caller's runs go wrong, grouped and counted, with the latest examples."""
+    issues = await list_issues(
+        deps.get_session_factory(request),
+        tenant_id=tenant_id,
+        principal_id=deps.request_principal_id(request, tenant_id),
+        composition_id=composition_id,
+        since_ms=since_ms,
+        limit=limit,
+    )
+    return {"issues": issues}
+
+
+class JudgeIn(BaseModel):
+    composition_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.-]*$")
+    rubric: str = Field(min_length=10, max_length=4000)
+    sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    """Share of finished runs judged (0.25: one in four, always the same ones)."""
+    model: str | None = Field(default=None, max_length=255)
+    enabled: bool = True
+
+
+@router.get("/v1/traces/judges")
+async def get_judges(
+    request: Request,
+    composition_id: str = Query(min_length=1, max_length=255),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """The judges applied to a composition's finished runs."""
+    judges = await list_judges(deps.get_session_factory(request), tenant_id=tenant_id, composition_id=composition_id)
+    return {"composition_id": composition_id, "judges": judges}
+
+
+@router.put("/v1/traces/judges")
+async def put_judge(body: JudgeIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
+    """Create a judge, or change one (a new rubric or model is a new version)."""
+    return await save_judge(
+        deps.get_session_factory(request),
+        tenant_id=tenant_id,
+        composition_id=body.composition_id,
+        name=body.name.strip(),
+        rubric=body.rubric.strip(),
+        sample_rate=body.sample_rate,
+        model=(body.model or "").strip() or None,
+        enabled=body.enabled,
+        created_by=deps.request_principal_id(request, tenant_id),
+    )
+
+
+@router.delete("/v1/traces/judges/{judge_id}", status_code=204)
+async def remove_judge(judge_id: str, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> Response:
+    """Remove a judge; the verdicts it gave stay."""
+    if not await delete_judge(deps.get_session_factory(request), tenant_id=tenant_id, judge_id=judge_id):
+        raise HTTPException(status_code=404, detail="judge not found")
+    return Response(status_code=204)

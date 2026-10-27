@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '@/lib/store/authStore';
 
 import { tracesAPI } from '../endpoints/traces';
-import type { RunStatus, TraceListParams, TraceScore } from '../types/trace.types';
+import type { JudgeInput, RunStatus, TraceListParams, TraceScore } from '../types/trace.types';
 
 const LIVE: readonly RunStatus[] = ['running', 'awaiting_approval'];
 const LIVE_REFRESH_MS = 4000;
@@ -23,6 +23,8 @@ export const traceKeys = {
     [...traceKeys.all, 'span', sessionId, runId, spanId] as const,
   events: (sessionId: string, runId: string) => [...traceKeys.all, 'events', sessionId, runId] as const,
   agentVersions: (agentId: string) => [...traceKeys.all, 'agent-versions', agentId] as const,
+  issues: (agentId: string) => [...traceKeys.all, 'issues', agentId] as const,
+  judges: (agentId: string) => [...traceKeys.all, 'judges', agentId] as const,
 };
 
 /** The user's runs, newest first, a page at a time. */
@@ -119,5 +121,45 @@ export function useAgentQuality(agentId: string | undefined) {
     queryFn: () => tracesAPI.agentVersions(agentId!),
     enabled: isAuthenticated && !!agentId,
     staleTime: 30_000,
+  });
+}
+
+export function useIssues(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: traceKeys.issues(agentId ?? ''),
+    queryFn: () => tracesAPI.issues(agentId || undefined),
+    enabled: isAuthenticated,
+    staleTime: 15_000,
+  });
+}
+
+export function useJudges(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: traceKeys.judges(agentId ?? ''),
+    queryFn: () => tracesAPI.judges(agentId!),
+    enabled: isAuthenticated && !!agentId,
+  });
+}
+
+export function useSaveJudge(agentId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: JudgeInput) => tracesAPI.saveJudge(agentId, body),
+    onSuccess: (judge) => {
+      toast.success(`Judge “${judge.name}” saved (version ${judge.version})`);
+      void client.invalidateQueries({ queryKey: traceKeys.judges(agentId) });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not save the judge'),
+  });
+}
+
+export function useDeleteJudge(agentId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (judgeId: string) => tracesAPI.deleteJudge(agentId, judgeId),
+    onSuccess: () => void client.invalidateQueries({ queryKey: traceKeys.judges(agentId) }),
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not remove the judge'),
   });
 }

@@ -29,6 +29,17 @@ await p.fill('input[type=password]', PASSWORD);
 await p.click('button[type=submit]');
 await p.waitForURL(`${BASE}/`);
 
+// A judge for the agent, set up from the Judges view (the dev model echoes, so its verdicts are "unclear").
+await p.goto(`${BASE}/traces/judges`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+await p.getByRole('button', { name: 'Add a judge' }).click();
+const form = p.getByRole('form', { name: 'New judge' });
+await form.getByLabel('Name').fill('answers');
+await form.getByLabel('What a good run looks like').fill('Answers the question that was asked, and says what it changed.');
+await form.getByRole('button', { name: 'Add judge' }).click();
+await p.getByTestId('judge').filter({ hasText: 'answers' }).waitFor({ timeout: 15000 });
+console.log('0 judge added');
+
 // Two runs: one writes a file, one runs a command that needs approval and exits 3.
 await p.goto(`${BASE}/harness/${hid}/test`, { waitUntil: 'domcontentloaded' });
 await p.getByTestId('connection').filter({ hasText: 'Live' }).waitFor({ timeout: 60000 });
@@ -67,6 +78,8 @@ check((await bash.innerText()).includes('checking'), "the command's output is in
 check(await p.getByTestId('transcript-answer').count() === 1, 'the answer closes the transcript');
 const checks = await p.getByTestId('check').evaluateAll((els) => els.map((e) => `${e.dataset.name}:${e.dataset.label}`));
 check(checks.includes('finished:pass') && checks.includes('approvals:pass'), `the run's checks (${checks})`);
+check(checks.includes('answers:unclear'), `the judge's verdict is on the run (${checks})`);
+check((await p.getByTestId('run-summary').innerText()) === 'Ran 1 command (1 failed); answered.', 'the run is summed up in a sentence');
 await shot(p, 't2-transcript');
 console.log('3 transcript ok; checks', checks.join(' '));
 
@@ -119,6 +132,15 @@ await p.getByText(name, { exact: true }).first().click();
 const quality = await p.getByTestId('version-quality').first().innerText({ timeout: 30000 });
 check(quality.includes('2 of 2 runs answered') && quality.includes('0 good, 1 wrong'), `version quality (${quality})`);
 console.log('7 filters and version quality:', quality);
+
+// Issues: the run marked wrong is an issue, with the note and a link to it.
+await p.goto(`${BASE}/traces/issues`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+const marked = p.getByTestId('issue').filter({ hasText: 'Marked wrong by people' });
+await marked.waitFor({ timeout: 15000 });
+check((await marked.innerText()).includes('should not exit 3'), 'the issue shows why it was marked wrong');
+await shot(p, 't5-issues');
+console.log('8 issues ok');
 
 await b.close();
 await deleteHarness(hid);

@@ -12,62 +12,23 @@ from supervisor.agent.events import (
     ApprovalResolved,
     CompactionEnd,
     CompactionStart,
-    Envelope,
     ErrorEvent,
     HandCheckpointed,
     HandProvisioned,
     MemoryInjected,
-    MessageEnd,
     RunEnd,
     RunStart,
     SubagentEnd,
     SubagentStart,
-    ToolEnd,
     ToolStart,
     TurnEnd,
     TurnStart,
-    Usage,
 )
 from supervisor.obs.projector import JournalProjector
 from supervisor.telemetry_contract.spans import SpanRecord
 from supervisor.traces import RunStatus, RunTrace, SpanKind, SpanStatus, build_run_trace, span_id
 from supervisor.traces.build import DETAIL_LIMIT
-
-SID, RUN = "s1", "run-1"
-
-
-class Journal:
-    """Events of one session, appended with explicit timestamps (ms from 0)."""
-
-    def __init__(self) -> None:
-        self.envs: list[Envelope] = []
-
-    def at(self, ms: int, payload: Any, *, run: str | None = RUN) -> Journal:
-        seq = len(self.envs)
-        self.envs.append(Envelope(SID, seq, f"e{seq}", ms, run, "trace-x", payload))
-        return self
-
-    def trace(self, *, running: bool = True) -> RunTrace:
-        trace = build_run_trace(SID, RUN, self.envs, agent="reviewer", session_running=running)
-        assert trace is not None
-        return trace
-
-
-def user(text: str) -> MessageEnd:
-    return MessageEnd(role="user", content=[{"type": "text", "text": text}])
-
-
-def model(text: str = "", calls: list[tuple[str, str, dict[str, Any]]] = (), cost: float = 0.01) -> MessageEnd:  # type: ignore[assignment]
-    content: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
-    content += [{"type": "tool_call", "id": cid, "name": name, "arguments": args} for cid, name, args in calls]
-    return MessageEnd(role="assistant", content=content, usage=Usage(100, 10, 0, 0, cost), model="m1",
-                      finish_reason="tool_calls" if calls else "stop")
-
-
-def ran(cid: str, name: str, payload: Any = None, *, ok: bool = True, code: str | None = None,
-        error: str | None = None, ms: int | None = None) -> ToolEnd:
-    return ToolEnd(cid, name, {"ok": ok, "payload": payload, "error": error, "code": code}, is_error=not ok,
-                   duration_ms=ms)
+from tests.support.trace_journal import RUN, SID, Journal, model, ran, user
 
 
 def approved_bash_run() -> Journal:

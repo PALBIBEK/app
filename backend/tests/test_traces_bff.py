@@ -3,6 +3,7 @@ version numbers, and nothing of anyone else's."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -243,3 +244,57 @@ async def test_quality_is_numbered_by_the_agents_versions(db_session, owner, age
     stranger = await make_user(email="stranger4@example.com", name="S")
     async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
         assert (await api.get(f"/api/v1/traces/agents/{agent.id}/versions")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_issues_are_named_by_agent_version_and_session(db_session, owner, agent, settings, monkeypatch):
+    link = await _link(db_session, owner, agent, "ai-i", V2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/traces/issues"
+        assert request.url.params["composition_id"] == "h-reviewer"
+        example = {"session_id": "ai-i", "run_id": "r1", "span_id": "s", "started_ms": 5, "input": "fix",
+                   "summary": "Ran 1 command (1 failed); answered.", "reason": "bash failed", "composition_digest": V2}
+        return httpx.Response(200, json={"issues": [
+            {"key": "k1", "composition_id": "h-reviewer", "title": "bash calls failed", "source": "check",
+             "name": "tool_errors", "topic": "bash", "runs": 3, "last_seen_ms": 5,
+             "versions": [{"composition_digest": V2, "runs": 3}], "examples": [example]},
+            {"key": "k2", "composition_id": "h-reviewer", "title": "Marked wrong by people", "source": "person",
+             "name": "feedback", "topic": None, "runs": 1, "last_seen_ms": 4, "versions": [],
+             "examples": [{**example, "session_id": "ai-not-mine"}]},
+        ]})
+
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        r = await api.get("/api/v1/traces/issues", params={"agent_id": agent.id})
+    assert r.status_code == 200, r.text
+    (issue,) = r.json()["issues"]  # the other one's only example is not the user's
+    assert issue["agent_name"] == "reviewer" and issue["versions"][0]["version"] == 2
+    assert issue["examples"][0]["session_id"] == link.id and issue["examples"][0]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_judges_belong_to_the_users_published_agent(db_session, owner, agent, settings, monkeypatch, make_user):
+    saved: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        judge = {"id": "j1", "composition_id": "h-reviewer", "name": "answers", "rubric": "Answers the question.",
+                 "sample_rate": 1.0, "model": None, "version": 1, "enabled": True, "created_ms": 1, "updated_ms": 1}
+        if request.method == "PUT":
+            saved.append(json.loads(request.content))
+            return httpx.Response(200, json=judge)
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, json={"composition_id": "h-reviewer", "judges": [judge]})
+
+    base = f"/api/v1/traces/agents/{agent.id}/judges"
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        r = await api.put(base, json={"name": "answers", "rubric": "Answers the question.", "sample_rate": 0.5})
+        assert r.status_code == 200, r.text
+        assert saved[0]["composition_id"] == "h-reviewer" and saved[0]["sample_rate"] == 0.5
+        assert [j["name"] for j in (await api.get(base)).json()["judges"]] == ["answers"]
+        assert (await api.delete(f"{base}/j1")).status_code == 204
+        assert (await api.delete(f"{base}/someone-elses")).status_code == 404
+
+    stranger = await make_user(email="stranger5@example.com", name="S")
+    async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
+        assert (await api.get(base)).status_code == 404

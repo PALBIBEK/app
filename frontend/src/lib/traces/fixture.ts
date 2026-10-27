@@ -49,6 +49,7 @@ export function sampleRun(over: Partial<RunTrace['rollup']> = {}): RunTrace {
     version: 2,
     composition_digest: 'sha256:' + 'a'.repeat(64),
     session_title: 'Fix the parser',
+    summary: 'Ran 1 command (1 failed), looked at 2 things; answered.',
     rollup: {
       status: 'ok',
       reason: null,
@@ -77,8 +78,8 @@ export function sampleRun(over: Partial<RunTrace['rollup']> = {}): RunTrace {
     },
     spans,
     scores: [
-      { id: 'c1', span_id: 'run', name: 'finished', source: 'check', label: 'pass', value: 1, reason: 'answered', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
-      { id: 'c2', span_id: 't3', name: 'tool_errors', source: 'check', label: 'fail', value: 0, reason: '1 of 3 tool calls failed; first: $ pytest -q (exit 1)', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
+      { id: 'c1', span_id: 'run', name: 'finished', topic: null, source: 'check', label: 'pass', value: 1, reason: 'answered', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
+      { id: 'c2', span_id: 't3', name: 'tool_errors', topic: 'bash', source: 'check', label: 'fail', value: 0, reason: '1 of 3 tool calls failed; first: $ pytest -q (exit 1)', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
     ],
   };
 }

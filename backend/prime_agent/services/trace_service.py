@@ -22,6 +22,11 @@ from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.trace import (
     AgentQualityResponse,
     FeedbackRequest,
+    Issue,
+    IssuesResponse,
+    Judge,
+    JudgeRequest,
+    JudgesResponse,
     RunSummary,
     RunTraceResponse,
     SessionTracesResponse,
@@ -222,6 +227,7 @@ class TraceService:
             version=releases.get((link.harness_id, digest or "")),
             composition_digest=digest,
             session_title=link.title,
+            summary=raw.get("summary"),
             rollup=raw.get("rollup") or {},
             spans=[_name_people(s, user_id) for s in raw.get("spans", []) if isinstance(s, dict)],
             scores=[_score(x, user_id) for x in raw.get("scores", []) if isinstance(x, dict)],
@@ -311,3 +317,129 @@ class TraceService:
             if isinstance(v, dict)
         ]
         return AgentQualityResponse(agent_id=agent_id, versions=versions)
+
+    async def _owned_agent(self, db: AsyncSession, user_id: str, agent_id: str) -> Harness:
+        harness = (
+            await db.execute(select(Harness).where(Harness.id == agent_id, Harness.user_id == user_id))
+        ).scalar_one_or_none()
+        if harness is None:
+            raise TraceNotFoundError()
+        return harness
+
+    async def issues(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str | None, since_ms: int | None, db: AsyncSession
+    ) -> IssuesResponse:
+        """The user's failures grouped into issues, named by agent, version and session."""
+        params: dict[str, Any] = {}
+        if agent_id:
+            harness = await self._owned_agent(db, user_id, agent_id)
+            if not harness.composition_id:
+                return IssuesResponse(issues=[])
+            params["composition_id"] = harness.composition_id
+        if since_ms is not None:
+            params["since_ms"] = str(since_ms)
+        try:
+            raw = await self._client.trace_issues(identity, params)
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        found = [i for i in raw.get("issues", []) if isinstance(i, dict)]
+        ai_ids = {str(e.get("session_id")) for i in found for e in i.get("examples", [])}
+        links = (
+            (
+                await db.execute(
+                    select(SessionLink).where(SessionLink.user_id == user_id, SessionLink.ai_session_id.in_(ai_ids))
+                )
+            ).scalars().all()
+            if ai_ids
+            else []
+        )
+        by_ai = {link.ai_session_id: link for link in links}
+        compositions = {str(i.get("composition_id")) for i in found if i.get("composition_id")}
+        agents = (
+            (
+                await db.execute(
+                    select(Harness).where(Harness.user_id == user_id, Harness.composition_id.in_(compositions))
+                )
+            ).scalars().all()
+            if compositions
+            else []
+        )
+        agent_of = {a.composition_id: a for a in agents}
+        releases = {
+            digest: version
+            for digest, version in (
+                await db.execute(
+                    select(HarnessRelease.composition_digest, HarnessRelease.version).where(
+                        HarnessRelease.harness_id.in_({a.id for a in agents})
+                    )
+                )
+            ).tuples()
+            if digest
+        } if agents else {}
+        out: list[Issue] = []
+        for i in found:
+            examples = [
+                {**e, "session_id": by_ai[str(e["session_id"])].id, "version": releases.get(e.get("composition_digest"))}
+                for e in i.get("examples", [])
+                if str(e.get("session_id")) in by_ai
+            ]
+            if not examples:
+                continue  # every example is in a session the user has no link to
+            agent = agent_of.get(i.get("composition_id"))
+            out.append(
+                Issue.model_validate(
+                    {
+                        **i,
+                        "agent_id": agent.id if agent else None,
+                        "agent_name": agent.name if agent else None,
+                        "versions": [
+                            {**v, "version": releases.get(v.get("composition_digest"))} for v in i.get("versions", [])
+                        ],
+                        "examples": examples,
+                    }
+                )
+            )
+        return IssuesResponse(issues=out)
+
+    async def judges(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, db: AsyncSession
+    ) -> JudgesResponse:
+        harness = await self._owned_agent(db, user_id, agent_id)
+        if not harness.composition_id:
+            return JudgesResponse(agent_id=agent_id, judges=[])
+        try:
+            raw = await self._client.list_judges(identity, harness.composition_id)
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        return JudgesResponse(
+            agent_id=agent_id, judges=[Judge.model_validate(j) for j in raw.get("judges", []) if isinstance(j, dict)]
+        )
+
+    async def save_judge(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, body: JudgeRequest, db: AsyncSession
+    ) -> Judge:
+        harness = await self._owned_agent(db, user_id, agent_id)
+        if not harness.composition_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"error_code": "AGENT_NOT_PUBLISHED", "message": "publish the agent before giving it judges"},
+            )
+        try:
+            raw = await self._client.save_judge(identity, {**body.model_dump(), "composition_id": harness.composition_id})
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        return Judge.model_validate(raw)
+
+    async def delete_judge(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, judge_id: str, db: AsyncSession
+    ) -> None:
+        harness = await self._owned_agent(db, user_id, agent_id)
+        current = await self.judges(identity=identity, user_id=user_id, agent_id=harness.id, db=db)
+        if judge_id not in {j.id for j in current.judges}:
+            raise TraceNotFoundError()  # not one of this agent's judges
+        try:
+            await self._client.delete_judge(identity, judge_id)
+        except AiUpstreamError as exc:
+            if exc.status_code == 404:
+                raise TraceNotFoundError() from exc
+            raise _upstream(exc) from exc

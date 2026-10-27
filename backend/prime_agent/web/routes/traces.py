@@ -14,6 +14,10 @@ from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.trace import (
     AgentQualityResponse,
     FeedbackRequest,
+    IssuesResponse,
+    Judge,
+    JudgeRequest,
+    JudgesResponse,
     RunTraceResponse,
     SessionTracesResponse,
     TraceListResponse,
@@ -181,3 +185,62 @@ async def agent_quality(agent_id: str, db: DbSession, current_user: CurrentUser)
         )
     except TraceNotFoundError as exc:
         raise _not_found() from exc
+
+
+@router.get("/issues", response_model=IssuesResponse)
+async def issues(
+    db: DbSession, current_user: CurrentUser, agent_id: str | None = None, since_ms: int | None = None
+) -> IssuesResponse:
+    """The ways the user's runs go wrong, grouped and counted, with the latest examples."""
+    try:
+        return await _service().issues(
+            identity=TenantPrincipal.from_user(current_user),
+            user_id=current_user.id,
+            agent_id=agent_id,
+            since_ms=since_ms,
+            db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.get("/agents/{agent_id}/judges", response_model=JudgesResponse)
+async def list_judges(agent_id: str, db: DbSession, current_user: CurrentUser) -> JudgesResponse:
+    """The judges applied to the agent's finished runs."""
+    try:
+        return await _service().judges(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, agent_id=agent_id, db=db
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.put("/agents/{agent_id}/judges", response_model=Judge)
+async def save_judge(agent_id: str, body: JudgeRequest, db: DbSession, current_user: CurrentUser) -> Judge:
+    """Create or change a judge (a new rubric or model is a new version)."""
+    try:
+        return await _service().save_judge(
+            identity=TenantPrincipal.from_user(current_user),
+            user_id=current_user.id,
+            agent_id=agent_id,
+            body=body,
+            db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.delete("/agents/{agent_id}/judges/{judge_id}", status_code=204, response_class=Response)
+async def delete_judge(agent_id: str, judge_id: str, db: DbSession, current_user: CurrentUser) -> Response:
+    """Remove a judge; the verdicts it gave stay."""
+    try:
+        await _service().delete_judge(
+            identity=TenantPrincipal.from_user(current_user),
+            user_id=current_user.id,
+            agent_id=agent_id,
+            judge_id=judge_id,
+            db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+    return Response(status_code=204)

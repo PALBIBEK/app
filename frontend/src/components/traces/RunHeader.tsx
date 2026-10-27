@@ -57,7 +57,12 @@ export function RunHeader({ trace }: { trace: RunTrace }): JSX.Element {
         <h1 className="text-xl font-semibold tracking-[-0.01em]" data-testid="run-input">
           {r.input || 'Run'}
         </h1>
-        {r.reason ? (
+        {trace.summary ? (
+          <p className="text-ink-2" data-testid="run-summary">
+            {trace.summary}
+          </p>
+        ) : null}
+        {r.reason && !trace.summary?.includes(r.reason) ? (
           <p className={status.kind === 'failed' ? 'text-bad' : 'text-ink-2'} data-testid="run-reason">
             {r.reason}
           </p>

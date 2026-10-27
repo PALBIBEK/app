@@ -489,6 +489,10 @@ class RunTraceRow(Base):
     errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """One sentence on what the run did and how it ended (``supervisor.traces.summary``)."""
+    summary_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """``rules`` or ``model``: a model's summary is kept when the rollup is rebuilt."""
     checks_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     """Automatic checks this run failed (``supervisor.traces.checks``)."""
     feedback_good: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -515,6 +519,8 @@ class TraceScoreRow(Base):
     span_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     """None: the score is on the whole run."""
     name: Mapped[str] = mapped_column(String(64), nullable=False)
+    topic: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    """What a failure is about within its check (a tool's name, an ending), for grouping issues."""
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     """``check`` (automatic), ``person`` (feedback), ``judge`` (a model's rubric)."""
     label: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -527,3 +533,27 @@ class TraceScoreRow(Base):
     composition_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     composition_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class TraceJudgeRow(Base):
+    """A judge: a rubric a model applies to an agent's finished runs (``supervisor.traces.judges``).
+
+    Editing the rubric or the model bumps ``version``; each verdict records the version that
+    gave it, so a changed judge never mixes with its earlier verdicts."""
+
+    __tablename__ = "trace_judges"
+    __table_args__ = (UniqueConstraint("tenant_id", "composition_id", "name", name="uq_trace_judges_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    composition_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    rubric: Mapped[str] = mapped_column(Text, nullable=False)
+    sample_rate: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    """The model route to judge with; none: the session's own."""
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)

@@ -3,29 +3,23 @@ when the run gives it something to judge."""
 
 from __future__ import annotations
 
-from typing import Any
-
 from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
     ErrorEvent,
     RunEnd,
     RunStart,
-    ToolEnd,
-    ToolStart,
     TurnEnd,
     TurnStart,
 )
 from supervisor.traces.checks import Check, run_checks
-from tests.unit.test_traces_build import Journal, model, ran
+from tests.support.trace_journal import Journal, model, ran, tool
 
 
 def checks(j: Journal) -> dict[str, Check]:
     return {c.name: c for c in run_checks(j.trace())}
 
 
-def tool(j: Journal, at: int, cid: str, name: str, args: dict[str, Any], result: ToolEnd) -> Journal:
-    return j.at(at, ToolStart(cid, name, args)).at(at + 5, result)
 
 
 def test_an_answered_run_with_no_tools_is_only_checked_for_finishing() -> None:

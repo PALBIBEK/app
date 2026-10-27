@@ -37,6 +37,9 @@ class Check:
     reason: str
     span_id: str | None = None
     """The span the check points at (the first failure), when there is one."""
+    topic: str | None = None
+    """What a failure is about (a tool's name, how the run ended): failures of one check on
+    the same topic group into one issue."""
 
     @property
     def label(self) -> str:
@@ -53,7 +56,9 @@ def _finished(trace: RunTrace) -> Check | None:
         return Check("finished", True, "answered")
     if r.status in (RunStatus.ERROR, RunStatus.BUDGET_EXCEEDED, RunStatus.INTERRUPTED):
         root = trace.spans[0] if trace.spans else None
-        return Check("finished", False, r.reason or r.status.value, root.id if root else None)
+        error = (root.error or {}).get("class") if root else None
+        return Check("finished", False, r.reason or r.status.value, root.id if root else None,
+                     topic=r.status.value if r.status is not RunStatus.ERROR else (error or "error"))
     return None  # stopped by a person, or still going: not the agent's doing
 
 
@@ -72,6 +77,7 @@ def _tool_errors(trace: RunTrace) -> Check | None:
         f"{len(failed)} of {len(tools)} tool calls failed; first: {first.preview or first.name}"
         + (f" ({why})" if why else ""),
         first.id,
+        topic=str(first.attrs.get("tool", first.name)),
     )
 
 
@@ -99,6 +105,7 @@ def _repeated_calls(trace: RunTrace) -> Check | None:
         False,
         f"ran {worst[0].preview or worst[0].name} {len(worst)} times with the same arguments",
         worst[REPEAT_LIMIT - 1].id,
+        topic=str(worst[0].attrs.get("tool", worst[0].name)),
     )
 
 
@@ -111,7 +118,8 @@ def _approvals(trace: RunTrace) -> Check | None:
         return Check("approvals", True, f"{len(asked)} asked, all allowed")
     timed_out = sum(1 for s in refused if s.attrs.get("outcome") == "timed_out")
     detail = f" ({timed_out} unanswered)" if timed_out else ""
-    return Check("approvals", False, f"{len(refused)} of {len(asked)} denied{detail}", refused[0].id)
+    tool = refused[0].name.removeprefix("approval ").strip() or "tool"
+    return Check("approvals", False, f"{len(refused)} of {len(asked)} denied{detail}", refused[0].id, topic=tool)
 
 
 def _tests_after_change(trace: RunTrace) -> Check | None:
@@ -132,7 +140,8 @@ def _tests_after_change(trace: RunTrace) -> Check | None:
     code = last.attrs.get("exit_code")
     if code == 0:
         return Check("tests_after_change", True, f"{last.preview} passed after the last change", last.id)
-    return Check("tests_after_change", False, f"{last.preview} exited {code} after the last change", last.id)
+    return Check("tests_after_change", False, f"{last.preview} exited {code} after the last change", last.id,
+                 topic=str(last.detail.get("args", {}).get("command", "tests"))[:128])
 
 
 def run_checks(trace: RunTrace) -> list[Check]:

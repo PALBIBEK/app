@@ -1064,6 +1064,26 @@ class AiClient:
         )
         return payload if isinstance(payload, dict) else {"versions": []}
 
+    async def trace_issues(self, identity: TenantPrincipal, params: dict[str, Any]) -> dict[str, Any]:
+        """GET /v1/traces/issues: the caller's failures grouped by what they are about."""
+        payload = await self._json_request("GET", "/v1/traces/issues", identity, expected=(200,), params=params)
+        return payload if isinstance(payload, dict) else {"issues": []}
+
+    async def list_judges(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
+        payload = await self._json_request(
+            "GET", "/v1/traces/judges", identity, expected=(200,), params={"composition_id": composition_id}
+        )
+        return payload if isinstance(payload, dict) else {"judges": []}
+
+    async def save_judge(self, identity: TenantPrincipal, body: dict[str, Any]) -> dict[str, Any]:
+        payload = await self._json_request("PUT", "/v1/traces/judges", identity, json_body=body, expected=(200,))
+        return payload if isinstance(payload, dict) else {}
+
+    async def delete_judge(self, identity: TenantPrincipal, judge_id: str) -> None:
+        await self._json_request(
+            "DELETE", f"/v1/traces/judges/{quote(judge_id, safe='')}", identity, expected=(204,), allow_empty=True
+        )
+
     async def run_events(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
         """GET .../trace/events: the journal events a run's trace was built from."""
         payload = await self._json_request(

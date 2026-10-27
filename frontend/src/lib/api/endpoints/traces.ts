@@ -6,6 +6,9 @@
 import { apiClient } from '../client';
 import type {
   AgentQuality,
+  Issue,
+  Judge,
+  JudgeInput,
   RawEvent,
   RunTrace,
   SessionTraces,
@@ -65,4 +68,17 @@ export const tracesAPI = {
   /** How each version of an agent did across the user's finished runs. */
   agentVersions: (agentId: string): Promise<AgentQuality> =>
     apiClient.get<AgentQuality>(`/traces/agents/${seg(agentId)}/versions`),
+
+  /** The ways runs go wrong, grouped and counted, with the latest examples. */
+  issues: (agentId?: string): Promise<{ issues: Issue[] }> =>
+    apiClient.get<{ issues: Issue[] }>(`/traces/issues${agentId ? `?agent_id=${seg(agentId)}` : ''}`),
+
+  judges: (agentId: string): Promise<{ agent_id: string; judges: Judge[] }> =>
+    apiClient.get<{ agent_id: string; judges: Judge[] }>(`/traces/agents/${seg(agentId)}/judges`),
+
+  saveJudge: (agentId: string, body: JudgeInput): Promise<Judge> =>
+    apiClient.put<Judge>(`/traces/agents/${seg(agentId)}/judges`, body),
+
+  deleteJudge: (agentId: string, judgeId: string): Promise<void> =>
+    apiClient.delete<void>(`/traces/agents/${seg(agentId)}/judges/${seg(judgeId)}`),
 };

@@ -109,12 +109,30 @@ describe('Scores', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark wrong' }));
     expect(mutate).toHaveBeenCalledWith({ good: false, spanId: null, comment: 'edited the wrong file' });
 
-    const judged = { ...run, scores: [...run.scores, { id: 'f', span_id: null, name: 'feedback', source: 'person', label: 'good', value: 1, reason: null, comment: null, evaluator: 'person', mine: true, created_ms: 2 }] };
+    const judged = { ...run, scores: [...run.scores, { id: 'f', span_id: null, name: 'feedback', topic: null, source: 'person', label: 'good', value: 1, reason: null, comment: null, evaluator: 'person', mine: true, created_ms: 2 }] };
     const client = new QueryClient();
     rerender(<QueryClientProvider client={client}><FeedbackButtons trace={judged} noun="run" /></QueryClientProvider>);
     const good = screen.getByRole('button', { name: 'Good answer' });
     expect(good.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(good);
     expect(mutate).toHaveBeenLastCalledWith({ good: null, spanId: null, comment: undefined });
+  });
+});
+
+describe('Judge verdicts', () => {
+  it('show beside the checks, an unclear one as unclear rather than failed', () => {
+    const run = sampleRun();
+    const judged = {
+      ...run,
+      scores: [
+        ...run.scores.filter((s) => s.label === 'pass'),
+        { id: 'j', span_id: null, name: 'answers', topic: 'answers', source: 'judge', label: 'unclear', value: null, reason: "the judge's reply was not a verdict: echo:…", comment: null, evaluator: 'judge:answers@v1', mine: false, created_ms: 3 },
+      ],
+    };
+    wrap(<ChecksCard trace={judged} onOpen={vi.fn()} />);
+    expect(screen.getByText('1 unclear')).toBeTruthy();
+    const verdict = screen.getAllByTestId('check').find((c) => c.getAttribute('data-name') === 'answers')!;
+    expect(verdict.textContent).toContain('Judge “answers”');
+    expect(within(verdict).queryByText('Show where')).toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -169,7 +169,7 @@ class SessionManagerBase:
         self._composition_catalog = composition_catalog
         self._live = LiveHub(maxsize=live_queue_max)
         self._fanout: dict[str, asyncio.Task[None]] = {}
-        self._rollups: set[asyncio.Task[None]] = set()
+        self._rollups: set[asyncio.Task[Any]] = set()
         """Trace rollups being written (``supervisor.traces``); held so none is collected mid-write."""
         self._hands = SessionHands(_HandHooks(self))
         # When sandboxes start and stop, where a profile does not say (supervisor.hands.lifecycle).
@@ -395,15 +395,26 @@ class SessionManagerBase:
         self._live.publish(session_id, envelope)
         await self._project(session_id, envelope)
         if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
-            self._record_trace(session_id, turn_id)
+            self._record_trace(session_id, turn_id, ended=isinstance(payload, RunEnd))
         return seq
 
-    def _record_trace(self, session_id: str, run_id: str) -> None:
+    def _trace_model_client(self, row: SessionRow) -> Any:
+        """The session's own model client, for judging and summarising its runs."""
+        client_for = getattr(self, "session_model_client", None)
+        return client_for(row.id, row) if callable(client_for) else None
+
+    def _record_trace(self, session_id: str, run_id: str, *, ended: bool = False) -> None:
         """Refresh the run's trace rollup beside the event path, never on it: tracing must not
         slow a run. A rollup lost to a crash is rebuilt the next time the run is read."""
-        from supervisor.traces.store import record_run  # traces reads sessions: import late
+        from supervisor.traces.after_run import after_run  # traces reads sessions: import late
+        from supervisor.traces.store import record_run
 
-        task = asyncio.create_task(record_run(self._db, self._reader, session_id, run_id))
+        work: Coroutine[Any, Any, Any] = (
+            after_run(self._db, self._reader, session_id, run_id, self._trace_model_client)
+            if ended
+            else record_run(self._db, self._reader, session_id, run_id)
+        )
+        task: asyncio.Task[Any] = asyncio.create_task(work)
         self._rollups.add(task)
         task.add_done_callback(self._rollups.discard)
 
