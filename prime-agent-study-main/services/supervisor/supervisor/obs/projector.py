@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
-from uuid import uuid4
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -36,6 +35,8 @@ from supervisor.telemetry_contract.operations import GenAIOperation, PlatformOpe
 from supervisor.telemetry_contract.run_id import resolve_run_id
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
 from supervisor.telemetry_contract.usage import to_genai_tokens, to_yal_cost
+from supervisor.traces.build import span_id as trace_span_id
+from supervisor.traces.kinds import EXPORT, SpanKind
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class JournalProjector:
     _jobs: dict[str, _OpenSpan] = field(default_factory=dict, init=False, repr=False)
     _subagents: dict[str, _OpenSpan] = field(default_factory=dict, init=False, repr=False)
     _pending: list[SpanRecord] = field(default_factory=list, init=False, repr=False)
+    _steps: int = field(default=0, init=False, repr=False)
     _last_event_ms: int | None = field(default=None, init=False, repr=False)
     _closed_run_ids: set[str] = field(default_factory=set, init=False, repr=False)
     closed_by_counts: dict[str, int] = field(default_factory=dict, init=False)
@@ -184,8 +186,17 @@ class JournalProjector:
         run_id: str,
         attributes: dict[str, Any],
         parent_span_id: str | None,
+        kind: SpanKind,
+        key: str,
     ) -> SpanRecord:
-        attrs = {**self._base_attrs(env, run_id), **attributes}
+        """A span whose id is the one ``supervisor.traces`` gives the same span (hash of the
+        session, the run and ``key``), so Jaeger and the product's trace view agree."""
+        attrs = {
+            **self._base_attrs(env, run_id),
+            "yal.span.kind": kind.value,
+            "openinference.span.kind": EXPORT[kind].openinference,
+            **attributes,
+        }
         if env.turn_id:
             attrs.setdefault("yal.turn.id", env.turn_id)
         return SpanRecord(
@@ -198,7 +209,7 @@ class JournalProjector:
             attributes=attrs,
             status=SpanStatus.UNSET,
             parent_span_id=parent_span_id,
-            span_id=uuid4().hex[:16],
+            span_id=trace_span_id(env.session_id, env.turn_id or self._root_run_id(run_id), key),
             start_ms=env.ts_ms,
             journal_seq=env.seq,
         )
@@ -248,11 +259,19 @@ class JournalProjector:
     def _run_id(self, env: Envelope) -> str:
         return resolve_run_id(env)
 
+    def _root_run_id(self, run_id: str) -> str:
+        """The run a span hashes under when its event names none: the open run (a subagent's
+        own run id names its child, not the run that started it)."""
+        return self._run.record.yal_run_id if self._run is not None else run_id
+
     def _on_run_start(self, env: Envelope) -> None:
         run_id = self._run_id(env)
+        self._steps = 0
         span = self._new_span(
             env=env,
             name=f"invoke_agent {self.harness_id}",
+            kind=SpanKind.AGENT,
+            key="run",
             run_id=run_id,
             attributes={
                 "gen_ai.operation.name": GenAIOperation.INVOKE_AGENT,
@@ -296,10 +315,13 @@ class JournalProjector:
 
     def _on_turn_start(self, env: Envelope) -> None:
         run_id = self._run_id(env)
+        self._steps += 1
         parent = self._run.record.span_id if self._run else None
         span = self._new_span(
             env=env,
             name="yal.turn",
+            kind=SpanKind.STEP,
+            key=f"step:{self._steps}",
             run_id=run_id,
             attributes={"yal.operation.name": PlatformOperation.TURN},
             parent_span_id=parent,
@@ -330,6 +352,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name="chat",
+            kind=SpanKind.LLM,
+            key=f"llm:{env.seq}",
             run_id=run_id,
             attributes=attrs,
             parent_span_id=parent,
@@ -346,6 +370,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name=f"execute_tool {p.tool_name}",
+            kind=SpanKind.TOOL,
+            key=f"tool:{p.tool_call_id}",
             run_id=run_id,
             attributes={
                 "gen_ai.operation.name": GenAIOperation.EXECUTE_TOOL,
@@ -382,6 +408,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name="yal.approval",
+            kind=SpanKind.APPROVAL,
+            key=f"approval:{p.approval_id}",
             run_id=run_id,
             attributes={"yal.operation.name": PlatformOperation.APPROVAL},
             parent_span_id=parent,
@@ -404,6 +432,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name="yal.compaction",
+            kind=SpanKind.COMPACTION,
+            key=f"compaction:{p.compaction_id}",
             run_id=run_id,
             attributes={"yal.operation.name": PlatformOperation.COMPACTION},
             parent_span_id=parent,
@@ -427,6 +457,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name="search_memory",
+            kind=SpanKind.MEMORY,
+            key=f"memory:{env.seq}",
             run_id=run_id,
             attributes={
                 "gen_ai.operation.name": GenAIOperation.SEARCH_MEMORY,
@@ -444,6 +476,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name=f"invoke_agent {p.label or p.provider}",
+            kind=SpanKind.AGENT,
+            key=f"subagent:{p.run_id}",
             run_id=run_id,
             attributes={
                 "gen_ai.operation.name": GenAIOperation.INVOKE_AGENT,
@@ -468,6 +502,8 @@ class JournalProjector:
         span = self._new_span(
             env=env,
             name="yal.job",
+            kind=SpanKind.JOB,
+            key=f"job:{p.job_id}",
             run_id=run_id,
             attributes={"yal.operation.name": PlatformOperation.JOB},
             parent_span_id=parent,

@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import Envelope, RunEnd, ToolEnd, ToolStart
@@ -134,6 +134,43 @@ class JournalReader:
                 await db.execute(
                     select(EventRow)
                     .where(EventRow.session_id == session_id, EventRow.turn_id == turn_id)
+                    .order_by(EventRow.seq.asc())
+                )
+            ).scalars().all()
+        return [self._to_envelope(row) for row in rows]
+
+    async def read_run_window(self, session_id: str, turn_id: str) -> list[Envelope]:
+        """One run's events plus the session's own events (those with no run) that happened
+        while it ran: a sandbox starting or being saved belongs to the run it served."""
+        async with self._factory() as db:
+            bounds = (
+                await db.execute(
+                    select(func.min(EventRow.seq), func.max(EventRow.seq)).where(
+                        EventRow.session_id == session_id, EventRow.turn_id == turn_id
+                    )
+                )
+            ).one()
+            if bounds[0] is None:
+                return []
+            first, last = bounds
+            ended = (
+                await db.execute(
+                    select(EventRow.seq).where(
+                        EventRow.session_id == session_id, EventRow.turn_id == turn_id, EventRow.type == "RunEnd"
+                    )
+                )
+            ).first()
+            in_window = EventRow.seq >= first
+            if ended is not None:
+                in_window = in_window & (EventRow.seq <= last)
+            rows = (
+                await db.execute(
+                    select(EventRow)
+                    .where(
+                        EventRow.session_id == session_id,
+                        in_window,
+                        (EventRow.turn_id == turn_id) | EventRow.turn_id.is_(None),
+                    )
                     .order_by(EventRow.seq.asc())
                 )
             ).scalars().all()

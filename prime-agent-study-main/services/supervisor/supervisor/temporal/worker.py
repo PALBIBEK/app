@@ -268,6 +268,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
         await asyncio.gather(*loops, return_exceptions=True)
     # Workers have stopped taking work; park the runtimes this process still holds.
     await state.manager.drain(timeout_seconds=state.drain_grace_s)
+    await state.manager.drain_trace_rollups()
     finished.set()
     await asyncio.gather(*side, return_exceptions=True)
 

@@ -36,6 +36,7 @@ from supervisor.api import (
     subagents,
     tenant_secrets,
     tools,
+    traces,
     workspace,
 )
 from supervisor.app import SupervisorState
@@ -140,6 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         state.draining = True
         try:
             await state.manager.drain(timeout_seconds=state.drain_grace_s)
+            await state.manager.drain_trace_rollups()
         except Exception:
             logger.exception("drain failed")
         try:
@@ -193,6 +195,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(tenant_secrets.router)
     app.include_router(runners.router)
     app.include_router(overview.router)
+    app.include_router(traces.router)
     return app
 
 

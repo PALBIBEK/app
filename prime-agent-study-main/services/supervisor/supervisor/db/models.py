@@ -8,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -453,3 +454,40 @@ class WorkerHeartbeatRow(Base):
     started_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     last_seen_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class RunTraceRow(Base):
+    """One run's trace rollup (``supervisor.traces``): what lists and filters read, so they never
+    scan events. Rebuilt from the journal, which stays the source of truth: written when a run
+    starts and ends, refreshed on read while it is unfinished."""
+
+    __tablename__ = "run_traces"
+    __table_args__ = (
+        Index("ix_run_traces_tenant_started", "tenant_id", "started_ms"),
+        Index("ix_run_traces_session_started", "session_id", "started_ms"),
+        Index("ix_run_traces_composition", "tenant_id", "composition_id", "composition_digest"),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    harness_version: Mapped[str] = mapped_column(String(255), nullable=False)
+    composition_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    composition_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    ended_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    denials: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rollup: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
