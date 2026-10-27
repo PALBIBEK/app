@@ -12,6 +12,7 @@ import type { RunTrace } from '@/lib/api/types/trace.types';
 import { formatMs, runStatus, toolsLine } from '@/lib/traces/format';
 import { formatCount, formatMoney, formatStamp } from '@/lib/utils';
 
+import { SaveToDataset } from './SaveToDataset';
 import { TimeSplitBar } from './TimeSplitBar';
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
@@ -94,6 +95,11 @@ export function RunHeader({ trace }: { trace: RunTrace }): JSX.Element {
         <div className="flex flex-col gap-2">
           <div className="text-xs text-ink-3">Where the {formatMs(r.duration_ms)} went</div>
           <TimeSplitBar time={r.time} />
+        </div>
+      ) : null}
+      {r.ended_ms != null ? (
+        <div className="flex flex-wrap gap-2 border-t border-line-soft pt-3">
+          <SaveToDataset trace={trace} />
         </div>
       ) : null}
     </Card>

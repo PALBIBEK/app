@@ -1,6 +1,7 @@
 'use client';
 
-/** The three views of traces: every run, the issues they add up to, and the judges. */
+/** The views of traces: every run, the issues they add up to, the judges, and the datasets
+ * of saved runs that versions are compared on. */
 
 import Link from 'next/link';
 
@@ -10,9 +11,10 @@ const VIEWS = [
   { href: '/traces', label: 'Runs' },
   { href: '/traces/issues', label: 'Issues' },
   { href: '/traces/judges', label: 'Judges' },
+  { href: '/traces/datasets', label: 'Datasets' },
 ] as const;
 
-export function TracesNav({ current }: { current: '/traces' | '/traces/issues' | '/traces/judges' }): JSX.Element {
+export function TracesNav({ current }: { current: (typeof VIEWS)[number]['href'] }): JSX.Element {
   return (
     <nav aria-label="Traces views" className="flex gap-1 border-b border-line">
       {VIEWS.map((v) => (

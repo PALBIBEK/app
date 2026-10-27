@@ -45,7 +45,7 @@ Factory = async_sessionmaker[AsyncSession]
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
-ROLLUP_VERSION = 4
+ROLLUP_VERSION = 5
 """Bumped when the builder changes what a rollup says; rows from an older one are rebuilt on read."""
 _backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
 """Per database, the tenants whose older runs are all filled in (new runs are recorded as

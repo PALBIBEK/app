@@ -65,8 +65,9 @@ DETAIL_LIMIT = 64_000
 """Characters kept of one text in a span's detail; the rest is cut and its length noted."""
 
 _DENIED_CODES = frozenset({"APPROVAL_DENIED", "APPROVAL_TIMEOUT", "APPROVAL_TIMED_OUT"})
-_NOT_ALLOWED = frozenset({"denied", "timed_out", "cancelled"})
-"""``ApprovalResolved.status`` values under which the call did not run, whatever the choice."""
+_NOT_ALLOWED = frozenset({"denied", "timed_out"})
+"""``ApprovalResolved.status`` values under which the call was refused, whatever the choice.
+``cancelled`` is neither allowed nor refused: the run was stopped while it waited."""
 _FAILED_SUBAGENT = frozenset({"error", "timeout", "failed"})
 _CANCELLED = frozenset({"aborted", "cancelled"})
 
@@ -375,7 +376,8 @@ class _Builder:
             return
         self._close(span, env)
         wait = env.ts_ms - span.start_ms
-        denied = p.status in _NOT_ALLOWED or not is_allow_choice(p.choice)
+        cancelled = p.status == "cancelled"
+        denied = not cancelled and (p.status in _NOT_ALLOWED or not is_allow_choice(p.choice))
         span.attrs.update(decision=p.choice, outcome=p.status, responded_by=p.responded_by,
                           wait_ms=wait, denied=denied)
         if p.status == "timed_out":
