@@ -264,3 +264,35 @@ async def test_an_experiment_cut_off_by_a_restart_reads_as_failed(db_session, ow
     service = EvaluationService(settings, client=AiClient(settings, transport=httpx.MockTransport(lambda r: httpx.Response(404))))
     detail = await service.experiment(identity=TenantPrincipal.from_user(owner), user_id=owner.id, experiment_id=exp.id, db=db_session)
     assert detail.experiment.status == "failed" and "restarted" in (detail.experiment.error or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("judge", "noted"), [("answers", None), ("cites", "not judged by cites")])
+async def test_a_replay_waits_for_the_agents_judges(db_session, owner, agent, settings, monkeypatch, judge, noted):
+    """Judges give verdicts after a run ends: a replay waits for them, and notes one that never answers."""
+    fake = FakeSupervisor({V2: "ok"})
+    plain = fake.handler
+
+    def with_judges(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/judges":
+            return httpx.Response(200, json={"judges": [{"name": judge, "enabled": True, "sample_rate": 1.0},
+                                                        {"name": "sampled", "enabled": True, "sample_rate": 0.25}]})
+        return plain(request)
+
+    fake.handler = with_judges
+    monkeypatch.setattr("prime_agent.services.evaluation_service.JUDGE_WAIT_S", 0.2)
+    launched: list = []
+    src = await _source_run(db_session, owner, agent)
+
+    @asynccontextmanager
+    async def same_session():
+        yield db_session
+
+    async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
+        ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "judged"})).json()
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        svc, exp_id, identity = launched[-1]
+        await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
+        (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
+    assert result["status"] == "done" and result["error"] == noted

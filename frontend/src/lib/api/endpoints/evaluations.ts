@@ -10,6 +10,8 @@ import type {
   Experiment,
   ExperimentComparison,
   ExperimentDetail,
+  Proposal,
+  ProposalDetail,
 } from '../types/evaluation.types';
 
 const seg = encodeURIComponent;
@@ -44,4 +46,22 @@ export const evaluationsAPI = {
 
   compare: (a: string, b: string): Promise<ExperimentComparison> =>
     apiClient.get<ExperimentComparison>(`/traces/experiments/compare?a=${seg(a)}&b=${seg(b)}`),
+
+  /** Learn a change from the agent's failing runs and measure it on a dataset; answers at once. */
+  propose: (agentId: string, body: { dataset_id: string; notes?: string | null }): Promise<Proposal> =>
+    apiClient.post<Proposal>(`/traces/agents/${seg(agentId)}/proposals`, body),
+
+  proposals: (params: { agentId?: string; status?: string } = {}): Promise<Proposal[]> => {
+    const q = new URLSearchParams();
+    if (params.agentId) q.set('agent_id', params.agentId);
+    if (params.status) q.set('status_filter', params.status);
+    const qs = q.toString();
+    return apiClient.get<Proposal[]>(`/traces/proposals${qs ? `?${qs}` : ''}`);
+  },
+
+  proposal: (id: string): Promise<ProposalDetail> => apiClient.get<ProposalDetail>(`/traces/proposals/${seg(id)}`),
+
+  approveProposal: (id: string): Promise<Proposal> => apiClient.post<Proposal>(`/traces/proposals/${seg(id)}/approve`),
+
+  rejectProposal: (id: string): Promise<Proposal> => apiClient.post<Proposal>(`/traces/proposals/${seg(id)}/reject`),
 };

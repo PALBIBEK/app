@@ -1069,6 +1069,14 @@ class AiClient:
         payload = await self._json_request("GET", "/v1/traces/issues", identity, expected=(200,), params=params)
         return payload if isinstance(payload, dict) else {"issues": []}
 
+    async def reflect(self, identity: TenantPrincipal, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/traces/reflect: a proposed prompt change from how the runs went wrong."""
+        payload = await self._json_request(
+            "POST", "/v1/traces/reflect", identity, json_body=body, expected=(200,),
+            timeout=LONG_CALL_TIMEOUT_S,  # one model call over a prompt and its evidence
+        )
+        return payload if isinstance(payload, dict) else {}
+
     async def list_judges(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
         payload = await self._json_request(
             "GET", "/v1/traces/judges", identity, expected=(200,), params={"composition_id": composition_id}

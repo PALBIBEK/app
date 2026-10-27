@@ -202,6 +202,29 @@ check(statuses.includes('needs_approval') && statuses.includes('done'), `the bas
 await shot(p, 't6-compare');
 console.log('12 compared:', await p.getByTestId('comparison-summary').innerText());
 
+// Learn a change from the traces, measured on the dataset. The dev model only echoes, so what
+// it proposes is not a real fix: the journey checks the loop ends in a decision that says why.
+await p.goto(`${BASE}/traces/improve`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+await p.getByRole('combobox', { name: 'Measured on' }).selectOption({ label: 'regressions (2)' });
+await p.getByLabel('What should it fix? (optional)').fill('the command should exit 0');
+await p.getByTestId('propose').click();
+const proposal = p.getByTestId('proposal').first();
+await proposal.waitFor({ timeout: 15000 });
+const ended = ['awaiting_approval', 'refused', 'no_change', 'failed'];
+for (let i = 0; i < 240 && !ended.includes(await proposal.getAttribute('data-status')); i++) await p.waitForTimeout(2500);
+const outcome = await proposal.getAttribute('data-status');
+check(ended.includes(outcome), `the change reached a decision (${outcome})`);
+await proposal.getByRole('link').click();
+await p.getByTestId('proposal-status').waitFor({ timeout: 15000 });
+const said = await p.getByTestId('proposal-status').innerText();
+check(said.length > 20, `the change says where it stands (${said})`);
+if (outcome === 'awaiting_approval' || outcome === 'refused') await p.getByTestId('gate').waitFor({ timeout: 15000 });
+const live = (await (await fetch(`${API}/harnesses/${hid}/releases`, { headers: await apiHeaders() })).json()).map((r) => r.version);
+check(live.length === 2, `nothing was published without an approval (${live})`);
+await shot(p, 't7-change');
+console.log('13 a change was learned and decided:', outcome, '·', said.replace(/\n/g, ' '));
+
 await b.close();
 await deleteHarness(hid);
 console.log('traces journey passed');

@@ -139,10 +139,39 @@ class HarnessPublisher:
 
         version = (latest.version if latest else 0) + 1
         artifacts = await self._artifacts(harness, manifest, version, identity)
+        release = await self._release(harness, manifest, version, artifacts, user_id=user_id, db=db)
+        return Published(release, created=True)
+
+    async def publish_candidate(
+        self, harness: Harness, manifest: HarnessManifest, *, tag: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> dict[str, str]:
+        """Publish ``manifest``'s artifacts as a candidate: runnable by an exact pin, but not a
+        release and not live. ``promote`` makes the same artifacts the next version."""
+        manifest = await EnvironmentService.resolve(manifest, harness.user_id, db)
+        history = await releases(harness.id, db)
+        version = (history[0].version if history else 0) + 1
+        return await self._artifacts(
+            harness, manifest, version, identity,
+            harness_version=f"{artifact_prefix(harness.id)}-c{tag}", semver=f"1.{version}.0-candidate.{tag}",
+        )
+
+    async def promote(
+        self, harness: Harness, manifest: HarnessManifest, artifacts: dict[str, str], *, user_id: str, db: AsyncSession
+    ) -> Published:
+        """Make a candidate's artifacts, exactly as they were measured, the next live version."""
+        history = await releases(harness.id, db)
+        version = (history[0].version if history else 0) + 1
+        release = await self._release(harness, manifest, version, artifacts, user_id=user_id, db=db)
+        return Published(release, created=True)
+
+    async def _release(
+        self, harness: Harness, manifest: HarnessManifest, version: int, artifacts: dict[str, str], *,
+        user_id: str, db: AsyncSession,
+    ) -> HarnessRelease:
         release = HarnessRelease(
             harness_id=harness.id,
             version=version,
-            manifest=body,
+            manifest=manifest_body(manifest),
             composition_id=artifacts["composition_id"],
             composition_digest=artifacts["composition_digest"],
             harness_version=artifacts["harness_version"],
@@ -157,7 +186,7 @@ class HarnessPublisher:
         harness.published_tools = list(manifest.tools)
         await db.commit()
         await db.refresh(release)
-        return Published(release, created=True)
+        return release
 
     @staticmethod
     def _bind(harness: Harness, release: HarnessRelease, user_id: str) -> None:
@@ -170,10 +199,11 @@ class HarnessPublisher:
         harness.bound_by = user_id
 
     async def _artifacts(
-        self, harness: Harness, m: HarnessManifest, version: int, identity: TenantPrincipal
+        self, harness: Harness, m: HarnessManifest, version: int, identity: TenantPrincipal, *,
+        harness_version: str | None = None, semver: str | None = None,
     ) -> dict[str, str]:
         prefix = artifact_prefix(harness.id)
-        semver = f"1.{version}.0"
+        semver = semver or f"1.{version}.0"
         base = await self._call("policy", self._client.get_harness_version(identity, BASE_HARNESS_VERSION))
         base_manifest: dict[str, Any] = base.get("manifest") or {}
         registry = {t["name"]: t for t in await self._call("tools", self._client.list_tools(identity))}
@@ -248,7 +278,7 @@ class HarnessPublisher:
             "recall": {"enabled": False, "backend": "none"},
         })
 
-        harness_version = f"{prefix}-r{version}"
+        harness_version = harness_version or f"{prefix}-r{version}"
         p = m.policy
         version_body: dict[str, Any] = {
             "harness_version": harness_version,

@@ -13,6 +13,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstr
 from sqlalchemy.orm import Mapped, mapped_column
 
 from prime_agent.db import Base
+from prime_agent.db.models.harness_release import JSON_DOCUMENT
 
 
 def _now() -> datetime:
@@ -110,3 +111,48 @@ class ExperimentRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Proposal(Base):
+    """A change to an agent proposed from how its runs went wrong, and what became of it.
+
+    It is drafted from the agent's issues (a reflection), published as a candidate that is not
+    live, replayed on a dataset beside the version it would replace, and gated: a candidate
+    that does worse on any saved run is refused. One that passes waits for a person, who sees
+    the diff and the results; approving it makes the candidate, exactly as measured, the next
+    version.
+    """
+
+    __tablename__ = "trace_proposals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    harness_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("harnesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    dataset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trace_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="drafting")
+    """``drafting``, ``evaluating``, ``awaiting_approval``, ``refused`` (the gate said no),
+    ``no_change`` (nothing to change), ``failed``, ``approved`` or ``rejected``."""
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """What the person asked to be addressed, if anything."""
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_manifest: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False)
+    candidate_manifest: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    evidence: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    candidate: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """The candidate's pin: composition id and digest, harness version, runtime."""
+    baseline_experiment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    candidate_experiment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    gate: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """The gate's decision: passed, and why, item by item."""
+    release_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """The version it became, once approved."""
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

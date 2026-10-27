@@ -8,16 +8,25 @@ come from ``.../spans/{span_id}``, so opening a trace never ships every tool out
 
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from supervisor.api import deps
-from supervisor.db.models import SessionRow
+from supervisor.db.models import RunTraceRow, SessionRow
 from supervisor.traces.issues import list_issues
 from supervisor.traces.judges import delete_judge, list_judges, save_judge
 from supervisor.traces.model import RunStatus
+from supervisor.traces.reflect import (
+    REFLECT_MODEL_ENV,
+    ProposalError,
+    parse_proposal,
+    reflect_messages,
+)
 from supervisor.traces.scores import (
     Feedback,
     clear_feedback,
@@ -279,3 +288,81 @@ async def remove_judge(judge_id: str, request: Request, tenant_id: str = Depends
     if not await delete_judge(deps.get_session_factory(request), tenant_id=tenant_id, judge_id=judge_id):
         raise HTTPException(status_code=404, detail="judge not found")
     return Response(status_code=204)
+
+
+class PromptSectionIn(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    text: str = Field(max_length=20_000)
+
+
+class ReflectIn(BaseModel):
+    composition_id: str = Field(min_length=1, max_length=255)
+    persona: str = Field(default="", max_length=2000)
+    sections: list[PromptSectionIn] = Field(min_length=1, max_length=50)
+    notes: str | None = Field(default=None, max_length=2000)
+    """What the person wants addressed, in their words."""
+    since_ms: int | None = None
+    model: str | None = Field(default=None, max_length=255)
+    exclude_sessions: list[str] = Field(default_factory=list, max_length=5000)
+    """Sessions that are not evidence: the replays a candidate is measured on, so the
+    reflection never sees what it will be graded on."""
+
+
+@router.post("/v1/traces/reflect")
+async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
+    """Read how the composition's runs went wrong and propose edits to its prompt.
+
+    Changes nothing: the proposal is for the caller to try on saved runs and to approve.
+    The model is asked through the newest session of the composition (its key and budget).
+    A model that cannot be asked is a 424, a reply that is not a proposal a 422: both say why.
+    """
+    factory = deps.get_session_factory(request)
+    principal = deps.request_principal_id(request, tenant_id)
+    issues = await list_issues(factory, tenant_id=tenant_id, principal_id=principal,
+                               composition_id=body.composition_id, since_ms=body.since_ms, limit=8,
+                               exclude_sessions=body.exclude_sessions)
+    if not issues and not (body.notes or "").strip():
+        raise HTTPException(status_code=409, detail={"error_code": "NO_EVIDENCE",
+                                                     "message": "no failing runs to learn from yet"})
+    async with factory() as db:
+        newest = (
+            await db.execute(
+                select(SessionRow)
+                .join(RunTraceRow, RunTraceRow.session_id == SessionRow.id)
+                .where(RunTraceRow.tenant_id == tenant_id, RunTraceRow.composition_id == body.composition_id)
+                .order_by(RunTraceRow.started_ms.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    client = None
+    if newest is not None:
+        try:
+            client = deps.get_manager(request).session_model_client(newest.id, newest)
+        except Exception:  # noqa: BLE001 — a session that cannot bind a client is the same as none
+            client = None
+    if client is None:
+        raise HTTPException(status_code=409, detail={"error_code": "NO_MODEL",
+                                                     "message": "the agent has no session to ask a model through yet"})
+    sections = [{"id": s.id, "text": s.text} for s in body.sections]
+    messages = reflect_messages(body.persona, sections, issues, body.notes)
+    model = (body.model or os.environ.get(REFLECT_MODEL_ENV, "")).strip() or None
+
+    def ask() -> str:
+        return str(client.complete(messages, [], model=model, tool_choice="none").message.content or "")
+
+    try:
+        reply = await asyncio.to_thread(ask)
+    except Exception as exc:
+        raise HTTPException(status_code=424, detail={"error_code": "MODEL_FAILED",
+                                                     "message": f"the model could not be asked: {exc}"[:300]}) from exc
+    try:
+        proposal = parse_proposal(reply, body.persona, sections)
+    except ProposalError as exc:
+        raise HTTPException(status_code=422, detail={"error_code": "NOT_A_PROPOSAL", "message": str(exc)}) from exc
+    evidence = [
+        {"key": i["key"], "title": i["title"], "runs": i["runs"],
+         "examples": [{k: e.get(k) for k in ("session_id", "run_id", "input", "summary", "reason")}
+                      for e in i["examples"][:3]]}
+        for i in issues
+    ]
+    return {"proposal": proposal.out(), "evidence": evidence, "model": model}

@@ -48,6 +48,7 @@ T2 = ServiceAuth("t2")
 class Api:
     client: AsyncClient
     factory: async_sessionmaker[AsyncSession]
+    state: Any = None
 
     async def session(self, *, tenant: str = "t1", owner: str | None = "alice", status: str = "active") -> str:
         sid = uuid4().hex
@@ -115,7 +116,7 @@ async def api(tmp_path: Path) -> AsyncIterator[Api]:
             service_jwt_secret=SECRET,
         )
         async with AsyncClient(transport=ASGITransport(app=create_app(state=state)), base_url="http://t") as client:
-            yield Api(client, factory)
+            yield Api(client, factory, state)
 
 
 async def list_traces(api: Api, headers: dict[str, str], **params: Any) -> dict[str, Any]:

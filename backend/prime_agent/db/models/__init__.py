@@ -6,7 +6,7 @@ Import all models here for Alembic auto-generation to work.
 from prime_agent.db import Base
 
 from .environment import Environment
-from .evaluation import Dataset, DatasetItem, Experiment, ExperimentRun
+from .evaluation import Dataset, DatasetItem, Experiment, ExperimentRun, Proposal
 from .harness import Harness
 from .harness_release import HarnessDraft, HarnessRelease
 from .refresh_token import RefreshToken
@@ -21,6 +21,7 @@ __all__ = [
     "Environment",
     "Experiment",
     "ExperimentRun",
+    "Proposal",
     "Harness",
     "HarnessDraft",
     "HarnessRelease",

@@ -124,6 +124,16 @@ it hit and the runs to start from. The *Agents* page shows each version's qualit
 
 ![Issues](docs/tour/27-trace-issues.png)
 
+Save runs worth keeping to a *Dataset*, and replay it on any version in fresh sessions to
+compare versions run by run (replays never approve anything). *Improve* closes the loop: a model
+reads an agent's issues and proposes prompt edits, the change is published as a candidate that
+is not live, replayed on a dataset beside the live version, and refused unless it does better
+on some saved run and worse on none. One that passes waits in *Approvals* with its diff, its
+evidence and its results; approving publishes exactly what was measured as the next version.
+The optimizer never sees the runs it is measured on and cannot change a judge or a dataset.
+
+![A learned change](docs/tour/28-trace-improve.png)
+
 **Memory.** What each agent remembers about you, in notebooks per version. Add, edit, forget
 or search facts. *History* restores a notebook to how it was after any change.
 
