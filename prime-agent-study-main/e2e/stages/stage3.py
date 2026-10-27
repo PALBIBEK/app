@@ -120,7 +120,7 @@ for route, path in (("standin-chat", "/v1/chat/completions"), ("standin-response
     check(f"[{route}] model reached over {path}", len(calls) >= 2 and all(c["path"] == path for c in calls),
           [c["path"] for c in calls])
     if calls:
-        check(f"[{route}] pinned system prompt reached the model", "You are a coding agent." in system_text(calls[0]),
+        check(f"[{route}] pinned system prompt reached the model", "You are an expert coding assistant." in system_text(calls[0]),
               system_text(calls[0])[:150])
         offered = tool_names(calls[0]["body"])
         check(f"[{route}] pinned tools + platform tools offered", GITHI_TOOLS | {"memory", "history"} <= offered, sorted(offered))
@@ -140,13 +140,13 @@ for route, path in (("standin-chat", "/v1/chat/completions"), ("standin-response
 print("\n## B. Prompt changes reach the model")
 prompt2 = local("prompt_packs", "coding-prompt") | {"name": "my-coding-prompt", "semver": "1.1.0"}
 prompt2["sections"] = [dict(s) for s in prompt2["sections"]]
-prompt2["sections"][1]["text"] = "Prefer small diffs. Always explain the change in one line."
+prompt2["sections"][-1]["text"] += " Always explain the change in one line."
 p2 = ref(publish("prompt_pack", prompt2))
 analyst = ref(publish("prompt_pack", {"name": "analyst-prompt", **COMMON, "persona": "analyst", "vars": [],
                                       "sections": [{"id": "s1", "order": 1, "complete": True,
                                                     "text": "You are a data analyst. Answer in bullet points."}]}))
 for name, pref, expect, absent in (("p-coding-1-1", p2, "Always explain the change", None),
-                                   ("p-analyst", analyst, "You are a data analyst", "You are a coding agent")):
+                                   ("p-analyst", analyst, "You are a data analyst", "You are an expert coding assistant")):
     sid = session(name, composition(name, prompt_pack=pref))
     _, _, calls = turn(sid, "hello", 1)
     text = system_text(calls[0]) if calls else ""
