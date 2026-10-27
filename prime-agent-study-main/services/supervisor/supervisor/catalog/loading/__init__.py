@@ -1,10 +1,5 @@
-"""Catalog loading layer — bootstrap and verification.
-
-This module contains:
-- bootstrap.py: Load catalog from disk at startup
-- loader.py: Parse YAML/JSON artifact files
-- verify.py: Catalog integrity verification
-"""
+"""The shipped catalog: loaded from ``harness/`` at boot (``loader``), checked (``verify``),
+and a composition that cannot run is withdrawn rather than failing the boot (``bootstrap``)."""
 
 from supervisor.catalog.loading.bootstrap import (
     agent_platform_root,
@@ -15,10 +10,8 @@ from supervisor.catalog.loading.bootstrap import (
 from supervisor.catalog.loading.loader import load_composition_catalog
 from supervisor.catalog.loading.verify import (
     composition_problems,
-    dump_composition_catalog,
     list_catalog_problems,
     verify_composition_catalog,
-    verify_harness_catalog,
 )
 
 __all__ = [
@@ -28,11 +21,9 @@ __all__ = [
     # Verify
     "composition_problems",
     "default_catalog_dir",
-    "dump_composition_catalog",
     "list_catalog_problems",
     # Loader
     "load_composition_catalog",
     "resolve_catalog_dir",
     "verify_composition_catalog",
-    "verify_harness_catalog",
 ]

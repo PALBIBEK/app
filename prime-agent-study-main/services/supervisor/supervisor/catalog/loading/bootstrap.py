@@ -1,4 +1,4 @@
-"""Bootstrap composition catalog at process start (DeepSeek boot() parity)."""
+"""The catalog a process starts with: the shipped artifacts, minus compositions that cannot run."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from supervisor.catalog.core.types import AgentComposition
+from supervisor.catalog.core.types import AgentComposition, ArtifactKind, ArtifactStatus
 from supervisor.catalog.loading.loader import load_composition_catalog
 from supervisor.catalog.loading.verify import verify_composition_catalog
 from supervisor.catalog.storage import CompositionCatalog
@@ -36,6 +36,7 @@ def agent_platform_root() -> Path:
 
 
 def default_catalog_dir() -> Path:
+    """The shipped catalog: ``<platform root>/harness``."""
     return agent_platform_root() / "harness"
 
 
@@ -74,7 +75,7 @@ def soft_skip_invalid_compositions(
             continue
         offered = [
             art
-            for art in catalog.list_artifacts("composition", status="offered")
+            for art in catalog.artifacts(ArtifactKind.COMPOSITION, status=ArtifactStatus.OFFERED)
             if art.name == name and isinstance(art, AgentComposition)
         ]
         if not offered:
@@ -111,7 +112,7 @@ def bootstrap_composition_catalog(
         return catalog
 
     soft_skip_invalid_compositions(catalog, problems)
-    offered = catalog.list_artifacts("composition", status="offered")
+    offered = catalog.list_artifacts(ArtifactKind.COMPOSITION, status=ArtifactStatus.OFFERED)
     if not offered:
         raise RuntimeError(
             "composition catalog verify failed: zero offered compositions after soft-skip:\n"

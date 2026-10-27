@@ -1,141 +1,107 @@
-"""Load shipped composition catalog artifacts from the harness tree."""
+"""Load the shipped catalog (``harness/``) into a ``CompositionCatalog``.
+
+Layout: ``prompt_packs/``, ``tool_sets/``, ``sandbox_profiles/``, ``memory_profiles/``
+and ``compositions/``, one JSON artifact per file; ``previous/`` holds the same
+layout for shipped versions an edit replaced. A file whose ``status`` is
+``draft`` is work in progress and is not offered.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from supervisor.catalog.core.errors import DigestMissing
-from supervisor.catalog.core.types import (
-    AgentComposition,
-    Artifact,
-    ArtifactKind,
-    DigestRef,
-    PlugBindings,
-)
-from supervisor.catalog.storage import (
-    CompositionCatalog,
-    memory_profile_from_dict,
-    prompt_pack_from_dict,
-    sandbox_profile_from_dict,
-    tool_set_from_dict,
-)
+from supervisor.catalog.core.types import ArtifactKind, ArtifactStatus
+from supervisor.catalog.storage import CompositionCatalog, artifact_from_dict
 
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_dir(catalog_dir: Path, subdir: str, loader) -> list[Any]:  # type: ignore[no-untyped-def]
-    root = catalog_dir / subdir
-    if not root.is_dir():
-        return []
-    items = []
-    for path in sorted(root.glob("*.json")):
-        items.append(loader(_read_json(path)))
-    return items
-
+logger = logging.getLogger(__name__)
 
 PREVIOUS_DIR = "previous"
 """Shipped versions an edit replaced, kept frozen so sessions and tenant compositions
 pinned to them still resolve. Loaded before the current versions (which stay the
 latest); never rewritten by recompute-digests."""
 
+_LEAVES: tuple[tuple[str, ArtifactKind], ...] = (
+    ("prompt_packs", ArtifactKind.PROMPT_PACK),
+    ("tool_sets", ArtifactKind.TOOL_SET),
+    ("sandbox_profiles", ArtifactKind.SANDBOX_PROFILE),
+    ("memory_profiles", ArtifactKind.MEMORY_PROFILE),
+)
+_REFERENCES: tuple[tuple[str, ArtifactKind], ...] = (
+    ("prompt_pack", ArtifactKind.PROMPT_PACK),
+    ("tool_set", ArtifactKind.TOOL_SET),
+    ("sandbox_profile", ArtifactKind.SANDBOX_PROFILE),
+    ("memory_profile", ArtifactKind.MEMORY_PROFILE),
+)
+"""Composition field -> the kind of artifact it pins."""
+
 
 def load_composition_catalog(catalog_dir: Path) -> CompositionCatalog:
-    """Offer all shipped artifacts from ``catalog_dir`` (prompts → tools → profiles → compositions):
-    first the frozen previous versions (``previous/``), then the current ones."""
+    """Offer every shipped artifact: every leaf a composition may pin before any composition,
+    and in each, the frozen previous versions before the current ones (which stay the latest)."""
     if not catalog_dir.is_dir():
         raise FileNotFoundError(f"composition catalog dir not found: {catalog_dir}")
 
     catalog = CompositionCatalog()
     roots = [r for r in (catalog_dir / PREVIOUS_DIR, catalog_dir) if r.is_dir()]
-    for root in roots:  # every artifact a composition may pin, before any composition
-        _load_leaves(catalog, root)
     for root in roots:
-        _load_compositions(catalog, root)
+        for subdir, kind in _LEAVES:
+            for data in _offerable(root / subdir):
+                catalog.offer(artifact_from_dict(kind, data))
+    for root in roots:
+        for data in _offerable(root / "compositions"):
+            catalog.offer(artifact_from_dict(ArtifactKind.COMPOSITION, _pin_references(catalog, data)))
     return catalog
 
 
-def _load_leaves(catalog: CompositionCatalog, catalog_dir: Path) -> None:
-    for pack in _load_dir(catalog_dir, "prompt_packs", prompt_pack_from_dict):
-        catalog.offer(pack)
-    for tool_set in _load_dir(catalog_dir, "tool_sets", tool_set_from_dict):
-        catalog.offer(tool_set)
-    for profile in _load_dir(catalog_dir, "sandbox_profiles", sandbox_profile_from_dict):
-        catalog.offer(profile)
-    for profile in _load_dir(catalog_dir, "memory_profiles", memory_profile_from_dict):
-        catalog.offer(profile)
-
-
-
-def _load_compositions(catalog: CompositionCatalog, catalog_dir: Path) -> None:
-    if not (catalog_dir / "compositions").is_dir():
+def _offerable(directory: Path) -> Iterator[dict[str, Any]]:
+    """Each artifact file in ``directory`` that is not a draft, in name order."""
+    if not directory.is_dir():
         return
-    for path in sorted((catalog_dir / "compositions").glob("*.json")):
-        data = _read_json(path)
-        pp_raw = data["prompt_pack"]
-        ts_raw = data["tool_set"]
-        sp_raw = data.get("sandbox_profile")
-        mp_raw = data.get("memory_profile")
-        pp = _resolve_ref(catalog, ArtifactKind.PROMPT_PACK, pp_raw["id"], pp_raw.get("digest", ""))
-        ts = _resolve_ref(catalog, ArtifactKind.TOOL_SET, ts_raw["id"], ts_raw.get("digest", ""))
-        sp_ref: DigestRef | None = None
-        if sp_raw is not None:
-            sp = _resolve_ref(
-                catalog, ArtifactKind.SANDBOX_PROFILE, sp_raw["id"], sp_raw.get("digest", "")
-            )
-            sp_ref = DigestRef(id=sp.name, digest=sp.digest)
-        mp_ref: DigestRef | None = None
-        if mp_raw is not None:
-            mp = _resolve_ref(
-                catalog, ArtifactKind.MEMORY_PROFILE, mp_raw["id"], mp_raw.get("digest", "")
-            )
-            mp_ref = DigestRef(id=mp.name, digest=mp.digest)
-        comp = AgentComposition(
-            name=data["name"],
-            semver=data["semver"],
-            digest=data.get("digest", ""),
-            protocol_version=int(data.get("protocol_version", 1)),
-            status=data.get("status", "offered"),  # type: ignore[arg-type]
-            harness_version=data["harness_version"],
-            prompt_pack=DigestRef(id=pp.name, digest=pp.digest),
-            tool_set=DigestRef(id=ts.name, digest=ts.digest),
-            sandbox_profile=sp_ref,
-            memory_profile=mp_ref,
-            plug_bindings=PlugBindings.from_dict(data.get("plug_bindings")),
-        )
-        catalog.offer(comp)
+    for path in sorted(directory.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("status") == ArtifactStatus.DRAFT:
+            logger.info("catalog: %s is a draft; not offered", path.name)
+            continue
+        yield data
+
+
+def _pin_references(catalog: CompositionCatalog, data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` with each reference pinned to an exact digest.
+
+    A shipped composition may leave a reference's digest as a placeholder, meaning
+    "the version shipped alongside": the newest offered one of that name.
+    """
+    pinned = dict(data)
+    for field, kind in _REFERENCES:
+        if (ref := data.get(field)) is not None:
+            pinned[field] = _pin(catalog, kind, ref)
+    if hands := data.get("hands"):
+        pinned["hands"] = {name: _pin(catalog, ArtifactKind.SANDBOX_PROFILE, ref) for name, ref in hands.items()}
+    return pinned
+
+
+def _pin(catalog: CompositionCatalog, kind: ArtifactKind, ref: dict[str, Any]) -> dict[str, str]:
+    artifact_id, digest = ref["id"], ref.get("digest") or ""
+    if not _is_placeholder_digest(digest):
+        return {"id": artifact_id, "digest": catalog.get(kind, artifact_id, digest).digest}
+    latest = catalog.latest(kind, artifact_id)
+    if latest is None:
+        raise DigestMissing(kind=kind, artifact_id=artifact_id, digest=digest or "latest")
+    return {"id": artifact_id, "digest": latest.digest}
 
 
 def _is_placeholder_digest(digest: str) -> bool:
-    """True for composition REPLACE markers and fixture image pins (aaaa…/bbbb…).
+    """True for authoring markers and fixture image pins (all one hex digit).
 
     D14: shipped coding local_docker pins must not use all-identical hex digests.
     """
-    if not digest:
-        return True
     d = digest.strip()
-    if d.startswith("sha256:REPLACE") or d == "sha256:PLACEHOLDER":
+    if not d or d.startswith("sha256:REPLACE") or d == "sha256:PLACEHOLDER":
         return True
-    # sha256:<64 hex> where every hex digit is the same → fixture, not a real image
-    if d.startswith("sha256:") and len(d) == len("sha256:") + 64:
-        hex_part = d[len("sha256:") :]
-        if all(c in "0123456789abcdef" for c in hex_part) and len(set(hex_part)) == 1:
-            return True
-    return False
-
-
-def _resolve_ref(
-    catalog: CompositionCatalog,
-    kind: ArtifactKind,
-    artifact_id: str,
-    digest: str,
-) -> Artifact:
-    if not _is_placeholder_digest(digest):
-        return catalog.get(kind, artifact_id, digest)
-    digests = catalog._by_name.get((kind, artifact_id), [])
-    if not digests:
-        raise DigestMissing(kind=kind, artifact_id=artifact_id, digest=digest or "latest")
-    return catalog.get(kind, artifact_id, digests[-1])
+    hex_part = d.removeprefix("sha256:")
+    return d.startswith("sha256:") and len(hex_part) == 64 and len(set(hex_part)) == 1

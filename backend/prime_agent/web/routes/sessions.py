@@ -10,10 +10,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.session import (
+    RUN_TERMINAL,
     CreateSessionFromHarness,
     ForkSessionRequest,
     ForkSessionResponse,
-    RUN_TERMINAL,
     RunResponse,
     SessionApprovalChoice,
     SessionApprovalOut,
@@ -21,6 +21,7 @@ from prime_agent.schemas.session import (
     SessionListResponse,
     SessionMessageRequest,
     SessionMessageResponse,
+    SessionPinsResponse,
     SessionResponse,
     SessionStartupResponse,
     SessionToolInvokeRequest,
@@ -123,6 +124,16 @@ async def cancel_session_run(session_id: str, run_id: str, db: DbSession, curren
     except SessionNotFoundError as exc:
         raise_session_not_found_http(exc)
     return _run_answer(run)
+
+
+@router.get("/{session_id}/pins", response_model=SessionPinsResponse)
+async def get_session_pins(session_id: str, db: DbSession, current_user: CurrentUser) -> SessionPinsResponse:
+    """The composition the session runs, part by part (404 when it runs a bare harness)."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().pins(session_id=session_id, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
 
 
 @router.get("/{session_id}/startup", response_model=SessionStartupResponse)

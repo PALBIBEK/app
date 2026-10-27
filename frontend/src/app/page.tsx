@@ -27,7 +27,7 @@ import {
   Tr,
   shortHash,
 } from '@/components/ui';
-import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
+import { useHarnessUsage, useHarnesses } from '@/lib/api/hooks/useHarnesses';
 import { useReleases } from '@/lib/api/hooks/useManifest';
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useSessions } from '@/lib/api/hooks/useSessions';
@@ -205,6 +205,8 @@ const SANDBOX_LABEL: Record<string, string> = {
 function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => void; live: number }): JSX.Element {
   const { data: releases, isLoading } = useReleases(agent.id);
   const { data: platform } = usePlatformStatus();
+  const { data: usage } = useHarnessUsage(agent.bind?.composition_id ? agent.id : undefined);
+  const sessionsOn = new Map((usage?.versions ?? []).map((v) => [v.digest, v.sessions]));
   const current = releases?.[0];
   const digest = current?.composition_digest ?? agent.bind?.composition_digest ?? null;
   const published = stateOf(agent) !== 'draft';
@@ -240,6 +242,13 @@ function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => 
           <LinkButton href={`/harness/${agent.id}/sessions`}>Sessions{live ? ` · ${live} live` : ''}</LinkButton>
         </div>
         {!canRun && published ? <p className="text-xs text-ink-3">The AI platform is not ready, so sessions cannot start right now.</p> : null}
+        {usage && usage.session_count > 0 ? (
+          <p className="text-xs text-ink-3" data-testid="agent-usage">
+            {usage.session_count} session{usage.session_count === 1 ? '' : 's'} run
+            {usage.active_sessions ? ` · ${usage.active_sessions} still open` : ''}
+            {usage.last_used_at ? ` · last ${formatRelativeTime(usage.last_used_at)}` : ''}
+          </p>
+        ) : null}
       </div>
 
       {m ? (
@@ -328,6 +337,11 @@ function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => 
                     <span className="font-mono text-[13px] font-medium">v{r.version}</span>
                     <span className="font-mono text-xs text-ink-2">{shortHash(r.composition_digest)}</span>
                     {i === 0 ? <span className="rounded-full bg-accent-50 px-[7px] py-px text-[11.5px] text-accent-700">live</span> : null}
+                    {sessionsOn.get(r.composition_digest) ? (
+                      <span className="text-xs text-ink-3">
+                        {sessionsOn.get(r.composition_digest)} session{sessionsOn.get(r.composition_digest) === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="text-[13px]">
                     {r.manifest.model} · {r.manifest.tools.length} tool{r.manifest.tools.length === 1 ? '' : 's'} · {r.manifest.policy.max_steps} steps

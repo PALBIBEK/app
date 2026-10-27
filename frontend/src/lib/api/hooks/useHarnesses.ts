@@ -45,6 +45,7 @@ export const harnessKeys = {
   list: (filters: string) => [...harnessKeys.lists(), { filters }] as const,
   details: () => [...harnessKeys.all, 'detail'] as const,
   detail: (id: string) => [...harnessKeys.details(), id] as const,
+  usage: (id: string) => [...harnessKeys.all, 'usage', id] as const,
 };
 
 /**
@@ -57,6 +58,17 @@ export function useHarnesses(params?: { search?: string }) {
     queryKey: harnessKeys.list(JSON.stringify(params)),
     queryFn: () => harnessesAPI.list(params),
     enabled: isAuthenticated,
+  });
+}
+
+/** How many sessions run each published version of the agent. */
+export function useHarnessUsage(id: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: harnessKeys.usage(id ?? ''),
+    queryFn: () => harnessesAPI.usage(id!),
+    enabled: isAuthenticated && !!id,
+    staleTime: 30_000,
   });
 }
 

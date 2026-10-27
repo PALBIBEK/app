@@ -1,64 +1,60 @@
-"""Catalog parity verify + dump (DeepSeek dump-config parity)."""
+"""Is the catalog runnable? Every offered composition's parts exist, are offered, and can run.
+
+Used at boot (``bootstrap``: a shipped composition with problems is not offered)
+and by ``/readyz`` (``list_catalog_problems``).
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
-from supervisor.catalog.core.digests import content_digest
-from supervisor.catalog.core.types import AgentComposition, ToolSet
+from supervisor.catalog.core.types import (
+    AgentComposition,
+    ArtifactKind,
+    ArtifactStatus,
+    DigestRef,
+    ToolSet,
+)
 from supervisor.catalog.services import require_implemented
-from supervisor.catalog.storage import CompositionCatalog
+from supervisor.catalog.storage import SYSTEM_OWNER, CompositionCatalog
 
 
 def composition_problems(catalog: CompositionCatalog, comp: AgentComposition) -> list[str]:
-    """Return human-readable problems for one composition (DeepSeek compositionProblem)."""
+    """What stops ``comp`` from running, one line each (empty when it can run)."""
     problems: list[str] = []
-    try:
-        catalog.get("prompt_pack", comp.prompt_pack.id, comp.prompt_pack.digest, require_offered=True)
-    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
-        problems.append(f"{comp.name}: prompt_pack {comp.prompt_pack.id}@{comp.prompt_pack.digest}: {exc}")
-    try:
-        tool_set = catalog.get_as(
-            ToolSet, "tool_set", comp.tool_set.id, comp.tool_set.digest, require_offered=True
-        )
-        require_implemented(tool_set)
-    except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
-        problems.append(f"{comp.name}: tool_set {comp.tool_set.id}@{comp.tool_set.digest}: {exc}")
-    if comp.sandbox_profile is not None:
-        sp = comp.sandbox_profile
+
+    def check(kind: ArtifactKind, ref: DigestRef) -> None:
         try:
-            catalog.get("sandbox_profile", sp.id, sp.digest, require_offered=True)
-        except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
-            problems.append(f"{comp.name}: sandbox_profile {sp.id}@{sp.digest}: {exc}")
-    if comp.status != "offered":
-        problems.append(f"{comp.name}: status={comp.status!r} (not offered)")
+            artifact = catalog.get(kind, ref.id, ref.digest, require_offered=True)
+            if isinstance(artifact, ToolSet):
+                require_implemented(artifact)
+        except Exception as exc:  # noqa: BLE001 - every failure is reported as a problem
+            problems.append(f"{comp.name}: {kind.value} {ref.id}@{ref.digest}: {exc}")
+
+    check(ArtifactKind.PROMPT_PACK, comp.prompt_pack)
+    check(ArtifactKind.TOOL_SET, comp.tool_set)
+    if comp.sandbox_profile is not None:
+        check(ArtifactKind.SANDBOX_PROFILE, comp.sandbox_profile)
+    for _, hand in comp.hands:
+        check(ArtifactKind.SANDBOX_PROFILE, hand)
+    if comp.memory_profile is not None:
+        check(ArtifactKind.MEMORY_PROFILE, comp.memory_profile)
+    if comp.status != ArtifactStatus.OFFERED:
+        problems.append(f"{comp.name}: status={comp.status.value!r} (not offered)")
     return problems
 
 
-def verify_harness_catalog(
-    catalog_dir: Path,
-    *,
-    offered_names: set[str] | None = None,
-) -> list[str]:
-    """Harness manifest recovery tools vs composition ToolSets."""
+def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -> list[str]:
+    """Problems with the shipped catalog in ``catalog_dir`` as loaded into ``catalog``.
+
+    Every offered composition must resolve and its recovery tools be in its tool
+    set; a composition file that pins exact digests must match what was loaded.
+    """
     from supervisor.harness.validate import verify_recovery_tools_in_compositions
 
-    return verify_recovery_tools_in_compositions(
-        catalog_dir, offered_names=offered_names
-    )
-
-
-def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -> list[str]:
-    """Check offered compositions resolve and on-disk fixture digests match computed bodies."""
-    problems: list[str] = []
-    offered_names = {
-        art.name
-        for art in catalog.list_artifacts("composition", status="offered")
-        if isinstance(art, AgentComposition)
-    }
-    problems.extend(verify_harness_catalog(catalog_dir, offered_names=offered_names))
+    offered = {art.name for art in catalog.artifacts(ArtifactKind.COMPOSITION, status=ArtifactStatus.OFFERED)}
+    problems = list(verify_recovery_tools_in_compositions(catalog_dir, offered_names=offered))
     compositions_dir = catalog_dir / "compositions"
     if not compositions_dir.is_dir():
         return [f"missing compositions dir: {compositions_dir}"]
@@ -66,90 +62,37 @@ def verify_composition_catalog(catalog: CompositionCatalog, catalog_dir: Path) -
     for path in sorted(compositions_dir.glob("*.json")):
         raw = json.loads(path.read_text(encoding="utf-8"))
         name = raw.get("name", path.stem)
-        status = raw.get("status", "offered")
-        # Soft-skipped / draft fixtures must not fail catalog bootstrap.
-        if name not in offered_names or status != "offered":
+        if name not in offered:  # a draft, or soft-skipped at boot
             continue
+        versions = [
+            art
+            for art in catalog.artifacts(ArtifactKind.COMPOSITION, status=ArtifactStatus.OFFERED)
+            if art.name == name and isinstance(art, AgentComposition)
+        ]
         digest = raw.get("digest", "")
         if digest and not digest.startswith("sha256:REPLACE"):
-            try:
-                comp = catalog.get_as(
-                    AgentComposition, "composition", name, digest, require_offered=True
-                )
-            except Exception as exc:  # noqa: BLE001 - every failure is reported as a verify problem
-                problems.append(f"{path.name}: fixture digest mismatch: {exc}")
+            versions = [v for v in versions if v.digest == digest]
+            if not versions:
+                problems.append(f"{path.name}: no offered {name!r} with the file's digest {digest}")
                 continue
+        for comp in versions:
             problems.extend(composition_problems(catalog, comp))
-        else:
-            # No pinned composition digest in fixture — find offered row by name.
-            offered = [
-                art
-                for (kind, art_name, _), art in catalog._by_key.items()
-                if kind == "composition" and art_name == name and art.status == "offered"
-            ]
-            if not offered:
-                problems.append(f"{path.name}: no offered composition named {name!r}")
-                continue
-            for art in offered:
-                if not isinstance(art, AgentComposition):
-                    continue
-                comp = art
-                problems.extend(composition_problems(catalog, comp))
-                # Fixture child digests must match offered children when present.
-                pp = raw.get("prompt_pack") or {}
-                ts = raw.get("tool_set") or {}
-                if (
-                    pp.get("digest") and not str(pp["digest"]).startswith("sha256:REPLACE")
-                    and pp["digest"] != comp.prompt_pack.digest
-                ):
+            for field in ("prompt_pack", "tool_set"):
+                pinned = (raw.get(field) or {}).get("digest", "")
+                if pinned and not pinned.startswith("sha256:REPLACE") and pinned != getattr(comp, field).digest:
                     problems.append(
-                        f"{path.name}: prompt_pack digest fixture {pp['digest']!r} "
-                        f"!= offered {comp.prompt_pack.digest!r}"
+                        f"{path.name}: {field} digest {pinned!r} != offered {getattr(comp, field).digest!r}"
                     )
-                if (
-                    ts.get("digest") and not str(ts["digest"]).startswith("sha256:REPLACE")
-                    and ts["digest"] != comp.tool_set.digest
-                ):
-                    problems.append(
-                        f"{path.name}: tool_set digest fixture {ts['digest']!r} "
-                        f"!= offered {comp.tool_set.digest!r}"
-                    )
-
     return problems
 
 
 def list_catalog_problems(catalog: CompositionCatalog, *, shipped_only: bool = False) -> list[str]:
-    """List problems for all offered compositions in memory (``shipped_only``: the
-    deployment's own, not tenants')."""
-    from supervisor.catalog.storage.composition import SYSTEM_OWNER
-
+    """Problems with every offered composition held (``shipped_only``: the deployment's own)."""
     problems: list[str] = []
-    for (kind, name, _digest), art in catalog._by_key.items():
-        if kind != "composition" or not isinstance(art, AgentComposition):
+    for comp in catalog.artifacts(ArtifactKind.COMPOSITION, status=ArtifactStatus.OFFERED):
+        if not isinstance(comp, AgentComposition):
             continue
-        if art.status != "offered":
+        if shipped_only and catalog.owner(ArtifactKind.COMPOSITION, comp.name) != SYSTEM_OWNER:
             continue
-        if shipped_only and catalog.owner(kind, name) != SYSTEM_OWNER:
-            continue
-        problems.extend(composition_problems(catalog, art))
+        problems.extend(composition_problems(catalog, comp))
     return problems
-
-
-def dump_composition_catalog(catalog: CompositionCatalog) -> dict[str, Any]:
-    """Canonical dump of offered artifacts (for CLI / startup audit)."""
-    rows: list[dict[str, Any]] = []
-    for (kind, name, digest), art in sorted(catalog._by_key.items()):
-        body = art.body_for_digest()
-        actual = content_digest(body)
-        rows.append(
-            {
-                "kind": kind,
-                "name": name,
-                "digest": digest,
-                "status": art.status,
-                "computed_digest": actual,
-                "digest_match": digest == actual,
-                "body": body,
-            }
-        )
-    return {"artifacts": rows, "count": len(rows)}

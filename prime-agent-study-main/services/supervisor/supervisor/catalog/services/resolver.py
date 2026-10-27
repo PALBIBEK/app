@@ -1,25 +1,19 @@
-"""Composition resolver service — resolve compositions to session pins.
+"""A composition, resolved once at session creation into the exact versions the session runs.
 
-Implements CompositionResolverProtocol with:
-- Protocol-based artifact access (no private attributes)
-- Verified child artifact references
-- Offered status enforcement
-
-Design principles:
-- Only use public Protocol methods
-- Fail fast on missing/invalid artifacts
-- Support both digest and id-based resolution
-
-Reference: Refactored from resolve.py with Protocol compliance.
+``resolve_composition`` checks every part is offered and returns ``SessionPins``,
+which the session keeps for its whole life: republishing or deprecating the
+composition afterwards changes nothing for a session already pinned.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
+from supervisor.catalog.core.digests import reject_floating_ref
 from supervisor.catalog.core.errors import (
-    CatalogError,
     CompositionDigestRequired,
+    CompositionIncompatible,
     CompositionIncomplete,
     DigestMissing,
     NotOffered,
@@ -28,178 +22,69 @@ from supervisor.catalog.core.types import (
     AgentComposition,
     ArtifactKind,
     ArtifactStatus,
+    SandboxProfile,
     SessionPins,
 )
-from supervisor.catalog.storage.memory import reject_floating_ref
+from supervisor.catalog.providers.model_route import apply_runtime_model_route
 
 if TYPE_CHECKING:
     from supervisor.catalog.storage.composition import CompositionCatalog
 
 
 __all__ = [
+    "composition_digest_required",
+    "require_sticky_compatible",
     "require_tenant_access",
     "resolve_composition",
 ]
 
 
+def composition_digest_required() -> bool:
+    """``REQUIRE_COMPOSITION_DIGEST``: sessions must name the exact composition version.
+
+    Off by default (a name resolves to its newest offered version); a deployment that
+    must be able to say exactly what every session ran turns it on.
+    """
+    return os.environ.get("REQUIRE_COMPOSITION_DIGEST", "").strip().lower() in ("1", "true", "yes")
+
+
 def resolve_composition(
-    catalog,
+    catalog: CompositionCatalog,
     *,
     composition_id: str | None = None,
     composition_digest: str | None = None,
     require_digest: bool = False,
 ) -> SessionPins:
-    """Synchronous composition resolution for CompositionCatalog.
+    """The pins for ``composition_id`` at ``composition_digest`` (or its newest offered version).
 
-    This is a convenience function for use with the synchronous
-    CompositionCatalog during bootstrap. For async stores, use
-    CompositionResolver directly.
-
-    Args:
-        catalog: CompositionCatalog instance
-        composition_id: Composition name (for tip resolve)
-        composition_digest: Exact digest
-        require_digest: Reject id-only resolve
-
-    Returns:
-        Session pins with all artifact digests
-
-    Raises:
-        CompositionIncomplete: If missing required pins
-        CompositionDigestRequired: If require_digest and no digest
-        NotOffered: If composition/artifact not found
+    ``require_digest`` refuses a name without a digest (``CompositionDigestRequired``):
+    a deployment that sets ``REQUIRE_COMPOSITION_DIGEST`` runs only versions a caller
+    named exactly. A floating reference (``latest``) is always refused.
     """
     if composition_id is None and composition_digest is None:
-        raise CompositionIncomplete(
-            composition_id="unknown",
-            missing="composition_id or composition_digest",
-        )
-
+        raise CompositionIncomplete("unknown", "composition_id or composition_digest")
     if require_digest and composition_digest is None:
         raise CompositionDigestRequired(composition_id or "unknown")
+    for ref in (composition_id, composition_digest):
+        if ref is not None:
+            reject_floating_ref(ref)
 
-    if composition_id is not None:
-        reject_floating_ref(composition_id)
-    if composition_digest is not None:
-        reject_floating_ref(composition_digest)
-
-    # Load the composition
-    if composition_digest is not None:
-        lookup = catalog.get_by_digest(composition_digest)
-        if lookup is None:
-            raise DigestMissing(
-                kind=ArtifactKind.COMPOSITION.value,
-                artifact_id=composition_id or "unknown",
-                digest=composition_digest,
-            )
-        _kind, name = lookup
-        if composition_id is not None and name != composition_id:
-            # The digest belongs to a different artifact: never silently run it.
-            raise NotOffered(
-                kind=ArtifactKind.COMPOSITION.value,
-                artifact_id=composition_id,
-                digest=composition_digest,
-            )
-        comp = catalog.get(ArtifactKind.COMPOSITION, name, composition_digest)
-    else:
-        assert composition_id is not None
-        digests = catalog.list_versions(ArtifactKind.COMPOSITION, composition_id)
-        if not digests:
-            raise DigestMissing(
-                kind=ArtifactKind.COMPOSITION.value,
-                artifact_id=composition_id,
-                digest="",
-            )
-        # Use the latest offered version
-        comp = None
-        for digest in reversed(digests):
-            try:
-                art = catalog.get(ArtifactKind.COMPOSITION, composition_id, digest)
-                if isinstance(art, AgentComposition) and art.status == ArtifactStatus.OFFERED:
-                    comp = art
-                    break
-            except CatalogError:
-                continue
-        if comp is None:
-            comp = catalog.get(ArtifactKind.COMPOSITION, composition_id, digests[-1])
-
-    if not isinstance(comp, AgentComposition):
-        raise NotOffered(
-            kind=ArtifactKind.COMPOSITION.value,
-            artifact_id=composition_id or "unknown",
-            digest=composition_digest or "",
-        )
-
-    # Verify offered status
+    comp = (
+        _by_digest(catalog, composition_id, composition_digest)
+        if composition_digest is not None
+        else _newest_offered(catalog, composition_id or "")
+    )
     if comp.status != ArtifactStatus.OFFERED:
         raise NotOffered(
-            kind=ArtifactKind.COMPOSITION.value,
-            artifact_id=comp.name,
-            digest=comp.digest,
-            status=comp.status.value if isinstance(comp.status, ArtifactStatus) else str(comp.status),
+            kind=ArtifactKind.COMPOSITION.value, artifact_id=comp.name, digest=comp.digest, status=comp.status.value
         )
-
-    # Verify required child pins
     if not comp.prompt_pack.id or not comp.prompt_pack.digest:
         raise CompositionIncomplete(comp.name, "prompt_pack pin")
     if not comp.tool_set.id or not comp.tool_set.digest:
         raise CompositionIncomplete(comp.name, "tool_set pin")
 
-    # Verify children exist
-    catalog.get(
-        ArtifactKind.PROMPT_PACK,
-        comp.prompt_pack.id,
-        comp.prompt_pack.digest,
-        require_offered=True,
-    )
-    catalog.get(
-        ArtifactKind.TOOL_SET,
-        comp.tool_set.id,
-        comp.tool_set.digest,
-        require_offered=True,
-    )
-
-    # Handle optional sandbox profile
-    sandbox_profile_id: str | None = None
-    sandbox_profile_digest: str | None = None
-    if (
-        comp.sandbox_profile is not None
-        and comp.sandbox_profile.id and comp.sandbox_profile.digest
-    ):
-        catalog.get(
-            ArtifactKind.SANDBOX_PROFILE,
-            comp.sandbox_profile.id,
-            comp.sandbox_profile.digest,
-            require_offered=True,
-        )
-        sandbox_profile_id = comp.sandbox_profile.id
-        sandbox_profile_digest = comp.sandbox_profile.digest
-
-    # Named hands: each a sandbox profile, pinned like the default one
-    hands: list[tuple[str, str, str]] = []
-    for hand_name, ref in comp.hands:
-        catalog.get(ArtifactKind.SANDBOX_PROFILE, ref.id, ref.digest, require_offered=True)
-        hands.append((hand_name, ref.id, ref.digest))
-
-    # Handle optional memory profile
-    memory_profile_id: str | None = None
-    memory_profile_digest: str | None = None
-    if comp.memory_profile is not None and comp.memory_profile.id and comp.memory_profile.digest:
-        catalog.get(
-            ArtifactKind.MEMORY_PROFILE,
-            comp.memory_profile.id,
-            comp.memory_profile.digest,
-            require_offered=True,
-        )
-        memory_profile_id = comp.memory_profile.id
-        memory_profile_digest = comp.memory_profile.digest
-
-    # Apply runtime model route
-    from supervisor.catalog.providers.model_route import apply_runtime_model_route
-
-    pinned_route = comp.plug_bindings.model_route if comp.plug_bindings else None
-
-    return SessionPins(
+    plug = comp.plug_bindings
+    pins = SessionPins(
         composition_id=comp.name,
         composition_digest=comp.digest,
         harness_version=comp.harness_version,
@@ -207,27 +92,44 @@ def resolve_composition(
         prompt_pack_digest=comp.prompt_pack.digest,
         tool_set_id=comp.tool_set.id,
         tool_set_digest=comp.tool_set.digest,
-        sandbox_profile_id=sandbox_profile_id,
-        sandbox_profile_digest=sandbox_profile_digest,
-        memory_profile_id=memory_profile_id,
-        memory_profile_digest=memory_profile_digest,
-        gateway_base_url=(
-            comp.plug_bindings.gateway_base_url if comp.plug_bindings else None
-        ),
-        mcp_server_url=comp.plug_bindings.mcp_server_url if comp.plug_bindings else None,
-        acp_base_url=comp.plug_bindings.acp_base_url if comp.plug_bindings else None,
-        model_route=apply_runtime_model_route(pinned_route),
-        hands=tuple(hands),
+        sandbox_profile_id=comp.sandbox_profile.id if comp.sandbox_profile else None,
+        sandbox_profile_digest=comp.sandbox_profile.digest if comp.sandbox_profile else None,
+        memory_profile_id=comp.memory_profile.id if comp.memory_profile else None,
+        memory_profile_digest=comp.memory_profile.digest if comp.memory_profile else None,
+        gateway_base_url=plug.gateway_base_url if plug else None,
+        mcp_server_url=plug.mcp_server_url if plug else None,
+        acp_base_url=plug.acp_base_url if plug else None,
+        model_route=apply_runtime_model_route(plug.model_route if plug else None),
+        hands=tuple((name, ref.id, ref.digest) for name, ref in comp.hands),
     )
+    # Every part a session will bind must be offered now; the composition itself was checked above.
+    for kind, artifact_id, digest in pins.refs():
+        if kind is not ArtifactKind.COMPOSITION:
+            catalog.get(kind, artifact_id, digest, require_offered=True)
+    return pins
 
 
-_PINNED_PARTS: tuple[tuple[ArtifactKind, str, str], ...] = (
-    (ArtifactKind.COMPOSITION, "composition_id", "composition_digest"),
-    (ArtifactKind.PROMPT_PACK, "prompt_pack_id", "prompt_pack_digest"),
-    (ArtifactKind.TOOL_SET, "tool_set_id", "tool_set_digest"),
-    (ArtifactKind.SANDBOX_PROFILE, "sandbox_profile_id", "sandbox_profile_digest"),
-    (ArtifactKind.MEMORY_PROFILE, "memory_profile_id", "memory_profile_digest"),
-)
+def _by_digest(catalog: CompositionCatalog, composition_id: str | None, digest: str) -> AgentComposition:
+    found = catalog.get_by_digest(digest)
+    if found is None:
+        raise DigestMissing(kind=ArtifactKind.COMPOSITION.value, artifact_id=composition_id or "unknown", digest=digest)
+    _, name = found
+    if composition_id is not None and name != composition_id:
+        # The digest belongs to a different artifact: never silently run it.
+        raise NotOffered(kind=ArtifactKind.COMPOSITION.value, artifact_id=composition_id, digest=digest)
+    return catalog.get_as(AgentComposition, ArtifactKind.COMPOSITION, name, digest)
+
+
+def _newest_offered(catalog: CompositionCatalog, composition_id: str) -> AgentComposition:
+    """The newest offered version (else the newest, which the caller then refuses as not offered)."""
+    versions = catalog.list_versions(ArtifactKind.COMPOSITION, composition_id)
+    if not versions:
+        raise DigestMissing(kind=ArtifactKind.COMPOSITION.value, artifact_id=composition_id, digest="")
+    for digest in reversed(versions):
+        comp = catalog.get_as(AgentComposition, ArtifactKind.COMPOSITION, composition_id, digest)
+        if comp.status == ArtifactStatus.OFFERED:
+            return comp
+    return catalog.get_as(AgentComposition, ArtifactKind.COMPOSITION, composition_id, versions[-1])
 
 
 def require_tenant_access(catalog: CompositionCatalog, pins: SessionPins, tenant_id: str) -> None:
@@ -236,10 +138,33 @@ def require_tenant_access(catalog: CompositionCatalog, pins: SessionPins, tenant
     Reported as not offered (404), the same as an artifact that doesn't exist,
     so one tenant cannot probe for another's artifacts.
     """
-    for kind, id_field, digest_field in _PINNED_PARTS:
-        name = getattr(pins, id_field)
-        if name and not catalog.visible_to(kind, name, tenant_id):
-            raise NotOffered(kind=kind.value, artifact_id=name, digest=getattr(pins, digest_field) or "")
-    for _, profile, digest in pins.hands:
-        if not catalog.visible_to(ArtifactKind.SANDBOX_PROFILE, profile, tenant_id):
-            raise NotOffered(kind=ArtifactKind.SANDBOX_PROFILE.value, artifact_id=profile, digest=digest)
+    for kind, name, digest in pins.refs():
+        if not catalog.visible_to(kind, name, tenant_id):
+            raise NotOffered(kind=kind.value, artifact_id=name, digest=digest)
+
+
+def require_sticky_compatible(
+    catalog: CompositionCatalog,
+    composition: AgentComposition,
+    *,
+    sticky: bool,
+) -> None:
+    """``CompositionIncompatible`` if a sticky harness pins a sandbox that may not be kept.
+
+    A sticky harness keeps a session's sandboxes between turns; a sandbox profile
+    with ``sticky_eligible: false`` must be torn down after each one. Checked when a
+    composition is published (against its harness version) and when a session is
+    created, so the two can never run together.
+    """
+    if not sticky:
+        return
+    refs = [ref for ref in (composition.sandbox_profile,) if ref is not None]
+    refs += [ref for _, ref in composition.hands]
+    for ref in refs:
+        profile = catalog.get_as(SandboxProfile, ArtifactKind.SANDBOX_PROFILE, ref.id, ref.digest)
+        if not profile.sticky_eligible:
+            raise CompositionIncompatible(
+                composition.name,
+                f"harness {composition.harness_version!r} keeps its sandbox between turns, but sandbox "
+                f"profile {profile.name!r} may not be kept (sticky_eligible: false)",
+            )

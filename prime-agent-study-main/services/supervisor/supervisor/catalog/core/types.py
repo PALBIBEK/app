@@ -1,32 +1,28 @@
-"""Catalog types - enums and frozen dataclasses with __slots__.
+"""What the catalog holds: the artifact kinds, their lifecycle, and the pins a session keeps.
 
-All catalog types defined here for consistent imports and avoiding
-circular dependencies. Types use:
-- StrEnum for string-based enums (JSON-serializable)
-- frozen dataclasses with __slots__ for immutability and memory efficiency
-- Union types with None for optional fields
-
-Reference: policy/types.py pattern.
+Artifacts are frozen: a published version never changes, and is addressed by the
+digest of ``body_for_digest()`` (``core.digests``). Fields outside that body
+(``digest``, ``status``, ``metadata``) describe a version without being part of it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
 __all__ = [
     "DEFAULT_PROTOCOL_VERSION",
+    "SUPPORTED_PROTOCOL_VERSIONS",
     "AgentComposition",
     "ApprovalDefault",
     "Artifact",
     "ArtifactKind",
     "ArtifactMetadata",
     "ArtifactStatus",
-    "ArtifactUsageRecord",
     "ArtifactUsageStats",
-    "CatalogGrant",
     "DigestRef",
     "FileEffects",
     "MemoryProfile",
@@ -47,6 +43,10 @@ __all__ = [
 # =============================================================================
 
 DEFAULT_PROTOCOL_VERSION: Final[int] = 1
+"""The artifact schema an artifact that names none is read as."""
+
+SUPPORTED_PROTOCOL_VERSIONS: Final[frozenset[int]] = frozenset({DEFAULT_PROTOCOL_VERSION})
+"""Artifact schemas this supervisor can run; publishing another is refused."""
 
 
 # =============================================================================
@@ -64,22 +64,16 @@ class ArtifactKind(StrEnum):
 
 
 class ArtifactStatus(StrEnum):
-    """Lifecycle status of an artifact."""
+    """Lifecycle of an artifact version.
+
+    ``draft``: written but not offered (a shipped file marked draft is not loaded);
+    ``offered``: new sessions may pin it; ``deprecated``: sessions already pinned to
+    it keep running, new ones may not pin it.
+    """
 
     DRAFT = "draft"
     OFFERED = "offered"
     DEPRECATED = "deprecated"
-
-
-class CatalogGrant(StrEnum):
-    """Permission grants for catalog operations."""
-
-    ARTIFACT_READ = "catalog:read"
-    ARTIFACT_PUBLISH = "catalog:publish"
-    ARTIFACT_DEPRECATE = "catalog:deprecate"
-    COMPOSITION_USE = "catalog:use"
-    ANALYTICS_VIEW = "catalog:analytics"
-    ADMIN = "catalog:admin"
 
 
 class SandboxProviderName(StrEnum):
@@ -122,57 +116,29 @@ class RecallBackend(StrEnum):
 # Base Types
 # =============================================================================
 
-def _now() -> datetime:
-    """Current UTC datetime."""
-    return datetime.now(UTC)
-
-
 @dataclass(frozen=True, slots=True)
 class ArtifactMetadata:
-    """Metadata common to all artifacts for ownership and tracking.
+    """Who published a version and when, and who deprecated it (from its catalog row).
 
-    Attributes:
-        created_by: Principal ID of the creator
-        created_at: Creation timestamp
-        updated_at: Last update timestamp
-        owner_id: Owner principal or team ID (for permission checks)
+    Not part of the digest: the same content published twice is the same artifact.
     """
 
     created_by: str
     created_at: datetime
     updated_at: datetime
     owner_id: str | None = None
-
-    @classmethod
-    def create(cls, principal_id: str) -> ArtifactMetadata:
-        """Create metadata for a new artifact."""
-        now = _now()
-        return cls(
-            created_by=principal_id,
-            created_at=now,
-            updated_at=now,
-            owner_id=principal_id,
-        )
-
+    deprecated_by: str | None = None
+    deprecated_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
         return {
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "owner_id": self.owner_id,
+            "deprecated_by": self.deprecated_by,
+            "deprecated_at": self.deprecated_at.isoformat() if self.deprecated_at else None,
         }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ArtifactMetadata:
-        """Create from dictionary."""
-        return cls(
-            created_by=data["created_by"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
-            owner_id=data.get("owner_id"),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +175,8 @@ class PromptSection:
         id: Unique section identifier
         order: Sort order (lower = earlier)
         text: Section text content (may contain template vars)
-        complete: Whether section is complete or a fragment
+        complete: False marks a section still being written; publish refuses a
+            pack with one, since the model would receive it as written
     """
 
     id: str
@@ -366,7 +333,9 @@ class SandboxProfile:
         provider: Sandbox provider (none/local_process/local_docker/e2b)
         file_effects: File system access level
         approval_default: Default approval behavior
-        sticky_eligible: Can sessions stick to this sandbox
+        sticky_eligible: Whether a sandbox may be kept between turns; a sticky
+            harness on a profile that says no is refused at publish and at
+            session creation (``require_sticky_compatible``)
         image_digest: Optional container image digest
         browser_model: Commands may call the session's model through the
             browser endpoint (they get a short-lived capability for it). Off
@@ -447,6 +416,7 @@ class MemoryProfile:
         recall_enabled: Enable memory recall
         recall_backend: Recall backend type
         recall_mcp_server_url: MCP server for recall
+        recall_max_tokens: Most tokens recalled memory may add to a turn (None: 512)
         metadata: Creator and ownership info
     """
 
@@ -464,6 +434,7 @@ class MemoryProfile:
     recall_enabled: bool = False
     recall_backend: RecallBackend = RecallBackend.NONE
     recall_mcp_server_url: str | None = None
+    recall_max_tokens: int | None = None
     metadata: ArtifactMetadata | None = None
 
     def body_for_digest(self) -> dict[str, Any]:
@@ -489,6 +460,8 @@ class MemoryProfile:
             body["compaction"]["context_window"] = self.context_window
         if self.recall_mcp_server_url is not None:
             body["recall"]["mcp_server_url"] = self.recall_mcp_server_url
+        if self.recall_max_tokens is not None:  # only when set, so profiles without it keep their digests
+            body["recall"]["max_tokens"] = self.recall_max_tokens
         return body
 
 
@@ -655,6 +628,18 @@ class SessionPins:
     hands: tuple[tuple[str, str, str], ...] = ()
     """Named hands beyond the default: (name, sandbox profile id, digest)."""
 
+    def refs(self) -> Iterator[tuple[ArtifactKind, str, str]]:
+        """Every artifact pinned, as ``(kind, id, digest)``: the composition, its parts, its hands."""
+        yield ArtifactKind.COMPOSITION, self.composition_id, self.composition_digest
+        yield ArtifactKind.PROMPT_PACK, self.prompt_pack_id, self.prompt_pack_digest
+        yield ArtifactKind.TOOL_SET, self.tool_set_id, self.tool_set_digest
+        if self.sandbox_profile_id and self.sandbox_profile_digest:
+            yield ArtifactKind.SANDBOX_PROFILE, self.sandbox_profile_id, self.sandbox_profile_digest
+        for _, profile_id, digest in self.hands:
+            yield ArtifactKind.SANDBOX_PROFILE, profile_id, digest
+        if self.memory_profile_id and self.memory_profile_digest:
+            yield ArtifactKind.MEMORY_PROFILE, self.memory_profile_id, self.memory_profile_digest
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         data: dict[str, Any] = {
@@ -713,108 +698,54 @@ class SessionPins:
 
 
 # =============================================================================
-# Usage Analytics
+# Usage
 # =============================================================================
 
 @dataclass(frozen=True, slots=True)
-class ArtifactUsageRecord:
-    """Single usage event for analytics.
-
-    Recorded when an artifact is resolved, bound, or used in a session.
-
-    Attributes:
-        artifact_kind: Type of artifact
-        artifact_id: Artifact name
-        artifact_digest: Content hash
-        session_id: Session that used this artifact
-        principal_id: User who triggered the usage
-        timestamp_ms: Event timestamp in milliseconds
-        operation: Type of usage (resolved/bound/session_started)
-    """
-
-    artifact_kind: ArtifactKind
-    artifact_id: str
-    artifact_digest: str
-    session_id: str
-    principal_id: str
-    timestamp_ms: int
-    operation: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "artifact_kind": self.artifact_kind.value,
-            "artifact_id": self.artifact_id,
-            "artifact_digest": self.artifact_digest,
-            "session_id": self.session_id,
-            "principal_id": self.principal_id,
-            "timestamp_ms": self.timestamp_ms,
-            "operation": self.operation,
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class ArtifactUsageStats:
-    """Aggregated usage statistics for an artifact.
+    """How many sessions pin an artifact, read from the sessions' own pins.
 
-    Computed from usage records for analytics dashboards.
-
-    Attributes:
-        artifact_kind: Type of artifact
-        artifact_id: Artifact name
-        artifact_digest: Content hash (None for all versions)
-        resolution_count: Times resolved from catalog
-        bind_count: Times bound to runtime
-        session_count: Sessions using this artifact
-        unique_principals: Distinct users
-        last_used_at: Most recent usage
-        error_count: Errors during resolution/binding
-        error_rate: Errors / total operations
+    The sessions table is the record of use: each session stores the digests it
+    pinned (``SessionPins``), so nothing is counted twice and nothing drifts.
+    ``versions`` says which digests sessions still pin, newest use first: a version
+    no session pins can be deprecated without stranding anyone.
     """
 
     artifact_kind: ArtifactKind
     artifact_id: str
     artifact_digest: str | None
-    resolution_count: int
-    bind_count: int
+    """The one version counted, or ``None`` for every version."""
     session_count: int
+    active_sessions: int
+    """Of those, sessions not yet ended (they keep their pins until they end)."""
     unique_principals: int
+    first_used_at: datetime | None
     last_used_at: datetime | None
-    error_count: int
-    error_rate: float
+    versions: tuple[tuple[str, int], ...] = ()
+    """``(digest, sessions)`` for each pinned version, most recently used first."""
 
     @classmethod
-    def empty(
-        cls,
-        kind: ArtifactKind,
-        artifact_id: str,
-        digest: str | None = None,
-    ) -> ArtifactUsageStats:
-        """Create empty stats for an artifact."""
+    def empty(cls, kind: ArtifactKind, artifact_id: str, digest: str | None = None) -> ArtifactUsageStats:
         return cls(
             artifact_kind=kind,
             artifact_id=artifact_id,
             artifact_digest=digest,
-            resolution_count=0,
-            bind_count=0,
             session_count=0,
+            active_sessions=0,
             unique_principals=0,
+            first_used_at=None,
             last_used_at=None,
-            error_count=0,
-            error_rate=0.0,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
         return {
             "artifact_kind": self.artifact_kind.value,
             "artifact_id": self.artifact_id,
             "artifact_digest": self.artifact_digest,
-            "resolution_count": self.resolution_count,
-            "bind_count": self.bind_count,
             "session_count": self.session_count,
+            "active_sessions": self.active_sessions,
             "unique_principals": self.unique_principals,
+            "first_used_at": self.first_used_at.isoformat() if self.first_used_at else None,
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
-            "error_count": self.error_count,
-            "error_rate": self.error_rate,
+            "versions": [{"digest": d, "sessions": n} for d, n in self.versions],
         }

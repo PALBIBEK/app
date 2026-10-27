@@ -44,6 +44,7 @@ from supervisor.seams.compaction import SUMMARY_MARKER
 from supervisor.session.workspaces import session_workspace
 from supervisor.temporal.contracts import CreateSession, Message, job_ids
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
+from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.steps import run_id_for
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
@@ -176,6 +177,19 @@ async def test_tools_act_in_the_pinned_sandbox(
     assert payloads(events, ToolEnd)[0].result["ok"] is True
     assert await sandbox.read_file("/workspace/notes.txt") == b"hello"
     assert not (session_workspace(sid) / "notes.txt").exists()  # never the supervisor's disk
+
+
+async def test_a_sticky_harness_will_not_start_on_a_sandbox_that_may_not_be_kept(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """A composition stored before publish checked this still cannot start a session."""
+    model()
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        with pytest.raises(SessionCommandError) as err:
+            await create_pinned(env, state, sandbox={"sticky_eligible": False})
+    assert err.value.kind == "CompositionIncompatible"
+    assert "sticky_eligible" in str(err.value)
 
 
 async def test_the_sandbox_profile_policy_governs_model_tool_calls(

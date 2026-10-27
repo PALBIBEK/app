@@ -1,36 +1,17 @@
-"""Catalog service layer — high-level orchestration with observability.
+"""Catalog services: resolving a composition into a session's pins, and what publish refuses."""
 
-Services:
-- CatalogService: Main orchestrator for publish/deprecate/resolve with audit
-- CatalogAuthz: Permission checking for catalog operations
-- CompositionResolver: Resolve compositions to session pins
-- require_implemented: a ToolSet may only pin tools the registry implements
-
-All services use Protocol interfaces for dependency injection.
-
-Example:
-    from supervisor.catalog.services import (
-        CatalogService,
-        CatalogAuthz,
-        CompositionResolver,
-    )
-
-    # Create services with dependencies
-    authz = CatalogAuthz(admin_principals=["system"])
-    resolver = CompositionResolver(artifact_store)
-    catalog = CatalogService(
-        artifact_store=artifact_store,
-        usage_store=usage_store,
-        authz=authz,
-        audit_logger=audit_logger,
-    )
-
-    # Publish artifact
-    published = await catalog.publish(principal_id, artifact)
-"""
-
+from supervisor.catalog.services.publish_checks import check_publishable
+from supervisor.catalog.services.resolver import (
+    require_sticky_compatible,
+    require_tenant_access,
+    resolve_composition,
+)
 from supervisor.catalog.services.tool_implementations import require_implemented
 
 __all__ = [
+    "check_publishable",
     "require_implemented",
+    "require_sticky_compatible",
+    "require_tenant_access",
+    "resolve_composition",
 ]

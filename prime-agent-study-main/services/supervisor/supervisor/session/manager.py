@@ -26,11 +26,16 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.factory import create_runtime
 from supervisor.agent.seams import RuntimeSeams
-from supervisor.catalog import HarnessVersionMismatch, SessionPins
+from supervisor.catalog import AgentComposition, ArtifactKind, HarnessVersionMismatch, SessionPins
 from supervisor.catalog.providers.binder import bind_runtime_seams
 from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profile
 from supervisor.catalog.repository import sync_composition
-from supervisor.catalog.services.resolver import require_tenant_access, resolve_composition
+from supervisor.catalog.services.resolver import (
+    composition_digest_required,
+    require_sticky_compatible,
+    require_tenant_access,
+    resolve_composition,
+)
 from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
 from supervisor.hands import HandRecipe, HandWorkspace
 from supervisor.hands.keys import hand_key
@@ -38,6 +43,7 @@ from supervisor.harness import (
     HarnessManifest,
     manifest_to_dict,
 )
+from supervisor.harness.core.enums import RuntimeMode
 from supervisor.harness.core.errors import UnknownHarness
 from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
@@ -160,6 +166,7 @@ class SessionManager(UpkeepOps):
                 self._composition_catalog,
                 composition_id=composition_id,
                 composition_digest=composition_digest,
+                require_digest=composition_digest_required(),
             )
             require_tenant_access(self._composition_catalog, pins, tenant_id)
             if pins.harness_version != harness_version:
@@ -167,6 +174,13 @@ class SessionManager(UpkeepOps):
                     requested=harness_version,
                     composition=pins.harness_version,
                 )
+            require_sticky_compatible(
+                self._composition_catalog,
+                self._composition_catalog.get_as(
+                    AgentComposition, ArtifactKind.COMPOSITION, pins.composition_id, pins.composition_digest
+                ),
+                sticky=manifest.mode == RuntimeMode.STICKY,
+            )
             pins_json = pins.to_dict()
 
         profile = None

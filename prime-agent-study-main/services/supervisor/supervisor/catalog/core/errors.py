@@ -1,13 +1,8 @@
-"""Catalog exception hierarchy with structured error data.
+"""Catalog errors: each a stable ``error_code``, a message, and the structured ``detail`` behind it.
 
-Design principles:
-- Rich context in exception attributes
-- No bare Exception raises
-- Retryable flag for transient failures
-- Structured error codes for API responses
-- to_dict() for serialization
-
-Reference: policy/errors.py pattern.
+``to_dict()`` is the API error body (``api.catalog``); ``retryable`` tells the
+workflow layer whether a retry could succeed (``temporal.domain``). Nothing in
+``detail`` names another tenant: an error is shown to whoever caused it.
 """
 
 from __future__ import annotations
@@ -18,6 +13,7 @@ __all__ = [
     "CatalogError",
     "CatalogOwnershipRequired",
     "CompositionDigestRequired",
+    "CompositionIncompatible",
     "CompositionIncomplete",
     "DigestMismatch",
     "DigestMissing",
@@ -55,9 +51,9 @@ class CatalogError(Exception):
         self.detail = detail or {}
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for API responses."""
+        """The API error body: ``code`` and ``message`` (what clients read), plus the detail."""
         return {
-            "error_code": self.error_code,
+            "code": self.error_code,
             "message": str(self),
             "retryable": self.retryable,
             "detail": self.detail,
@@ -213,17 +209,18 @@ class CompositionIncomplete(CatalogError):
 
 
 class CompositionDigestRequired(CatalogError):
-    """Id-only tip resolve refused when digest is required.
+    """A session named a composition without its digest where one is required.
 
-    In production/staging, exact digests are required for reproducibility.
+    With ``REQUIRE_COMPOSITION_DIGEST`` set, a session must say exactly which
+    version it runs: resolving a name to "whatever is newest" is refused.
     """
 
     error_code = "COMPOSITION_DIGEST_REQUIRED"
 
     def __init__(self, composition_id: str) -> None:
         super().__init__(
-            f"composition_digest required for {composition_id!r} "
-            "(id-only tip resolve disabled in this environment)",
+            f"composition_digest required for {composition_id!r}: "
+            "this deployment runs only exact versions (REQUIRE_COMPOSITION_DIGEST)",
             detail={"composition_id": composition_id},
         )
         self.composition_id = composition_id
@@ -249,14 +246,30 @@ class HarnessVersionMismatch(CatalogError):
         self.composition = composition
 
 
+class CompositionIncompatible(CatalogError):
+    """A composition's parts cannot work together as pinned (e.g. a sticky harness
+    on a sandbox profile that may not be kept between turns)."""
+
+    error_code = "COMPOSITION_INCOMPATIBLE"
+
+    def __init__(self, composition_id: str, reason: str) -> None:
+        super().__init__(
+            f"composition {composition_id!r} cannot run: {reason}",
+            detail={"composition_id": composition_id, "reason": reason},
+        )
+        self.composition_id = composition_id
+        self.reason = reason
+
+
 # =============================================================================
 # Permission Errors
 # =============================================================================
 
 class CatalogOwnershipRequired(CatalogError):
-    """Operation requires artifact ownership.
+    """The name belongs to someone else: shipped (``system``) or another tenant's.
 
-    Only the owner or admin can perform this operation.
+    Another tenant is never named, in the message or the detail: the caller learns
+    the name is taken, not by whom.
     """
 
     error_code = "CATALOG_OWNERSHIP_REQUIRED"
@@ -269,14 +282,15 @@ class CatalogOwnershipRequired(CatalogError):
         artifact_id: str,
         owner_id: str | None,
     ) -> None:
+        shipped = owner_id == "system"
         super().__init__(
-            f"ownership required: {principal_id!r} is not owner of "
-            f"{artifact_kind}:{artifact_id} (owner={owner_id!r})",
+            f"{artifact_kind} {artifact_id!r} "
+            + ("is shipped and read-only" if shipped else "belongs to another owner")
+            + "; publish it under a new name",
             detail={
-                "principal_id": principal_id,
                 "artifact_kind": artifact_kind,
                 "artifact_id": artifact_id,
-                "owner_id": owner_id,
+                **({"owner_id": owner_id} if shipped else {}),
             },
         )
         self.principal_id = principal_id
@@ -284,10 +298,6 @@ class CatalogOwnershipRequired(CatalogError):
         self.artifact_id = artifact_id
         self.owner_id = owner_id
 
-
-# =============================================================================
-# Storage Errors
-# =============================================================================
 
 # =============================================================================
 # Validation Errors

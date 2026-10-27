@@ -101,6 +101,14 @@ await p.getByTestId('queued').first().waitFor({ state: 'detached', timeout: 1500
 check(await p.getByTestId('queued').count() === 0, 'no queued badge left once it ran');
 console.log('5 queued message ran');
 
+// The rail names what the session runs: the published version and each pinned part.
+await p.getByTestId('pinned-card').waitFor({ timeout: 15000 });
+const roles = await p.getByTestId('pinned-part').evaluateAll((els) => els.map((e) => e.dataset.role));
+check(roles.includes('tools') && roles.includes('hand:default'), `runs-on lists its parts (${roles})`);
+check((await p.getByTestId('pinned-card').innerText()).includes('version 1'), 'runs-on names the agent version');
+await shot(p, 'c1b-runs-on');
+console.log('5a runs on:', roles.join(', '));
+
 // Runs by id: a queued message is cancelled before it runs; Stop cancels the run going now (by
 // its id, safe to repeat); the runs panel shows each run's status.
 await box.fill('/tool bash {"command": "echo never"}');

@@ -201,12 +201,25 @@ class ChildRowOut(BaseModel):
     depth: int | None = None
 
 
+class ArtifactMetadataOut(BaseModel):
+    """Who published a version and when, and who deprecated it."""
+
+    created_by: str
+    created_at: str
+    updated_at: str
+    owner_id: str | None = None
+    deprecated_by: str | None = None
+    deprecated_at: str | None = None
+
+
 class CatalogArtifactOut(BaseModel):
     kind: str
     artifact_id: str
     digest: str
     status: str
     semver: str
+    protocol_version: int = 1
+    metadata: ArtifactMetadataOut | None = None
     # The artifact itself, on a single read: what a user copies and changes to make a new version.
     body: dict[str, Any] | None = None
 

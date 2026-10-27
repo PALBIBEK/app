@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * The live session's right rail: its sandboxes, and what it has used against its limits.
+ * The live session's right rail: its sandboxes, what it has used against its limits, and
+ * the exact versions it runs.
  */
 
 import { useEffect } from 'react';
@@ -10,6 +11,8 @@ import { Card, Meter, Mono, StatusPill, type StatusKind } from '@/components/ui'
 import { useSandboxes } from '@/lib/api/hooks/useOperate';
 import type { SandboxItem } from '@/lib/api/types/operate.types';
 import { sandboxLabel } from '@/lib/session/runs';
+
+import { PinnedCard } from './PinnedCard';
 import type { SandboxView } from '@/lib/session/wireEventReducer';
 import { formatCount, formatMoney, formatRelativeTime } from '@/lib/utils';
 
@@ -149,6 +152,8 @@ export function SessionRail({
           </div>
         </div>
       </Section>
+
+      <PinnedCard sessionId={sessionId} />
 
       {children}
     </aside>

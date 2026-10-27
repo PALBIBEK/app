@@ -6,7 +6,6 @@ All harness components defined as Protocol classes to enable:
 - Swappable implementations
 - Clear interface contracts
 
-Reference: catalog/core/protocols.py pattern.
 """
 
 from __future__ import annotations
