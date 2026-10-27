@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supervisor.api import deps
 from supervisor.db.models import SessionRow
 from supervisor.traces.model import RunStatus
-from supervisor.traces.store import TraceFilter, list_runs, load_run, session_runs
+from supervisor.traces.store import TraceFilter, list_runs, load_run, run_events, session_runs
 
 router = APIRouter(tags=["traces"])
 
@@ -115,10 +115,10 @@ async def get_trace_span(
 async def get_run_events(
     session_id: str, run_id: str, request: Request, tenant_id: str = Depends(deps.current_tenant)
 ) -> dict[str, Any]:
-    """The journal events the trace was built from, as journalled: the run's own events and the
-    session's (a sandbox starting) that happened while it ran."""
+    """The events the trace was built from, as recorded: the run's own and the session's
+    (a sandbox starting) that happened while it ran."""
     await _session(request, tenant_id, session_id)
-    events = await deps.get_reader(request).read_run_window(session_id, run_id)
+    events = await run_events(deps.get_reader(request), session_id, run_id)
     if not events:
         raise HTTPException(status_code=404, detail="run not found")
-    return {"session_id": session_id, "run_id": run_id, "events": [e.to_dict() for e in events]}
+    return {"session_id": session_id, "run_id": run_id, "events": events}

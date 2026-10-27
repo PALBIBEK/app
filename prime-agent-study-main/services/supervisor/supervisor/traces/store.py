@@ -31,6 +31,7 @@ __all__ = [
     "list_runs",
     "load_run",
     "record_run",
+    "run_events",
     "session_runs",
     "summary",
 ]
@@ -294,3 +295,8 @@ async def list_runs(
     more = len(rows) > limit
     rows = await _refresh(factory, reader, rows[:limit])
     return [summary(r) for r in rows], (rows[-1].started_ms if more and rows else None)
+
+
+async def run_events(reader: JournalReader, session_id: str, run_id: str) -> list[dict[str, Any]]:
+    """The events run ``run_id``'s trace is built from, as recorded (none: no such run)."""
+    return [e.to_dict() for e in await reader.read_run_window(session_id, run_id)]
