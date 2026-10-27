@@ -147,7 +147,7 @@ async def test_publish_sends_leaves_then_the_composition_and_binds_the_harness(d
     assert {b["name"] for k, b in supervisor.calls if k != "harness_version"} == {
         f"{prefix}-prompt", f"{prefix}-tools", f"{prefix}-sandbox", f"{prefix}-memory", prefix,
     }
-    assert bodies["prompt_pack"]["vars"] == ["cwd"]  # the default prompt says {cwd}
+    assert bodies["prompt_pack"]["vars"] == []  # the runtime says where the agent works
     assert set(bodies["tool_set"]["tools"]) == set(manifest["tools"])
     hv = bodies["harness_version"]
     assert hv["harness_version"] == f"{prefix}-r1"

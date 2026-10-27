@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:3258f1bc4a50d6e8d93a1b06a872905ab831e57fcd8659315972288b4d39f5b1",
+  "digest": "sha256:1c24041c9328e5f11d3b8e0c6b5270adbef0aa2cd4b8f1027194f3b174de2b02",
   "name": "coding-prompt",
   "persona": "coder",
   "protocol_version": 1,
@@ -8,18 +8,10 @@
       "complete": true,
       "id": "intro",
       "order": 1,
-      "text": "You are a coding agent."
-    },
-    {
-      "complete": true,
-      "id": "rules",
-      "order": 2,
-      "text": "Prefer small diffs."
+      "text": "You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files."
     }
   ],
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered",
-  "vars": [
-    "cwd"
-  ]
+  "vars": []
 }

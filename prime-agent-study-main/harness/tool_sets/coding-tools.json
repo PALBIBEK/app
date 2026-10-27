@@ -1,13 +1,19 @@
 {
   "definitions": {
     "bash": {
-      "description": "Run a shell command in the workspace sandbox",
-      "digest": "sha256:697ad8db1778fb49ce5fc5ffaae4374ec769178150dd3e76f0340754f8d9fd2b",
+      "description": "Run a shell command in the workspace. Returns exit code, stdout and stderr.",
+      "digest": "sha256:559029e5c3ece73b3f2a10a2fff09cd5abc3ed4882c0ff558672154fe34d0fd2",
       "name": "bash",
       "parameters": {
         "properties": {
           "command": {
+            "description": "The bash command to run",
             "type": "string"
+          },
+          "timeout": {
+            "description": "Seconds before the command is killed (capped by the session's limit)",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -18,7 +24,7 @@
     },
     "echo": {
       "description": "Echo text (dev / smoke tool)",
-      "digest": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
+      "digest": "sha256:14435d5c6419ae6dbb076d7a96eed1b23477250492d5a44df379241141cbdb42",
       "name": "echo",
       "parameters": {
         "properties": {
@@ -26,16 +32,18 @@
             "type": "string"
           }
         },
+        "required": [],
         "type": "object"
       }
     },
     "git_commit": {
-      "description": "Create a git commit in the workspace",
-      "digest": "sha256:29d890e267287c0b895bae5dfc0d095a166543f5c91c530eac508e5e6aafe738",
+      "description": "Stage every change in the workspace and create a git commit.",
+      "digest": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
       "name": "git_commit",
       "parameters": {
         "properties": {
           "message": {
+            "description": "Commit message",
             "type": "string"
           }
         },
@@ -46,12 +54,29 @@
       }
     },
     "grep": {
-      "description": "Search file contents in the workspace",
-      "digest": "sha256:3faa375ef6b601aec6da25b108bf9d79726626f15c8c85d09ba4d0ba612d75f3",
+      "description": "Search files in the workspace for a regex/string pattern. Returns 'path:line:text' for each matching line.",
+      "digest": "sha256:a597a65b5040867c3461f66690dcb39a4683a8d78a49b9fb4e3952838fecb7e7",
       "name": "grep",
       "parameters": {
         "properties": {
+          "case_insensitive": {
+            "description": "Ignore case (default: false)",
+            "type": "boolean"
+          },
+          "glob": {
+            "description": "Only search files matching this pattern, e.g. '*.py'",
+            "type": "string"
+          },
+          "max_matches": {
+            "description": "Stop after this many matching lines (default: 100)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "File or directory to search (default: workspace root)",
+            "type": "string"
+          },
           "pattern": {
+            "description": "Regular expression to search for",
             "type": "string"
           }
         },
@@ -62,36 +87,49 @@
       }
     },
     "read": {
-      "description": "Read a file from the workspace",
-      "digest": "sha256:724205349d678d1ac2b902e049a93ab981b7a1758667913c441f25a7e37937e1",
+      "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and when you need the full file, continue with offset until complete.",
+      "digest": "sha256:281a01cfeb32bafe928015fe6e41d7a4d52499e05bdc3e98d922855717749f32",
       "name": "read",
       "parameters": {
         "properties": {
-          "path": {
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
             "type": "string"
+          },
+          "limit": {
+            "description": "Most lines to return (optional; at most 2000)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "1-indexed line to start from (optional)",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
-          "path"
+          "file_path"
         ],
         "type": "object"
       }
     },
     "write": {
-      "description": "Write a file in the workspace",
-      "digest": "sha256:5e30877f5322356f0fa441bea1701ca07ccf440883a55d4b655597dae3038b73",
+      "description": "Write or overwrite a file in the workspace. Creates parent directories if needed.",
+      "digest": "sha256:fd6c61b8617ab5e76376873cb6a8aa4c80ccabbd6d3ae401fd8c1c087784003f",
       "name": "write",
       "parameters": {
         "properties": {
           "content": {
+            "description": "Content to write",
             "type": "string"
           },
-          "path": {
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
             "type": "string"
           }
         },
         "required": [
-          "path",
+          "file_path",
           "content"
         ],
         "type": "object"
@@ -100,14 +138,14 @@
   },
   "name": "coding-tools",
   "protocol_version": 1,
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered",
   "tools": {
-    "bash": "sha256:697ad8db1778fb49ce5fc5ffaae4374ec769178150dd3e76f0340754f8d9fd2b",
-    "echo": "sha256:e3c01e8e05e5e68f0129e48c96d0a7dbca613f0c64b4f35aca218b883f8d7b5f",
-    "git_commit": "sha256:29d890e267287c0b895bae5dfc0d095a166543f5c91c530eac508e5e6aafe738",
-    "grep": "sha256:3faa375ef6b601aec6da25b108bf9d79726626f15c8c85d09ba4d0ba612d75f3",
-    "read": "sha256:724205349d678d1ac2b902e049a93ab981b7a1758667913c441f25a7e37937e1",
-    "write": "sha256:5e30877f5322356f0fa441bea1701ca07ccf440883a55d4b655597dae3038b73"
+    "bash": "sha256:559029e5c3ece73b3f2a10a2fff09cd5abc3ed4882c0ff558672154fe34d0fd2",
+    "echo": "sha256:14435d5c6419ae6dbb076d7a96eed1b23477250492d5a44df379241141cbdb42",
+    "git_commit": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
+    "grep": "sha256:a597a65b5040867c3461f66690dcb39a4683a8d78a49b9fb4e3952838fecb7e7",
+    "read": "sha256:281a01cfeb32bafe928015fe6e41d7a4d52499e05bdc3e98d922855717749f32",
+    "write": "sha256:fd6c61b8617ab5e76376873cb6a8aa4c80ccabbd6d3ae401fd8c1c087784003f"
   }
 }

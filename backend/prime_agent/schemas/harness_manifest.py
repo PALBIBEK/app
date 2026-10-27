@@ -128,8 +128,14 @@ def default_manifest(sandbox: SandboxSpec | None = None) -> HarnessManifest:
         prompt=PromptSpec(
             persona="coder",
             sections=[
-                PromptSection(id="intro", text="You are a coding agent working in {cwd}."),
-                PromptSection(id="rules", text="Prefer small diffs. Run the tests before you finish."),
+                PromptSection(
+                    id="intro",
+                    text=(
+                        "You are an expert coding assistant. You help users by reading files, "
+                        "executing commands, editing code, and writing new files."
+                    ),
+                ),
+                PromptSection(id="rules", text="Run the tests before you finish."),
             ],
         ),
         tools=["read", "grep", "ls", "write", "edit", "bash"],

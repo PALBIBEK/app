@@ -65,10 +65,33 @@ def call(workspace: Workspace, mutations: list[str]) -> Callable[..., Any]:
 # --- read --------------------------------------------------------------------
 
 
-async def test_read_whole_file_and_line_window(call: Callable[..., Any]) -> None:
-    assert await call("read", file_path="README") == "line 1\nline 2\nline 3\n"
-    assert await call("read", file_path="README", offset=2, limit=1) == "line 2\n"
-    assert await call("read", path="/workspace/README", offset=3) == "line 3\n"
+async def test_read_pages_with_a_resume_offset(call: Callable[..., Any]) -> None:
+    assert await call("read", file_path="README") == "line 1\nline 2\nline 3"
+    assert await call("read", file_path="README", offset=2, limit=1) == (
+        "line 2\n\n[1 more lines in file. Use offset=3 to continue.]"
+    )
+    assert await call("read", path="/workspace/README", offset=3) == "line 3"
+    with pytest.raises(InvalidArguments, match="past the end of README, which has 3 lines"):
+        await call("read", file_path="README", offset=9)
+
+
+async def test_read_caps_a_long_file_and_says_where_to_go_on(call: Callable[..., Any]) -> None:
+    await call("write", file_path="big.txt", content="".join(f"row {i}\n" for i in range(1, 2501)))
+    page = await call("read", file_path="big.txt")
+    assert page.splitlines()[1999] == "row 2000"
+    assert page.endswith("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]")
+    assert (await call("read", file_path="big.txt", offset=2001)).splitlines()[0] == "row 2001"
+
+
+async def test_read_reports_binary_and_images_instead_of_garbage(
+    call: Callable[..., Any], workspace: Workspace
+) -> None:
+    await workspace.write_bytes("pic.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+    await workspace.write_bytes("blob.bin", b"ab\x00cd")
+    await workspace.write_bytes("empty.txt", b"")
+    assert await call("read", file_path="pic.png") == "pic.png is a png image (28 bytes); it cannot be shown as text."
+    assert await call("read", file_path="blob.bin") == "blob.bin is a binary file (5 bytes); it cannot be shown as text."
+    assert await call("read", file_path="empty.txt") == "empty.txt is empty."
 
 
 @pytest.mark.parametrize("path", ["../outside", "/etc/passwd", "src/../../x"])
@@ -124,21 +147,43 @@ async def test_write_accepts_the_coding_tools_argument_name(call: Callable[..., 
     assert await call("read", path="b.txt") == "x"
 
 
-async def test_edit_requires_a_unique_match(call: Callable[..., Any]) -> None:
+async def test_edit_requires_a_unique_match(call: Callable[..., Any], workspace: Workspace) -> None:
     await call("write", file_path="f.txt", content="a-b-a")
     with pytest.raises(InvalidArguments, match="occurs 2 times"):
         await call("edit", file_path="f.txt", old_text="a", new_text="z")
     with pytest.raises(InvalidArguments, match="does not occur"):
         await call("edit", file_path="f.txt", old_text="q", new_text="z")
-    assert await call("edit", file_path="f.txt", old_text="-b-", new_text="+") == {
-        "path": "f.txt",
-        "replacements": 1,
-    }
-    assert await call("edit", file_path="f.txt", old_text="a", new_text="o", replace_all=True) == {
-        "path": "f.txt",
-        "replacements": 2,
-    }
-    assert await call("read", file_path="f.txt") == "o+o"
+    done = await call("edit", file_path="f.txt", old_text="-b-", new_text="+")
+    assert (done["path"], done["replacements"]) == ("f.txt", 1)
+    assert "-a-b-a" in done["diff"] and "+a+a" in done["diff"]
+    done = await call("edit", file_path="f.txt", old_text="a", new_text="o", replace_all=True)
+    assert done["replacements"] == 2
+    assert await workspace.read_bytes("f.txt") == b"o+o"
+
+
+async def test_edit_keeps_line_endings_bom_and_matches_curly_quotes(
+    call: Callable[..., Any], workspace: Workspace
+) -> None:
+    await workspace.write_bytes("w.txt", "\ufeffsay \u201chi\u201d\r\nit\u2019s here\r\n".encode())
+    await call("edit", file_path="w.txt", old_text="it's here\n", new_text="it's there\n")
+    assert await workspace.read_bytes("w.txt") == "\ufeffsay \u201chi\u201d\r\nit's there\r\n".encode()
+
+
+async def test_several_edits_apply_together_or_not_at_all(call: Callable[..., Any], workspace: Workspace) -> None:
+    await call("write", file_path="g.py", content="x = 1\ny = 2\nz = 3\n")
+    with pytest.raises(InvalidArguments, match="does not occur"):
+        await call("edit", file_path="g.py", edits=[{"old_text": "x = 1", "new_text": "x = 10"},
+                                                    {"old_text": "nope", "new_text": "?"}])
+    assert await workspace.read_bytes("g.py") == b"x = 1\ny = 2\nz = 3\n"  # untouched
+    with pytest.raises(InvalidArguments, match="overlap"):
+        await call("edit", file_path="g.py", edits=[{"old_text": "x = 1\ny", "new_text": "a"},
+                                                    {"old_text": "y = 2", "new_text": "b"}])
+    with pytest.raises(InvalidArguments, match="change nothing"):
+        await call("edit", file_path="g.py", old_text="z = 3", new_text="z = 3")
+    done = await call("edit", file_path="g.py", edits=[{"old_text": "x = 1", "new_text": "x = 10"},
+                                                       {"old_text": "z = 3", "new_text": "z = 30"}])
+    assert done["replacements"] == 2
+    assert await workspace.read_bytes("g.py") == b"x = 10\ny = 2\nz = 30\n"
 
 
 # --- ls / grep ------------------------------------------------------------------
