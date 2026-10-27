@@ -65,8 +65,12 @@ async def list_issues(
     composition_id: str | None = None,
     since_ms: int | None = None,
     limit: int = 30,
+    exclude_sessions: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """The caller's issues, the ones hitting the most runs first."""
+    """The caller's issues, the ones hitting the most runs first.
+
+    ``exclude_sessions``: sessions whose runs are not evidence (an experiment's replays, which
+    an optimizer must never learn from)."""
     query = (
         select(TraceScoreRow, RunTraceRow.started_ms, RunTraceRow.input_preview, RunTraceRow.summary)
         .join(RunTraceRow, and_(RunTraceRow.session_id == TraceScoreRow.session_id,
@@ -79,6 +83,8 @@ async def list_issues(
         query = query.where(TraceScoreRow.composition_id == composition_id)
     if since_ms is not None:
         query = query.where(RunTraceRow.started_ms >= since_ms)
+    if exclude_sessions:
+        query = query.where(TraceScoreRow.session_id.not_in(exclude_sessions))
     async with factory() as db:
         found = (await db.execute(query.order_by(RunTraceRow.started_ms.desc()).limit(SCAN_LIMIT))).all()
 

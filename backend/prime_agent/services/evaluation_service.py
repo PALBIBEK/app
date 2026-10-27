@@ -55,6 +55,8 @@ MAX_ITEMS = 50
 ITEM_TIMEOUT_S = 300.0
 """How long one replayed run may take before it is cancelled and recorded as timed out."""
 STARTUP_TIMEOUT_S = 120.0
+JUDGE_WAIT_S = 120.0
+"""How long a finished replay waits for its agent's judges, which give verdicts after a run ends."""
 STALE_AFTER = timedelta(minutes=15)
 """An experiment ``running`` with no progress for this long was cut off (the server restarted)."""
 
@@ -313,6 +315,36 @@ class EvaluationService:
                 raise TimeoutError("the session did not start in time")
             await asyncio.sleep(1.0)
 
+    async def _wait_judged(
+        self, identity: TenantPrincipal, exp: Experiment, link: SessionLink, run: ExperimentRun, db: AsyncSession,
+        *, poll_s: float,
+    ) -> None:
+        """Wait until every judge that judges all of the agent's runs has given this run its
+        verdict, so results compare like with like. A judge that never answers is noted."""
+        if not exp.composition_id or not run.run_id:
+            return
+        try:
+            listed = await self._client.list_judges(identity, exp.composition_id)
+        except AiUpstreamError:
+            return
+        expected = {str(j["name"]) for j in listed.get("judges") or [] if j.get("enabled") and float(j.get("sample_rate") or 0) >= 1}
+        if not expected:
+            return
+        deadline = asyncio.get_running_loop().time() + JUDGE_WAIT_S
+        while True:
+            try:
+                trace = await self._traces.run(identity=identity, user_id=exp.user_id, session_id=link.id,
+                                               run_id=run.run_id, db=db)
+                judged = {s.name for s in trace.scores if s.source == "judge"}
+            except (TraceNotFoundError, HTTPException):
+                judged = set()
+            if expected <= judged:
+                return
+            if asyncio.get_running_loop().time() > deadline:
+                run.error = f"not judged by {', '.join(sorted(expected - judged))}"
+                return
+            await asyncio.sleep(max(poll_s, 0.05) * 2)
+
     async def _replay(
         self, identity: TenantPrincipal, exp: Experiment, item: DatasetItem, dataset: Dataset, run: ExperimentRun,
         db: AsyncSession, *, poll_s: float, timeout_s: float,
@@ -343,6 +375,7 @@ class EvaluationService:
                 status = str(state.get("status") or "")
                 if status in ("completed", "failed", "cancelled", "incomplete"):
                     run.status = "done"
+                    await self._wait_judged(identity, exp, link, run, db, poll_s=poll_s)
                     break
                 if status == "requires_action" or state.get("pending_approval_id"):
                     await self._client.cancel_run(identity, ai_session_id, run.run_id)
@@ -505,7 +538,8 @@ class EvaluationService:
             ra, rb = a_by.get(item_id), b_by.get(item_id)
             sa, sb = self._score(ra), self._score(rb)
             change = "unknown" if sa is None or sb is None else "better" if sb > sa else "worse" if sb < sa else "same"
-            rows.append(ComparisonRow(item_id=item_id, input=(ra or rb).input if (ra or rb) else "", a=ra, b=rb, change=change))
+            either = ra or rb
+            rows.append(ComparisonRow(item_id=item_id, input=either.input if either else "", a=ra, b=rb, change=change))
         return ExperimentComparison(
             a=a.experiment, b=b.experiment, rows=rows,
             better=sum(1 for r in rows if r.change == "better"), worse=sum(1 for r in rows if r.change == "worse"),

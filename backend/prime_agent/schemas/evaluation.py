@@ -131,3 +131,80 @@ class ExperimentComparison(BaseModel):
     rows: list[ComparisonRow]
     better: int
     worse: int
+
+
+# --- proposals: changes learned from traces, gated on a dataset -------------------------------
+
+
+class ProposalCreate(BaseModel):
+    dataset_id: str = Field(min_length=1, max_length=36)
+    """The saved runs the candidate must not do worse on."""
+    notes: str | None = Field(default=None, max_length=2000)
+    """What you want addressed, in your words (optional)."""
+
+
+class PromptSectionOut(BaseModel):
+    id: str
+    text: str
+
+
+class PromptOut(BaseModel):
+    persona: str
+    sections: list[PromptSectionOut]
+
+
+class EvidenceExample(BaseModel):
+    session_id: str | None = None
+    """The product session the failing run was in, when it is the user's."""
+    run_id: str | None = None
+    input: str | None = None
+    summary: str | None = None
+    reason: str | None = None
+
+
+class Evidence(BaseModel):
+    title: str
+    runs: int
+    examples: list[EvidenceExample] = Field(default_factory=list)
+
+
+class GateItem(BaseModel):
+    item_id: str
+    input: str
+    change: str
+    """``better``, ``worse``, ``same`` or ``unknown`` (did not finish)."""
+
+
+class Gate(BaseModel):
+    passed: bool
+    reasons: list[str]
+    """Why it passed or not, in sentences."""
+    better: int
+    worse: int
+    items: list[GateItem] = Field(default_factory=list)
+
+
+class ProposalOut(BaseModel):
+    id: str
+    agent_id: str
+    agent_name: str | None = None
+    dataset_id: str
+    dataset_name: str | None = None
+    status: str
+    error: str | None = None
+    notes: str | None = None
+    base_version: int
+    rationale: str | None = None
+    changed: list[str] = Field(default_factory=list)
+    gate: Gate | None = None
+    release_version: int | None = None
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
+class ProposalDetail(ProposalOut):
+    base_prompt: PromptOut
+    candidate_prompt: PromptOut | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
+    baseline: ExperimentOut | None = None
+    candidate: ExperimentOut | None = None

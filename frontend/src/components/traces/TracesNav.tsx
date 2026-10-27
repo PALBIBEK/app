@@ -1,7 +1,7 @@
 'use client';
 
-/** The views of traces: every run, the issues they add up to, the judges, and the datasets
- * of saved runs that versions are compared on. */
+/** The views of traces: every run, the issues they add up to, the judges, the datasets of
+ * saved runs that versions are compared on, and the changes learned from them. */
 
 import Link from 'next/link';
 
@@ -12,6 +12,7 @@ const VIEWS = [
   { href: '/traces/issues', label: 'Issues' },
   { href: '/traces/judges', label: 'Judges' },
   { href: '/traces/datasets', label: 'Datasets' },
+  { href: '/traces/improve', label: 'Improve' },
 ] as const;
 
 export function TracesNav({ current }: { current: (typeof VIEWS)[number]['href'] }): JSX.Element {

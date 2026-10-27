@@ -9,10 +9,11 @@ import { toast } from 'sonner';
 import { useAuthStore } from '@/lib/store/authStore';
 
 import { evaluationsAPI } from '../endpoints/evaluations';
-import type { ExperimentStatus } from '../types/evaluation.types';
+import type { ExperimentStatus, ProposalStatus } from '../types/evaluation.types';
 
 const GOING: readonly ExperimentStatus[] = ['queued', 'running'];
 const REFRESH_MS = 3000;
+const WORKING: readonly ProposalStatus[] = ['drafting', 'evaluating'];
 
 export const evaluationKeys = {
   all: ['evaluations'] as const,
@@ -20,6 +21,8 @@ export const evaluationKeys = {
   dataset: (id: string) => [...evaluationKeys.all, 'dataset', id] as const,
   experiment: (id: string) => [...evaluationKeys.all, 'experiment', id] as const,
   compare: (a: string, b: string) => [...evaluationKeys.all, 'compare', a, b] as const,
+  proposals: (agentId?: string, status?: string) => [...evaluationKeys.all, 'proposals', agentId ?? '', status ?? ''] as const,
+  proposal: (id: string) => [...evaluationKeys.all, 'proposal', id] as const,
 };
 
 function message(err: unknown, fallback: string): string {
@@ -111,5 +114,47 @@ export function useCancelExperiment(experimentId: string) {
   return useMutation({
     mutationFn: () => evaluationsAPI.cancelExperiment(experimentId),
     onSuccess: () => void client.invalidateQueries({ queryKey: evaluationKeys.all }),
+  });
+}
+
+export function useProposals(params: { agentId?: string; status?: string } = {}) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: evaluationKeys.proposals(params.agentId, params.status),
+    queryFn: () => evaluationsAPI.proposals(params),
+    enabled: isAuthenticated,
+    refetchInterval: (q) => (q.state.data?.some((p) => WORKING.includes(p.status)) ? REFRESH_MS : false),
+  });
+}
+
+export function useProposal(id: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: evaluationKeys.proposal(id ?? ''),
+    queryFn: () => evaluationsAPI.proposal(id!),
+    enabled: isAuthenticated && !!id,
+    refetchInterval: (q) => (q.state.data && WORKING.includes(q.state.data.status) ? REFRESH_MS : false),
+  });
+}
+
+export function usePropose(agentId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { dataset_id: string; notes?: string | null }) => evaluationsAPI.propose(agentId, body),
+    onSuccess: () => void client.invalidateQueries({ queryKey: evaluationKeys.all }),
+    onError: (err) => toast.error(message(err, 'Could not start learning from the traces')),
+  });
+}
+
+export function useDecideProposal(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (decision: 'approve' | 'reject') =>
+      decision === 'approve' ? evaluationsAPI.approveProposal(id) : evaluationsAPI.rejectProposal(id),
+    onSuccess: (p) => {
+      toast.success(p.status === 'approved' ? `Published as v${p.release_version}` : 'Rejected');
+      void client.invalidateQueries();
+    },
+    onError: (err) => toast.error(message(err, 'Could not decide')),
   });
 }

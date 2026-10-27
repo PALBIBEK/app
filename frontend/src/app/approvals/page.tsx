@@ -15,6 +15,7 @@ import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { Button, Card, EmptyState, ErrorNote, LinkButton, Mono, PageHeader, SkeletonRows } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { getApiErrorMessage } from '@/lib/api/errors';
+import { useProposals } from '@/lib/api/hooks/useEvaluations';
 import { operateKeys, useApprovalInbox } from '@/lib/api/hooks/useOperate';
 import type { InboxItem } from '@/lib/api/types/operate.types';
 import { formatDuration } from '@/lib/utils';
@@ -78,6 +79,33 @@ function Row({ item, now, onAnswered }: { item: InboxItem; now: number; onAnswer
   );
 }
 
+/** Changes learned from traces that passed their gate: each publishes only when approved here. */
+function ChangesToApprove(): JSX.Element | null {
+  const { data } = useProposals({ status: 'awaiting_approval' });
+  if (!data?.length) return null;
+  return (
+    <Card tone="accent" aria-label="Changes to approve">
+      <div className="border-b border-line-soft px-5 py-3">
+        <h2 className="text-[15px] font-semibold">Changes to approve</h2>
+        <p className="text-sm text-ink-2">Learned from failing runs and measured on saved ones; each did better and no worse.</p>
+      </div>
+      <ul>
+        {data.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line-soft px-5 py-3.5 last:border-0" data-testid="change-to-approve">
+            <span className="font-medium">
+              {p.agent_name} v{p.base_version}
+            </span>
+            <span className="min-w-0 flex-1 text-[13px] text-ink-2">{p.gate?.reasons.join('; ')}</span>
+            <LinkButton href={`/traces/improve/${p.id}`} size="sm" variant="primary">
+              Review
+            </LinkButton>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 export default function ApprovalsPage(): JSX.Element {
   const { data, isLoading, error, refetch } = useApprovalInbox();
   const qc = useQueryClient();
@@ -89,8 +117,9 @@ export default function ApprovalsPage(): JSX.Element {
       <PageBody>
         <PageHeader
           title="Approvals"
-          description="Runs paused on a question for you. An unanswered one is decided by its agent's policy when it times out."
+          description="Runs paused on a question for you, and changes to your agents waiting for a yes. An unanswered run question is decided by its agent's policy when it times out."
         />
+        <ChangesToApprove />
         <Card tone={items.length ? 'accent' : 'default'} aria-label="Waiting approvals">
           {isLoading ? (
             <SkeletonRows rows={3} />
@@ -101,7 +130,7 @@ export default function ApprovalsPage(): JSX.Element {
           ) : items.length === 0 ? (
             <EmptyState
               icon={<ShieldCheck size={28} />}
-              title="Nothing is waiting on you"
+              title="No runs are waiting on you"
               description="When a run needs your approval to use a tool, it shows up here and on the session."
             />
           ) : (

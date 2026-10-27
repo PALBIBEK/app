@@ -25,8 +25,12 @@ from prime_agent.schemas.evaluation import (
     ExperimentDetail,
     ExperimentOut,
     ExperimentStart,
+    ProposalCreate,
+    ProposalDetail,
+    ProposalOut,
 )
 from prime_agent.services.evaluation_service import EvaluationNotFoundError, EvaluationService
+from prime_agent.services.improvement_service import ImprovementNotFoundError, ImprovementService
 from prime_agent.web.dependencies import CurrentUser, DbSession
 
 router = APIRouter()
@@ -162,3 +166,72 @@ async def cancel(experiment_id: str, db: DbSession, current_user: CurrentUser) -
     except EvaluationNotFoundError as exc:
         raise _not_found() from exc
     return Response(status_code=204)
+
+
+# --- proposals: a change learned from traces, gated on a dataset, approved by a person ----------
+
+
+def _improver() -> ImprovementService:
+    return ImprovementService.from_settings(get_settings())
+
+
+def start_improving(service: ImprovementService, proposal_id: str, identity: TenantPrincipal) -> None:
+    """Draft, measure and gate the proposal in the background, on its own database sessions."""
+    factory = database._session_factory  # noqa: SLF001 - the app's one session factory
+    if factory is None:
+        raise RuntimeError("the database is not initialised")
+    task = asyncio.create_task(service.run(proposal_id, identity=identity, session_factory=factory))
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+
+
+@router.post("/agents/{agent_id}/proposals", response_model=ProposalOut, status_code=202)
+async def propose_change(agent_id: str, body: ProposalCreate, db: DbSession, current_user: CurrentUser) -> ProposalOut:
+    """Learn a prompt change from the agent's failing runs and measure it on ``dataset_id``.
+
+    Answers at once; the proposal drafts, replays and gates in the background, and one that
+    passes waits in Approvals.
+    """
+    service = _improver()
+    try:
+        row = await service.propose(user_id=current_user.id, agent_id=agent_id, dataset_id=body.dataset_id,
+                                    notes=body.notes, db=db)
+    except ImprovementNotFoundError as exc:
+        raise _not_found() from exc
+    start_improving(service, row.id, TenantPrincipal.from_user(current_user))
+    return (await service.list_proposals(user_id=current_user.id, db=db, agent_id=agent_id))[0]
+
+
+@router.get("/proposals", response_model=list[ProposalOut])
+async def list_proposals(
+    db: DbSession, current_user: CurrentUser, agent_id: str | None = None, status_filter: str | None = None
+) -> list[ProposalOut]:
+    """The user's proposed changes, newest first (``status_filter=awaiting_approval``: the inbox)."""
+    return await _improver().list_proposals(user_id=current_user.id, db=db, agent_id=agent_id, status=status_filter)
+
+
+@router.get("/proposals/{proposal_id}", response_model=ProposalDetail)
+async def proposal_detail(proposal_id: str, db: DbSession, current_user: CurrentUser) -> ProposalDetail:
+    """The change: why, from what evidence, the diff, and how it did against the live version."""
+    try:
+        return await _improver().detail(identity=TenantPrincipal.from_user(current_user), user_id=current_user.id,
+                                        proposal_id=proposal_id, db=db)
+    except ImprovementNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.post("/proposals/{proposal_id}/approve", response_model=ProposalOut)
+async def approve_proposal(proposal_id: str, db: DbSession, current_user: CurrentUser) -> ProposalOut:
+    """Make the measured candidate the agent's next version."""
+    try:
+        return await _improver().approve(user_id=current_user.id, proposal_id=proposal_id, db=db)
+    except ImprovementNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.post("/proposals/{proposal_id}/reject", response_model=ProposalOut)
+async def reject_proposal(proposal_id: str, db: DbSession, current_user: CurrentUser) -> ProposalOut:
+    try:
+        return await _improver().reject(user_id=current_user.id, proposal_id=proposal_id, db=db)
+    except ImprovementNotFoundError as exc:
+        raise _not_found() from exc
