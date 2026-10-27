@@ -1,0 +1,68 @@
+"""githi's rules for one model step: the step limit, its notices, and which calls must not run.
+
+Pure functions of the run's pinned ``LoopSpec``, the step number and the journaled reply,
+so every place that applies them (the model step that plans the calls, the tool step that
+answers them, a retried or re-homed activity, a replay) reaches the same decision.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Final
+
+from supervisor.agent.events import MessageEnd
+from supervisor.harness import LoopSpec
+from supervisor.seams.core.types import INVALID_ARGUMENTS_KEY
+
+__all__ = [
+    "FINAL_STEP_NOTICE",
+    "is_final_step",
+    "loop_spec",
+    "refusal",
+    "steps_left_notice",
+]
+
+FINAL_STEP_NOTICE: Final = (
+    "This is the last step of this run: no more tool calls. Give your complete answer "
+    "now from what you already know, and say plainly which parts are unverified."
+)
+"""Shown on the last step's request only (never journalled), with ``tool_choice=none``:
+the run ends with an answer instead of at the limit with none."""
+
+
+def steps_left_notice(left: int) -> str:
+    """Shown on the requests near the limit only, so a stale count never persists."""
+    return (
+        f"[{left} steps left in this run. If you have enough to conclude, answer now; "
+        "combine any last checks into a single call.]"
+    )
+
+
+def loop_spec(manifest: Any) -> LoopSpec:
+    """The manifest's run-length settings; the defaults for manifests without them."""
+    return getattr(manifest, "loop", None) or LoopSpec()
+
+
+def is_final_step(spec: LoopSpec, step: int) -> bool:
+    return spec.force_answer_on_final_step and spec.max_steps - step <= 1
+
+
+def refusal(
+    spec: LoopSpec, step: int, assistant: MessageEnd, call: dict[str, Any]
+) -> tuple[str, str] | None:
+    """Why a call the model made must not run, as (code, message for the model); None to run it."""
+    if is_final_step(spec, step):
+        return "STEP_LIMIT", (
+            "not run: this run has used its last step. Answer with what you have; "
+            "the user can ask you to continue."
+        )
+    if assistant.finish_reason == "length":
+        return "TRUNCATED_TOOL_CALL", (
+            "not run: your reply was cut off by the output limit, so this call's "
+            "arguments may be incomplete. Send it again in a shorter reply."
+        )
+    if INVALID_ARGUMENTS_KEY in (call.get("arguments") or {}):
+        return "MALFORMED_ARGUMENTS", (
+            "not run: the arguments were not valid JSON and could not be parsed. "
+            "Send the call again with well-formed JSON arguments."
+        )
+    return None

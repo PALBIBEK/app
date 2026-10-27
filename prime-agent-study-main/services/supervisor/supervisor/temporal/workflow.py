@@ -67,7 +67,9 @@ from supervisor.temporal.contracts import (
     Placement,
     PlannedCall,
     RetryMode,
+    RunPhase,
     RunPlan,
+    RunState,
     SessionInput,
     SessionOp,
     SessionResult,
@@ -102,6 +104,8 @@ _BRAIN_ANYWHERE = "brain-anywhere"
 # Histories from before a successful new call counted as progress replay with the
 # stall guard counting every call.
 _STALL_COUNTS_PROGRESS = "stall-counts-progress"
+# Runs recorded before the run loop became githi's phase machine replay through _run_steps.
+_PHASE_LOOP = "phase-loop"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -226,7 +230,12 @@ class AgentSessionWorkflow:
                 Activity.BEGIN_RUN, TurnRequest(self._session_id, message), RunPlan
             )
             outcome = await (
-                self._run_steps(message, plan) if plan.stepped else self._run_whole(message)
+                self._run_whole(message)
+                if not plan.stepped
+                # Histories recorded before the phase machine replay through the old loop.
+                else self._run_phases(message, plan)
+                if workflow.patched(_PHASE_LOOP)
+                else self._run_steps(message, plan)
             )
             if plan.capture is not None and outcome.stop_reason == "stop":
                 await self._queue_capture(plan.run_id, plan.capture)
@@ -307,6 +316,104 @@ class AgentSessionWorkflow:
         )
 
     # --- stepped (workflow-driven) turns --------------------------------------
+
+    async def _run_phases(self, message: Message, plan: RunPlan) -> TurnOutcome:
+        """githi's turn as phases over a small checkpoint (Pi Durable's generation task).
+
+        REQUEST runs one model call; a reply with tool calls moves to TOOLS, which answers
+        each call (guard, approval, tool step) and returns to REQUEST for the next step.
+        The model's answer, a policy stop or the step limit ends the run. Every decision is
+        here, in replayed code; the steps it runs only do their effect and journal it.
+        """
+        guard = _guard(plan.guard)
+        st = RunState()
+
+        async def end(stop_reason: str, **details: Any) -> TurnOutcome:
+            return await self._end_run(message, plan, stop_reason, **details)
+
+        try:
+            while True:
+                if st.phase is RunPhase.REQUEST:
+                    if st.step >= plan.max_steps:
+                        return await end(
+                            "error",
+                            error_class="AgentLoopError",
+                            detail=(
+                                f"the step limit ({plan.max_steps} model steps) was reached "
+                                "without an answer; ask the agent to continue"
+                            ),
+                        )
+                    result = await self._model_step(
+                        StepRequest(self._session_id, plan.run_id, st.step)
+                    )
+                    if result.final:
+                        return await end(result.stop_reason)
+                    st.calls, st.phase = list(result.calls), RunPhase.TOOLS
+                else:
+                    stopped = await self._tool_round(plan, st, guard, end)
+                    if stopped is not None:
+                        return stopped
+                    st.step, st.calls, st.phase = st.step + 1, [], RunPhase.REQUEST
+        except (ActivityError, asyncio.CancelledError) as err:
+            if is_cancelled_exception(err) and self._abort_requested:
+                return await end(
+                    "aborted",
+                    lost_call_id=st.in_flight,
+                    lost_reason="the run was aborted while the tool ran",
+                )
+            if isinstance(err, ActivityError):
+                kind, detail = _failure(err)
+                return await end("error", error_class=kind, detail=detail)
+            raise
+
+    async def _tool_round(
+        self,
+        plan: RunPlan,
+        st: RunState,
+        guard: LoopGuard | None,
+        end: Callable[..., Any],
+    ) -> TurnOutcome | None:
+        """Answer every call of the step, in order; a TurnOutcome when the run must stop."""
+        for call in st.calls:
+            if guard is not None:
+                verdict = guard.observe("run", call.name, call.args_hash)
+                if verdict.tripped and verdict.action is GuardAction.ABORT:
+                    # The runaway run ends; the conversation does not (F32).
+                    return await end(
+                        "error", error_class="LoopGuard", detail=verdict.detail or "loop detected"
+                    )
+            approved = call.approval is None or await self._approve(plan.run_id, call)
+            st.in_flight = call.call_id
+            try:
+                failed = await self._call_tool(plan.run_id, call, denied=not approved)
+            except ActivityError as err:
+                if is_cancelled_exception(err):
+                    raise
+                # The tool may or may not have run: never guess, stop the turn.
+                return await end(
+                    "interrupted",
+                    error_class="TurnInterrupted",
+                    detail=f"tool {call.name!r} did not complete: {_failure(err)[1]}",
+                    lost_call_id=call.call_id,
+                )
+            st.in_flight = None
+            key = f"{call.name}:{call.args_hash}"
+            if guard is not None and not failed and key not in st.tried:
+                guard.progress("run")  # a stall is calls that get nowhere, not many calls
+            st.tried.add(key)
+        return None
+
+    async def _end_run(
+        self, message: Message, plan: RunPlan, stop_reason: str, **details: Any
+    ) -> TurnOutcome:
+        req = EndRunRequest(self._session_id, plan.run_id, message.command_id, stop_reason, **details)
+        lost = (
+            LostCall(self._session_id, plan.run_id, req.lost_call_id, req.lost_reason)
+            if req.lost_call_id is not None
+            else None
+        )
+        # If the session's worker is gone, its lost call is closed before adoption.
+        return await self._session_activity(Activity.END_RUN, req, TurnOutcome, lost=lost)
 
     async def _run_steps(self, message: Message, plan: RunPlan) -> TurnOutcome:
         """Model call, then each tool call, until the model answers or policy stops it."""
