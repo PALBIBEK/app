@@ -16,6 +16,7 @@ const A = await apiHeaders();
 const hid = (await (await fetch(`${API}/harnesses`, { method: 'POST', headers: A, body: JSON.stringify({ name: 'chat-' + Date.now().toString(36), model: 'gateway/echo', mode: 'sticky' }) })).json()).id;
 const m = (await (await fetch(`${API}/harnesses/${hid}/manifest`, { headers: A })).json()).manifest;
 m.sandbox.provider = 'local_process'; m.sandbox.file_effects = 'danger_full_access'; m.policy.max_steps = 9;
+m.policy.max_cost_per_session = 50; // the dev echo model's price is made up; this journey is not about budgets
 await fetch(`${API}/harnesses/${hid}/manifest`, { method: 'PUT', headers: A, body: JSON.stringify(m) });
 const published = await fetch(`${API}/harnesses/${hid}/publish`, { method: 'POST', headers: A });
 check(published.ok, `publish (${published.status})`);
