@@ -211,3 +211,30 @@ class SessionChildOut(BaseModel):
     depth: int | None = None
     session_id: str | None = None
 
+
+class PinnedPart(BaseModel):
+    """One part of the composition a session runs, at the version it pinned."""
+
+    kind: str
+    role: str
+    artifact_id: str
+    digest: str
+    semver: str | None = None
+    status: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionPinsResponse(BaseModel):
+    """What a session runs: its agent's version and every pinned part."""
+
+    composition_id: str
+    composition_digest: str
+    composition_semver: str | None = None
+    composition_status: str
+    release_version: int | None = None
+    """The agent's version number this composition was published as (None if not one of its releases)."""
+    harness_version: str
+    model_route: str | None = None
+    mcp_configured: bool = False
+    acp_configured: bool = False
+    parts: list[PinnedPart]

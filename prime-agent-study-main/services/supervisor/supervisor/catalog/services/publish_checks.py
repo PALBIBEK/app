@@ -12,7 +12,10 @@ memory profile with ``summarization_model`` at the top level instead of under
   so a gateway outage does not block publishing;
 - a composition's named hand whose name a tool call could not carry (lowercase
   letters, digits, ``-`` and ``_``, at most 32), or ``default``, which is the
-  sandbox profile's own name, or a named hand on a composition with no default.
+  sandbox profile's own name, or a named hand on a composition with no default;
+- an artifact schema (``protocol_version``) this supervisor does not run;
+- a prompt pack with a section marked unfinished (``complete: false``): it would
+  reach the model as written.
 """
 
 from __future__ import annotations
@@ -22,13 +25,19 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from supervisor.catalog.core.errors import InvalidArtifact
+from supervisor.catalog.core.types import (
+    SUPPORTED_PROTOCOL_VERSIONS,
+    MemoryProfile,
+    PromptPack,
+    RecallBackend,
+)
 from supervisor.catalog.storage import artifact_to_dict
+from supervisor.hands.keys import DEFAULT_HAND
 
 __all__ = ["check_publishable"]
 
-_IGNORED = frozenset({"digest"})  # derived from the content, recomputed on publish
+_IGNORED = frozenset({"digest", "metadata"})  # derived (recomputed) or assigned by the catalog
 _HAND_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
-DEFAULT_HAND = "default"
 
 
 def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None:
@@ -37,6 +46,15 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
     unknown = sorted(_unknown_keys(body, artifact_to_dict(artifact)))
     if unknown:
         raise InvalidArtifact(kind, name, f"unknown field(s): {', '.join(unknown)}")
+    if artifact.protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+        raise InvalidArtifact(
+            kind,
+            name,
+            f"protocol_version {artifact.protocol_version}: this supervisor runs "
+            f"{', '.join(map(str, sorted(SUPPORTED_PROTOCOL_VERSIONS)))}",
+        )
+    if isinstance(artifact, PromptPack):
+        _check_prompt_pack(name, artifact)
     if kind == "memory_profile":
         _check_memory_profile(name, artifact)
     if kind == "composition":
@@ -93,10 +111,17 @@ def _check_hands(name: str, composition: Any) -> None:
         raise InvalidArtifact("composition", name, "named hands need a sandbox_profile (the default hand)")
 
 
-def _check_memory_profile(name: str, profile: Any) -> None:
+def _check_prompt_pack(name: str, pack: PromptPack) -> None:
+    if unfinished := [s.id for s in pack.sections if not s.complete]:
+        raise InvalidArtifact(
+            "prompt_pack", name, f"section(s) marked unfinished: {', '.join(unfinished)}; finish or remove them"
+        )
+
+
+def _check_memory_profile(name: str, profile: MemoryProfile) -> None:
     if (
         profile.recall_enabled
-        and profile.recall_backend == "mcp"
+        and profile.recall_backend == RecallBackend.MCP
         and not (profile.recall_mcp_server_url or "").strip()
     ):
         raise InvalidArtifact("memory_profile", name, "recall backend 'mcp' needs recall.mcp_server_url")

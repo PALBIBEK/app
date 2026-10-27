@@ -1,17 +1,18 @@
-"""Core catalog types, errors, and protocols.
+"""The catalog's vocabulary: artifact types, errors, and digests. No I/O."""
 
-This module contains the foundation layer:
-- types.py: All enums, dataclasses, type aliases
-- errors.py: Exception hierarchy with rich context
-- protocols.py: Protocol interfaces for dependency injection
-- digests.py: Content hash computation
-"""
-
-from supervisor.catalog.core.digests import content_digest
+from supervisor.catalog.core.digests import (
+    canonical_json_bytes,
+    content_digest,
+    is_unset_digest,
+    reject_floating_ref,
+    validate_digest_format,
+    verify_digest,
+)
 from supervisor.catalog.core.errors import (
     CatalogError,
     CatalogOwnershipRequired,
     CompositionDigestRequired,
+    CompositionIncompatible,
     CompositionIncomplete,
     DigestMismatch,
     DigestMissing,
@@ -21,20 +22,16 @@ from supervisor.catalog.core.errors import (
     InvalidDigest,
     NotOffered,
 )
-from supervisor.catalog.core.protocols import (
-    ArtifactStoreProtocol,
-    CompositionResolverProtocol,
-)
 from supervisor.catalog.core.types import (
+    DEFAULT_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     AgentComposition,
     ApprovalDefault,
     Artifact,
     ArtifactKind,
     ArtifactMetadata,
     ArtifactStatus,
-    ArtifactUsageRecord,
     ArtifactUsageStats,
-    CatalogGrant,
     DigestRef,
     FileEffects,
     MemoryProfile,
@@ -50,21 +47,20 @@ from supervisor.catalog.core.types import (
 )
 
 __all__ = [
+    "DEFAULT_PROTOCOL_VERSION",
+    "SUPPORTED_PROTOCOL_VERSIONS",
     "AgentComposition",
     "ApprovalDefault",
     "Artifact",
     "ArtifactKind",
     "ArtifactMetadata",
     "ArtifactStatus",
-    "ArtifactStoreProtocol",
-    "ArtifactUsageRecord",
     "ArtifactUsageStats",
     "CatalogError",
-    "CatalogGrant",
     "CatalogOwnershipRequired",
     "CompositionDigestRequired",
+    "CompositionIncompatible",
     "CompositionIncomplete",
-    "CompositionResolverProtocol",
     "DigestMismatch",
     "DigestMissing",
     "DigestRef",
@@ -84,5 +80,10 @@ __all__ = [
     "SessionPins",
     "ToolDefinition",
     "ToolSet",
+    "canonical_json_bytes",
     "content_digest",
+    "is_unset_digest",
+    "reject_floating_ref",
+    "validate_digest_format",
+    "verify_digest",
 ]

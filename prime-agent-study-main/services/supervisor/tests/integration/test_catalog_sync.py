@@ -72,7 +72,8 @@ async def test_a_deprecation_reaches_the_worker(
     }
     await worker.manager.create(**create)  # the worker now caches it as offered
 
-    await persist_deprecate(api.manager._db, "composition", "short-lived", digest)
+    assert api.composition_catalog is not None
+    await persist_deprecate(api.manager._db, api.composition_catalog, "composition", "short-lived", digest)
     with pytest.raises(NotOffered):
         await worker.manager.create(**create)
 

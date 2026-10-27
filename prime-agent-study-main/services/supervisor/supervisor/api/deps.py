@@ -24,6 +24,7 @@ from supervisor.seams.services import (
 from supervisor.session import SessionManager
 
 if TYPE_CHECKING:
+    from supervisor.harness.services.resolver import HarnessCatalog
     from supervisor.temporal.sessions import SessionWorkflows
 
 
@@ -235,6 +236,10 @@ async def _still_starting(request: Request, tenant_id: str, principal_id: str, s
 
 def get_manager(request: Request) -> SessionManager:
     return _state(request).manager
+
+
+def get_harness_catalog(request: Request) -> HarnessCatalog:
+    return get_manager(request).harness_catalog
 
 
 def get_composition_catalog(request: Request):

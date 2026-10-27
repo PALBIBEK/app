@@ -3,6 +3,7 @@
  */
 
 import { apiClient } from '../client';
+import type { SessionPins } from '../types/catalog.types';
 import type { SessionStartup } from '@/lib/session/startup';
 import { useAuthStore } from '../../store/authStore';
 import {
@@ -96,6 +97,10 @@ export const sessionsAPI = {
    * BFF tools invoke — never call supervisor host from the browser (D6 F).
    * POST /sessions/:id/tools/invoke
    */
+  /** What the session runs, part by part (404 for a session on a bare harness). */
+  pins: (sessionId: string): Promise<SessionPins> =>
+    apiClient.get<SessionPins>(`/sessions/${encodeURIComponent(sessionId)}/pins`),
+
   /** Where a new session's start stands: poll after create until `ready` or `failed`. */
   startup: (sessionId: string): Promise<SessionStartup> =>
     apiClient.get<SessionStartup>(`/sessions/${encodeURIComponent(sessionId)}/startup`),

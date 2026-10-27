@@ -36,7 +36,7 @@ router = APIRouter(tags=["harness"])
 
 
 def _catalog(request: Request) -> HarnessCatalog:
-    return deps.get_manager(request)._catalog
+    return deps.get_harness_catalog(request)
 
 
 def _summary(manifest: Any, status: HarnessStatus, owner: str | None) -> dict[str, Any]:

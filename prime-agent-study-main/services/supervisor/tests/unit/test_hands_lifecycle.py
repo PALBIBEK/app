@@ -11,7 +11,7 @@ import pytest
 
 from supervisor.catalog.core.types import ArtifactStatus, SandboxProfile, SandboxProviderName
 from supervisor.catalog.services.publish_checks import _check_lifecycle
-from supervisor.catalog.storage.converters import sandbox_profile_from_dict, sandbox_profile_to_dict
+from supervisor.catalog.storage.converters import artifact_to_dict, sandbox_profile_from_dict
 from supervisor.hands import HandRecipe
 from supervisor.hands.lifecycle import SandboxLifecycle
 from tests.unit.test_hands import _hands
@@ -111,10 +111,10 @@ def _profile(**kw: object) -> SandboxProfile:
 def test_lifecycle_fields_change_a_profile_only_when_set() -> None:
     plain = _profile()
     assert "start" not in plain.body_for_digest() and "idle_stop_s" not in plain.body_for_digest()
-    assert "start" not in sandbox_profile_to_dict(plain), "profiles without them keep their digests"
+    assert "start" not in artifact_to_dict(plain), "profiles without them keep their digests"
     set_ = _profile(start="with_run", idle_stop_s=300)
     assert set_.body_for_digest()["start"] == "with_run" and set_.body_for_digest()["idle_stop_s"] == 300
-    back = sandbox_profile_from_dict(sandbox_profile_to_dict(set_))
+    back = sandbox_profile_from_dict(artifact_to_dict(set_))
     assert (back.start, back.idle_stop_s) == ("with_run", 300)
     _check_lifecycle("p", set_)
     for bad in (_profile(start="eventually"), _profile(idle_stop_s=-1), _profile(idle_stop_s=100_000)):

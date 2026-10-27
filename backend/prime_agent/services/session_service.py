@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prime_agent.config import Settings, get_settings
+from prime_agent.db.models.harness_release import HarnessRelease
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.session import (
@@ -25,6 +26,7 @@ from prime_agent.schemas.session import (
     SessionMessageRequest,
     SessionMessageResponse,
     SessionPinSnapshot,
+    SessionPinsResponse,
     SessionResponse,
     SessionStartupResponse,
     SessionToolInvokeRequest,
@@ -218,6 +220,33 @@ class SessionService:
     async def cancel_run(self, *, session_id: str, run_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> RunResponse:
         raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.cancel_run(identity, sid, run_id))
         return RunResponse.model_validate(raw)
+
+    async def pins(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        identity: TenantPrincipal,
+        db: AsyncSession,
+    ) -> SessionPinsResponse:
+        """What the session runs, part by part, with the agent version it was published as."""
+        link = await self._get_owned(session_id, user_id, db)
+        try:
+            raw = await self._client.session_pins(identity, link.ai_session_id)
+        except AiUpstreamError as exc:
+            raise HTTPException(
+                status_code=exc.status_code or 503,
+                detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
+            ) from exc
+        release = (
+            await db.execute(
+                select(HarnessRelease.version).where(
+                    HarnessRelease.harness_id == link.harness_id,
+                    HarnessRelease.composition_digest == raw.get("composition_digest"),
+                )
+            )
+        ).scalar_one_or_none()
+        return SessionPinsResponse.model_validate({**raw, "release_version": release})
 
     async def startup(
         self,

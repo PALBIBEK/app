@@ -418,6 +418,26 @@ class AiClient:
             timeout=15.0,  # a few Temporal round trips, each bounded by the supervisor
         )
 
+    async def session_pins(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/pins: the composition the session runs, part by part (404: none)."""
+        payload = await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/pins", identity, expected=(200,)
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def artifact_usage(
+        self, identity: TenantPrincipal, kind: str, artifact_id: str, *, digest: str | None = None
+    ) -> dict[str, Any]:
+        """GET /v1/catalog/{kind}/{id}/usage: the caller's sessions pinning it, by version."""
+        payload = await self._json_request(
+            "GET",
+            f"/v1/catalog/{quote(kind, safe='')}/{quote(artifact_id, safe='')}/usage",
+            identity,
+            expected=(200,),
+            params={"digest": digest} if digest else None,
+        )
+        return payload if isinstance(payload, dict) else {}
+
     async def get_session(
         self, identity: TenantPrincipal, ai_session_id: str
     ) -> dict[str, Any]:

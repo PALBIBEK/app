@@ -185,6 +185,56 @@ async def get_session(
     )
 
 
+class PinnedPartOut(BaseModel):
+    kind: str
+    role: str
+    artifact_id: str
+    digest: str
+    semver: str | None
+    status: str
+    settings: dict[str, Any]
+
+
+class SessionPinsOut(BaseModel):
+    """What a session runs: its composition and every part, at the exact versions it pinned."""
+
+    composition_id: str
+    composition_digest: str
+    composition_semver: str | None
+    composition_status: str
+    harness_version: str
+    model_route: str | None
+    mcp_configured: bool
+    acp_configured: bool
+    parts: list[PinnedPartOut]
+
+
+@router.get("/{session_id}/pins", response_model=SessionPinsOut)
+async def get_session_pins(
+    session_id: str,
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> SessionPinsOut:
+    """The session's pinned composition, part by part (404 when it pins none: a bare harness)."""
+    from dataclasses import asdict
+
+    from supervisor.catalog import SessionPins
+    from supervisor.catalog.repository import sync_composition
+    from supervisor.catalog.views import pinned_view
+    from supervisor.db.models import SessionRow
+
+    await deps.require_session_access(tenant_id, session_id, request)
+    factory = deps.get_session_factory(request)
+    async with factory() as db:
+        row = await db.get(SessionRow, session_id)
+    if row is None or not row.composition_pins:
+        raise HTTPException(status_code=404, detail="this session runs a harness version, not a composition")
+    pins = SessionPins.from_dict(dict(row.composition_pins))
+    catalog = deps.get_composition_catalog(request)
+    await sync_composition(catalog, factory, pins.composition_id, pins.composition_digest)
+    return SessionPinsOut(**asdict(pinned_view(catalog, pins)))
+
+
 @router.post(
     "/{session_id}/messages",
     status_code=202,

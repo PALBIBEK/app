@@ -16,6 +16,7 @@ export const sessionKeys = {
   list: (filters: string) => [...sessionKeys.lists(), { filters }] as const,
   details: () => [...sessionKeys.all, 'detail'] as const,
   detail: (id: string) => [...sessionKeys.details(), id] as const,
+  pins: (id: string) => [...sessionKeys.all, 'pins', id] as const,
 };
 
 /**
@@ -40,6 +41,17 @@ export function useSession(id: string) {
     queryKey: sessionKeys.detail(id),
     queryFn: () => sessionsAPI.getById(id),
     enabled: !!id,
+  });
+}
+
+/** What the session runs; pinned for its life, so read once (re-read for a status change). */
+export function useSessionPins(id: string) {
+  return useQuery({
+    queryKey: sessionKeys.pins(id),
+    queryFn: () => sessionsAPI.pins(id),
+    enabled: !!id,
+    staleTime: 60_000,
+    retry: false, // 404: a session on a bare harness pins no composition
   });
 }
 

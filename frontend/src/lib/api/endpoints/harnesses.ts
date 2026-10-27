@@ -17,6 +17,7 @@
  */
 
 import { apiClient } from '../client';
+import type { HarnessUsage } from '../types/catalog.types';
 import {
   Harness,
   HarnessBindRequest,
@@ -148,6 +149,9 @@ export const harnessesAPI = {
 
   releases: async (id: string): Promise<Release[]> =>
     ReleaseSchema.array().parse(await apiClient.get(`/harnesses/${id}/releases`)),
+
+  /** Sessions per published version of the agent (counted from what each session pinned). */
+  usage: (id: string): Promise<HarnessUsage> => apiClient.get<HarnessUsage>(`/harnesses/${id}/usage`),
 };
 
 /** What a harness can be built from, as the supervisor offers it now. */

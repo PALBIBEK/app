@@ -28,7 +28,7 @@ from prime_agent.schemas.harness_manifest import (
     HarnessPublishResponse,
     HarnessReleaseView,
 )
-from prime_agent.services.ai_client import AiClient
+from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.harness_publish_service import (
     HarnessPublisher,
     PublishError,
@@ -230,6 +230,48 @@ async def check_harness(harness_id: str, db: DbSession, current_user: CurrentUse
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
     views = [DraftCheckView(**asdict(c)) for c in checks]
     return DraftCheckResponse(ok=all(c.ok for c in views), checks=views)
+
+
+class VersionUsage(BaseModel):
+    version: int | None
+    """The release number, or None for a version this agent did not publish (bound by hand)."""
+    digest: str
+    sessions: int
+
+
+class HarnessUsage(BaseModel):
+    """The sessions that run this agent, counted from what each one pinned."""
+
+    session_count: int
+    active_sessions: int
+    first_used_at: str | None = None
+    last_used_at: str | None = None
+    versions: list[VersionUsage]
+
+
+@router.get("/{harness_id}/usage", response_model=HarnessUsage)
+async def harness_usage(harness_id: str, db: DbSession, current_user: CurrentUser) -> HarnessUsage:
+    """How many sessions run each version of the agent; a version none runs can go without stranding anyone."""
+    harness = await HarnessService.get_owned(harness_id, current_user.id, db)
+    if not harness.composition_id:
+        return HarnessUsage(session_count=0, active_sessions=0, versions=[])
+    try:
+        raw = await AiClient.from_settings(get_settings()).artifact_usage(
+            TenantPrincipal.from_user(current_user), "composition", harness.composition_id
+        )
+    except AiUpstreamError as exc:
+        raise HTTPException(status_code=exc.status_code or 503, detail=exc.to_dict()) from exc
+    number = {r.composition_digest: r.version for r in await releases(harness_id, db)}
+    return HarnessUsage(
+        session_count=int(raw.get("session_count", 0)),
+        active_sessions=int(raw.get("active_sessions", 0)),
+        first_used_at=raw.get("first_used_at"),
+        last_used_at=raw.get("last_used_at"),
+        versions=[
+            VersionUsage(version=number.get(v["digest"]), digest=v["digest"], sessions=int(v["sessions"]))
+            for v in raw.get("versions") or []
+        ],
+    )
 
 
 @router.get("/{harness_id}/releases", response_model=list[HarnessReleaseView])

@@ -248,6 +248,11 @@ class SessionManagerBase:
     def memory(self) -> MemoryPlatform:
         return self._memory
 
+    @property
+    def harness_catalog(self) -> HarnessCatalog:
+        """The harness versions sessions are created on."""
+        return self._catalog
+
     def memory_profile(self, row: SessionRow) -> MemoryProfile | None:
         """The memory profile a session pinned, if any."""
         if not row.composition_pins or self._composition_catalog is None:

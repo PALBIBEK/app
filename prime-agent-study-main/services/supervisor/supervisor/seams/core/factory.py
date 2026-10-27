@@ -7,6 +7,7 @@ import os
 from typing import TYPE_CHECKING, Final
 
 from supervisor.agent.seams import RuntimeSeams
+from supervisor.catalog.core.types import RecallBackend
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
 from supervisor.seams.interfaces.subagent_transport import SubagentTransport, SubagentTransportImpl
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 
 # Nested session provider constant
 NESTED_SESSION_PROVIDER = "nested_session"
+
+DEFAULT_RECALL_MAX_TOKENS: Final = 512
+"""Recall's share of the context when a memory profile does not set ``recall.max_tokens``."""
 
 STANDALONE_TOOLS: Final = ("read", "write", "ls", "grep")
 """Offered to a githi runtime created without a tool seam (no catalog pins):
@@ -83,22 +87,17 @@ def build_context_memory_from_profile(
         compaction = NullContextMemoryProvider(rpc_configured=True)
 
     recall: ContextMemoryProvider | None = None
-    if profile.recall_enabled and profile.recall_backend == "githi_markdown":
+    if profile.recall_enabled and profile.recall_backend == RecallBackend.GITHI_MARKDOWN:
         from supervisor.seams.providers.memory.markdown_recall import MarkdownRecallProvider
         recall = MarkdownRecallProvider()
-    elif profile.recall_enabled and profile.recall_backend == "mcp":
+    elif profile.recall_enabled and profile.recall_backend == RecallBackend.MCP:
         url = (profile.recall_mcp_server_url or "").strip()
         if url:
             from supervisor.seams.providers.memory.mcp_recall import McpSemanticRecallProvider
             recall = McpSemanticRecallProvider(server_url=url)
-    elif profile.recall_enabled and profile.recall_backend in (
-        "durable",
-        "memory_service",
-    ):
+    elif profile.recall_enabled and profile.recall_backend in (RecallBackend.DURABLE, RecallBackend.MEMORY_SERVICE):
         from supervisor.seams.providers.memory.durable_recall import DurableRecallProvider
-        recall = DurableRecallProvider(
-            max_tokens=int(getattr(profile, "recall_max_tokens", None) or 512),
-        )
+        recall = DurableRecallProvider(max_tokens=profile.recall_max_tokens or DEFAULT_RECALL_MAX_TOKENS)
 
     if recall is not None:
         from supervisor.seams.providers.memory.composite_memory import (

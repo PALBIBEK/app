@@ -1,29 +1,22 @@
-"""Synchronous in-memory composition catalog for bootstrap loading.
+"""``CompositionCatalog``: every artifact version this process knows, and who owns each name.
 
-This is a lightweight, synchronous catalog used during application bootstrap
-to load shipped artifacts from disk. For production runtime operations,
-use PostgresArtifactStore or InMemoryArtifactStore (async).
-
-Note: This class will be deprecated once full database migration is complete.
-The end state will use PostgresArtifactStore as the single source of truth.
+It is a cache. The ``catalog_artifacts`` table is the source of truth
+(``catalog.repository``): the API writes there on publish and deprecate, and a
+process syncs what a session is about to pin before resolving it, so replicas
+agree. Reads are synchronous and in memory because resolution sits on the
+session-create and bind paths.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
-from supervisor.catalog.core.digests import content_digest, is_unset_digest
-from supervisor.catalog.core.errors import (
-    CatalogOwnershipRequired,
-    DigestMismatch,
-    NotOffered,
-)
-from supervisor.catalog.core.types import (
-    ArtifactKind,
-    ArtifactStatus,
-)
-from supervisor.catalog.storage.converters import kind_of, with_digest, with_status
+from supervisor.catalog.core.digests import content_digest, is_unset_digest, verify_digest
+from supervisor.catalog.core.errors import CatalogOwnershipRequired, NotOffered
+from supervisor.catalog.core.types import ArtifactKind, ArtifactMetadata, ArtifactStatus
+from supervisor.catalog.storage.converters import kind_of, with_digest, with_metadata, with_status
 
 if TYPE_CHECKING:
     from supervisor.catalog.core.types import Artifact
@@ -34,105 +27,89 @@ SYSTEM_OWNER = "system"
 """Owner of shipped artifacts: every tenant may use them, none may change them."""
 
 
-def _kind_key(kind: ArtifactKind | str) -> str:
-    return kind.value if isinstance(kind, ArtifactKind) else str(kind)
+def _kind(kind: ArtifactKind | str) -> ArtifactKind:
+    return ArtifactKind(kind)
 
 
 class CompositionCatalog:
-    """Synchronous in-memory catalog for composition loading.
-
-    This class provides a simple, synchronous interface for loading and
-    querying catalog artifacts during bootstrap. It mirrors the structure
-    of InMemoryArtifactStore but with sync methods and simplified signatures.
-
-    Attributes:
-        _by_key: Primary storage mapping (kind, name, digest) -> artifact
-        _by_name: Version index mapping (kind, name) -> list of digests
-        _by_digest: Reverse lookup mapping digest -> (kind, name)
-
-    Example:
-        >>> catalog = CompositionCatalog()
-        >>> catalog.offer(prompt_pack)
-        >>> catalog.offer(tool_set)
-        >>> catalog.offer(composition)
-        >>>
-        >>> pack = catalog.get("prompt_pack", "coding-prompt", "sha256:...")
-        >>> tools = catalog.get("tool_set", "coding-tools", "sha256:...")
-    """
+    """Artifacts by ``(kind, name, digest)``, versions by ``(kind, name)``, and owners by name."""
 
     def __init__(self) -> None:
-        # Primary storage: (kind, name, digest) -> artifact
-        self._by_key: dict[tuple[ArtifactKind | str, str, str], Artifact] = {}
-        # Version index: (kind, name) -> [digests]
-        self._by_name: dict[tuple[ArtifactKind | str, str], list[str]] = defaultdict(list)
-        # Reverse lookup: digest -> (kind, name)
-        self._by_digest: dict[str, tuple[ArtifactKind | str, str]] = {}
-        # Tenancy: (kind, name) -> owning tenant (SYSTEM_OWNER for shipped artifacts)
-        self._owners: dict[tuple[str, str], str] = {}
+        self._by_key: dict[tuple[ArtifactKind, str, str], Artifact] = {}
+        self._versions: dict[tuple[ArtifactKind, str], list[str]] = defaultdict(list)
+        self._by_digest: dict[str, tuple[ArtifactKind, str]] = {}
+        self._owners: dict[tuple[ArtifactKind, str], str] = {}
 
     # --- tenancy -------------------------------------------------------------
 
     def owner(self, kind: ArtifactKind | str, name: str) -> str | None:
         """The tenant that owns ``name`` (``SYSTEM_OWNER`` for shipped ones), if known."""
-        return self._owners.get((_kind_key(kind), name))
+        return self._owners.get((_kind(kind), name))
 
     def claim(self, kind: ArtifactKind | str, name: str, owner: str) -> None:
         """Record ``owner`` for ``name``; a name owned by anyone else is refused."""
-        key = (_kind_key(kind), name)
+        key = (_kind(kind), name)
         current = self._owners.setdefault(key, owner)
         if current != owner:
             raise CatalogOwnershipRequired(
-                principal_id=owner, artifact_kind=key[0], artifact_id=name, owner_id=current
+                principal_id=owner, artifact_kind=key[0].value, artifact_id=name, owner_id=current
             )
 
     def visible_to(self, kind: ArtifactKind | str, name: str, tenant_id: str) -> bool:
         """Whether ``tenant_id`` may see and use ``name``: shipped, or its own."""
         return self.owner(kind, name) in (SYSTEM_OWNER, tenant_id, None)
 
-    def offer(self, artifact: Artifact, *, owner: str = SYSTEM_OWNER) -> Artifact:
-        """Publish an artifact to the catalog.
+    # --- writes --------------------------------------------------------------
 
-        Computes digest if not present, sets status to OFFERED,
-        and stores the artifact.
+    def offer(
+        self,
+        artifact: Artifact,
+        *,
+        owner: str = SYSTEM_OWNER,
+        metadata: ArtifactMetadata | None = None,
+    ) -> Artifact:
+        """Store ``artifact`` as offered, under ``owner``; returns it with its digest.
 
-        Args:
-            artifact: The artifact to publish (PromptPack, ToolSet, etc.)
-
-        Returns:
-            The artifact with computed digest and OFFERED status.
-
-        Raises:
-            DigestMismatch: If artifact has digest that doesn't match content.
-            CatalogOwnershipRequired: If another owner already holds the name.
+        A missing or placeholder digest is computed; a claimed one must match the
+        content (``DigestMismatch``): sessions pin by digest, so a digest that did
+        not hash to its body would let anyone rewrite pinned content. ``metadata``
+        (who published it, when: the database row's) replaces whatever it had.
         """
         kind = kind_of(artifact)
-        name = artifact.name
-        self.claim(kind, name, owner)
-
-        # A digest is a proof of content: sessions pin by it, so a claimed digest
-        # that does not hash to this body would let anyone rewrite pinned content.
-        expected = content_digest(artifact.body_for_digest())
+        self.claim(kind, artifact.name, owner)
+        body = artifact.body_for_digest()
         if is_unset_digest(artifact.digest):
-            artifact = with_digest(artifact, expected)
-        elif artifact.digest != expected:
-            raise DigestMismatch(expected=artifact.digest, actual=expected)
-
-        digest = artifact.digest
-
-        # Set status to offered
+            artifact = with_digest(artifact, content_digest(body))
+        else:
+            verify_digest(body, artifact.digest)
         if artifact.status != ArtifactStatus.OFFERED:
             artifact = with_status(artifact, ArtifactStatus.OFFERED)
+        if metadata is not None or artifact.metadata is not None:
+            artifact = with_metadata(artifact, metadata or artifact.metadata)
 
-        # Store
-        key = (kind, name, digest)
-        self._by_key[key] = artifact
-
-        if digest not in self._by_name[(kind, name)]:
-            self._by_name[(kind, name)].append(digest)
-
-        self._by_digest[digest] = (kind, name)
-
+        self._by_key[(kind, artifact.name, artifact.digest)] = artifact
+        versions = self._versions[(kind, artifact.name)]
+        if artifact.digest not in versions:
+            versions.append(artifact.digest)
+        self._by_digest[artifact.digest] = (kind, artifact.name)
         return artifact
+
+    def deprecate(
+        self,
+        kind: ArtifactKind | str,
+        artifact_id: str,
+        digest: str,
+        *,
+        metadata: ArtifactMetadata | None = None,
+    ) -> Artifact:
+        """Mark one version deprecated (sessions pinned to it keep running); returns it."""
+        artifact = with_status(self.get(kind, artifact_id, digest), ArtifactStatus.DEPRECATED)
+        if metadata is not None:
+            artifact = with_metadata(artifact, metadata)
+        self._by_key[(_kind(kind), artifact_id, digest)] = artifact
+        return artifact
+
+    # --- reads ---------------------------------------------------------------
 
     def get(
         self,
@@ -142,42 +119,15 @@ class CompositionCatalog:
         *,
         require_offered: bool = False,
     ) -> Artifact:
-        """Retrieve an artifact by kind, id, and digest.
-
-        Args:
-            kind: Artifact type (prompt_pack, tool_set, composition, etc.)
-            artifact_id: Name/ID of the artifact
-            digest: Content digest (sha256:...)
-            require_offered: If True, raise if artifact is not OFFERED
-
-        Returns:
-            The matching artifact.
-
-        Raises:
-            NotOffered: If artifact not found or not offered when required.
-        """
-        kind_str = kind.value if isinstance(kind, ArtifactKind) else kind
-        key = (kind_str, artifact_id, digest)
-
-        artifact = self._by_key.get(key)
+        """One version; ``NotOffered`` if absent (or, with ``require_offered``, deprecated)."""
+        k = _kind(kind)
+        artifact = self._by_key.get((k, artifact_id, digest))
         if artifact is None:
-            # Try with ArtifactKind enum
-            for k in [kind_str, ArtifactKind(kind_str) if kind_str in ArtifactKind._value2member_map_ else None]:
-                if k is None:
-                    continue
-                key = (k, artifact_id, digest)
-                artifact = self._by_key.get(key)
-                if artifact is not None:
-                    break
-
-        if artifact is None:
-            raise NotOffered(kind=kind_str, artifact_id=artifact_id, digest=digest)
-
+            raise NotOffered(kind=k.value, artifact_id=artifact_id, digest=digest)
         if require_offered and artifact.status != ArtifactStatus.OFFERED:
             raise NotOffered(
-                kind=kind_str, artifact_id=artifact_id, digest=digest, status=str(artifact.status)
+                kind=k.value, artifact_id=artifact_id, digest=digest, status=artifact.status.value
             )
-
         return artifact
 
     def get_as[A: Artifact](
@@ -195,103 +145,42 @@ class CompositionCatalog:
             raise TypeError(f"{kind} {artifact_id!r} is a {type(artifact).__name__}")
         return artifact
 
-    def deprecate(
+    def artifacts(
         self,
-        kind: ArtifactKind | str,
-        artifact_id: str,
-        digest: str,
-    ) -> None:
-        """Mark an artifact as deprecated.
-
-        Args:
-            kind: Artifact type
-            artifact_id: Name/ID of the artifact
-            digest: Content digest
-
-        Raises:
-            NotOffered: If artifact not found.
-        """
-        artifact = self.get(kind, artifact_id, digest)
-        deprecated = with_status(artifact, ArtifactStatus.DEPRECATED)
-
-        kind_str = kind.value if isinstance(kind, ArtifactKind) else kind
-        key = (kind_str, artifact_id, digest)
-        self._by_key[key] = deprecated
-
-        # Also update with enum key if different
-        if isinstance(kind, str) and kind in ArtifactKind._value2member_map_:
-            enum_key = (ArtifactKind(kind), artifact_id, digest)
-            if enum_key in self._by_key:
-                self._by_key[enum_key] = deprecated
+        kind: ArtifactKind | str | None = None,
+        *,
+        status: ArtifactStatus | str | None = None,
+    ) -> Iterator[Artifact]:
+        """Every version held (of ``kind``, in ``status``), in the order they were offered."""
+        k = _kind(kind) if kind is not None else None
+        s = ArtifactStatus(status) if status is not None else None
+        for (art_kind, _, _), artifact in self._by_key.items():
+            if (k is None or art_kind == k) and (s is None or artifact.status == s):
+                yield artifact
 
     def list_artifacts(
         self,
         kind: ArtifactKind | str,
         *,
-        status: str | ArtifactStatus | None = None,
+        status: ArtifactStatus | str | None = None,
     ) -> list[Artifact]:
-        """List artifacts of a given kind, optionally filtered by status.
+        return list(self.artifacts(kind, status=status))
 
-        Args:
-            kind: Artifact type to list
-            status: Optional status filter (offered, deprecated, draft)
+    def list_versions(self, kind: ArtifactKind | str, artifact_id: str) -> list[str]:
+        """Every digest of ``artifact_id``, oldest first."""
+        return list(self._versions.get((_kind(kind), artifact_id), ()))
 
-        Returns:
-            List of matching artifacts.
-        """
-        kind_str = kind.value if isinstance(kind, ArtifactKind) else kind
+    def latest(self, kind: ArtifactKind | str, artifact_id: str) -> Artifact | None:
+        """The newest version of ``artifact_id`` (offered or not), if any."""
+        versions = self.list_versions(kind, artifact_id)
+        return self.get(kind, artifact_id, versions[-1]) if versions else None
 
-        # Normalize status
-        status_filter: ArtifactStatus | None = None
-        if status is not None:
-            if isinstance(status, str):
-                status_filter = ArtifactStatus(status)
-            else:
-                status_filter = status
-
-        results: list[Artifact] = []
-        for (k, name, digest), artifact in self._by_key.items():
-            k_str = k.value if isinstance(k, ArtifactKind) else k
-            if k_str != kind_str:
-                continue
-            if status_filter is not None and artifact.status != status_filter:
-                continue
-            results.append(artifact)
-
-        return results
-
-    def list_versions(
-        self,
-        kind: ArtifactKind | str,
-        artifact_id: str,
-    ) -> list[str]:
-        """List all digest versions for an artifact.
-
-        Args:
-            kind: Artifact type
-            artifact_id: Name/ID of the artifact
-
-        Returns:
-            List of digests for this artifact.
-        """
-        kind_str = kind.value if isinstance(kind, ArtifactKind) else kind
-        return list(self._by_name.get((kind_str, artifact_id), []))
-
-    def get_by_digest(self, digest: str) -> tuple[ArtifactKind | str, str] | None:
-        """Reverse lookup: find artifact kind and name by digest.
-
-        Args:
-            digest: Content digest to look up
-
-        Returns:
-            Tuple of (kind, name) or None if not found.
-        """
+    def get_by_digest(self, digest: str) -> tuple[ArtifactKind, str] | None:
+        """Which ``(kind, name)`` a digest belongs to."""
         return self._by_digest.get(digest)
 
     def __len__(self) -> int:
-        """Return total number of artifacts in catalog."""
         return len(self._by_key)
 
     def __contains__(self, digest: str) -> bool:
-        """Check if a digest exists in the catalog."""
         return digest in self._by_digest

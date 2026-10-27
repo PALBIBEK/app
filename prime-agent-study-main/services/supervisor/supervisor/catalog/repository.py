@@ -14,18 +14,24 @@ from typing import Any, TypedDict
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.catalog.core.types import ArtifactKind, ArtifactStatus
-from supervisor.catalog.storage import CompositionCatalog
-from supervisor.catalog.storage.composition import SYSTEM_OWNER
-from supervisor.catalog.storage.converters import artifact_from_dict, artifact_to_dict
+from supervisor.catalog.core.types import Artifact, ArtifactKind, ArtifactMetadata, ArtifactStatus
+from supervisor.catalog.storage import (
+    SYSTEM_OWNER,
+    CompositionCatalog,
+    artifact_from_dict,
+    artifact_to_dict,
+    kind_of,
+)
 from supervisor.db.models import CatalogArtifactRow
 
 __all__ = [
+    "ArtifactSummary",
     "artifact_summary",
     "hydrate_composition_catalog",
     "persist_deprecate",
     "persist_offer",
     "persist_shipped",
+    "persisted_owner",
     "sync_composition",
 ]
 
@@ -43,11 +49,26 @@ _EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 def _kind_str(kind: ArtifactKind | str) -> str:
-    return kind.value if isinstance(kind, ArtifactKind) else str(kind)
+    return ArtifactKind(kind).value
 
 
-def _status_str(status: Any) -> str:
-    return status.value if hasattr(status, "value") else str(status)
+def _utc(at: datetime | None) -> datetime | None:
+    if at is not None and at.tzinfo is None:  # SQLite returns naive datetimes, stored as UTC
+        return at.replace(tzinfo=UTC)
+    return at
+
+
+def _metadata(row: CatalogArtifactRow) -> ArtifactMetadata:
+    """Who published the row's version and when, and who deprecated it."""
+    created_at = _utc(row.created_at) or _EPOCH
+    return ArtifactMetadata(
+        created_by=row.created_by,
+        created_at=created_at,
+        updated_at=_utc(row.updated_at) or created_at,
+        owner_id=row.owner_id,
+        deprecated_by=row.deprecated_by,
+        deprecated_at=_utc(row.deprecated_at),
+    )
 
 
 async def persist_offer(
@@ -57,31 +78,39 @@ async def persist_offer(
     artifact_id: str,
     digest: str,
     *,
-    created_by: str = "system",
-) -> None:
-    """Write (or re-offer) one catalog artifact to the database."""
+    owner_id: str = SYSTEM_OWNER,
+    created_by: str | None = None,
+) -> Artifact:
+    """Write (or re-offer) one version; returns it as cached, with its row's metadata.
+
+    ``owner_id`` is the tenant the name belongs to; ``created_by`` the principal who
+    published it (the owner itself for a tenant-level caller).
+    """
     kind_s = _kind_str(kind)
     artifact = catalog.get(kind_s, artifact_id, digest)
-    body = artifact_to_dict(artifact)
     async with factory() as db, db.begin():
         row = await db.get(CatalogArtifactRow, (kind_s, artifact_id, digest))
         if row is None:
-            db.add(
-                CatalogArtifactRow(
-                    kind=kind_s,
-                    artifact_id=artifact_id,
-                    digest=digest,
-                    status=ArtifactStatus.OFFERED.value,
-                    body=body,
-                    created_by=created_by,
-                    owner_id=created_by,
-                )
+            row = CatalogArtifactRow(
+                kind=kind_s,
+                artifact_id=artifact_id,
+                digest=digest,
+                status=ArtifactStatus.OFFERED.value,
+                body=artifact_to_dict(artifact),
+                created_by=created_by or owner_id,
+                owner_id=owner_id,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
+            db.add(row)
         else:
             # Content is digest-addressed, so the body cannot change; only status can.
             row.status = ArtifactStatus.OFFERED.value
             row.deprecated_by = None
             row.deprecated_at = None
+            row.updated_at = datetime.now(UTC)
+        metadata = _metadata(row)
+    return catalog.offer(artifact, owner=owner_id, metadata=metadata)
 
 
 async def persist_shipped(
@@ -100,8 +129,9 @@ async def persist_shipped(
     from sqlalchemy.exc import IntegrityError
 
     added = 0
-    for (kind, name, digest), artifact in list(catalog._by_key.items()):
-        kind_s = _kind_str(kind)
+    for artifact in list(catalog.artifacts()):
+        kind_s = kind_of(artifact).value
+        name, digest = artifact.name, artifact.digest
         if catalog.owner(kind_s, name) != SYSTEM_OWNER:
             continue
         try:
@@ -113,7 +143,7 @@ async def persist_shipped(
                         kind=kind_s,
                         artifact_id=name,
                         digest=digest,
-                        status=_status_str(artifact.status),
+                        status=artifact.status.value,
                         body=artifact_to_dict(artifact),
                         created_by=SYSTEM_OWNER,
                         owner_id=SYSTEM_OWNER,
@@ -149,20 +179,23 @@ async def persisted_owner(
 
 async def persist_deprecate(
     factory: async_sessionmaker[AsyncSession],
+    catalog: CompositionCatalog,
     kind: ArtifactKind | str,
     artifact_id: str,
     digest: str,
     *,
-    deprecated_by: str = "system",
-) -> None:
-    """Mark a persisted artifact deprecated. No-op if it was never persisted."""
+    deprecated_by: str = SYSTEM_OWNER,
+) -> Artifact:
+    """Deprecate one version, durably and in ``catalog``; returns it with its row's metadata."""
     async with factory() as db, db.begin():
         row = await db.get(CatalogArtifactRow, (_kind_str(kind), artifact_id, digest))
-        if row is None:
-            return
-        row.status = ArtifactStatus.DEPRECATED.value
-        row.deprecated_by = deprecated_by
-        row.deprecated_at = datetime.now(UTC)
+        if row is not None:
+            row.status = ArtifactStatus.DEPRECATED.value
+            row.deprecated_by = deprecated_by
+            row.deprecated_at = datetime.now(UTC)
+            row.updated_at = row.deprecated_at
+        metadata = _metadata(row) if row is not None else None
+    return catalog.deprecate(kind, artifact_id, digest, metadata=metadata)
 
 
 async def hydrate_composition_catalog(
@@ -244,11 +277,14 @@ async def sync_composition(
 
 def _reconcile(catalog: CompositionCatalog, row: CatalogArtifactRow) -> None:
     """Make the cached artifact match its database row (content is digest-addressed)."""
+    metadata = _metadata(row)
     offered = catalog.offer(
-        artifact_from_dict(row.kind, dict(row.body)), owner=row.owner_id or SYSTEM_OWNER
+        artifact_from_dict(row.kind, dict(row.body)),
+        owner=row.owner_id or SYSTEM_OWNER,
+        metadata=metadata,
     )
     if row.status == ArtifactStatus.DEPRECATED.value:
-        catalog.deprecate(row.kind, offered.name, offered.digest)
+        catalog.deprecate(row.kind, offered.name, offered.digest, metadata=metadata)
 
 
 class ArtifactSummary(TypedDict):
@@ -256,13 +292,17 @@ class ArtifactSummary(TypedDict):
     digest: str
     status: str
     semver: str
+    protocol_version: int
+    metadata: dict[str, Any] | None
 
 
-def artifact_summary(artifact: Any) -> ArtifactSummary:
+def artifact_summary(artifact: Artifact) -> ArtifactSummary:
     """Fields shared by every artifact kind, shaped for ``CatalogArtifactOut``."""
     return {
         "artifact_id": artifact.name,
         "digest": artifact.digest,
-        "status": _status_str(artifact.status),
-        "semver": getattr(artifact, "semver", "") or "",
+        "status": artifact.status.value,
+        "semver": artifact.semver,
+        "protocol_version": artifact.protocol_version,
+        "metadata": artifact.metadata.to_dict() if artifact.metadata is not None else None,
     }
