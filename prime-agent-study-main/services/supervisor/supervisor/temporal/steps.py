@@ -23,6 +23,7 @@ from supervisor.agent.events import (
     ApprovalRequired,
     ApprovalResolved,
     BackgroundResults,
+    CompactionEnd,
     ErrorEvent,
     MemoryInjected,
     MemoryRecall,
@@ -36,6 +37,7 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.runtimes.githi.classify import (
     FINAL_STEP_NOTICE,
+    is_context_overflow,
     is_final_step,
     loop_spec,
     refusal,
@@ -62,6 +64,7 @@ from supervisor.session import SessionManager
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
 from supervisor.temporal.contracts import (
+    COMPACT,
     ApprovalAsk,
     ApprovalDecision,
     ApprovalNeeded,
@@ -119,6 +122,11 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     user_at: int | None = None
     for envelope in run:
         event = envelope.payload
+        if isinstance(event, CompactionEnd) and event.in_run and event.stop_reason == "ok":
+            # A compaction inside this run: its messages are the whole conversation up to
+            # here (summary + what it kept), and the run carries on from them.
+            messages, user_at = list(event.messages or []), None
+            continue
         if isinstance(event, (MemoryInjected, MemoryRecall, BackgroundResults)):
             shown = announcement(event) if isinstance(event, BackgroundResults) else event.text
             if shown:
@@ -332,9 +340,19 @@ class GithiSteps:
                 await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
             schemas = await self._tool_schemas(sid, loop)
-            chat = loop.messages_for_model(
-                conversation(await self._memory.prior_history(sid), run), schemas
-            )
+            history = conversation(await self._memory.prior_history(sid), run)
+            # githi's prepare phase: a request past the pinned limit is not sent; the
+            # workflow compacts (once per step) and asks again. Not on the first step:
+            # the run has added nothing yet, earlier turns were compacted as it began,
+            # and the request itself is never summarised away.
+            if (
+                req.step > 0
+                and req.can_compact
+                and not req.compacted
+                and await self._pinned.over_limit(sid, history, run)
+            ):
+                return StepResult(calls=[], final=False, kind=COMPACT)
+            chat = loop.messages_for_model(history, schemas)
             files = self._manager.files
             if files is not None and self._manager._hands.recipe(sid) is not None and (note := await files.context_note(sid)):
                 # Where this session's attachments are and where outputs go, after the pinned
@@ -350,15 +368,23 @@ class GithiSteps:
                 chat.append(ChatMessage(role="system", content=steps_left_notice(left)))
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             choice: dict[str, Any] = {"tool_choice": "none"} if final and schemas else {}
-            completion = await heartbeating(
-                asyncio.to_thread(
-                    runtime.seams.model_gateway.complete,
-                    chat,
-                    schemas,
-                    model=runtime.model,
-                    **choice,
+            try:
+                completion = await heartbeating(
+                    asyncio.to_thread(
+                        runtime.seams.model_gateway.complete,
+                        chat,
+                        schemas,
+                        model=runtime.model,
+                        **choice,
+                    )
                 )
-            )
+            except Exception as exc:
+                # The provider (or the model layer) says the request does not fit: nothing
+                # was answered. The workflow compacts and asks again, once; a step that
+                # still overflows after that ends the run saying so.
+                if req.can_compact and is_context_overflow(exc):
+                    return StepResult(calls=[], final=False, kind=COMPACT)
+                raise
             usage = AgentLoop.usage_from_completion(completion)
             assistant = MessageEnd(
                 role="assistant",
@@ -386,6 +412,18 @@ class GithiSteps:
             for call in calls
         ]
         return StepResult(calls=plans, final=False)
+
+    async def compact(self, req: StepRequest) -> bool:
+        """Compact the conversation so far, this run included, before ``req.step``'s request."""
+        sid, run_id = req.session_id, req.run_id
+        await self._brain(sid)
+        run = await self._reader.read_turn(sid, run_id)
+        history = conversation(await self._memory.prior_history(sid), run)
+        return await heartbeating(
+            self._pinned.compact_run(
+                sid, run_id, req.step, history, await self._reader.read(sid), request=_user_text(run)
+            )
+        )
 
     def _plan(self, manifest: Any, call: dict[str, Any], *, refused: bool = False) -> PlannedCall:
         name = str(call["name"])

@@ -17,10 +17,17 @@ from typing import Any
 from supervisor.harness import HarnessCatalog, HarnessManifest
 from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
+from supervisor.seams.compaction.core import COMPACTION_NOTICE, SUMMARY_MARKER
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion
 from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
 from supervisor.seams.providers.tools import RegistryToolProvider
+
+
+def _compacted(text: str) -> bool:
+    """A compaction's summary (or notice) stands in for turns already answered or in
+    progress; it is not a new request, so the scripted model carries on rather than restart."""
+    return text.startswith((SUMMARY_MARKER, COMPACTION_NOTICE[:40]))
 
 
 @dataclasses.dataclass
@@ -45,6 +52,8 @@ class ScriptedGateway:
     sensitivity: str = "ordinary"
     # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
     window: int | None = None
+    # Agent calls (0-based, in order, tools offered) the provider refuses as too long for its window.
+    overflow_calls: set[int] = dataclasses.field(default_factory=set)
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     tools_seen: list[list[dict[str, Any]]] = dataclasses.field(default_factory=list)
     # A background subagent working in a borrowed hand (``temporal.hand_jobs``): what it
@@ -85,9 +94,15 @@ class ScriptedGateway:
             if self.fail_first > 0:
                 self.fail_first -= 1
                 raise ConnectionError("model gateway unavailable (scripted)")
+            # Counted over the agent's calls only: compaction's summary request offers no tools.
+            if tools and sum(1 for t in self.tools_seen if t) - 1 in self.overflow_calls:
+                raise RuntimeError(
+                    "model gateway error 400: This model's maximum context length is 2000 tokens"
+                )
         results = sum(1 for m in messages if m.role == "tool")
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
-        asking = bool(self.calls) and (messages[-1].role == "user" or self.repeat or self.vary_args)
+        fresh = messages[-1].role == "user" and not _compacted(messages[-1].content)
+        asking = bool(self.calls) and (fresh or self.repeat or self.vary_args)
         if not asking:
             text = f"done after {results} tool results"
             return Completion(ChatMessage("assistant", text), model="scripted", usage=usage)

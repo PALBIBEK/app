@@ -21,6 +21,7 @@ result instead of summarising or recalling twice.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -142,7 +143,9 @@ class PinnedContextMemory:
     async def _binding(self, session_id: str) -> _Binding | None:
         row = await self._manager._get_session_row(session_id)
         profile = self._manager.memory_profile(row)
-        seams = getattr(self._manager._registry.get(session_id), "seams", None)
+        # The live runtime where this worker holds the session; elsewhere (a model step on
+        # any worker) the same runtime built from the pins.
+        seams = getattr(await self._manager.brain(session_id), "seams", None)
         memory = getattr(seams, "context_memory", None)
         if profile is None or memory is None:
             return None
@@ -219,6 +222,91 @@ class PinnedContextMemory:
         end = await self._summarise(compaction_id, binding, preparation, tail, replaced)
         await self._record(session_id, run_id, "compaction:end", end)
 
+    # --- inside a run (githi's prepare phase) ------------------------------------------
+
+    async def over_limit(
+        self, session_id: str, conversation: list[dict[str, Any]], run: Sequence[Envelope]
+    ) -> bool:
+        """Whether this step's request is past the pinned compaction limit.
+
+        The estimate sees the conversation; the provider's count of this run's last call
+        also includes the system prompt and tool schemas, so the larger decides. False
+        when the session pins no compaction: then only the provider can say it overflowed.
+        """
+        binding = await self._binding(session_id)
+        if binding is None or not binding.profile.compaction_enabled:
+            return False
+        tokens = max(binding.memory.estimate_tokens(conversation), _reported_tokens(run, binding.memory))
+        return tokens > binding.limit(await binding.context_window())
+
+    async def compact_run(
+        self,
+        session_id: str,
+        run_id: str,
+        step: int,
+        conversation: list[dict[str, Any]],
+        events: Sequence[Envelope],
+        *,
+        request: str = "",
+        reason: str = "threshold",
+    ) -> bool:
+        """Summarise all but the recent part of the conversation so far, this run included.
+
+        ``request`` is the message this run answers. When the cut falls after it, it is
+        kept verbatim beside the summary: a summary may lose detail (or fail, leaving
+        only a notice), and the run must still know what it was asked to do.
+
+        Journalled as an in-run ``CompactionEnd`` whose ``messages`` the run carries on
+        from (``steps.conversation``). Keyed by step, so a retried activity reuses it.
+        False when there is nothing to compact or the summary failed.
+        """
+        done = await self._keyed(session_id, run_id, f"{step}:compaction:end")
+        if done is not None:
+            return bool(done.stop_reason == "ok")
+        binding = await self._binding(session_id)
+        if binding is None or not binding.profile.compaction_enabled:
+            return False
+        window = await binding.context_window()
+        tail = _latest_round(conversation, binding.limit(window), binding.memory) or _recent(
+            conversation, binding.keep_recent(window), binding.memory
+        )
+        head = conversation[: len(conversation) - len(tail)]
+        if not head:
+            return False
+        tokens = binding.memory.estimate_tokens(conversation)
+        compaction_id = f"cmp-{run_id[:12]}-{step}"
+        await self._record(
+            session_id,
+            run_id,
+            f"{step}:compaction:start",
+            CompactionStart(
+                compaction_id=compaction_id,
+                reason=reason,
+                tokens_before=tokens,
+                first_kept_entry_id=str(len(head)),
+            ),
+        )
+        preparation = CompactionPreparation(
+            first_kept_entry_id=str(len(head)),
+            messages_to_summarize=head,
+            tokens_before=tokens,
+            previous_summary=extract_previous_summary(conversation),
+            context_window=window,
+            reserve_tokens=binding.reserve(window),
+        )
+        kept = request.strip() and not any(_mentions(m, request) for m in tail)
+        end = await self._summarise(
+            compaction_id,
+            binding,
+            preparation,
+            tail,
+            _replaced_range(list(events), tail),
+            request=request.strip() if kept else "",
+        )
+        end = dataclasses.replace(end, in_run=True)
+        await self._record(session_id, run_id, f"{step}:compaction:end", end)
+        return end.stop_reason == "ok"
+
     @staticmethod
     async def _summarise(
         compaction_id: str,
@@ -226,6 +314,8 @@ class PinnedContextMemory:
         preparation: CompactionPreparation,
         tail: list[dict[str, Any]],
         replaced: tuple[int, int] | None = None,
+        *,
+        request: str = "",
     ) -> CompactionEnd:
         try:
             decision = await asyncio.to_thread(
@@ -244,6 +334,8 @@ class PinnedContextMemory:
         )
         if replaced is not None:
             summary = f"{summary}\n\n{_citation(*replaced)}"
+        if request:
+            summary = f"{summary}\n\n{REQUEST_HEADING}\n{request}"
         compacted = [{"role": "user", "content": summary}, *tail]
         return CompactionEnd(
             compaction_id=compaction_id,
@@ -288,6 +380,14 @@ class PinnedContextMemory:
         )
 
 
+REQUEST_HEADING: Final = "The request this run is working on, verbatim:"
+
+
+def _mentions(message: dict[str, Any], text: str) -> bool:
+    content = message.get("content")
+    return message.get("role") == "user" and isinstance(content, str) and text.strip() in content
+
+
 def _citation(first: int, last: int) -> str:
     return (
         f"[This summary stands in for journal entries #{first}–#{last}, which are kept verbatim. "
@@ -326,6 +426,23 @@ def _replaced_range(before: Sequence[Envelope], tail: list[dict[str, Any]]) -> t
                 last = envelope.seq - 1
                 break
     return (first, last) if last >= first else None
+
+
+def _latest_round(
+    messages: list[dict[str, Any]], limit: int, memory: ContextMemoryProvider
+) -> list[dict[str, Any]]:
+    """The model's latest reply and the tool results it has not seen yet, when they fit.
+
+    Compacting inside a run happens right after a tool round, so summarising that
+    round away would hide the output the model just asked for. It is kept whole while
+    it fits under the limit on its own; a round larger than that is summarised with
+    the rest ([] here), and the summary's journal range lets the model reopen a part.
+    """
+    at = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=None)
+    if at is None or at == 0:
+        return []
+    round_ = messages[at:]
+    return round_ if memory.estimate_tokens(round_) <= limit else []
 
 
 def _recent(

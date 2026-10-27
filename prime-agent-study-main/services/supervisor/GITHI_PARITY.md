@@ -28,7 +28,7 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | L1–L3 | Step limit from the pins (default 30), "N steps left" on the last requests, a final step with no tools | same |
 | L4–L5 | A cut-off reply's calls and malformed arguments are refused, not run | same |
 | L6 | Every tool call answered | same |
-| L7 | Compaction before any model call that needs it, blocking or in the background, and recovery from a context overflow | next (phase 3) |
+| L7 | Compaction before any model call that needs it (`COMPACT` activity, keyed by step), and recovery from a provider's context overflow: compact once, ask again, else end the run saying why. The run's request is kept verbatim beside the summary, and the tool round the model has not seen yet is kept whole when it fits | done (phase 3); background compaction later |
 | L8 | Durable execution: per-step journal, adoption, at-most-once tools | better |
 | L9 | Loop guard, durable approvals, cost budget | better |
 | L10 | Abort | same |

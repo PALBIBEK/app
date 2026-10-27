@@ -59,6 +59,8 @@ class Activity(StrEnum):
     MODEL_STEP = "session.model_step"
     # Save what the last tools changed in the sandbox; on the worker holding it.
     CHECKPOINT = "session.checkpoint"
+    # Summarise the conversation inside a run so the next model step fits its window.
+    COMPACT = "session.compact"
     TOOL_CALL = "session.tool_call"
     REQUEST_APPROVAL = "session.request_approval"
     RESOLVE_APPROVAL = "session.resolve_approval"
@@ -277,6 +279,8 @@ class RunState:
     """``tool:args-hash`` the run has already run (the stall guard counts only new ones)."""
     in_flight: str | None = None
     """The call whose tool step is running, closed as lost if the run is aborted."""
+    compacted: bool = False
+    """This step's conversation was compacted once; it is not compacted twice."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +291,11 @@ class StepRequest:
     # Histories from before the brain ran anywhere ask the model step to checkpoint
     # too (it ran beside the sandbox); now the workflow runs CHECKPOINT itself.
     checkpoint: bool = True
+    # The phase loop can compact: the step may answer COMPACT instead of calling the
+    # model. Off for the older loop, which would read that answer as "no calls".
+    can_compact: bool = False
+    # This step already compacted once: a request still too large ends the run.
+    compacted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +304,12 @@ class StepResult:
     # Final: the model answered (stop) or policy ended the run (e.g. budget_exceeded).
     final: bool
     stop_reason: str = "stop"
+    # COMPACT: the request would not fit the model's window (estimated, or the provider
+    # said so); nothing was sent and nothing journalled as the reply. Otherwise empty.
+    kind: str = ""
+
+
+COMPACT = "compact"
 
 
 @dataclass(frozen=True, slots=True)
