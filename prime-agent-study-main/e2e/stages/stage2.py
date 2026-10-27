@@ -95,7 +95,7 @@ check("read a published composition's content via the API", "prompt_pack" in (r.
 
 prompt = local("prompt_packs", "coding-prompt")
 prompt2 = copy.deepcopy(prompt) | {"semver": "1.1.0"}
-prompt2["sections"][1]["text"] = "Prefer small diffs. Always explain the change in one line."
+prompt2["sections"][-1]["text"] += " Always explain the change in one line."
 code, refused = publish("prompt_pack", prompt2)
 check("a new version under a shipped name is refused (shipped artifacts are read-only)", code == 403, refused)
 prompt2["name"] = "my-coding-prompt"  # a tenant changes a shipped artifact by publishing its own copy

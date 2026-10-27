@@ -67,9 +67,23 @@ class _ModelFacingSchema(GenerateJsonSchema):
         return self.generate_inner(schema["schema"])
 
 
+def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
+    """``$ref``s replaced by what they name: several providers refuse a schema with refs."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            return _inline_refs(defs[ref.removeprefix("#/$defs/")], defs)
+        return {k: _inline_refs(v, defs) for k, v in node.items() if k != "$defs"}
+    if isinstance(node, list):
+        return [_inline_refs(v, defs) for v in node]
+    return node
+
+
 @functools.cache
 def _cached_schema(model: type[BaseModel]) -> dict[str, Any]:
     generated = model.model_json_schema(by_alias=True, schema_generator=_ModelFacingSchema)
+    if "$defs" in generated:  # arguments are never recursive, so inlining always ends
+        generated = _inline_refs(generated, generated["$defs"])
     generated.setdefault("required", [])
     return generated
 

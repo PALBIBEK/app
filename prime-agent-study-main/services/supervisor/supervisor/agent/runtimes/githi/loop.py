@@ -36,6 +36,7 @@ from supervisor.agent.events import (
     TurnStart,
     Usage,
 )
+from supervisor.agent.runtimes.githi.prompt import WORKSPACE, system_prompt
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.seams import ChatMessage, PromptBindings, ToolInvokeContext
 from supervisor.seams.core.types import invalid_arguments
@@ -128,14 +129,17 @@ class AgentLoop:
 
     # --- pieces of a stepped turn --------------------------------------------------
 
-    def messages_for_model(self, messages: list[dict[str, Any]]) -> list[ChatMessage]:
-        """The conversation as the model sees it, led by the pinned system prompt."""
+    def messages_for_model(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> list[ChatMessage]:
+        """The conversation as the model sees it, led by the system prompt: the pinned
+        prompt pack, the tools this run offers, and the working directory."""
         chat = self.to_chat_messages(messages)
         assembler = self._seams.prompt_assembler if self._seams else None
         if assembler is None:
             return chat
-        prompt = assembler.assemble(PromptBindings(cwd="/workspace"))
-        return [ChatMessage(role="system", content=prompt.text), *chat]
+        pinned = assembler.assemble(PromptBindings(cwd=WORKSPACE)).text
+        return [ChatMessage(role="system", content=system_prompt(pinned, tools or [])), *chat]
 
     @property
     def tool_provider(self) -> Any:

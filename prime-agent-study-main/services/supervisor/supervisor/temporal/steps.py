@@ -10,7 +10,6 @@ the journal, so tool arguments and results never enter workflow history.
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import Awaitable
 from dataclasses import asdict
@@ -36,6 +35,7 @@ from supervisor.agent.events import (
     TurnStart,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoop
+from supervisor.agent.runtimes.githi.render import tool_result_text
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import LoopSpec, RecoveryAction
@@ -195,7 +195,7 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                 {
                     "role": "tool",
                     "tool_call_id": event.tool_call_id,
-                    "content": [{"type": "text", "text": json.dumps(event.result)}],
+                    "content": [{"type": "text", "text": tool_result_text(event.result)}],
                 }
             )
     return messages
@@ -377,7 +377,10 @@ class GithiSteps:
                 await self._memory.recall(sid, run_id, _user_text(run), self._record)
                 await self._pinned.recall(sid, run_id, _user_text(run))
                 run = await self._reader.read_turn(sid, run_id)
-            chat = loop.messages_for_model(conversation(await self._memory.prior_history(sid), run))
+            schemas = await self._tool_schemas(sid, loop)
+            chat = loop.messages_for_model(
+                conversation(await self._memory.prior_history(sid), run), schemas
+            )
             files = self._manager.files
             if files is not None and self._manager._hands.recipe(sid) is not None and (note := await files.context_note(sid)):
                 # Where this session's attachments are and where outputs go, after the pinned
@@ -391,7 +394,6 @@ class GithiSteps:
                 chat.append(ChatMessage(role="system", content=FINAL_STEP_NOTICE))
             elif 0 < left <= spec.warn_steps_remaining:
                 chat.append(ChatMessage(role="system", content=steps_left_notice(left)))
-            schemas = await self._tool_schemas(sid, loop)
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             choice: dict[str, Any] = {"tool_choice": "none"} if final and schemas else {}
             completion = await heartbeating(

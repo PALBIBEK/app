@@ -69,4 +69,7 @@ def test_registry_definitions_publish_as_a_tool_set() -> None:
 
 def _sample(prop: str, schema: dict[str, Any], index: int) -> Any:
     """A value unique to ``prop`` (booleans differ from every default, which is false)."""
+    if schema["type"] == "array":  # one item, each of its own fields sampled
+        item = schema["items"]
+        return [{k: _sample(k, v, i) for i, (k, v) in enumerate(item.get("properties", {}).items())}]
     return {"string": f"value-of-{prop}", "integer": 10 + index, "boolean": True}[schema["type"]]
