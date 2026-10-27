@@ -209,7 +209,7 @@ class JournalProjector:
             attributes=attrs,
             status=SpanStatus.UNSET,
             parent_span_id=parent_span_id,
-            span_id=trace_span_id(env.session_id, self._root_run_id(run_id), key),
+            span_id=trace_span_id(env.session_id, env.turn_id or self._root_run_id(run_id), key),
             start_ms=env.ts_ms,
             journal_seq=env.seq,
         )
@@ -260,7 +260,8 @@ class JournalProjector:
         return resolve_run_id(env)
 
     def _root_run_id(self, run_id: str) -> str:
-        """The run a span hashes under: the open run (a subagent's own run id names its child)."""
+        """The run a span hashes under when its event names none: the open run (a subagent's
+        own run id names its child, not the run that started it)."""
         return self._run.record.yal_run_id if self._run is not None else run_id
 
     def _on_run_start(self, env: Envelope) -> None:

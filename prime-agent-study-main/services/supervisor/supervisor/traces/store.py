@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,8 +42,9 @@ Factory = async_sessionmaker[AsyncSession]
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
-_backfilled: set[str] = set()
-"""Tenants whose older runs are all filled in (new runs are recorded as they happen)."""
+_backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
+"""Per database, the tenants whose older runs are all filled in (new runs are recorded as
+they happen, so a tenant is checked once per process)."""
 
 
 def agent_label(row: SessionRow) -> str:
@@ -251,11 +253,12 @@ async def list_runs(
 ) -> tuple[list[dict[str, Any]], int | None]:
     """The caller's runs, newest first, and the cursor for the next page (None at the end)."""
     visible = and_(SessionRow.tenant_id == tenant_id, session_visibility(tenant_id, principal_id))
-    if tenant_id not in _backfilled:
+    done = _backfilled.setdefault(factory, set())
+    if tenant_id not in done:
         missing = await _unrecorded(factory, SessionRow.tenant_id == tenant_id, BACKFILL_LIMIT)
         await _fill(factory, reader, missing)
         if len(missing) < BACKFILL_LIMIT:
-            _backfilled.add(tenant_id)
+            done.add(tenant_id)
     query = (
         select(RunTraceRow)
         .join(SessionRow, SessionRow.id == RunTraceRow.session_id)
