@@ -105,6 +105,17 @@ your own machines for sandboxes, and *Fleet* (owners and admins) shows the worke
 
 ![Usage](docs/tour/22-usage.png)
 
+**Traces.** Every run as a readable trace. *Traces* lists runs (what was asked, how it ended, the
+agent version, where the time went, what it cost) with filters for failures and denials. A run
+opens as a transcript: the ask, what the agent did with each command's output and each file
+change as a diff, approvals with how long they waited on you, and the answer. *Tree* shows every
+step, model call, tool and approval on a timeline, the selected one opened beside it; *Raw
+events* the journal it was built from.
+
+![Trace transcript](docs/tour/25-trace-transcript.png)
+
+![Trace tree](docs/tour/26-trace-tree.png)
+
 **Memory.** What each agent remembers about you, in notebooks per version. Add, edit, forget
 or search facts. *History* restores a notebook to how it was after any change.
 
@@ -116,7 +127,7 @@ or search facts. *History* restores a notebook to how it was after any change.
 |---|---|
 | Backend tests | `cd backend && .venv/bin/python -m pytest -q tests` |
 | Frontend lint, types, tests | `cd frontend && npx next lint && npx tsc --noEmit && npx vitest run` |
-| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs` and `startup-journey.mjs` |
+| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs`, `traces-journey.mjs` and `startup-journey.mjs` |
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
 

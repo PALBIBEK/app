@@ -109,3 +109,16 @@ async def get_trace_span(
     if span is None:
         raise HTTPException(status_code=404, detail="span not found")
     return span.to_dict(full=True)
+
+
+@router.get("/v1/sessions/{session_id}/runs/{run_id}/trace/events")
+async def get_run_events(
+    session_id: str, run_id: str, request: Request, tenant_id: str = Depends(deps.current_tenant)
+) -> dict[str, Any]:
+    """The journal events the trace was built from, as journalled: the run's own events and the
+    session's (a sandbox starting) that happened while it ran."""
+    await _session(request, tenant_id, session_id)
+    events = await deps.get_reader(request).read_run_window(session_id, run_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"session_id": session_id, "run_id": run_id, "events": [e.to_dict() for e in events]}

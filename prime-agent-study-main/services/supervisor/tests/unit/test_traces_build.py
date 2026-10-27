@@ -80,7 +80,7 @@ def approved_bash_run() -> Journal:
         .at(1_000, model(calls=[("c1", "bash", {"command": "pytest -q"})]))
         .at(1_000, ApprovalRequired("a1", "Allow bash?", ["allow", "deny"], 300,
                                     metadata={"tool": "bash", "tool_call_id": "c1"}))
-        .at(11_000, ApprovalResolved("a1", "allow", "responded", responded_by="alice"))
+        .at(11_000, ApprovalResolved("a1", "allow", "approved", responded_by="alice"))
         .at(11_000, ToolStart("c1", "bash", {"command": "pytest -q"}))
         .at(13_000, ran("c1", "bash", {"exit_code": 0, "stdout": "3 passed\n", "stderr": ""}, ms=2_000))
         .at(13_000, TurnStart())
@@ -109,9 +109,10 @@ def test_a_run_nests_steps_model_calls_tools_and_the_approval_that_gated_a_tool(
     assert tool.start_ms == 1_000 and tool.end_ms == 13_000 and tool.attrs["exec_ms"] == 2_000
     assert tool.attrs["exit_code"] == 0 and tool.preview == "$ pytest -q"
     assert tool.attrs["outcome"] == "exit 0 · 3 passed"
-    assert approval.attrs["wait_ms"] == 10_000 and approval.preview == "allowed by alice after 10s"
+    assert approval.attrs["wait_ms"] == 10_000 and approval.preview == "allowed after 10s" and not approval.attrs["denied"]
     assert llm1.start_ms == 10 and llm1.end_ms == 1_000  # from the step's start to the reply
     assert llm1.preview == "asks for bash" and llm2.preview == "All 3 tests pass."
+    assert tool.excerpt == "3 passed\n" and llm2.excerpt == "All 3 tests pass." and root.excerpt == "run the tests"
 
 
 def test_the_rollup_says_how_it_went_and_where_the_time_went() -> None:
@@ -290,6 +291,7 @@ def test_long_content_is_cut_in_detail_and_left_out_of_the_tree() -> None:
         .trace()
     )
     (tool,) = by_kind(trace, SpanKind.TOOL)
+    assert tool.excerpt is not None and len(tool.excerpt) == 2_001  # the excerpt is short
     kept = tool.detail["result"]["payload"]
     assert kept.startswith("x" * 100) and kept.endswith("[500 more characters]")
     assert tool.attrs["outcome"] == "1 line"

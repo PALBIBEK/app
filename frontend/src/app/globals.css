@@ -43,4 +43,9 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Time spent waiting on a person: hatched, so it reads apart from work without colour. */
+  .stripes {
+    background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0 3px, transparent 3px 7px);
+  }
 }

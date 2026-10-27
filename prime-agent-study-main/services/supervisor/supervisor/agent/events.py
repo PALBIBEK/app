@@ -145,7 +145,7 @@ class ApprovalRequired:
 class ApprovalResolved:
     approval_id: str
     choice: str
-    status: str  # responded | timed_out | cancelled
+    status: str  # responded | approved | denied | timed_out | cancelled
     responded_by: str | None = None
     category: EventCategory = field(default=EventCategory.APPROVAL, repr=False)
 

@@ -101,9 +101,6 @@ class Settings(BaseSettings):
     harness_default_sandbox_provider: Literal["none", "local_process", "local_docker", "e2b"] = "local_docker"
     harness_default_file_effects: Literal["read_only", "workspace_write", "danger_full_access"] = "workspace_write"
 
-    # D13 Trace API — Jaeger query proxy (MVP); never hardcode in route modules.
-    jaeger_query_base_url: str = "http://127.0.0.1:16686"
-
     @field_validator("celery_broker_url", mode="before")
     @classmethod
     def set_celery_broker_url(cls, v: str | None, info) -> str:

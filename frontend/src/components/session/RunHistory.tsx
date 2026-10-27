@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { CircleNotch, X } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
@@ -60,13 +61,79 @@ export function RunHistory({ sessionId, refreshKey, onCancelled }: RunHistoryPro
       setRuns((rs) => rs?.map((r) => (r.run_id === after.run_id ? after : r)) ?? rs);
       if (after.status === 'cancelled' && after.started_at_ms == null) onCancelled?.(after.run_id);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not cancel the run'); } } return ( <div className="border-b border-line bg-canvas px-6 py-3" data-testid="run-history"> <div className="mx-auto max-w-3xl"> {error ? <p className="text-sm text-bad">{error}</p> : null} {runs === null && !error ? ( <p className="flex items-center gap-2 text-sm text-ink-2"><CircleNotch size={14} className="animate-spin" /> Loading runs…</p> ) : null} {runs?.length === 0 ? <p className="text-sm text-ink-2">No runs yet: each message you send starts one.</p> : null} {runs && runs.length > 0 ? ( <ul className="max-h-60 divide-y divide-line-soft overflow-auto text-xs"> {runs.map((r) => { const tokens = r.usage.total_tokens ?? 0; return ( <li key={r.run_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2" data-testid="run-row" data-status={r.status} data-run-id={r.run_id}> <span className={cn('rounded-full px-2 py-0.5 font-medium', TONE[r.status])}>{RUN_LABEL[r.status]}</span> <span className="text-ink-2" title={new Date(r.created_at_ms).toLocaleString()}> {new Date(r.created_at_ms).toLocaleTimeString()} </span> {runDuration(r) ? <span className="text-ink-2">{runDuration(r)}</span> : null} {r.steps ? <span className="text-ink-2">{r.steps} step{r.steps === 1 ?'' : 's'}</span> : null} {r.tool_calls ? <span className="text-ink-2">{r.tool_calls} tool call{r.tool_calls === 1 ?'' : 's'}</span> : null}
+      toast.error(err instanceof Error ? err.message : 'Could not cancel the run');
+    }
+  }
+  return (
+    <div className="border-b border-line bg-canvas px-6 py-3" data-testid="run-history">
+      {' '}
+      <div className="mx-auto max-w-3xl">
+        {' '}
+        {error ? <p className="text-sm text-bad">{error}</p> : null}{' '}
+        {runs === null && !error ? (
+          <p className="flex items-center gap-2 text-sm text-ink-2">
+            <CircleNotch size={14} className="animate-spin" /> Loading runs…
+          </p>
+        ) : null}{' '}
+        {runs?.length === 0 ? (
+          <p className="text-sm text-ink-2">No runs yet: each message you send starts one.</p>
+        ) : null}{' '}
+        {runs && runs.length > 0 ? (
+          <ul className="max-h-60 divide-y divide-line-soft overflow-auto text-xs">
+            {' '}
+            {runs.map((r) => {
+              const tokens = r.usage.total_tokens ?? 0;
+              return (
+                <li
+                  key={r.run_id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
+                  data-testid="run-row"
+                  data-status={r.status}
+                  data-run-id={r.run_id}
+                >
+                  {' '}
+                  <span className={cn('rounded-full px-2 py-0.5 font-medium', TONE[r.status])}>
+                    {RUN_LABEL[r.status]}
+                  </span>{' '}
+                  <span className="text-ink-2" title={new Date(r.created_at_ms).toLocaleString()}>
+                    {' '}
+                    {new Date(r.created_at_ms).toLocaleTimeString()}{' '}
+                  </span>{' '}
+                  {runDuration(r) ? <span className="text-ink-2">{runDuration(r)}</span> : null}{' '}
+                  {r.steps ? (
+                    <span className="text-ink-2">
+                      {r.steps} step{r.steps === 1 ? '' : 's'}
+                    </span>
+                  ) : null}{' '}
+                  {r.tool_calls ? (
+                    <span className="text-ink-2">
+                      {r.tool_calls} tool call{r.tool_calls === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
                   {tokens ? <span className="text-ink-2">{tokens.toLocaleString()} tokens</span> : null}
                   {r.usage.cost ? <span className="text-ink-2">${r.usage.cost.toFixed(4)}</span> : null}
-                  {r.error ? <span className="truncate text-bad" title={r.error.message}>{r.error.message}</span> : null}
-                  <span className="ml-auto font-mono text-[10px] text-ink-3" title="Run id">{r.run_id.slice(0, 8)}</span>
+                  {r.error ? (
+                    <span className="truncate text-bad" title={r.error.message}>
+                      {r.error.message}
+                    </span>
+                  ) : null}
+                  <span className="ml-auto font-mono text-[10px] text-ink-3" title="Run id">
+                    {r.run_id.slice(0, 8)}
+                  </span>
+                  <Link
+                    href={`/traces/${sessionId}/${r.run_id}`}
+                    className="text-accent-600 hover:underline"
+                    data-testid="run-trace-link"
+                  >
+                    Trace
+                  </Link>
                   {!RUN_ENDED.has(r.status) ? (
-                    <button type="button" onClick={() => void cancel(r)} className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-bad hover:bg-canvas" data-testid="run-cancel">
+                    <button
+                      type="button"
+                      onClick={() => void cancel(r)}
+                      className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-bad hover:bg-canvas"
+                      data-testid="run-cancel"
+                    >
                       <X size={12} /> Cancel
                     </button>
                   ) : null}
