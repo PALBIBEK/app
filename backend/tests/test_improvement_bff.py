@@ -5,6 +5,7 @@ next version only when a person approves it."""
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -71,7 +72,8 @@ class FakeSupervisor:
         self.reflected: list[dict] = []
 
     def _good(self, sid: str) -> bool:
-        return (self.candidate if "-c" in self.sessions.get(sid, "") else self.live) == "ok"
+        candidate = re.search(r"-c[0-9a-f]{8}$", self.sessions.get(sid, "")) is not None  # h-<id>-c<tag>, not h-c…-r1
+        return (self.candidate if candidate else self.live) == "ok"
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
