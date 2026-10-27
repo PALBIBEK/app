@@ -36,6 +36,7 @@ from supervisor.api import (
     subagents,
     tenant_secrets,
     tools,
+    traces,
     workspace,
 )
 from supervisor.app import SupervisorState
@@ -193,6 +194,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(tenant_secrets.router)
     app.include_router(runners.router)
     app.include_router(overview.router)
+    app.include_router(traces.router)
     return app
 
 

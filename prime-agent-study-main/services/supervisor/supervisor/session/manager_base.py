@@ -79,6 +79,7 @@ from supervisor.session.modes import SessionMode
 from supervisor.session.recovery import Recovery, ResumeState
 from supervisor.session.registry import SessionRegistry
 from supervisor.session.tool_outbox import ToolOutbox
+from supervisor.traces.store import record_run
 from supervisor.vault import Vault
 from supervisor.vault.credentials import ToolCredentials
 from supervisor.vault.session_keys import SessionKeys
@@ -392,6 +393,8 @@ class SessionManagerBase:
         )
         self._live.publish(session_id, envelope)
         await self._project(session_id, envelope)
+        if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
+            await record_run(self._db, self._reader, session_id, turn_id)
         return seq
 
     async def _workspace_effects(
