@@ -27,6 +27,8 @@ class RunSummary(BaseModel):
     session_title: str | None = None
     input: str | None = None
     output: str | None = None
+    summary: str | None = None
+    """One sentence on what the run did and how it ended."""
     cost: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -65,6 +67,7 @@ class TraceScore(BaseModel):
     id: str
     span_id: str | None = None
     name: str
+    topic: str | None = None
     source: str
     label: str
     value: float | None = None
@@ -114,6 +117,69 @@ class RunTraceResponse(BaseModel):
     version: int | None = None
     composition_digest: str | None = None
     session_title: str | None = None
+    summary: str | None = None
     rollup: dict[str, Any]
     spans: list[dict[str, Any]]
     scores: list[TraceScore] = Field(default_factory=list)
+
+
+class IssueExample(BaseModel):
+    session_id: str
+    """The product's session id."""
+    run_id: str
+    span_id: str | None = None
+    started_ms: int | None = None
+    input: str | None = None
+    summary: str | None = None
+    reason: str | None = None
+    version: int | None = None
+
+
+class IssueVersion(BaseModel):
+    version: int | None = None
+    composition_digest: str | None = None
+    runs: int
+
+
+class Issue(BaseModel):
+    """One way runs go wrong: what judged it, what it is about, how often, where to look."""
+
+    key: str
+    title: str
+    source: str
+    name: str
+    topic: str | None = None
+    runs: int
+    last_seen_ms: int
+    agent_id: str | None = None
+    agent_name: str | None = None
+    versions: list[IssueVersion]
+    examples: list[IssueExample]
+
+
+class IssuesResponse(BaseModel):
+    issues: list[Issue]
+
+
+class Judge(BaseModel):
+    id: str
+    name: str
+    rubric: str
+    sample_rate: float
+    model: str | None = None
+    version: int
+    enabled: bool
+    updated_ms: int
+
+
+class JudgeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.-]*$")
+    rubric: str = Field(min_length=10, max_length=4000)
+    sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    model: str | None = Field(default=None, max_length=255)
+    enabled: bool = True
+
+
+class JudgesResponse(BaseModel):
+    agent_id: str
+    judges: list[Judge]

@@ -56,6 +56,7 @@ def score_out(row: TraceScoreRow) -> dict[str, Any]:
         "run_id": row.run_id,
         "span_id": row.span_id,
         "name": row.name,
+        "topic": row.topic,
         "source": row.source,
         "label": row.label,
         "value": row.value,
@@ -83,7 +84,7 @@ async def write_checks(db: AsyncSession, session: SessionRow, trace: RunTrace) -
         db.add(
             TraceScoreRow(
                 id=str(uuid4()), tenant_id=session.tenant_id, session_id=trace.session_id, run_id=trace.run_id,
-                span_id=c.span_id, name=c.name, source="check", label=c.label, value=1.0 if c.passed else 0.0,
+                span_id=c.span_id, name=c.name, topic=c.topic, source="check", label=c.label, value=1.0 if c.passed else 0.0,
                 reason=c.reason, comment=None, evaluator=CHECKS_VERSION, principal_id=None,
                 composition_id=composition_id, composition_digest=digest, created_ms=now,
             )

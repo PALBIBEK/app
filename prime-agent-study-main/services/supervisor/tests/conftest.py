@@ -7,4 +7,5 @@ pytest_plugins = [
     "tests.support.temporal_env",
     "tests.support.githi_env",
     "tests.support.notebooks",
+    "tests.support.trace_api",
 ]

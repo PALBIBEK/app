@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { TimeSplitBar } from '@/components/traces/TimeSplitBar';
+import { TracesNav } from '@/components/traces/TracesNav';
 import {
   Button,
   Card,
@@ -55,7 +56,7 @@ function useDebounced<T>(value: T, ms: number): T {
 function Row({ run }: { run: RunSummary }): JSX.Element {
   const st = runStatus(run.status);
   const href = `/traces/${run.session_id}/${run.run_id}`;
-  const outcome = run.reason ?? run.output;
+  const outcome = run.summary ?? run.reason ?? run.output;
   return (
     <Tr className="align-top">
       <Td className="max-w-[440px]">
@@ -136,6 +137,7 @@ export default function TracesPage(): JSX.Element {
           title="Traces"
           description="Every run of every agent: what was asked, what it did, and where the time and money went."
         />
+        <TracesNav current="/traces" />
         <div className="flex flex-wrap items-center gap-2.5">
           <SearchInput value={text} onChange={setText} label="Search runs" placeholder="Search what was asked or answered" />
           <Segmented

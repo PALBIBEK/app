@@ -25,6 +25,7 @@ from supervisor.session.access import session_visibility
 from supervisor.traces.build import build_run_trace, trace_id
 from supervisor.traces.model import RunStatus, RunTrace
 from supervisor.traces.scores import write_checks
+from supervisor.traces.summary import describe
 
 __all__ = [
     "TraceFilter",
@@ -44,7 +45,7 @@ Factory = async_sessionmaker[AsyncSession]
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
-ROLLUP_VERSION = 3
+ROLLUP_VERSION = 4
 """Bumped when the builder changes what a rollup says; rows from an older one are rebuilt on read."""
 _backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
 """Per database, the tenants whose older runs are all filled in (new runs are recorded as
@@ -105,6 +106,8 @@ async def _save(factory: Factory, session: SessionRow, trace: RunTrace) -> None:
         "errors": r.errors,
         "input_preview": r.input,
         "output_preview": r.output,
+        "summary": describe(trace),
+        "summary_by": "rules",
         "rollup": {**r.to_dict(), "v": ROLLUP_VERSION},
         "updated_ms": int(time.time() * 1000),
     }
@@ -113,6 +116,8 @@ async def _save(factory: Factory, session: SessionRow, trace: RunTrace) -> None:
             async with factory() as db, db.begin():
                 existing = await db.get(RunTraceRow, (trace.session_id, trace.run_id))
                 judged = existing is not None and existing.status in _FINISHED and _current(existing)
+                if existing is not None and existing.summary_by == "model" and existing.status == r.status.value:
+                    values["summary"], values["summary_by"] = existing.summary, "model"  # keep the model's line
                 if r.status.finished and not judged:  # it just finished, or an older builder judged it
                     values["checks_failed"] = await write_checks(db, session, trace)
                 if existing is None:
@@ -147,6 +152,7 @@ def summary(row: RunTraceRow) -> dict[str, Any]:
         "composition_digest": row.composition_digest,
         "input": row.input_preview,
         "output": row.output_preview,
+        "summary": row.summary,
         "cost": row.cost,
         "input_tokens": row.input_tokens,
         "output_tokens": row.output_tokens,
@@ -322,3 +328,18 @@ async def list_runs(
 async def run_events(reader: JournalReader, session_id: str, run_id: str) -> list[dict[str, Any]]:
     """The events run ``run_id``'s trace is built from, as recorded (none: no such run)."""
     return [e.to_dict() for e in await reader.read_run_window(session_id, run_id)]
+
+
+async def set_model_summary(factory: Factory, session_id: str, run_id: str, text: str) -> None:
+    """Keep a model's one-line summary of the run (it outlives rebuilds of the rollup)."""
+    async with factory() as db, db.begin():
+        row = await db.get(RunTraceRow, (session_id, run_id))
+        if row is not None:
+            row.summary, row.summary_by = text, "model"
+
+
+async def stored_summary(factory: Factory, session_id: str, run_id: str) -> str | None:
+    """The run's one-line summary as kept (a model's, when one wrote it)."""
+    async with factory() as db:
+        row = await db.get(RunTraceRow, (session_id, run_id))
+    return row.summary if row is not None else None

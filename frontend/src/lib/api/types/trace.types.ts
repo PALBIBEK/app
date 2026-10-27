@@ -39,6 +39,8 @@ export interface RunSummary {
   session_title: string | null;
   input: string | null;
   output: string | null;
+  /** One sentence on what the run did and how it ended. */
+  summary: string | null;
   cost: number;
   input_tokens: number;
   output_tokens: number;
@@ -134,6 +136,7 @@ export interface RunTrace {
   version: number | null;
   composition_digest: string | null;
   session_title: string | null;
+  summary: string | null;
   rollup: Rollup;
   spans: TraceSpan[];
   scores: TraceScore[];
@@ -144,6 +147,7 @@ export interface TraceScore {
   id: string;
   span_id: string | null;
   name: string;
+  topic: string | null;
   source: 'check' | 'person' | 'judge' | string;
   label: 'pass' | 'fail' | 'good' | 'bad' | string;
   value: number | null;
@@ -195,4 +199,49 @@ export interface TraceListParams {
   since_ms?: number;
   before_ms?: number;
   limit?: number;
+}
+
+export interface IssueExample {
+  session_id: string;
+  run_id: string;
+  span_id: string | null;
+  started_ms: number | null;
+  input: string | null;
+  summary: string | null;
+  reason: string | null;
+  version: number | null;
+}
+
+/** One way runs go wrong: what judged it, what it is about, how often, where to look. */
+export interface Issue {
+  key: string;
+  title: string;
+  source: 'check' | 'judge' | 'person' | string;
+  name: string;
+  topic: string | null;
+  runs: number;
+  last_seen_ms: number;
+  agent_id: string | null;
+  agent_name: string | null;
+  versions: { version: number | null; composition_digest: string | null; runs: number }[];
+  examples: IssueExample[];
+}
+
+export interface Judge {
+  id: string;
+  name: string;
+  rubric: string;
+  sample_rate: number;
+  model: string | null;
+  version: number;
+  enabled: boolean;
+  updated_ms: number;
+}
+
+export interface JudgeInput {
+  name: string;
+  rubric: string;
+  sample_rate: number;
+  model?: string | null;
+  enabled: boolean;
 }

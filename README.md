@@ -116,6 +116,14 @@ events* the journal it was built from.
 
 ![Trace tree](docs/tour/26-trace-tree.png)
 
+Every finished run is checked (did it finish, did its tools work, did it loop, were its
+approvals allowed, did the tests pass after its last change) and summed up in a sentence. Mark
+a run or a step good or wrong, with a note. *Judges* apply a rubric you write to an agent's
+runs through its own model; *Issues* groups what failed by agent and cause, with the versions
+it hit and the runs to start from. The *Agents* page shows each version's quality.
+
+![Issues](docs/tour/27-trace-issues.png)
+
 **Memory.** What each agent remembers about you, in notebooks per version. Add, edit, forget
 or search facts. *History* restores a notebook to how it was after any change.
 
