@@ -35,4 +35,5 @@ async def test_bash_says_how_to_see_the_rest(tmp_path: Path) -> None:
     ctx = ToolContext(session_id="s1", bound_workspace=HostWorkspace(tmp_path), timeout_s=30)
     payload = await default_registry()["bash"].run({"command": "seq 1 300000"}, ctx)
     assert payload["stdout"].endswith("300000\n")
-    assert "redirect it to a file" in payload["notice"]
+    assert payload["full_output"] in payload["notice"]  # where the whole output is kept
+    assert (tmp_path / payload["full_output"]).read_text().endswith("300000\n")

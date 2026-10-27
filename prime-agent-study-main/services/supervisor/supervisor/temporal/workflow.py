@@ -79,6 +79,7 @@ from supervisor.temporal.contracts import (
     StartJob,
     StepRequest,
     StepResult,
+    ToolBatch,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
@@ -108,6 +109,8 @@ _BRAIN_ANYWHERE = "brain-anywhere"
 _STALL_COUNTS_PROGRESS = "stall-counts-progress"
 # Runs recorded before the run loop became githi's phase machine replay through _run_steps.
 _PHASE_LOOP = "phase-loop"
+# A round asks for every approval first, then runs its read-only calls together.
+_TOOL_ROUND = "tool-round"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -386,7 +389,11 @@ class AgentSessionWorkflow:
                         return await end(result.stop_reason)
                     st.calls, st.phase = list(result.calls), RunPhase.TOOLS
                 else:
-                    stopped = await self._tool_round(plan, st, guard, end)
+                    stopped = await (
+                        self._round(plan, st, guard, end)
+                        if workflow.patched(_TOOL_ROUND)
+                        else self._tool_round(plan, st, guard, end)
+                    )
                     if stopped is not None:
                         return stopped
                     st.step, st.calls, st.phase = st.step + 1, [], RunPhase.REQUEST
@@ -436,6 +443,73 @@ class AgentSessionWorkflow:
             st.in_flight = None
             key = f"{call.name}:{call.args_hash}"
             if guard is not None and not failed and key not in st.tried:
+                guard.progress("run")  # a stall is calls that get nowhere, not many calls
+            st.tried.add(key)
+        return None
+
+    async def _round(
+        self,
+        plan: RunPlan,
+        st: RunState,
+        guard: LoopGuard | None,
+        end: Callable[..., Any],
+    ) -> TurnOutcome | None:
+        """The step's calls as one round (Pi Durable's tool tasks).
+
+        Every call is checked by the loop guard and every approval is asked before any
+        call runs, so a human answers the round's asks together and a refused round
+        changes nothing. Then the calls run in the order made, consecutive read-only
+        ones together; a call that changes anything runs alone, so it sees what the
+        calls before it did.
+        """
+        denied: set[str] = set()
+        for call in st.calls:
+            if guard is not None:
+                verdict = guard.observe("run", call.name, call.args_hash)
+                if verdict.tripped and verdict.action is GuardAction.ABORT:
+                    return await end(
+                        "error", error_class="LoopGuard", detail=verdict.detail or "loop detected"
+                    )
+        for call in st.calls:
+            if call.approval is not None and not await self._approve(plan.run_id, call):
+                denied.add(call.call_id)
+        failed: dict[str, bool] = {}
+        at = 0
+        while at < len(st.calls):
+            batch = [st.calls[at]]
+            while batch[-1].parallel and at + len(batch) < len(st.calls) and st.calls[at + len(batch)].parallel:
+                batch.append(st.calls[at + len(batch)])
+            at += len(batch)
+            if len(batch) > 1:
+                ids = [c.call_id for c in batch]
+                results = await self._session_activity(
+                    Activity.TOOL_BATCH,
+                    ToolBatch(self._session_id, plan.run_id, ids, [i for i in ids if i in denied]),
+                    list[bool],
+                    track=True,
+                )
+                failed |= dict(zip(ids, results, strict=True))
+                continue
+            call = batch[0]
+            st.in_flight = call.call_id
+            try:
+                failed[call.call_id] = await self._call_tool(
+                    plan.run_id, call, denied=call.call_id in denied
+                )
+            except ActivityError as err:
+                if is_cancelled_exception(err):
+                    raise
+                # The tool may or may not have run: never guess, stop the turn.
+                return await end(
+                    "interrupted",
+                    error_class="TurnInterrupted",
+                    detail=f"tool {call.name!r} did not complete: {_failure(err)[1]}",
+                    lost_call_id=call.call_id,
+                )
+            st.in_flight = None
+        for call in st.calls:
+            key = f"{call.name}:{call.args_hash}"
+            if guard is not None and not failed.get(call.call_id, True) and key not in st.tried:
                 guard.progress("run")  # a stall is calls that get nowhere, not many calls
             st.tried.add(key)
         return None

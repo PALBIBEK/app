@@ -41,6 +41,7 @@ from supervisor.temporal.contracts import (
     SessionOp,
     StepRequest,
     StepResult,
+    ToolBatch,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
@@ -218,6 +219,11 @@ class SessionActivities:
         with _as_application_error():
             return await heartbeating(self._steps.tool_call(req))
 
+    @activity.defn(name=Activity.TOOL_BATCH)
+    async def tool_batch(self, batch: ToolBatch) -> list[bool]:
+        with _as_application_error():
+            return await heartbeating(self._steps.tool_batch(batch))
+
     @activity.defn(name=Activity.REQUEST_APPROVAL)
     async def request_approval(self, ask: ApprovalAsk) -> str:
         with _as_application_error():
@@ -274,6 +280,7 @@ class SessionActivities:
             self.compact,
             self.checkpoint,
             self.tool_call,
+            self.tool_batch,
             self.request_approval,
             self.resolve_approval,
             self.end_run,

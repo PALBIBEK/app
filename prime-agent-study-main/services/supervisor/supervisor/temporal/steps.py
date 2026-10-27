@@ -53,6 +53,7 @@ from supervisor.agent.runtimes.githi.render import tool_result_text
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import RecoveryAction
+from supervisor.harness.core.enums import ToolClass as HarnessToolClass
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory.binding import Strategy
@@ -83,6 +84,7 @@ from supervisor.temporal.contracts import (
     RunPlan,
     StepRequest,
     StepResult,
+    ToolBatch,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
@@ -166,7 +168,25 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                     "content": [{"type": "text", "text": tool_result_text(event.result)}],
                 }
             )
-    return messages
+    return _in_call_order(messages)
+
+
+def _in_call_order(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each reply's tool results in the order it made the calls.
+
+    Calls run together finish in any order; the model reads its results back in the
+    order it asked, as it would had they run one after another.
+    """
+    out = list(messages)
+    for i, message in enumerate(out):
+        order = {c["id"]: n for n, c in enumerate(message.get("tool_calls") or [])}
+        if len(order) < 2:
+            continue
+        end = i + 1
+        while end < len(out) and out[end].get("role") == "tool":
+            end += 1
+        out[i + 1 : end] = sorted(out[i + 1 : end], key=lambda m: order.get(m.get("tool_call_id"), len(order)))
+    return out
 
 
 def _user_text(run: list[Any]) -> str:
@@ -480,6 +500,7 @@ class GithiSteps:
                 args_hash=call_hash(name, dict(call.get("arguments") or {})),
                 retry=RetryMode.RETRY,
                 approval=None,
+                parallel=True,
             )
         approvals = manifest.approvals
         needed = (
@@ -510,6 +531,13 @@ class GithiSteps:
             args_hash=call_hash(name, dict(call.get("arguments") or {})),
             retry=retry,
             approval=needed,
+            # Read-only by its pinned class; platform and subagent tools keep their order.
+            parallel=(
+                name not in PLATFORM_TOOLS
+                and name not in SUBAGENT_TOOLS
+                and name != SUBAGENT_RESULT
+                and manifest.recovery.classify(name) is HarnessToolClass.PURE
+            ),
         )
 
     async def _budget_stop(self, session_id: str, reason: str | None) -> StepResult:
@@ -525,6 +553,22 @@ class GithiSteps:
         return StepResult(calls=[], final=True, stop_reason="budget_exceeded")
 
     # --- tools ---------------------------------------------------------------
+
+    async def tool_batch(self, batch: ToolBatch) -> list[bool]:
+        """Run a round's read-only calls together; whether each errored, in order.
+
+        Each is ``tool_call``, keyed as one, so a retried batch re-runs only the calls
+        that had not ended, and the journal holds each result once.
+        """
+        denied = set(batch.denied)
+        return list(
+            await asyncio.gather(
+                *(
+                    self.tool_call(ToolRequest(batch.session_id, batch.run_id, call_id, denied=call_id in denied))
+                    for call_id in batch.call_ids
+                )
+            )
+        )
 
     async def tool_call(self, req: ToolRequest) -> bool:
         """Run one tool call; returns whether it errored. Safe to repeat (keyed events)."""
