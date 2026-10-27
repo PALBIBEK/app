@@ -192,3 +192,54 @@ async def test_a_run_tree_and_its_spans_are_only_the_owners(db_session, owner, a
 async def test_an_unknown_status_is_refused(db_session, owner, settings, monkeypatch):
     async with _api(db_session, owner, settings, monkeypatch, lambda r: httpx.Response(500)) as api:
         assert (await api.get("/api/v1/traces", params={"status": "sideways"})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_feedback_goes_through_as_the_user_and_comes_back_as_theirs(
+    db_session, owner, agent, settings, monkeypatch, make_user
+):
+    link = await _link(db_session, owner, agent, "ai-f", V1)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.method == "PUT":
+            return httpx.Response(200, json={"id": "sc1", "run_id": "r1", "span_id": None, "name": "feedback",
+                                             "source": "person", "label": "bad", "value": 0.0, "reason": None,
+                                             "comment": "wrong file", "evaluator": "person",
+                                             "principal_id": owner.id, "created_ms": 1})
+        return httpx.Response(204)
+
+    base = f"/api/v1/traces/sessions/{link.id}/runs/r1/feedback"
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        r = await api.put(base, json={"good": False, "comment": "wrong file"})
+        assert r.status_code == 200, r.text
+        assert r.json()["mine"] is True and r.json()["label"] == "bad"
+        assert (await api.delete(base, params={"span_id": "abc"})).status_code == 204
+    assert seen[0].url.path == "/v1/sessions/ai-f/runs/r1/feedback"
+    assert seen[1].method == "DELETE" and seen[1].url.params["span_id"] == "abc"
+
+    stranger = await make_user(email="stranger3@example.com", name="S")
+    async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
+        assert (await api.put(base, json={"good": True})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_quality_is_numbered_by_the_agents_versions(db_session, owner, agent, settings, monkeypatch, make_user):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["composition_id"] == "h-reviewer"
+        return httpx.Response(200, json={"composition_id": "h-reviewer", "versions": [
+            {"composition_digest": V2, "runs": 4, "answered": 3, "failed": 1, "runs_failing_checks": 1,
+             "feedback_good": 2, "feedback_bad": 0, "avg_duration_ms": 1200, "avg_cost": 0.02, "last_run_ms": 9},
+            {"composition_digest": V1, "runs": 2, "answered": 1, "failed": 1, "runs_failing_checks": 2,
+             "feedback_good": 0, "feedback_bad": 1, "avg_duration_ms": 900, "avg_cost": 0.01, "last_run_ms": 5},
+        ]})
+
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        r = await api.get(f"/api/v1/traces/agents/{agent.id}/versions")
+    assert r.status_code == 200, r.text
+    assert [(v["version"], v["answered"]) for v in r.json()["versions"]] == [(2, 3), (1, 1)]
+
+    stranger = await make_user(email="stranger4@example.com", name="S")
+    async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
+        assert (await api.get(f"/api/v1/traces/agents/{agent.id}/versions")).status_code == 404

@@ -24,6 +24,7 @@ from supervisor.journal.reader import JournalReader
 from supervisor.session.access import session_visibility
 from supervisor.traces.build import build_run_trace, trace_id
 from supervisor.traces.model import RunStatus, RunTrace
+from supervisor.traces.scores import write_checks
 
 __all__ = [
     "TraceFilter",
@@ -43,7 +44,7 @@ Factory = async_sessionmaker[AsyncSession]
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
-ROLLUP_VERSION = 2
+ROLLUP_VERSION = 3
 """Bumped when the builder changes what a rollup says; rows from an older one are rebuilt on read."""
 _backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
 """Per database, the tenants whose older runs are all filled in (new runs are recorded as
@@ -111,6 +112,9 @@ async def _save(factory: Factory, session: SessionRow, trace: RunTrace) -> None:
         try:
             async with factory() as db, db.begin():
                 existing = await db.get(RunTraceRow, (trace.session_id, trace.run_id))
+                judged = existing is not None and existing.status in _FINISHED and _current(existing)
+                if r.status.finished and not judged:  # it just finished, or an older builder judged it
+                    values["checks_failed"] = await write_checks(db, session, trace)
                 if existing is None:
                     db.add(RunTraceRow(session_id=trace.session_id, run_id=trace.run_id, **values))
                 else:
@@ -119,6 +123,11 @@ async def _save(factory: Factory, session: SessionRow, trace: RunTrace) -> None:
             return
         except IntegrityError:
             continue
+
+
+def _current(row: RunTraceRow) -> bool:
+    """Whether the row was written by this builder (so its rollup and checks are current)."""
+    return (row.rollup or {}).get("v") == ROLLUP_VERSION
 
 
 def summary(row: RunTraceRow) -> dict[str, Any]:
@@ -146,6 +155,9 @@ def summary(row: RunTraceRow) -> dict[str, Any]:
         "tool_errors": row.tool_errors,
         "denials": row.denials,
         "errors": row.errors,
+        "checks_failed": row.checks_failed,
+        "feedback_good": row.feedback_good,
+        "feedback_bad": row.feedback_bad,
         "time": rollup.get("time", {}),
         "tools": rollup.get("tools", {}),
         "models": rollup.get("models", []),
@@ -154,7 +166,7 @@ def summary(row: RunTraceRow) -> dict[str, Any]:
 
 async def _refresh(factory: Factory, reader: JournalReader, rows: list[RunTraceRow]) -> list[RunTraceRow]:
     """``rows`` with every unfinished run, and every row an older builder made, rebuilt."""
-    stale = [r for r in rows if r.status not in _FINISHED or (r.rollup or {}).get("v") != ROLLUP_VERSION]
+    stale = [r for r in rows if r.status not in _FINISHED or not _current(r)]
     if not stale:
         return rows
     async with factory() as db:
@@ -238,6 +250,10 @@ class TraceFilter:
     with_errors: bool = False
     """Only runs where something failed (an error, or a tool that errored)."""
     with_denials: bool = False
+    failing_checks: bool = False
+    """Only runs that failed an automatic check."""
+    feedback: str | None = None
+    """``good`` or ``bad``: only runs someone judged so."""
     text: str | None = None
     """Words in the run's request or answer."""
     since_ms: int | None = None
@@ -280,6 +296,12 @@ async def list_runs(
         query = query.where(or_(RunTraceRow.errors > 0, RunTraceRow.tool_errors > 0))
     if f.with_denials:
         query = query.where(RunTraceRow.denials > 0)
+    if f.failing_checks:
+        query = query.where(RunTraceRow.checks_failed > 0)
+    if f.feedback == "good":
+        query = query.where(RunTraceRow.feedback_good > 0)
+    elif f.feedback == "bad":
+        query = query.where(RunTraceRow.feedback_bad > 0)
     if f.text:
         like = f"%{f.text.lower()}%"
         query = query.where(

@@ -1031,6 +1031,39 @@ class AiClient:
         )
         return payload if isinstance(payload, dict) else {}
 
+    async def put_feedback(
+        self, identity: TenantPrincipal, ai_session_id: str, run_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PUT .../runs/{run}/feedback: the caller's verdict on a run or one of its spans."""
+        payload = await self._json_request(
+            "PUT",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/feedback",
+            identity,
+            json_body=body,
+            expected=(200,),
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def delete_feedback(
+        self, identity: TenantPrincipal, ai_session_id: str, run_id: str, span_id: str | None
+    ) -> None:
+        """DELETE .../runs/{run}/feedback: take the caller's verdict back."""
+        await self._json_request(
+            "DELETE",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/feedback",
+            identity,
+            expected=(204,),
+            allow_empty=True,
+            params={"span_id": span_id} if span_id else None,
+        )
+
+    async def trace_versions(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
+        """GET /v1/traces/versions: how each version of a composition did."""
+        payload = await self._json_request(
+            "GET", "/v1/traces/versions", identity, expected=(200,), params={"composition_id": composition_id}
+        )
+        return payload if isinstance(payload, dict) else {"versions": []}
+
     async def run_events(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
         """GET .../trace/events: the journal events a run's trace was built from."""
         payload = await self._json_request(

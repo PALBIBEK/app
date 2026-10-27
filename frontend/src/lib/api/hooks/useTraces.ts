@@ -3,12 +3,13 @@
  * a finished one never changes, so it is cached for good.
  */
 
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 import { useAuthStore } from '@/lib/store/authStore';
 
 import { tracesAPI } from '../endpoints/traces';
-import type { RunStatus, TraceListParams } from '../types/trace.types';
+import type { RunStatus, TraceListParams, TraceScore } from '../types/trace.types';
 
 const LIVE: readonly RunStatus[] = ['running', 'awaiting_approval'];
 const LIVE_REFRESH_MS = 4000;
@@ -21,6 +22,7 @@ export const traceKeys = {
   span: (sessionId: string, runId: string, spanId: string) =>
     [...traceKeys.all, 'span', sessionId, runId, spanId] as const,
   events: (sessionId: string, runId: string) => [...traceKeys.all, 'events', sessionId, runId] as const,
+  agentVersions: (agentId: string) => [...traceKeys.all, 'agent-versions', agentId] as const,
 };
 
 /** The user's runs, newest first, a page at a time. */
@@ -79,5 +81,43 @@ export function useRunEvents(sessionId: string, runId: string, enabled: boolean)
     queryFn: () => tracesAPI.events(sessionId, runId),
     enabled: isAuthenticated && enabled,
     retry: false,
+  });
+}
+
+/** Say how a run (or one span) went, or take it back (``good`` null). */
+export function useFeedback(sessionId: string, runId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      good,
+      spanId,
+      comment,
+    }: {
+      good: boolean | null;
+      spanId?: string | null;
+      comment?: string | null;
+    }): Promise<TraceScore | null> => {
+      if (good === null) {
+        await tracesAPI.clearFeedback(sessionId, runId, spanId);
+        return null;
+      }
+      return tracesAPI.setFeedback(sessionId, runId, { good, span_id: spanId ?? null, comment: comment ?? null });
+    },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: traceKeys.run(sessionId, runId) });
+      void client.invalidateQueries({ queryKey: [...traceKeys.all, 'list'] });
+      void client.invalidateQueries({ queryKey: [...traceKeys.all, 'agent-versions'] });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not save that'),
+  });
+}
+
+export function useAgentQuality(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: traceKeys.agentVersions(agentId ?? ''),
+    queryFn: () => tracesAPI.agentVersions(agentId!),
+    enabled: isAuthenticated && !!agentId,
+    staleTime: 30_000,
   });
 }

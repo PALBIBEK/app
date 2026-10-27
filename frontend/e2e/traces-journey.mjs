@@ -65,8 +65,19 @@ check((await bash.innerText()).includes('exit 3'), 'the command card shows its e
 check((await bash.getByTestId('transcript-approval').innerText()).startsWith('allowed by you'), 'the approval is on the card');
 check((await bash.innerText()).includes('checking'), "the command's output is inline");
 check(await p.getByTestId('transcript-answer').count() === 1, 'the answer closes the transcript');
+const checks = await p.getByTestId('check').evaluateAll((els) => els.map((e) => `${e.dataset.name}:${e.dataset.label}`));
+check(checks.includes('finished:pass') && checks.includes('approvals:pass'), `the run's checks (${checks})`);
 await shot(p, 't2-transcript');
-console.log('3 transcript ok');
+console.log('3 transcript ok; checks', checks.join(' '));
+
+// Say it went wrong, with why: the list finds it, the agent's version shows it.
+const verdict = p.getByTestId('feedback-run');
+await verdict.getByRole('button', { name: 'Wrong answer' }).click();
+await verdict.getByLabel('What went wrong? (optional)').fill('should not exit 3');
+await verdict.getByRole('button', { name: 'Mark wrong' }).click();
+await verdict.getByText('“should not exit 3”').waitFor({ timeout: 15000 });
+check((await verdict.getByRole('button', { name: 'Wrong answer' }).getAttribute('aria-pressed')) === 'true', 'the verdict shows as chosen');
+console.log('3b marked wrong');
 
 // Its tree, with the command's span opened.
 await bash.getByRole('button', { name: 'Details' }).click();
@@ -95,6 +106,19 @@ await p.getByTestId('transcript').waitFor();
 const write = p.getByTestId('transcript-tool').filter({ hasText: 'notes.txt' });
 await write.getByText('second line').waitFor({ timeout: 15000 });
 console.log('6 session replay and diff ok');
+
+// The runs list finds runs marked wrong; the agent's version history counts them.
+await p.goto(`${BASE}/traces`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+await p.getByRole('button', { name: 'Marked wrong' }).click();
+await p.waitForTimeout(1500);
+const wrong = await p.getByTestId('trace-row-link').allInnerTexts();
+check(wrong.length === 1 && wrong[0].includes('/tool bash'), `marked wrong filter (${wrong})`);
+await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+await p.getByText(name, { exact: true }).first().click();
+const quality = await p.getByTestId('version-quality').first().innerText({ timeout: 30000 });
+check(quality.includes('2 of 2 runs answered') && quality.includes('0 good, 1 wrong'), `version quality (${quality})`);
+console.log('7 filters and version quality:', quality);
 
 await b.close();
 await deleteHarness(hid);

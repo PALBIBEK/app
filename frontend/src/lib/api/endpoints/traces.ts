@@ -5,11 +5,13 @@
 
 import { apiClient } from '../client';
 import type {
+  AgentQuality,
   RawEvent,
   RunTrace,
   SessionTraces,
   TraceList,
   TraceListParams,
+  TraceScore,
   TraceSpan,
 } from '../types/trace.types';
 
@@ -22,6 +24,8 @@ export function traceListQuery(params: TraceListParams = {}): string {
   if (params.agent_id) q.set('agent_id', params.agent_id);
   if (params.errors) q.set('errors', 'true');
   if (params.denied) q.set('denied', 'true');
+  if (params.failing_checks) q.set('failing_checks', 'true');
+  if (params.feedback) q.set('feedback', params.feedback);
   if (params.q?.trim()) q.set('q', params.q.trim());
   if (params.since_ms != null) q.set('since_ms', String(params.since_ms));
   if (params.before_ms != null) q.set('before_ms', String(params.before_ms));
@@ -44,4 +48,21 @@ export const tracesAPI = {
 
   events: (sessionId: string, runId: string): Promise<{ events: RawEvent[] }> =>
     apiClient.get<{ events: RawEvent[] }>(`/traces/sessions/${seg(sessionId)}/runs/${seg(runId)}/events`),
+
+  /** The user's verdict on the run, or on one span; saying it again replaces it. */
+  setFeedback: (
+    sessionId: string,
+    runId: string,
+    body: { good: boolean; span_id?: string | null; comment?: string | null },
+  ): Promise<TraceScore> =>
+    apiClient.put<TraceScore>(`/traces/sessions/${seg(sessionId)}/runs/${seg(runId)}/feedback`, body),
+
+  clearFeedback: (sessionId: string, runId: string, spanId?: string | null): Promise<void> =>
+    apiClient.delete<void>(
+      `/traces/sessions/${seg(sessionId)}/runs/${seg(runId)}/feedback${spanId ? `?span_id=${seg(spanId)}` : ''}`,
+    ),
+
+  /** How each version of an agent did across the user's finished runs. */
+  agentVersions: (agentId: string): Promise<AgentQuality> =>
+    apiClient.get<AgentQuality>(`/traces/agents/${seg(agentId)}/versions`),
 };

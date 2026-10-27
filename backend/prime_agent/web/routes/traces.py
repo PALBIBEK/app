@@ -7,11 +7,18 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
-from prime_agent.schemas.trace import RunTraceResponse, SessionTracesResponse, TraceListResponse
+from prime_agent.schemas.trace import (
+    AgentQualityResponse,
+    FeedbackRequest,
+    RunTraceResponse,
+    SessionTracesResponse,
+    TraceListResponse,
+    TraceScore,
+)
 from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 from prime_agent.web.dependencies import CurrentUser, DbSession
 
@@ -38,6 +45,8 @@ async def list_traces(
     agent_id: str | None = None,
     errors: bool = False,
     denied: bool = False,
+    failing_checks: bool = False,
+    feedback: Annotated[str | None, Query(pattern="^(good|bad)$")] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
     since_ms: int | None = None,
     before_ms: int | None = None,
@@ -54,6 +63,8 @@ async def list_traces(
         agent_id=agent_id,
         errors=errors,
         denied=denied,
+        failing_checks=failing_checks,
+        feedback=feedback,
         q=q.strip() if q and q.strip() else None,
         since_ms=since_ms,
         before_ms=before_ms,
@@ -115,6 +126,58 @@ async def run_events(session_id: str, run_id: str, db: DbSession, current_user: 
             session_id=session_id,
             run_id=run_id,
             db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.put("/sessions/{session_id}/runs/{run_id}/feedback", response_model=TraceScore)
+async def put_feedback(
+    session_id: str, run_id: str, body: FeedbackRequest, db: DbSession, current_user: CurrentUser
+) -> TraceScore:
+    """The user's verdict on the run, or on one of its spans; saying it again replaces it."""
+    try:
+        score = await _service().feedback(
+            identity=TenantPrincipal.from_user(current_user),
+            user_id=current_user.id,
+            session_id=session_id,
+            run_id=run_id,
+            body=body,
+            span_id=body.span_id,
+            db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+    assert score is not None
+    return score
+
+
+@router.delete("/sessions/{session_id}/runs/{run_id}/feedback", status_code=204, response_class=Response)
+async def delete_feedback(
+    session_id: str, run_id: str, db: DbSession, current_user: CurrentUser, span_id: str | None = None
+) -> Response:
+    """Take back the user's verdict on the run (or the span)."""
+    try:
+        await _service().feedback(
+            identity=TenantPrincipal.from_user(current_user),
+            user_id=current_user.id,
+            session_id=session_id,
+            run_id=run_id,
+            body=None,
+            span_id=span_id,
+            db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+    return Response(status_code=204)
+
+
+@router.get("/agents/{agent_id}/versions", response_model=AgentQualityResponse)
+async def agent_quality(agent_id: str, db: DbSession, current_user: CurrentUser) -> AgentQualityResponse:
+    """How each version of the agent did: answered, failed, failing checks, people's verdicts."""
+    try:
+        return await _service().quality(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, agent_id=agent_id, db=db
         )
     except TraceNotFoundError as exc:
         raise _not_found() from exc

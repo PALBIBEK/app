@@ -244,3 +244,55 @@ async def test_a_run_is_recorded_when_it_starts_and_again_when_it_ends(api: Api)
         stale.rollup, stale.status, stale.duration_ms = {"v": 1}, "error", 1
     listed = (await api.client.get(f"/v1/sessions/{sid}/traces", headers=ALICE)).json()["items"]
     assert [(i["status"], i["duration_ms"]) for i in listed] == [("ok", 500)]
+
+
+async def test_finished_runs_are_checked_and_people_can_say_how_it_went(api: Api) -> None:
+    sid = await api.session()
+    await api.run(sid, "fine", "all good", start=1_000)
+    await api.run(sid, "broke", "tool fails", start=2_000, tool_ok=False)
+
+    failing = await _traces(api, ALICE, failing_checks="true")
+    assert [i["run_id"] for i in failing["items"]] == ["broke"] and failing["items"][0]["checks_failed"] == 1
+
+    tree = (await api.client.get(f"/v1/sessions/{sid}/runs/broke/trace", headers=ALICE)).json()
+    checks = {s["name"]: s for s in tree["scores"] if s["source"] == "check"}
+    assert checks["finished"]["label"] == "pass" and checks["tool_errors"]["label"] == "fail"
+    tool = next(s for s in tree["spans"] if s["kind"] == "tool")
+    assert checks["tool_errors"]["span_id"] == tool["id"] and checks["tool_errors"]["evaluator"] == "checks@1"
+
+    base = f"/v1/sessions/{sid}/runs/broke/feedback"
+    r = await api.client.put(base, json={"good": False, "comment": "should have checked the file exists"}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "bad" and r.json()["principal_id"] == "alice"
+    assert (await api.client.put(base, json={"good": False}, headers=ALICE)).status_code == 200  # replaces
+    span_vote = await api.client.put(base, json={"good": True, "span_id": tool["id"]}, headers=ALICE)
+    assert span_vote.status_code == 200
+    assert (await api.client.put(base, json={"good": True, "span_id": "0" * 16}, headers=ALICE)).status_code == 404
+
+    row = (await _traces(api, ALICE, feedback="bad"))["items"]
+    assert [(i["run_id"], i["feedback_bad"], i["feedback_good"]) for i in row] == [("broke", 1, 1)]
+    assert (await _traces(api, ALICE, feedback="good"))["items"][0]["run_id"] == "broke"
+
+    assert (await api.client.put(base, json={"good": True}, headers=BOB)).status_code == 404  # not Bob's session
+    assert (await api.client.delete(base, headers=ALICE)).status_code == 204
+    assert (await api.client.delete(base, headers=ALICE)).status_code == 404
+    assert (await _traces(api, ALICE, feedback="bad"))["items"] == []
+
+
+async def test_versions_are_compared_on_their_finished_runs(api: Api) -> None:
+    sid = await api.session()
+    await api.run(sid, "a", "one", start=1_000)
+    await api.run(sid, "b", "two", start=2_000, tool_ok=False)
+    await api.run(sid, "c", "three", start=3_000, ended=False)  # still going: not counted
+    await _traces(api, ALICE)  # fills in the rollups
+    await api.client.put(f"/v1/sessions/{sid}/runs/a/feedback", json={"good": True}, headers=ALICE)
+
+    r = await api.client.get("/v1/traces/versions", params={"composition_id": "githi-v1"}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    (v,) = r.json()["versions"]
+    assert v["composition_digest"] == "sha256:" + "a" * 64
+    assert (v["runs"], v["answered"], v["failed"], v["runs_failing_checks"]) == (2, 2, 0, 1)
+    assert (v["feedback_good"], v["feedback_bad"]) == (1, 0) and v["avg_cost"] == 0.03
+
+    other = await api.client.get("/v1/traces/versions", params={"composition_id": "githi-v1"}, headers=BOB)
+    assert other.json()["versions"] == []

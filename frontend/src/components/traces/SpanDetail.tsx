@@ -16,6 +16,7 @@ import { KIND, LIVE_STATUSES, formatMs } from '@/lib/traces/format';
 import { cn, formatMoney } from '@/lib/utils';
 
 import { DiffView, changeCounts, type FileChange } from './DiffView';
+import { FeedbackButtons } from './Scores';
 
 type Tab = 'reply' | 'change' | 'args' | 'result' | 'decision' | 'content' | 'facts' | 'events';
 
@@ -268,6 +269,11 @@ export function SpanDetail({ trace, spanId }: { trace: RunTrace; spanId: string 
           </>
         ) : null}
         {current === 'facts' ? <Facts span={span} trace={trace} /> : null}
+        {span.kind !== 'agent' && span.kind !== 'step' && !LIVE_STATUSES.includes(trace.rollup.status) ? (
+          <div className="border-t border-line-soft pt-3">
+            <FeedbackButtons trace={trace} spanId={span.id} noun="step" />
+          </div>
+        ) : null}
         {current === 'events' ? (
           <p className="text-[13px] text-ink-2">
             Built from journal events{' '}

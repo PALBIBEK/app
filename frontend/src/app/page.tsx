@@ -28,6 +28,8 @@ import {
   shortHash,
 } from '@/components/ui';
 import { useHarnessUsage, useHarnesses } from '@/lib/api/hooks/useHarnesses';
+import { useAgentQuality } from '@/lib/api/hooks/useTraces';
+import type { VersionQuality } from '@/lib/api/types/trace.types';
 import { useReleases } from '@/lib/api/hooks/useManifest';
 import { usePlatformStatus } from '@/lib/api/hooks/usePlatformStatus';
 import { useSessions } from '@/lib/api/hooks/useSessions';
@@ -202,11 +204,27 @@ const SANDBOX_LABEL: Record<string, string> = {
   e2b: 'E2B',
 };
 
+/** How a version's finished runs went: answered, failing checks, people's verdicts. */
+function QualityLine({ q }: { q: VersionQuality }): JSX.Element {
+  const parts = [
+    `${q.answered} of ${q.runs} run${q.runs === 1 ? '' : 's'} answered`,
+    q.runs_failing_checks ? `${q.runs_failing_checks} failing checks` : null,
+    q.feedback_good || q.feedback_bad ? `${q.feedback_good} good, ${q.feedback_bad} wrong` : null,
+  ].filter(Boolean);
+  return (
+    <div className={cn('text-xs', q.runs_failing_checks || q.feedback_bad ? 'text-ink-2' : 'text-ink-3')} data-testid="version-quality">
+      {parts.join(' · ')}
+    </div>
+  );
+}
+
 function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => void; live: number }): JSX.Element {
   const { data: releases, isLoading } = useReleases(agent.id);
   const { data: platform } = usePlatformStatus();
   const { data: usage } = useHarnessUsage(agent.bind?.composition_id ? agent.id : undefined);
   const sessionsOn = new Map((usage?.versions ?? []).map((v) => [v.digest, v.sessions]));
+  const { data: quality } = useAgentQuality(agent.bind?.composition_id ? agent.id : undefined);
+  const qualityOf = new Map((quality?.versions ?? []).map((v) => [v.composition_digest, v]));
   const current = releases?.[0];
   const digest = current?.composition_digest ?? agent.bind?.composition_digest ?? null;
   const published = stateOf(agent) !== 'draft';
@@ -346,6 +364,7 @@ function AgentDetail({ agent, onClose, live }: { agent: Harness; onClose: () => 
                   <div className="text-[13px]">
                     {r.manifest.model} · {r.manifest.tools.length} tool{r.manifest.tools.length === 1 ? '' : 's'} · {r.manifest.policy.max_steps} steps
                   </div>
+                  {qualityOf.get(r.composition_digest) ? <QualityLine q={qualityOf.get(r.composition_digest)!} /> : null}
                   <div className="text-xs text-ink-3">{formatStamp(r.created_at)}</div>
                 </div>
               </li>

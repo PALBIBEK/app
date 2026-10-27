@@ -35,6 +35,9 @@ class RunSummary(BaseModel):
     tool_errors: int = 0
     denials: int = 0
     errors: int = 0
+    checks_failed: int = 0
+    feedback_good: int = 0
+    feedback_bad: int = 0
     time: dict[str, int] = Field(default_factory=dict)
     tools: dict[str, int] = Field(default_factory=dict)
     models: list[str] = Field(default_factory=list)
@@ -56,6 +59,50 @@ class SessionTracesResponse(BaseModel):
     items: list[RunSummary]
 
 
+class TraceScore(BaseModel):
+    """A verdict on a run or a span: an automatic check, or a person's feedback."""
+
+    id: str
+    span_id: str | None = None
+    name: str
+    source: str
+    label: str
+    value: float | None = None
+    reason: str | None = None
+    comment: str | None = None
+    evaluator: str
+    mine: bool = False
+    """The user's own feedback (so the page shows their choice and can take it back)."""
+    created_ms: int
+
+
+class FeedbackRequest(BaseModel):
+    good: bool
+    span_id: str | None = Field(default=None, max_length=32)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class VersionQuality(BaseModel):
+    """How one version of an agent did across the user's finished runs."""
+
+    version: int | None = None
+    composition_digest: str | None = None
+    runs: int
+    answered: int
+    failed: int
+    runs_failing_checks: int
+    feedback_good: int
+    feedback_bad: int
+    avg_duration_ms: int | None = None
+    avg_cost: float = 0.0
+    last_run_ms: int | None = None
+
+
+class AgentQualityResponse(BaseModel):
+    agent_id: str
+    versions: list[VersionQuality]
+
+
 class RunTraceResponse(BaseModel):
     """A run's spans (flat, each naming its parent) and rollup; span content is fetched per span."""
 
@@ -69,3 +116,4 @@ class RunTraceResponse(BaseModel):
     session_title: str | None = None
     rollup: dict[str, Any]
     spans: list[dict[str, Any]]
+    scores: list[TraceScore] = Field(default_factory=list)
