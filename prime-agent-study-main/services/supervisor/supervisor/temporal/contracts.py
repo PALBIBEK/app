@@ -254,6 +254,31 @@ class PlannedCall:
     approval: ApprovalNeeded | None = None
 
 
+class RunPhase(StrEnum):
+    """Where a stepped run is: githi's turn, one phase at a time (Pi Durable's generation task)."""
+
+    REQUEST = "request"  # one model call
+    TOOLS = "tools"  # the calls it made, then back to REQUEST
+
+
+@dataclass
+class RunState:
+    """The run's checkpoint, held by the workflow: small, references only.
+
+    Message bodies, arguments and results live in the journal; the workflow keeps which
+    phase the run is in and which calls it is answering, so a replay rebuilds exactly
+    this and nothing a step wrote is ever held twice.
+    """
+
+    phase: RunPhase = RunPhase.REQUEST
+    step: int = 0
+    calls: list[PlannedCall] = field(default_factory=list)
+    tried: set[str] = field(default_factory=set)
+    """``tool:args-hash`` the run has already run (the stall guard counts only new ones)."""
+    in_flight: str | None = None
+    """The call whose tool step is running, closed as lost if the run is aborted."""
+
+
 @dataclass(frozen=True, slots=True)
 class StepRequest:
     session_id: str

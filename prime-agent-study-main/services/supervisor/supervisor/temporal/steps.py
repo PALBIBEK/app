@@ -34,11 +34,18 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
 )
+from supervisor.agent.runtimes.githi.classify import (
+    FINAL_STEP_NOTICE,
+    is_final_step,
+    loop_spec,
+    refusal,
+    steps_left_notice,
+)
 from supervisor.agent.runtimes.githi.loop import AgentLoop
 from supervisor.agent.runtimes.githi.render import tool_result_text
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
-from supervisor.harness import LoopSpec, RecoveryAction
+from supervisor.harness import RecoveryAction
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory.binding import Strategy
@@ -50,7 +57,6 @@ from supervisor.memory.turn import SessionMemory
 from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
-from supervisor.seams.core.types import INVALID_ARGUMENTS_KEY
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager
 from supervisor.session.tool_outbox import idempotency_key
@@ -82,58 +88,6 @@ from supervisor.temporal.subagent_tools import (
 )
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
-
-FINAL_STEP_NOTICE = (
-    "This is the last step of this run: no more tool calls. Give your complete answer "
-    "now from what you already know, and say plainly which parts are unverified."
-)
-"""Shown on the last step's request only (never journalled), with ``tool_choice=none``:
-the run ends with an answer instead of at the limit with none."""
-
-
-def steps_left_notice(left: int) -> str:
-    """Shown on the requests near the limit only, so a stale count never persists."""
-    return (
-        f"[{left} steps left in this run. If you have enough to conclude, answer now; "
-        "combine any last checks into a single call.]"
-    )
-
-
-def loop_spec(manifest: Any) -> LoopSpec:
-    """The manifest's run-length settings; the defaults for manifests without them."""
-    return getattr(manifest, "loop", None) or LoopSpec()
-
-
-def is_final_step(spec: LoopSpec, step: int) -> bool:
-    return spec.force_answer_on_final_step and spec.max_steps - step <= 1
-
-
-def refusal(
-    spec: LoopSpec, step: int, assistant: MessageEnd, call: dict[str, Any]
-) -> tuple[str, str] | None:
-    """Why a call the model made must not run, as (code, message for the model); None to run it.
-
-    Decided from the journal alone, so the plan and the tool step always agree.
-    """
-    if is_final_step(spec, step):
-        return "STEP_LIMIT", (
-            "not run: this run has used its last step. Answer with what you have; "
-            "the user can ask you to continue."
-        )
-    if assistant.finish_reason == "length":
-        return "TRUNCATED_TOOL_CALL", (
-            "not run: your reply was cut off by the output limit, so this call's "
-            "arguments may be incomplete. Send it again in a shorter reply."
-        )
-    if INVALID_ARGUMENTS_KEY in (call.get("arguments") or {}):
-        return "MALFORMED_ARGUMENTS", (
-            "not run: the arguments were not valid JSON and could not be parsed. "
-            "Send the call again with well-formed JSON arguments."
-        )
-    return None
-
-
-
 
 async def heartbeating[T](work: Awaitable[T]) -> T:
     """Await ``work`` while heartbeating, so a dead worker is noticed and aborts arrive."""
