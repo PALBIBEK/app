@@ -79,3 +79,42 @@ describe('SpanTree', () => {
     expect(onSelect).toHaveBeenCalledWith('run');
   });
 });
+
+const mutate = vi.fn();
+vi.mock('@/lib/api/hooks/useTraces', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api/hooks/useTraces')>()),
+  useFeedback: () => ({ mutate, isPending: false }),
+}));
+
+import { ChecksCard, FeedbackButtons } from './Scores';
+
+describe('Scores', () => {
+  it('lists the checks with their reasons and links a failure to its span', () => {
+    const onOpen = vi.fn();
+    wrap(<ChecksCard trace={sampleRun()} onOpen={onOpen} />);
+    expect(screen.getByText('1 of 2 failed')).toBeTruthy();
+    const failing = screen.getAllByTestId('check').find((c) => c.getAttribute('data-label') === 'fail')!;
+    expect(failing.textContent).toContain('Tool calls worked');
+    expect(failing.textContent).toContain('1 of 3 tool calls failed');
+    fireEvent.click(within(failing).getByText('Show where'));
+    expect(onOpen).toHaveBeenCalledWith('t3');
+  });
+
+  it('asks what went wrong before marking a run wrong, and takes a verdict back', () => {
+    mutate.mockClear();
+    const run = sampleRun();
+    const { rerender } = wrap(<FeedbackButtons trace={run} noun="run" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Wrong answer' }));
+    fireEvent.change(screen.getByLabelText('What went wrong? (optional)'), { target: { value: 'edited the wrong file' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark wrong' }));
+    expect(mutate).toHaveBeenCalledWith({ good: false, spanId: null, comment: 'edited the wrong file' });
+
+    const judged = { ...run, scores: [...run.scores, { id: 'f', span_id: null, name: 'feedback', source: 'person', label: 'good', value: 1, reason: null, comment: null, evaluator: 'person', mine: true, created_ms: 2 }] };
+    const client = new QueryClient();
+    rerender(<QueryClientProvider client={client}><FeedbackButtons trace={judged} noun="run" /></QueryClientProvider>);
+    const good = screen.getByRole('button', { name: 'Good answer' });
+    expect(good.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(good);
+    expect(mutate).toHaveBeenLastCalledWith({ good: null, spanId: null, comment: undefined });
+  });
+});

@@ -20,10 +20,14 @@ from prime_agent.db.models.harness_release import HarnessRelease
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.trace import (
+    AgentQualityResponse,
+    FeedbackRequest,
     RunSummary,
     RunTraceResponse,
     SessionTracesResponse,
     TraceListResponse,
+    TraceScore,
+    VersionQuality,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 
@@ -40,6 +44,10 @@ def _name_people(span: dict[str, Any], user_id: str) -> dict[str, Any]:
     if isinstance(attrs, dict) and attrs.get("responded_by") == user_id:
         return {**span, "attrs": {**attrs, "responded_by": "you"}}
     return span
+
+
+def _score(raw: dict[str, Any], user_id: str) -> TraceScore:
+    return TraceScore.model_validate({**raw, "mine": raw.get("principal_id") == user_id})
 
 
 def _upstream(exc: AiUpstreamError) -> HTTPException:
@@ -116,6 +124,8 @@ class TraceService:
         agent_id: str | None,
         errors: bool,
         denied: bool,
+        failing_checks: bool,
+        feedback: str | None,
         q: str | None,
         since_ms: int | None,
         before_ms: int | None,
@@ -135,6 +145,10 @@ class TraceService:
             params["errors"] = "true"
         if denied:
             params["denied"] = "true"
+        if failing_checks:
+            params["failing_checks"] = "true"
+        if feedback:
+            params["feedback"] = feedback
         if q:
             params["q"] = q
         if since_ms is not None:
@@ -210,6 +224,7 @@ class TraceService:
             session_title=link.title,
             rollup=raw.get("rollup") or {},
             spans=[_name_people(s, user_id) for s in raw.get("spans", []) if isinstance(s, dict)],
+            scores=[_score(x, user_id) for x in raw.get("scores", []) if isinstance(x, dict)],
         )
 
     async def span(
@@ -241,3 +256,58 @@ class TraceService:
                 raise TraceNotFoundError() from exc
             raise _upstream(exc) from exc
         return {"session_id": link.id, "run_id": run_id, "events": raw.get("events", [])}
+
+    async def feedback(
+        self,
+        *,
+        identity: TenantPrincipal,
+        user_id: str,
+        session_id: str,
+        run_id: str,
+        body: FeedbackRequest | None,
+        span_id: str | None,
+        db: AsyncSession,
+    ) -> TraceScore | None:
+        """Set the user's verdict (``body``), or take it back (``body`` None)."""
+        link = await self._link(db, user_id, session_id)
+        try:
+            if body is None:
+                await self._client.delete_feedback(identity, link.ai_session_id, run_id, span_id)
+                return None
+            raw = await self._client.put_feedback(identity, link.ai_session_id, run_id, body.model_dump())
+        except AiUpstreamError as exc:
+            if exc.status_code == 404:
+                raise TraceNotFoundError() from exc
+            raise _upstream(exc) from exc
+        return _score(raw, user_id)
+
+    async def quality(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, db: AsyncSession
+    ) -> AgentQualityResponse:
+        """How each version of the user's agent did, numbered as its releases."""
+        harness = (
+            await db.execute(select(Harness).where(Harness.id == agent_id, Harness.user_id == user_id))
+        ).scalar_one_or_none()
+        if harness is None:
+            raise TraceNotFoundError()
+        if not harness.composition_id:
+            return AgentQualityResponse(agent_id=agent_id, versions=[])
+        try:
+            raw = await self._client.trace_versions(identity, harness.composition_id)
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        releases = dict(
+            (
+                await db.execute(
+                    select(HarnessRelease.composition_digest, HarnessRelease.version).where(
+                        HarnessRelease.harness_id == agent_id
+                    )
+                )
+            ).tuples().all()
+        )
+        versions = [
+            VersionQuality.model_validate({**v, "version": releases.get(v.get("composition_digest"))})
+            for v in raw.get("versions", [])
+            if isinstance(v, dict)
+        ]
+        return AgentQualityResponse(agent_id=agent_id, versions=versions)

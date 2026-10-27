@@ -91,6 +91,13 @@ function Row({ run }: { run: RunSummary }): JSX.Element {
         {run.tool_errors ? <span className="ml-1 text-bad">· {run.tool_errors} failed</span> : null}
         {run.denials ? <span className="ml-1">· {run.denials} denied</span> : null}
       </Td>
+      <Td className="whitespace-nowrap text-[12.5px]" >
+        <span data-testid="trace-row-checks" className={run.checks_failed ? 'text-bad' : 'text-ink-3'}>
+          {run.checks_failed ? `${run.checks_failed} failed` : run.ended_ms != null ? 'passed' : '—'}
+        </span>
+        {run.feedback_bad ? <span className="ml-1.5 text-bad">· marked wrong</span> : null}
+        {run.feedback_good && !run.feedback_bad ? <span className="ml-1.5 text-ink-3">· marked good</span> : null}
+      </Td>
       <Td align="right" className="whitespace-nowrap text-[12.5px] text-ink-3">
         {formatRelativeTime(new Date(run.started_ms))}
       </Td>
@@ -103,13 +110,24 @@ export default function TracesPage(): JSX.Element {
   const [agent, setAgent] = useState('');
   const [errors, setErrors] = useState(false);
   const [denied, setDenied] = useState(false);
+  const [failingChecks, setFailingChecks] = useState(false);
+  const [markedWrong, setMarkedWrong] = useState(false);
   const [text, setText] = useState('');
   const q = useDebounced(text, 300);
   const { data: agents } = useHarnesses();
-  const params = { status: VIEWS[view].statuses, agent_id: agent || undefined, errors, denied, q: q || undefined, limit: 50 };
+  const params = {
+    status: VIEWS[view].statuses,
+    agent_id: agent || undefined,
+    errors,
+    denied,
+    failing_checks: failingChecks,
+    feedback: markedWrong ? ('bad' as const) : undefined,
+    q: q || undefined,
+    limit: 50,
+  };
   const { data, isLoading, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useTraceList(params);
   const runs = data?.pages.flatMap((p) => p.items) ?? [];
-  const filtered = view !== 'all' || !!agent || errors || denied || !!q;
+  const filtered = view !== 'all' || !!agent || errors || denied || failingChecks || markedWrong || !!q;
 
   return (
     <AppShell>
@@ -139,6 +157,12 @@ export default function TracesPage(): JSX.Element {
           <Button variant={denied ? 'primary' : 'secondary'} aria-pressed={denied} onClick={() => setDenied((v) => !v)}>
             With denials
           </Button>
+          <Button variant={failingChecks ? 'primary' : 'secondary'} aria-pressed={failingChecks} onClick={() => setFailingChecks((v) => !v)}>
+            Failing checks
+          </Button>
+          <Button variant={markedWrong ? 'primary' : 'secondary'} aria-pressed={markedWrong} onClick={() => setMarkedWrong((v) => !v)}>
+            Marked wrong
+          </Button>
         </div>
         <Card>
           {error ? <ErrorNote message="Could not load runs." onRetry={() => void refetch()} /> : null}
@@ -152,7 +176,7 @@ export default function TracesPage(): JSX.Element {
               description={filtered ? 'Try another filter.' : 'Each message sent to an agent starts a run; its trace appears here.'}
             />
           ) : (
-            <Table label="Runs" minWidth={1040}>
+            <Table label="Runs" minWidth={1140}>
               <thead>
                 <tr>
                   <Th>Run</Th>
@@ -161,6 +185,7 @@ export default function TracesPage(): JSX.Element {
                   <Th>Time</Th>
                   <Th align="right">Cost</Th>
                   <Th>Tools</Th>
+                  <Th>Checks</Th>
                   <Th align="right">Started</Th>
                 </tr>
               </thead>

@@ -76,5 +76,9 @@ export function sampleRun(over: Partial<RunTrace['rollup']> = {}): RunTrace {
       ...over,
     },
     spans,
+    scores: [
+      { id: 'c1', span_id: 'run', name: 'finished', source: 'check', label: 'pass', value: 1, reason: 'answered', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
+      { id: 'c2', span_id: 't3', name: 'tool_errors', source: 'check', label: 'fail', value: 0, reason: '1 of 3 tool calls failed; first: $ pytest -q (exit 1)', comment: null, evaluator: 'checks@1', mine: false, created_ms: 1 },
+    ],
   };
 }

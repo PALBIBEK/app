@@ -10,11 +10,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
 from supervisor.api import deps
 from supervisor.db.models import SessionRow
 from supervisor.traces.model import RunStatus
+from supervisor.traces.scores import (
+    Feedback,
+    clear_feedback,
+    run_scores,
+    set_feedback,
+    version_quality,
+)
 from supervisor.traces.store import TraceFilter, list_runs, load_run, run_events, session_runs
 
 router = APIRouter(tags=["traces"])
@@ -41,6 +49,8 @@ async def list_traces(
     composition_digest: str | None = None,
     errors: bool = False,
     denied: bool = False,
+    failing_checks: bool = False,
+    feedback: str | None = Query(default=None, pattern="^(good|bad)$"),
     q: str | None = Query(default=None, max_length=200),
     since_ms: int | None = None,
     before_ms: int | None = None,
@@ -61,6 +71,8 @@ async def list_traces(
             composition_digest=composition_digest,
             with_errors=errors,
             with_denials=denied,
+            failing_checks=failing_checks,
+            feedback=feedback,
             text=q.strip() if q and q.strip() else None,
             since_ms=since_ms,
             before_ms=before_ms,
@@ -95,6 +107,7 @@ async def get_run_trace(
     pins = row.composition_pins if isinstance(row.composition_pins, dict) else {}
     out["composition_id"] = pins.get("composition_id")
     out["composition_digest"] = pins.get("composition_digest")
+    out["scores"] = await run_scores(deps.get_session_factory(request), session_id, run_id)
     return out
 
 
@@ -122,3 +135,72 @@ async def get_run_events(
     if not events:
         raise HTTPException(status_code=404, detail="run not found")
     return {"session_id": session_id, "run_id": run_id, "events": events}
+
+
+class FeedbackIn(BaseModel):
+    good: bool
+    span_id: str | None = Field(default=None, max_length=32)
+    """A span of the run; none for the whole run."""
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+@router.put("/v1/sessions/{session_id}/runs/{run_id}/feedback")
+async def put_feedback(
+    session_id: str,
+    run_id: str,
+    body: FeedbackIn,
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """The caller's verdict on the run, or on one of its spans; replaces any they gave."""
+    row = await _session(request, tenant_id, session_id)
+    trace = await load_run(deps.get_session_factory(request), deps.get_reader(request), row, run_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if body.span_id is not None and trace.span(body.span_id) is None:
+        raise HTTPException(status_code=404, detail="span not found")
+    return await set_feedback(
+        deps.get_session_factory(request),
+        row,
+        run_id,
+        principal_id=deps.request_principal_id(request, tenant_id),
+        feedback=Feedback(good=body.good, span_id=body.span_id, comment=body.comment),
+    )
+
+
+@router.delete("/v1/sessions/{session_id}/runs/{run_id}/feedback", status_code=204)
+async def delete_feedback(
+    session_id: str,
+    run_id: str,
+    request: Request,
+    span_id: str | None = None,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> Response:
+    """Take back the caller's verdict on the run (or the span)."""
+    row = await _session(request, tenant_id, session_id)
+    gone = await clear_feedback(
+        deps.get_session_factory(request),
+        row,
+        run_id,
+        principal_id=deps.request_principal_id(request, tenant_id),
+        span_id=span_id,
+    )
+    if not gone:
+        raise HTTPException(status_code=404, detail="no feedback of yours on that")
+    return Response(status_code=204)
+
+
+@router.get("/v1/traces/versions")
+async def trace_versions(
+    request: Request,
+    composition_id: str = Query(min_length=1, max_length=255),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """How each version of a composition did across the caller's finished runs."""
+    versions = await version_quality(
+        deps.get_session_factory(request),
+        tenant_id=tenant_id,
+        principal_id=deps.request_principal_id(request, tenant_id),
+        composition_id=composition_id,
+    )
+    return {"composition_id": composition_id, "versions": versions}

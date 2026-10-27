@@ -47,6 +47,9 @@ export interface RunSummary {
   tool_errors: number;
   denials: number;
   errors: number;
+  checks_failed: number;
+  feedback_good: number;
+  feedback_bad: number;
   time: Partial<TimeSplit>;
   tools: Record<string, number>;
   models: string[];
@@ -133,6 +136,42 @@ export interface RunTrace {
   session_title: string | null;
   rollup: Rollup;
   spans: TraceSpan[];
+  scores: TraceScore[];
+}
+
+/** A verdict on a run (``span_id`` null) or a span: an automatic check or a person's feedback. */
+export interface TraceScore {
+  id: string;
+  span_id: string | null;
+  name: string;
+  source: 'check' | 'person' | 'judge' | string;
+  label: 'pass' | 'fail' | 'good' | 'bad' | string;
+  value: number | null;
+  reason: string | null;
+  comment: string | null;
+  evaluator: string;
+  /** The user's own feedback. */
+  mine: boolean;
+  created_ms: number;
+}
+
+export interface VersionQuality {
+  version: number | null;
+  composition_digest: string | null;
+  runs: number;
+  answered: number;
+  failed: number;
+  runs_failing_checks: number;
+  feedback_good: number;
+  feedback_bad: number;
+  avg_duration_ms: number | null;
+  avg_cost: number;
+  last_run_ms: number | null;
+}
+
+export interface AgentQuality {
+  agent_id: string;
+  versions: VersionQuality[];
 }
 
 export interface RawEvent {
@@ -150,6 +189,8 @@ export interface TraceListParams {
   agent_id?: string;
   errors?: boolean;
   denied?: boolean;
+  failing_checks?: boolean;
+  feedback?: 'good' | 'bad';
   q?: string;
   since_ms?: number;
   before_ms?: number;

@@ -64,6 +64,8 @@ export function SpanTree({
   const win = timeWindow(trace.spans, now);
   const span = win.end - win.start;
   const { slowest_span_id: slowest, costliest_span_id: costliest } = trace.rollup;
+  const flagged = new Set((trace.scores ?? []).filter((c) => c.source === 'check' && c.label === 'fail' && c.span_id).map((c) => c.span_id));
+  const judged = new Map((trace.scores ?? []).filter((c) => c.source === 'person' && c.span_id).map((c) => [c.span_id, c.label]));
 
   const toggle = (id: string): void =>
     setFolded((prev) => {
@@ -134,6 +136,9 @@ export function SpanTree({
                   </span>
                   {s.preview ? <span className="min-w-0 truncate text-ink-3">{s.preview}</span> : null}
                   {s.status === 'error' ? <Badge tone="bad">failed</Badge> : null}
+                  {flagged.has(s.id) && s.status !== 'error' ? <Badge tone="bad">check failed</Badge> : null}
+                  {judged.get(s.id) === 'bad' ? <Badge tone="bad">marked wrong</Badge> : null}
+                  {judged.get(s.id) === 'good' ? <Badge tone="quiet">marked good</Badge> : null}
                   {s.error_below && s.status !== 'error' && isFolded ? <Badge tone="bad">failure inside</Badge> : null}
                   {s.attrs.denied && s.kind === 'tool' ? <Badge tone="quiet">not run</Badge> : null}
                   {s.status === 'unfinished' ? <Badge tone="quiet">unfinished</Badge> : null}

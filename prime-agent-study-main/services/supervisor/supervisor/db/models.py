@@ -489,5 +489,41 @@ class RunTraceRow(Base):
     errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checks_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    """Automatic checks this run failed (``supervisor.traces.checks``)."""
+    feedback_good: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    feedback_bad: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     rollup: Mapped[dict] = mapped_column(JSON, nullable=False)
     updated_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class TraceScoreRow(Base):
+    """A verdict on a run or one of its spans: an automatic check, or a person's feedback
+    (``supervisor.traces.scores``). Kept with the agent version that ran, so quality can be
+    compared version by version."""
+
+    __tablename__ = "trace_scores"
+    __table_args__ = (
+        Index("ix_trace_scores_run", "session_id", "run_id"),
+        Index("ix_trace_scores_version", "tenant_id", "composition_id", "composition_digest", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    span_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """None: the score is on the whole run."""
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    """``check`` (automatic), ``person`` (feedback), ``judge`` (a model's rubric)."""
+    label: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evaluator: Mapped[str] = mapped_column(String(64), nullable=False)
+    """What judged it, versioned (``checks@1``; ``person`` for feedback)."""
+    principal_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    composition_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    composition_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)

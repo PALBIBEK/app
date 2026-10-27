@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { RawEvents } from '@/components/traces/RawEvents';
 import { RunHeader } from '@/components/traces/RunHeader';
+import { ChecksCard, FeedbackButtons } from '@/components/traces/Scores';
 import { SpanDetail } from '@/components/traces/SpanDetail';
 import { SpanTree } from '@/components/traces/SpanTree';
 import { Transcript } from '@/components/traces/Transcript';
@@ -190,6 +191,13 @@ export default function RunTracePage(): JSX.Element {
                   <Transcript trace={trace} onOpen={open} />
                 </div>
                 <div className="flex min-w-0 flex-[1_1_320px] flex-col gap-4">
+                  {LIVE_STATUSES.includes(trace.rollup.status) ? null : (
+                    <Card className="flex flex-col gap-2.5 px-4 py-3.5" aria-label="Your verdict">
+                      <h2 className="text-sm font-semibold">How did it go?</h2>
+                      <FeedbackButtons trace={trace} noun="run" />
+                    </Card>
+                  )}
+                  <ChecksCard trace={trace} onOpen={open} />
                   <Touched trace={trace} />
                   <SessionRuns sessionId={sessionId} runId={runId} />
                 </div>
