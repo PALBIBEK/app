@@ -142,6 +142,66 @@ check((await marked.innerText()).includes('should not exit 3'), 'the issue shows
 await shot(p, 't5-issues');
 console.log('8 issues ok');
 
+// Save both runs to a dataset, replay it on v1, publish v2, replay on v2, compare.
+async function saveRun(index, datasetChoice, expected) {
+  await p.goto(`${BASE}/traces`, { waitUntil: 'domcontentloaded' });
+  await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+  await p.getByTestId('trace-row-link').nth(index).waitFor({ timeout: 15000 });
+  await p.getByTestId('trace-row-link').nth(index).click();
+  await p.getByTestId('save-to-dataset').click();
+  const save = p.getByRole('form', { name: 'Save this run to a dataset' });
+  await save.getByLabel('Dataset').waitFor();
+  await p.waitForTimeout(800); // the agent's datasets load into the picker
+  if (datasetChoice === 'new') {
+    await save.getByLabel('Dataset').selectOption({ label: 'A new dataset…' });
+    await save.getByLabel('Name').fill('regressions');
+  } else {
+    await save.getByLabel('Dataset').selectOption({ label: datasetChoice });
+  }
+  if (expected) await save.getByLabel('What a good answer does (optional)').fill(expected);
+  await save.getByRole('button', { name: 'Save' }).click();
+  await p.getByText('Saved to the dataset').waitFor({ timeout: 15000 });
+}
+await saveRun(0, 'new', 'the command exits 0');
+await saveRun(1, 'regressions (1)', null);
+console.log('9 two runs saved to a dataset');
+
+await p.goto(`${BASE}/traces/datasets`, { waitUntil: 'domcontentloaded' });
+await p.getByRole('combobox', { name: 'Agent' }).selectOption(hid);
+await p.getByTestId('dataset-link').filter({ hasText: 'regressions' }).click();
+await p.getByTestId('dataset-items').waitFor({ timeout: 15000 });
+check((await p.getByTestId('dataset-items').locator('li').count()) === 2, 'the dataset holds the two runs');
+async function replay(versionLabel) {
+  await p.getByRole('combobox', { name: 'Version' }).selectOption({ label: versionLabel });
+  await p.getByTestId('run-experiment').click();
+  await p.locator('[data-testid=experiment][data-status=done]').filter({ hasText: versionLabel === 'The live version' ? 'v1' : versionLabel }).first()
+    .waitFor({ timeout: 240000 });
+}
+await replay('The live version');
+console.log('10 replayed on v1:', await p.getByTestId('experiment-stats').first().innerText());
+
+// A second version: same agent, a changed prompt, published.
+const A2 = await apiHeaders();
+const m2 = (await (await fetch(`${API}/harnesses/${hid}/manifest`, { headers: A2 })).json()).manifest;
+m2.prompt.persona = 'careful';
+await fetch(`${API}/harnesses/${hid}/manifest`, { method: 'PUT', headers: A2, body: JSON.stringify(m2) });
+check((await fetch(`${API}/harnesses/${hid}/publish`, { method: 'POST', headers: A2 })).ok, 'publish v2');
+await p.reload({ waitUntil: 'domcontentloaded' });
+await p.getByTestId('experiments').waitFor({ timeout: 15000 });
+await p.waitForTimeout(1000); // the releases load into the version picker
+await replay('v2');
+console.log('11 replayed on v2');
+
+await p.getByRole('checkbox', { name: 'Pick v1 to compare' }).check();
+await p.getByRole('checkbox', { name: 'Pick v2 to compare' }).check();
+await p.getByRole('link', { name: 'Compare the two' }).click();
+await p.getByTestId('comparison-rows').waitFor({ timeout: 30000 });
+const statuses = await p.getByTestId('result').evaluateAll((els) => els.map((e) => e.dataset.status));
+check((await p.getByTestId('comparison-row').count()) === 2, 'both saved runs are compared');
+check(statuses.includes('needs_approval') && statuses.includes('done'), `the bash replay stopped for its approval, the write one ran (${statuses})`);
+await shot(p, 't6-compare');
+console.log('12 compared:', await p.getByTestId('comparison-summary').innerText());
+
 await b.close();
 await deleteHarness(hid);
 console.log('traces journey passed');

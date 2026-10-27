@@ -90,3 +90,14 @@ def test_a_run_a_person_stopped_is_not_held_against_the_agent() -> None:
     j = (Journal().at(0, RunStart()).at(0, TurnStart()).at(10, model(calls=[("c1", "bash", {"command": "sleep 99"})]))
          .at(20, TurnEnd("aborted")).at(20, RunEnd(messages=[])))
     assert "finished" not in checks(j)
+
+
+def test_an_approval_cancelled_while_it_waited_is_neither_allowed_nor_denied() -> None:
+    j = Journal().at(0, RunStart()).at(0, TurnStart())
+    meta = {"tool": "bash", "tool_call_id": "c1"}
+    j.at(10, ApprovalRequired("a1", "Allow?", ["allow", "deny"], 60, metadata=meta))
+    j.at(20, ApprovalResolved("a1", "deny", "cancelled"))
+    j.at(30, TurnEnd("aborted")).at(30, RunEnd(messages=[]))
+    trace = j.trace()
+    assert trace.rollup.denials == 0
+    assert "approvals" not in {c.name for c in run_checks(trace)}

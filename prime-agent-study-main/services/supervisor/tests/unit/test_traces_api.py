@@ -148,7 +148,7 @@ async def test_finished_runs_are_checked_and_people_can_say_how_it_went(api: Api
     checks = {s["name"]: s for s in tree["scores"] if s["source"] == "check"}
     assert checks["finished"]["label"] == "pass" and checks["tool_errors"]["label"] == "fail"
     tool = next(s for s in tree["spans"] if s["kind"] == "tool")
-    assert checks["tool_errors"]["span_id"] == tool["id"] and checks["tool_errors"]["evaluator"] == "checks@1"
+    assert checks["tool_errors"]["span_id"] == tool["id"] and checks["tool_errors"]["evaluator"] == "checks@2"
 
     base = f"/v1/sessions/{sid}/runs/broke/feedback"
     r = await api.client.put(base, json={"good": False, "comment": "should have checked the file exists"}, headers=ALICE)

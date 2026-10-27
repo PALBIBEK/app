@@ -20,7 +20,7 @@ from supervisor.traces.model import RunStatus, RunTrace, Span, SpanStatus
 
 __all__ = ["CHECKS_VERSION", "REPEAT_LIMIT", "Check", "run_checks"]
 
-CHECKS_VERSION = "checks@1"
+CHECKS_VERSION = "checks@2"
 REPEAT_LIMIT = 3
 """The same tool with the same arguments this many times in one run reads as a loop."""
 
@@ -110,7 +110,8 @@ def _repeated_calls(trace: RunTrace) -> Check | None:
 
 
 def _approvals(trace: RunTrace) -> Check | None:
-    asked = [s for s in trace.spans if s.kind is SpanKind.APPROVAL]
+    # One cancelled while it waited (the run was stopped) was never answered: not a verdict.
+    asked = [s for s in trace.spans if s.kind is SpanKind.APPROVAL and s.attrs.get("outcome") != "cancelled"]
     if not asked:
         return None
     refused = [s for s in asked if s.attrs.get("denied")]

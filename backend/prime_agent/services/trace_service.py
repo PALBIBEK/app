@@ -78,7 +78,7 @@ class TraceService:
         if not harness_ids:
             return {}, {}
         names = dict(
-            (await db.execute(select(Harness.id, Harness.name).where(Harness.id.in_(harness_ids)))).tuples().all()
+            (await db.execute(select(Harness.id, Harness.name).where(Harness.id.in_(harness_ids)))).all()
         )
         releases = {
             (hid, digest): version
@@ -88,7 +88,7 @@ class TraceService:
                         HarnessRelease.harness_id.in_(harness_ids)
                     )
                 )
-            ).tuples()
+            )
             if digest
         }
         return names, releases
@@ -309,7 +309,7 @@ class TraceService:
                         HarnessRelease.harness_id == agent_id
                     )
                 )
-            ).tuples().all()
+            ).all()
         )
         versions = [
             VersionQuality.model_validate({**v, "version": releases.get(v.get("composition_digest"))})
@@ -373,7 +373,7 @@ class TraceService:
                         HarnessRelease.harness_id.in_({a.id for a in agents})
                     )
                 )
-            ).tuples()
+            )
             if digest
         } if agents else {}
         out: list[Issue] = []
