@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Final
 
 __all__ = ["BOM", "Edit", "EditError", "apply_edits", "unified_diff"]
@@ -109,7 +110,7 @@ def apply_edits(original: str, edits: list[Edit], path: str) -> tuple[str, int]:
             raise EditError("old_text and new_text are the same; the edit would change nothing")
         planned += [(a, b, _lf(edit.new)) for a, b in _locate(content, folded, edit, path)]
     planned.sort()
-    for (_, end, _), (start, _, _) in zip(planned, planned[1:], strict=False):
+    for (_, end, _), (start, _, _) in pairwise(planned):
         if start < end:
             raise EditError("two edits overlap; merge them into one edit")
     updated = content

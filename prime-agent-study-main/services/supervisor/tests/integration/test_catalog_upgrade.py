@@ -10,6 +10,7 @@ database at boot, the versions this repo replaced are kept frozen in
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,8 @@ def test_the_shipped_catalog_keeps_the_versions_it_replaced() -> None:
         versions = catalog.list_versions(kind, name)
         assert len(versions) >= 2, (name, versions)
         latest = catalog.get(kind, name, versions[-1])
-        assert latest.semver == "1.1.0", "the current version stays the latest"
+        current = json.loads((HARNESS / f"{kind}s" / f"{name}.json").read_text())
+        assert latest.semver == current["semver"], "the current version stays the latest"
     assert list_catalog_problems(catalog) == []
 
 

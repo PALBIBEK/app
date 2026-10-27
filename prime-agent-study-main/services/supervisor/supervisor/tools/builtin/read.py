@@ -49,7 +49,8 @@ def _image_kind(data: bytes) -> str | None:
 
 def _clip(line: str) -> str:
     if len(line) > MAX_LINE_CHARS:
-        return f"{line[:MAX_LINE_CHARS]} [... line cut at {MAX_LINE_CHARS} characters]"
+        end = "\n" if line.endswith("\n") else ""
+        return f"{line[:MAX_LINE_CHARS]} [... line cut at {MAX_LINE_CHARS} characters]{end}"
     return line
 
 
@@ -80,7 +81,7 @@ async def read(args: ReadArgs, ctx: ToolContext) -> str:
     text = data.decode("utf-8", errors="replace")
     if not text:
         return f"{rel} is empty."
-    lines = text.splitlines()
+    lines = text.splitlines(keepends=True)
     total = len(lines)
     start = (args.offset or 1) - 1
     if start >= total:
@@ -91,14 +92,15 @@ async def read(args: ReadArgs, ctx: ToolContext) -> str:
     capped = stop - start == MAX_LINES and stop < total
     for index in range(start, stop):
         line = _clip(lines[index])
-        if page and size + len(line) + 1 > MAX_BYTES:
+        if page and size + len(line) > MAX_BYTES:
             capped = True
             break
         page.append(line)
-        size += len(line) + 1
+        size += len(line)
     shown_to = start + len(page)
-    body = "\n".join(page)
+    body = "".join(page)  # the text exactly, its line endings included
     if shown_to < total:
+        body = body.rstrip("\n")
         if capped or args.limit is None:
             body += f"\n\n[Showing lines {start + 1}-{shown_to} of {total}. Use offset={shown_to + 1} to continue.]"
         else:

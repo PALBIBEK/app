@@ -66,11 +66,11 @@ def call(workspace: Workspace, mutations: list[str]) -> Callable[..., Any]:
 
 
 async def test_read_pages_with_a_resume_offset(call: Callable[..., Any]) -> None:
-    assert await call("read", file_path="README") == "line 1\nline 2\nline 3"
+    assert await call("read", file_path="README") == "line 1\nline 2\nline 3\n"
     assert await call("read", file_path="README", offset=2, limit=1) == (
         "line 2\n\n[1 more lines in file. Use offset=3 to continue.]"
     )
-    assert await call("read", path="/workspace/README", offset=3) == "line 3"
+    assert await call("read", path="/workspace/README", offset=3) == "line 3\n"
     with pytest.raises(InvalidArguments, match="past the end of README, which has 3 lines"):
         await call("read", file_path="README", offset=9)
 

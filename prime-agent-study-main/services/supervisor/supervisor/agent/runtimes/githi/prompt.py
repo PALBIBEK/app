@@ -38,12 +38,18 @@ RULES: Final[dict[str, tuple[str, ...]]] = {
     "read": ("Use read to examine files instead of cat or sed.",),
     "edit": (
         "Use edit for precise changes (old_text must match exactly)",
-        "When changing multiple separate locations in one file, use one edit call with "
-        "multiple entries in edits instead of multiple edit calls",
-        "Each edits[].old_text is matched against the original file, not after earlier edits "
-        "are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-        "Keep old_text as small as possible while still being unique in the file. Do not pad "
-        "with large unchanged regions.",
+        (
+            "When changing multiple separate locations in one file, use one edit call with "
+            "multiple entries in edits instead of multiple edit calls"
+        ),
+        (
+            "Each edits[].old_text is matched against the original file, not after earlier edits "
+            "are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit."
+        ),
+        (
+            "Keep old_text as small as possible while still being unique in the file. Do not pad "
+            "with large unchanged regions."
+        ),
     ),
     "write": ("Use write only for new files or complete rewrites.",),
 }
