@@ -1,395 +1,185 @@
-/**
- * Traces List — sessions as traces MVP (D4). No hard-coded mock IDs.
- */
-
 'use client';
 
-import { useMemo, useState } from 'react';
+/**
+ * Traces: every run of every agent, newest first. A row says what was asked and how it
+ * ended, which agent version ran it, where its time went and what it cost; filters find
+ * the runs that failed, waited on you or were denied.
+ */
+
 import Link from 'next/link';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+
+import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { TimeSplitBar } from '@/components/traces/TimeSplitBar';
 import {
-  ChartLine,
-  MagnifyingGlass,
-  Play,
-  CheckCircle,
-  XCircle,
-  Clock,
-  CurrencyDollar,
-  Stack,
-  SortAscending,
-  ChatCircle,
-  Pause,
-} from '@phosphor-icons/react';
-import { AuthGuard } from '@/components/auth/AuthGuard';
-import { useSessions } from '@/lib/api/hooks/useSessions';
-import type { Session } from '@/lib/api/types/session.types';
-import { cn } from '@/lib/utils';
-import { AppShell } from '@/components/layout/AppShell';
+  Button,
+  Card,
+  EmptyState,
+  ErrorNote,
+  PageHeader,
+  SearchInput,
+  Segmented,
+  Select,
+  SkeletonRows,
+  StatusPill,
+  Table,
+  Td,
+  Th,
+  Tr,
+} from '@/components/ui';
+import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
+import { useTraceList } from '@/lib/api/hooks/useTraces';
+import type { RunStatus, RunSummary } from '@/lib/api/types/trace.types';
+import { formatMs, runStatus, toolsLine } from '@/lib/traces/format';
+import { cn, formatMoney, formatRelativeTime } from '@/lib/utils';
 
-const pageVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.08 } },
+type View = 'all' | 'live' | 'failed' | 'answered' | 'stopped';
+
+const VIEWS: Record<View, { label: string; statuses: RunStatus[] }> = {
+  all: { label: 'All', statuses: [] },
+  live: { label: 'Going now', statuses: ['running', 'awaiting_approval'] },
+  failed: { label: 'Failed', statuses: ['error', 'budget_exceeded'] },
+  answered: { label: 'Answered', statuses: ['ok'] },
+  stopped: { label: 'Stopped', statuses: ['cancelled', 'interrupted'] },
 };
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] },
-  },
-};
-
-const cardVariants = {
-  hidden: { opacity: 0, scale: 0.95 },
-  visible: { opacity: 1, scale: 1, transition: { duration: 0.3, ease: 'easeOut' } },
-};
-
-function statusTone(status: string): 'primary' | 'secondary' | 'red' | 'amber' | 'slate' {
-  switch (status) {
-    case 'active':
-      return 'primary';
-    case 'terminated':
-      return 'secondary';
-    case 'failed':
-    case 'budget_exceeded':
-      return 'red';
-    case 'paused':
-    case 'awaiting_approval':
-      return 'amber';
-    default:
-      return 'slate';
-  }
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
 }
 
-function StatusIconFor(status: string) {
-  switch (status) {
-    case 'active':
-      return Play;
-    case 'terminated':
-      return CheckCircle;
-    case 'failed':
-    case 'budget_exceeded':
-      return XCircle;
-    case 'paused':
-      return Pause;
-    default:
-      return ChartLine;
-  }
-}
-
-function formatTimestamp(iso: string): string {
-  const date = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const hours = Math.floor(diff / (60 * 60 * 1000));
-  const days = Math.floor(hours / 24);
-
-  if (hours < 1) return 'Just now';
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return 'Yesterday';
-  return `${days}d ago`;
-}
-
-export default function TracesPage(): JSX.Element {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const { data, isLoading, error } = useSessions({ page: 1, page_size: 50 });
-  const sessions = useMemo(() => data?.data ?? [], [data]);
-
-  const filtered = useMemo(() => {
-    return sessions.filter((s) => {
-      const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
-      const q = searchQuery.trim().toLowerCase();
-      const matchesSearch =
-        !q ||
-        s.id.toLowerCase().includes(q) ||
-        s.harness_id.toLowerCase().includes(q) ||
-        (s.title ?? '').toLowerCase().includes(q);
-      return matchesStatus && matchesSearch;
-    });
-  }, [sessions, searchQuery, statusFilter]);
-
-  const stats = {
-    total: data?.total ?? sessions.length,
-    active: sessions.filter((t) => t.status === 'active').length,
-    totalCost: sessions.reduce((sum, t) => sum + (t.total_cost ?? 0), 0),
-    messages: sessions.reduce((sum, t) => sum + (t.message_count ?? 0), 0),
-  };
-
+function Row({ run }: { run: RunSummary }): JSX.Element {
+  const st = runStatus(run.status);
+  const href = `/traces/${run.session_id}/${run.run_id}`;
+  const outcome = run.reason ?? run.output;
   return (
-    <AuthGuard>
-      <AppShell>
-          <motion.div
-            className="mx-auto max-w-6xl px-8 py-8"
-            initial="hidden"
-            animate="visible"
-            variants={pageVariants}
-          >
-            <motion.div variants={itemVariants} className="flex items-start justify-between">
-              <div className="flex items-start gap-4">
-                <motion.div
-                  className="flex h-14 w-14 items-center justify-center rounded-card bg-accent-500"
-                >
-                  <ChartLine size={26} weight="fill" className="text-white" />
-                </motion.div>
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h1 className="text-2xl font-semibold tracking-tight text-ink">
-                      Traces
-                    </h1>
-                    <span className="rounded-lg bg-accent-100 px-2.5 py-1 text-xs font-semibold text-accent-700 ring-1 ring-inset ring-accent-200">
-                      Sessions
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-ink-2">
-                    Session event timelines (live + journal replay)
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-
-            <motion.div variants={itemVariants} className="mt-8 grid grid-cols-4 gap-4">
-              {[
-                { label: 'Total Traces', value: stats.total, icon: Stack, color: 'primary' },
-                { label: 'Active', value: stats.active, icon: Play, color: 'accent' },
-                { label: 'Messages', value: stats.messages, icon: ChatCircle, color: 'secondary' },
-                {
-                  label: 'Total Cost',
-                  value: `$${stats.totalCost.toFixed(2)}`,
-                  icon: CurrencyDollar,
-                  color: 'slate',
-                },
-              ].map((stat) => {
-                const Icon = stat.icon;
-                return (
-                  <motion.div
-                    key={stat.label}
-                    className={cn(
-                      'rounded-card p-5',
-                      'border border-line bg-surface',
-                      'transition-all duration-200',
-                      'hover:border-line-strong'
-                    )}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-ink-2">{stat.label}</p>
-                        <p className="mt-1 text-2xl font-semibold text-ink">{stat.value}</p>
-                      </div>
-                      <div
-                        className={cn(
-                          'flex h-12 w-12 items-center justify-center rounded-xl',
-                          stat.color === 'primary' && 'bg-accent-100',
-                          stat.color === 'accent' && 'bg-accent-100',
-                          stat.color === 'secondary' && 'bg-line-soft',
-                          stat.color === 'slate' && 'bg-line-soft'
-                        )}
-                      >
-                        <Icon
-                          size={24}
-                          weight="regular"
-                          className={cn(
-                            stat.color === 'primary' && 'text-accent-600',
-                            stat.color === 'accent' && 'text-accent-600',
-                            stat.color === 'secondary' && 'text-good',
-                            stat.color === 'slate' && 'text-ink-2'
-                          )}
-                        />
-                      </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </motion.div>
-
-            <motion.div variants={itemVariants} className="mt-8 flex items-center gap-4">
-              <div className="relative flex-1 max-w-md">
-                <MagnifyingGlass
-                  size={16}
-                  className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-3"
-                />
-                <motion.input
-                  whileFocus={{ scale: 1.01 }}
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search traces..."
-                  className={cn(
-                    'h-11 w-full rounded-xl pl-11 pr-4',
-                    'text-sm text-ink placeholder:text-ink-3',
-                    'bg-surface border border-line',
-                    'transition-all duration-200',
-                    'hover:border-line-strong',
-                    'focus:border-accent-500 focus:outline-none focus:ring-4 focus:ring-accent-500/10'
-                  )}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {['all', 'active', 'terminated', 'failed'].map((filter) => (
-                  <motion.button
-                    key={filter}
-                    onClick={() => setStatusFilter(filter)}
-                    className={cn(
-                      'rounded-xl px-4 py-2',
-                      'text-sm font-medium transition-all',
-                      statusFilter === filter
-                        ? 'bg-accent-600 text-white'
-                        : 'bg-surface text-ink-2 border border-line hover:border-line-strong'
-                    )}
-                  >
-                    <span className="capitalize">{filter}</span>
-                  </motion.button>
-                ))}
-              </div>
-
-              <motion.button
-                type="button"
-                className={cn(
-                  'flex items-center gap-2 rounded-xl px-4 py-2.5',
-                  'text-sm font-medium text-ink-2',
-                  'bg-surface border border-line',
-                  'transition-all hover:border-line-strong hover:'
-                )}
-              >
-                <SortAscending size={16} />
-                Sort
-              </motion.button>
-            </motion.div>
-
-            {isLoading && <p className="mt-6 text-sm text-ink-2">Loading traces…</p>}
-            {error && (
-              <p className="mt-6 text-sm text-bad">
-                {error instanceof Error ? error.message : 'Failed to load traces'}
-              </p>
-            )}
-            {!isLoading && !error && filtered.length === 0 && (
-              <p className="mt-6 text-sm text-ink-2">No session traces yet.</p>
-            )}
-
-            <motion.div variants={itemVariants} className="mt-6 space-y-3">
-              {filtered.map((session) => (
-                <TraceRow key={session.id} session={session} />
-              ))}
-            </motion.div>
-          </motion.div>
-        </AppShell>
-    </AuthGuard>
+    <Tr className="align-top">
+      <Td className="max-w-[440px]">
+        <Link href={href} className="block truncate font-medium hover:text-accent-600 hover:underline" data-testid="trace-row-link">
+          {run.input || 'Run'}
+        </Link>
+        {outcome ? (
+          <div className={cn('truncate text-[12.5px]', st.kind === 'failed' ? 'text-bad' : 'text-ink-3')}>{outcome}</div>
+        ) : null}
+      </Td>
+      <Td className="whitespace-nowrap">
+        {run.agent_name ?? '—'}
+        {run.version != null ? (
+          <span className="ml-1.5 rounded-md bg-accent-50 px-1.5 py-px font-mono text-xs text-accent-700">v{run.version}</span>
+        ) : null}
+      </Td>
+      <Td className="whitespace-nowrap">
+        <StatusPill kind={st.kind} label={st.label} />
+      </Td>
+      <Td className="w-[200px]">
+        <div className="flex items-center gap-2">
+          <TimeSplitBar time={run.time} legend={false} className="flex-1" />
+          <span className="tabular w-[64px] text-right font-mono text-xs text-ink-2">
+            {run.duration_ms != null ? formatMs(run.duration_ms) : 'going'}
+          </span>
+        </div>
+      </Td>
+      <Td align="right" className="tabular font-mono text-[12.5px]">
+        {formatMoney(run.cost)}
+      </Td>
+      <Td className="max-w-[220px] truncate text-[12.5px] text-ink-2">
+        {toolsLine(run.tools) || '—'}
+        {run.tool_errors ? <span className="ml-1 text-bad">· {run.tool_errors} failed</span> : null}
+        {run.denials ? <span className="ml-1">· {run.denials} denied</span> : null}
+      </Td>
+      <Td align="right" className="whitespace-nowrap text-[12.5px] text-ink-3">
+        {formatRelativeTime(new Date(run.started_ms))}
+      </Td>
+    </Tr>
   );
 }
 
-function TraceRow({ session }: { session: Session }): JSX.Element {
-  const StatusIcon = StatusIconFor(session.status);
-  const tone = statusTone(session.status);
-  const isActive = session.status === 'active';
+export default function TracesPage(): JSX.Element {
+  const [view, setView] = useState<View>('all');
+  const [agent, setAgent] = useState('');
+  const [errors, setErrors] = useState(false);
+  const [denied, setDenied] = useState(false);
+  const [text, setText] = useState('');
+  const q = useDebounced(text, 300);
+  const { data: agents } = useHarnesses();
+  const params = { status: VIEWS[view].statuses, agent_id: agent || undefined, errors, denied, q: q || undefined, limit: 50 };
+  const { data, isLoading, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useTraceList(params);
+  const runs = data?.pages.flatMap((p) => p.items) ?? [];
+  const filtered = view !== 'all' || !!agent || errors || denied || !!q;
 
   return (
-    <Link href={`/traces/${session.id}`}>
-      <motion.div
-        variants={cardVariants}
-        className={cn(
-          'rounded-card p-5',
-          'border border-line bg-surface',
-          'transition-all duration-200',
-          'hover:border-line-strong'
-        )}
-      >
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-4 flex-1">
-            <div
-              className={cn(
-                'flex h-11 w-11 items-center justify-center rounded-xl',
-                tone === 'secondary' && 'bg-line-soft',
-                tone === 'red' && 'bg-canvas',
-                tone === 'primary' && 'bg-accent-100',
-                tone === 'amber' && 'bg-accent-50',
-                tone === 'slate' && 'bg-line-soft'
-              )}
-            >
-              {isActive ? (
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                >
-                  <StatusIcon
-                    size={20}
-                    weight="fill"
-                    className={cn(
-                      tone === 'secondary' && 'text-good',
-                      tone === 'red' && 'text-bad',
-                      tone === 'primary' && 'text-accent-600',
-                      tone === 'amber' && 'text-ink',
-                      tone === 'slate' && 'text-ink-2'
-                    )}
-                  />
-                </motion.div>
-              ) : (
-                <StatusIcon
-                  size={20}
-                  weight="fill"
-                  className={cn(
-                    tone === 'secondary' && 'text-good',
-                    tone === 'red' && 'text-bad',
-                    tone === 'primary' && 'text-accent-600',
-                    tone === 'amber' && 'text-ink',
-                    tone === 'slate' && 'text-ink-2'
-                  )}
-                />
-              )}
-            </div>
-
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
-                <p className="text-sm font-semibold text-ink">
-                  {session.title || session.harness_id}
-                </p>
-                <span
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-full px-2.5 py-1',
-                    tone === 'secondary' &&
-                      'bg-line-soft text-good ring-1 ring-inset ring-secondary-200',
-                    tone === 'red' && 'bg-canvas text-bad ring-1 ring-inset ring-red-200',
-                    tone === 'primary' &&
-                      'bg-primary-50 text-accent-700 ring-1 ring-inset ring-accent-200',
-                    tone === 'amber' &&
-                      'bg-accent-50 text-ink ring-1 ring-inset ring-amber-200',
-                    tone === 'slate' &&
-                      'bg-canvas text-ink-2 ring-1 ring-inset ring-slate-200'
-                  )}
-                >
-                  <span className="text-xs font-semibold capitalize">
-                    {session.status.replace('_', ' ')}
-                  </span>
-                </span>
-              </div>
-              <p className="mt-1 text-xs font-mono text-ink-2">
-                Session: {session.id} · seq {session.last_seq}
-              </p>
-              <div className="mt-3 flex items-center gap-4 text-xs text-ink-2">
-                <span className="flex items-center gap-1">
-                  <ChatCircle size={12} className="text-ink-3" />
-                  {session.message_count} messages
-                </span>
-                <span>•</span>
-                <span className="flex items-center gap-1">
-                  <Clock size={12} className="text-ink-3" />
-                  {formatTimestamp(session.created_at)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <div className="text-right">
-              <p className="text-xs font-medium text-ink-2">Cost</p>
-              <p className="mt-0.5 text-sm font-semibold text-ink">
-                ${session.total_cost.toFixed(4)}
-              </p>
-            </div>
-          </div>
+    <AppShell>
+      <PageBody>
+        <PageHeader
+          title="Traces"
+          description="Every run of every agent: what was asked, what it did, and where the time and money went."
+        />
+        <div className="flex flex-wrap items-center gap-2.5">
+          <SearchInput value={text} onChange={setText} label="Search runs" placeholder="Search what was asked or answered" />
+          <Segmented
+            label="Run status"
+            value={view}
+            onChange={setView}
+            options={(Object.keys(VIEWS) as View[]).map((v) => ({ value: v, label: VIEWS[v].label }))}
+          />
+          <Select
+            label="Agent"
+            hideLabel
+            value={agent}
+            onChange={setAgent}
+            options={[{ value: '', label: 'Every agent' }, ...(agents?.data ?? []).map((a) => ({ value: a.id, label: a.name }))]}
+          />
+          <Button variant={errors ? 'primary' : 'secondary'} aria-pressed={errors} onClick={() => setErrors((v) => !v)}>
+            With failures
+          </Button>
+          <Button variant={denied ? 'primary' : 'secondary'} aria-pressed={denied} onClick={() => setDenied((v) => !v)}>
+            With denials
+          </Button>
         </div>
-      </motion.div>
-    </Link>
+        <Card>
+          {error ? <ErrorNote message="Could not load runs." onRetry={() => void refetch()} /> : null}
+          {isLoading ? (
+            <div className="p-4">
+              <SkeletonRows rows={6} />
+            </div>
+          ) : runs.length === 0 && !error ? (
+            <EmptyState
+              title={filtered ? 'No runs match' : 'No runs yet'}
+              description={filtered ? 'Try another filter.' : 'Each message sent to an agent starts a run; its trace appears here.'}
+            />
+          ) : (
+            <Table label="Runs" minWidth={1040}>
+              <thead>
+                <tr>
+                  <Th>Run</Th>
+                  <Th>Agent</Th>
+                  <Th>Status</Th>
+                  <Th>Time</Th>
+                  <Th align="right">Cost</Th>
+                  <Th>Tools</Th>
+                  <Th align="right">Started</Th>
+                </tr>
+              </thead>
+              <tbody data-testid="trace-rows">
+                {runs.map((r) => (
+                  <Row key={`${r.session_id}-${r.run_id}`} run={r} />
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card>
+        {hasNextPage ? (
+          <div className="flex justify-center">
+            <Button onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+              {isFetchingNextPage ? 'Loading…' : 'Older runs'}
+            </Button>
+          </div>
+        ) : null}
+      </PageBody>
+    </AppShell>
   );
 }

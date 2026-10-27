@@ -1,479 +1,101 @@
-/**
- * Trace Detail — session journal timeline first (LOCAL_DEMO #7 / D4).
- * Span waterfall (D13 Trace API) is a secondary tab when spans exist.
- */
-
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+/**
+ * A session replayed run by run: each turn as a numbered card (what was asked, how it ended,
+ * its time, cost and tools) that opens the run's trace.
+ */
+
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { motion } from 'framer-motion';
-import {
-  ArrowLeft,
-  ChartLine,
-  CircleNotch,
-  Clock,
-  TreeStructure,
-} from '@phosphor-icons/react';
-import { AuthGuard } from '@/components/auth/AuthGuard';
-import { tracesAPI, type TraceSpan } from '@/lib/api/endpoints/traces';
-import { sessionsAPI } from '@/lib/api/endpoints/sessions';
-import { useSession } from '@/lib/api/hooks/useSessions';
-import type { WireEvent } from '@/lib/api/types/session.types';
-import {
-  applyWireEvent,
-  createSessionViewState,
-  type SessionViewState,
-} from '@/lib/session/wireEventReducer';
-import { cn } from '@/lib/utils';
-import { AppShell } from '@/components/layout/AppShell';
 
-const pageVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.06 } },
-};
+import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { TimeSplitBar } from '@/components/traces/TimeSplitBar';
+import { Card, EmptyState, ErrorNote, PageHeader, SkeletonRows, StatusPill } from '@/components/ui';
+import { useSessionTraces } from '@/lib/api/hooks/useTraces';
+import type { RunSummary } from '@/lib/api/types/trace.types';
+import { formatMs, runStatus, toolsLine } from '@/lib/traces/format';
+import { cn, formatMoney, formatStamp } from '@/lib/utils';
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] },
-  },
-};
-
-type TreeNode = {
-  span: TraceSpan;
-  children: TreeNode[];
-  depth: number;
-};
-
-type DetailTab = 'journal' | 'waterfall';
-
-function spanIdOf(span: TraceSpan): string {
-  return String(span.spanID ?? span.span_id ?? '');
-}
-
-function parentIdOf(span: TraceSpan): string | null {
-  const refs = span.references;
-  if (Array.isArray(refs)) {
-    for (const r of refs) {
-      if (
-        r &&
-        typeof r === 'object' &&
-        (r.refType === 'CHILD_OF' || r.ref_type === 'CHILD_OF') &&
-        (r.spanID || r.span_id)
-      ) {
-        return String(r.spanID ?? r.span_id);
-      }
-    }
-  }
-  if (span.parentSpanId || span.parent_span_id) {
-    return String(span.parentSpanId ?? span.parent_span_id);
-  }
-  return null;
-}
-
-function operationOf(span: TraceSpan): string {
-  return String(
-    span.operationName ?? span.operation_name ?? span.name ?? 'span'
+function TurnCard({ run, n }: { run: RunSummary; n: number }): JSX.Element {
+  const st = runStatus(run.status);
+  return (
+    <li>
+      <Link
+        href={`/traces/${run.session_id}/${run.run_id}`}
+        className="flex gap-4 rounded-card border border-line bg-surface px-4 py-3.5 hover:border-accent-200 hover:bg-accent-50/30"
+        data-testid="turn-card"
+      >
+        <span className="tabular w-6 flex-none pt-0.5 text-right font-mono text-sm text-ink-3">{n}</span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="min-w-0 truncate font-medium">{run.input || 'Run'}</span>
+            <StatusPill kind={st.kind} label={st.label} />
+          </span>
+          {run.reason || run.output ? (
+            <span className={cn('line-clamp-2 text-[13.5px]', st.kind === 'failed' ? 'text-bad' : 'text-ink-2')}>
+              {run.reason ?? run.output}
+            </span>
+          ) : null}
+          <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
+            <span>{formatStamp(run.started_ms)}</span>
+            <span className="tabular">{run.duration_ms != null ? formatMs(run.duration_ms) : 'going'}</span>
+            <span className="tabular">{formatMoney(run.cost)}</span>
+            {run.tool_calls ? <span>{toolsLine(run.tools)}</span> : null}
+            {run.denials ? <span>{run.denials} denied</span> : null}
+          </span>
+          <TimeSplitBar time={run.time} legend={false} className="max-w-[360px]" />
+        </span>
+      </Link>
+    </li>
   );
 }
 
-function durationUs(span: TraceSpan): number | null {
-  const d = span.duration ?? span.duration_us;
-  return typeof d === 'number' ? d : null;
-}
-
-function buildTree(spans: TraceSpan[]): TreeNode[] {
-  const byId = new Map<string, TreeNode>();
-  for (const span of spans) {
-    const id = spanIdOf(span);
-    if (!id) continue;
-    byId.set(id, { span, children: [], depth: 0 });
-  }
-  const roots: TreeNode[] = [];
-  for (const node of byId.values()) {
-    const pid = parentIdOf(node.span);
-    if (pid && byId.has(pid)) {
-      byId.get(pid)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  }
-  const assignDepth = (nodes: TreeNode[], depth: number) => {
-    for (const n of nodes) {
-      n.depth = depth;
-      assignDepth(n.children, depth + 1);
-    }
-  };
-  assignDepth(roots, 0);
-  return roots;
-}
-
-function flattenTree(nodes: TreeNode[]): TreeNode[] {
-  const out: TreeNode[] = [];
-  const walk = (list: TreeNode[]) => {
-    for (const n of list) {
-      out.push(n);
-      walk(n.children);
-    }
-  };
-  walk(nodes);
-  return out;
-}
-
-export default function TraceDetailPage(): JSX.Element {
+export default function SessionTracePage(): JSX.Element {
   const params = useParams();
   const id = typeof params.id === 'string' ? params.id : '';
-  const { data: session } = useSession(id);
-
-  const [tab, setTab] = useState<DetailTab>('journal');
-  const [spans, setSpans] = useState<TraceSpan[] | null>(null);
-  const [spansLoading, setSpansLoading] = useState(true);
-  const [spansError, setSpansError] = useState<string | null>(null);
-
-  const [viewState, setViewState] = useState<SessionViewState>(() =>
-    createSessionViewState()
-  );
-  const [events, setEvents] = useState<WireEvent[]>([]);
-  const [journalLoading, setJournalLoading] = useState(true);
-  const [journalError, setJournalError] = useState<string | null>(null);
-
-  // Primary: session journal timeline (D4 / LOCAL_DEMO #7).
-  useEffect(() => {
-    if (!id) {
-      setJournalLoading(false);
-      return;
-    }
-    const ac = new AbortController();
-    let cancelled = false;
-    setViewState(createSessionViewState());
-    setEvents([]);
-    setJournalError(null);
-    setJournalLoading(true);
-
-    (async () => {
-      try {
-        for await (const event of sessionsAPI.openEventStream(id, {
-          signal: ac.signal,
-        })) {
-          if (cancelled) break;
-          setEvents((prev) => [...prev, event]);
-          setViewState((prev) => applyWireEvent(prev, event));
-          setJournalLoading(false);
-        }
-        if (!cancelled) setJournalLoading(false);
-      } catch (err) {
-        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) {
-          return;
-        }
-        if (!cancelled) {
-          setJournalError(
-            err instanceof Error ? err.message : 'Failed to load session journal'
-          );
-          setJournalLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, [id]);
-
-  // Secondary: Trace API span waterfall (D13).
-  useEffect(() => {
-    if (!id) {
-      setSpansLoading(false);
-      setSpans([]);
-      return;
-    }
-    let cancelled = false;
-    setSpansLoading(true);
-    setSpansError(null);
-    (async () => {
-      try {
-        const result = await tracesAPI.getSpans(id);
-        if (!cancelled) {
-          setSpans(result.spans);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const status =
-            err && typeof err === 'object' && 'response' in err
-              ? (err as { response?: { status?: number } }).response?.status
-              : undefined;
-          if (status === 404) {
-            setSpans([]);
-            setSpansError(null);
-          } else {
-            setSpans([]);
-            setSpansError(
-              err instanceof Error ? err.message : 'Failed to load span tree'
-            );
-          }
-        }
-      } finally {
-        if (!cancelled) setSpansLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  const rows = useMemo(() => {
-    if (!spans || spans.length === 0) return [];
-    return flattenTree(buildTree(spans));
-  }, [spans]);
-
-  const maxDuration = useMemo(() => {
-    let max = 1;
-    for (const n of rows) {
-      const d = durationUs(n.span);
-      if (d != null && d > max) max = d;
-    }
-    return max;
-  }, [rows]);
-
-  const orderedEvents = useMemo(() => {
-    return [...events].sort((a, b) => {
-      const sa = typeof a.seq === 'number' ? a.seq : 0;
-      const sb = typeof b.seq === 'number' ? b.seq : 0;
-      return sa - sb;
-    });
-  }, [events]);
+  const { data, isLoading, error, refetch } = useSessionTraces(id);
+  const total = data?.items.reduce((sum, r) => sum + r.cost, 0) ?? 0;
 
   return (
-    <AuthGuard>
-      <AppShell>
-          <motion.div
-            className="mx-auto max-w-5xl px-8 py-8"
-            initial="hidden"
-            animate="visible"
-            variants={pageVariants}
-          >
-            <motion.div variants={itemVariants} className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                <Link
-                  href="/traces"
-                  className="mt-1 flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-ink-2 hover:border-line-strong"
-                  aria-label="Back to traces"
-                >
-                  <ArrowLeft size={18} />
-                </Link>
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h1 className="text-2xl font-semibold tracking-tight text-ink">
-                      Session journal timeline
-                    </h1>
-                    <span className="rounded-lg bg-line-soft px-2.5 py-1 text-xs font-semibold text-good ring-1 ring-inset ring-secondary-200">
-                      Journal
-                    </span>
-                  </div>
-                  <p className="mt-1 font-mono text-xs text-ink-2">{id || '—'}</p>
-                  {session?.status ? (
-                    <p className="mt-1 text-xs capitalize text-ink-2">
-                      {String(session.status).replace(/_/g, ' ')}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-              {id ? (
-                <Link
-                  href={`/sessions/${id}`}
-                  className={cn(
-                    'inline-flex items-center gap-2 rounded-xl px-4 py-2.5',
-                    'text-sm font-medium text-ink-2',
-                    'border border-line bg-surface',
-                    'hover:border-line-strong'
-                  )}
-                >
-                  <ChartLine size={16} />
-                  Session timeline
-                </Link>
-              ) : null}
-            </motion.div>
-
-            <motion.div variants={itemVariants} className="mt-6 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setTab('journal')}
-                className={cn(
-                  'rounded-xl px-4 py-2 text-sm font-medium',
-                  tab === 'journal'
-                    ? 'bg-slate-900 text-white'
-                    : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
-                )}
-              >
-                Journal
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('waterfall')}
-                className={cn(
-                  'rounded-xl px-4 py-2 text-sm font-medium',
-                  tab === 'waterfall'
-                    ? 'bg-slate-900 text-white'
-                    : 'border border-line bg-surface text-ink-2 hover:border-line-strong'
-                )}
-              >
-                Span waterfall
-                {spans && spans.length > 0 ? (
-                  <span className="ml-1.5 text-xs opacity-70">({spans.length})</span>
-                ) : null}
-              </button>
-            </motion.div>
-
-            {tab === 'journal' && (
+    <AppShell>
+      <PageBody className="max-w-[960px]">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-ink-3">
+          <Link href="/traces" className="hover:text-ink">
+            Traces
+          </Link>
+          <span aria-hidden="true">/</span>
+          <span className="text-ink">Session</span>
+        </nav>
+        <PageHeader
+          title={data?.title || data?.items[0]?.input || 'Session'}
+          description={
+            data ? (
               <>
-                {journalLoading && events.length === 0 && (
-                  <motion.p
-                    variants={itemVariants}
-                    className="mt-10 flex items-center gap-2 text-sm text-ink-2"
-                  >
-                    <CircleNotch size={16} className="animate-spin text-accent-500" />
-                    Loading session journal…
-                  </motion.p>
-                )}
-                {journalError && (
-                  <motion.p variants={itemVariants} className="mt-10 text-sm text-bad">
-                    {journalError}
-                  </motion.p>
-                )}
-                {!journalLoading && !journalError && orderedEvents.length === 0 && (
-                  <motion.div
-                    variants={itemVariants}
-                    className="mt-10 rounded-card border border-dashed border-line bg-surface px-6 py-10 text-center"
-                  >
-                    <p className="text-sm font-medium text-ink">No journal events yet</p>
-                    <p className="mt-1 text-sm text-ink-2">
-                      Run a Test chat for this session, then reopen Traces. Full session
-                      timeline remains on the dedicated page.
-                    </p>
-                    {id ? (
-                      <Link
-                        href={`/sessions/${id}`}
-                        className="mt-5 inline-flex text-sm font-medium text-accent-600 hover:underline"
-                      >
-                        Open session timeline
-                      </Link>
-                    ) : null}
-                  </motion.div>
-                )}
-                {orderedEvents.length > 0 && (
-                  <motion.ol variants={itemVariants} className="mt-8 space-y-2">
-                    {orderedEvents.map((ev, idx) => (
-                      <li
-                        key={`${ev.type}-${ev.seq ?? idx}-${idx}`}
-                        className="rounded-xl border border-line bg-surface px-4 py-3"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-semibold text-ink">{ev.type}</p>
-                          <span className="font-mono text-[11px] text-ink-3">
-                            seq {ev.seq ?? '—'}
-                          </span>
-                        </div>
-                        {viewState.messages.length > 0 && ev.type === 'message_end' ? (
-                          <p className="mt-1 truncate text-xs text-ink-2">
-                            message settled
-                          </p>
-                        ) : null}
-                      </li>
-                    ))}
-                  </motion.ol>
-                )}
+                {data.agent_name ?? 'Agent'}
+                {data.version != null ? ` v${data.version}` : ''} · {data.items.length} run{data.items.length === 1 ? '' : 's'} ·{' '}
+                {formatMoney(total)} ·{' '}
+                <Link href={`/sessions/${id}`} className="text-accent-600 hover:underline">
+                  open session
+                </Link>
               </>
-            )}
-
-            {tab === 'waterfall' && (
-              <>
-                {spansLoading && (
-                  <motion.p
-                    variants={itemVariants}
-                    className="mt-10 flex items-center gap-2 text-sm text-ink-2"
-                  >
-                    <CircleNotch size={16} className="animate-spin text-accent-500" />
-                    Loading spans…
-                  </motion.p>
-                )}
-
-                {!spansLoading && spansError && (
-                  <motion.p variants={itemVariants} className="mt-10 text-sm text-bad">
-                    {spansError}
-                  </motion.p>
-                )}
-
-                {!spansLoading && !spansError && spans !== null && spans.length === 0 && (
-                  <motion.div
-                    variants={itemVariants}
-                    className="mt-10 rounded-card border border-dashed border-line bg-surface px-6 py-10 text-center"
-                  >
-                    <TreeStructure size={28} className="mx-auto text-ink-3" />
-                    <p className="mt-3 text-sm font-medium text-ink">
-                      No spans for this id
-                    </p>
-                    <p className="mt-1 text-sm text-ink-2">
-                      Jaeger/Trace API returned no tenant-scoped spans. Session journal
-                      timeline remains available.
-                    </p>
-                    {id ? (
-                      <Link
-                        href={`/sessions/${id}`}
-                        className="mt-5 inline-flex text-sm font-medium text-accent-600 hover:underline"
-                      >
-                        Open session timeline
-                      </Link>
-                    ) : null}
-                  </motion.div>
-                )}
-
-                {!spansLoading && rows.length > 0 && (
-                  <motion.div variants={itemVariants} className="mt-8 space-y-2">
-                    {rows.map((node) => {
-                      const dur = durationUs(node.span);
-                      const widthPct =
-                        dur != null
-                          ? Math.max(4, Math.round((dur / maxDuration) * 100))
-                          : 8;
-                      return (
-                        <div
-                          key={spanIdOf(node.span) || operationOf(node.span)}
-                          className="rounded-xl border border-line bg-surface px-4 py-3"
-                          style={{ marginLeft: node.depth * 16 }}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-ink">
-                                {operationOf(node.span)}
-                              </p>
-                              <p className="mt-0.5 font-mono text-[11px] text-ink-2">
-                                {spanIdOf(node.span) || '—'}
-                              </p>
-                            </div>
-                            <span className="flex shrink-0 items-center gap-1 text-xs text-ink-2">
-                              <Clock size={12} />
-                              {dur != null ? `${(dur / 1000).toFixed(1)} ms` : '—'}
-                            </span>
-                          </div>
-                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line-soft">
-                            <div
-                              className="h-full rounded-full bg-accent-500/80"
-                              style={{ width: `${widthPct}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </motion.div>
-                )}
-              </>
-            )}
-          </motion.div>
-        </AppShell>
-    </AuthGuard>
+            ) : undefined
+          }
+        />
+        {error ? <ErrorNote message="Could not load this session's runs." onRetry={() => void refetch()} /> : null}
+        {isLoading ? (
+          <Card padded>
+            <SkeletonRows rows={4} />
+          </Card>
+        ) : data && data.items.length === 0 ? (
+          <Card>
+            <EmptyState title="No runs yet" description="Each message sent in this session starts a run." />
+          </Card>
+        ) : (
+          <ol className="flex flex-col gap-2.5" aria-label="Runs in this session">
+            {data?.items.map((run, i) => <TurnCard key={run.run_id} run={run} n={i + 1} />)}
+          </ol>
+        )}
+      </PageBody>
+    </AppShell>
   );
 }

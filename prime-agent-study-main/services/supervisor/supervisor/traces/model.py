@@ -66,6 +66,9 @@ class Span:
     attrs: dict[str, Any] = field(default_factory=dict)
     """Small typed facts: model, tokens, cost, tool name, decision, exit code."""
     preview: str | None = None
+    excerpt: str | None = None
+    """The first part of what a reader wants inline (a reply's text, a command's output),
+    ``EXCERPT_LIMIT`` characters at most; the whole is in ``detail``."""
     detail: dict[str, Any] = field(default_factory=dict)
     markers: list[Marker] = field(default_factory=list)
     seqs: list[int] = field(default_factory=list)

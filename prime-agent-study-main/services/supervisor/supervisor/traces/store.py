@@ -31,6 +31,7 @@ __all__ = [
     "list_runs",
     "load_run",
     "record_run",
+    "run_events",
     "session_runs",
     "summary",
 ]
@@ -42,6 +43,8 @@ Factory = async_sessionmaker[AsyncSession]
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
+ROLLUP_VERSION = 2
+"""Bumped when the builder changes what a rollup says; rows from an older one are rebuilt on read."""
 _backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
 """Per database, the tenants whose older runs are all filled in (new runs are recorded as
 they happen, so a tenant is checked once per process)."""
@@ -101,7 +104,7 @@ async def _save(factory: Factory, session: SessionRow, trace: RunTrace) -> None:
         "errors": r.errors,
         "input_preview": r.input,
         "output_preview": r.output,
-        "rollup": r.to_dict(),
+        "rollup": {**r.to_dict(), "v": ROLLUP_VERSION},
         "updated_ms": int(time.time() * 1000),
     }
     for _ in range(2):  # a concurrent first write of the same run: the loser updates instead
@@ -150,8 +153,8 @@ def summary(row: RunTraceRow) -> dict[str, Any]:
 
 
 async def _refresh(factory: Factory, reader: JournalReader, rows: list[RunTraceRow]) -> list[RunTraceRow]:
-    """``rows`` with every unfinished run rebuilt from the journal."""
-    stale = [r for r in rows if r.status not in _FINISHED]
+    """``rows`` with every unfinished run, and every row an older builder made, rebuilt."""
+    stale = [r for r in rows if r.status not in _FINISHED or (r.rollup or {}).get("v") != ROLLUP_VERSION]
     if not stale:
         return rows
     async with factory() as db:
@@ -292,3 +295,8 @@ async def list_runs(
     more = len(rows) > limit
     rows = await _refresh(factory, reader, rows[:limit])
     return [summary(r) for r in rows], (rows[-1].started_ms if more and rows else None)
+
+
+async def run_events(reader: JournalReader, session_id: str, run_id: str) -> list[dict[str, Any]]:
+    """The events run ``run_id``'s trace is built from, as recorded (none: no such run)."""
+    return [e.to_dict() for e in await reader.read_run_window(session_id, run_id)]

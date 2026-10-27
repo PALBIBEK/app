@@ -1009,123 +1009,50 @@ class AiClient:
         )
         return raw if isinstance(raw, list) else []
 
-    def _jaeger_base(self) -> str:
-        return (self._settings.jaeger_query_base_url or "").rstrip("/")
+    async def list_traces(self, identity: TenantPrincipal, params: dict[str, Any]) -> dict[str, Any]:
+        """GET /v1/traces: the caller's runs, newest first (``items``, ``next_before_ms``)."""
+        payload = await self._json_request("GET", "/v1/traces", identity, expected=(200,), params=params)
+        return payload if isinstance(payload, dict) else {"items": [], "next_before_ms": None}
 
-    @staticmethod
-    def _trace_belongs_to_tenant(data: Any, tenant_id: str) -> bool:
-        """True when Jaeger payload carries matching tenant tag (or unknown → deny)."""
-        # Must match span attrs emitted by supervisor otlp_sink (`yal.tenant.id`).
-        tenant_keys = {"yal.tenant.id", "yal.tenant_id", "tenant_id"}
-        if not isinstance(data, dict):
-            return False
-        processes = data.get("processes")
-        if isinstance(processes, dict):
-            for proc in processes.values():
-                if not isinstance(proc, dict):
-                    continue
-                tags = proc.get("tags") or []
-                if isinstance(tags, list):
-                    for tag in tags:
-                        if (
-                            isinstance(tag, dict)
-                            and tag.get("key") in tenant_keys
-                            and str(tag.get("value")) == tenant_id
-                        ):
-                            return True
-        spans = data.get("spans")
-        if isinstance(spans, list):
-            for span in spans:
-                if not isinstance(span, dict):
-                    continue
-                for tag in span.get("tags") or []:
-                    if (
-                        isinstance(tag, dict)
-                        and tag.get("key") in tenant_keys
-                        and str(tag.get("value")) == tenant_id
-                    ):
-                        return True
-        return False
+    async def session_traces(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/traces: every run of one session, oldest first."""
+        payload = await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/traces", identity, expected=(200,)
+        )
+        return payload if isinstance(payload, dict) else {"items": []}
 
-    async def list_traces(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
-        """GET Jaeger /api/traces filtered by tenant tag — empty list if unavailable (MVP)."""
-        base = self._jaeger_base()
-        if not base:
-            return []
-        # Jaeger tags query: same key spans emit (`yal.tenant.id`).
-        tags = quote(f'{{"yal.tenant.id":"{identity.tenant_id}"}}', safe="")
-        url = f"{base}/api/traces?tags={tags}&limit=20"
-        timeout = self._settings.ai_http_timeout_seconds
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            timeout=timeout,
-        ) as client:
-            try:
-                response = await client.get(url)
-            except (httpx.TimeoutException, httpx.HTTPError):
-                return []
-        if response.status_code >= 400:
-            return []
-        try:
-            payload = response.json()
-        except ValueError:
-            return []
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(data, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for item in data:
-            if isinstance(item, dict) and self._trace_belongs_to_tenant(
-                item, identity.tenant_id
-            ):
-                out.append(item)
-            elif isinstance(item, dict) and not item.get("processes"):
-                # Stub-friendly: if Jaeger returns pre-filtered results without tags, keep.
-                out.append(item)
-        return out
+    async def run_trace(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/runs/{run}/trace: one run's span tree and rollup."""
+        payload = await self._json_request(
+            "GET",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/trace",
+            identity,
+            expected=(200,),
+        )
+        return payload if isinstance(payload, dict) else {}
 
-    async def get_trace_spans(
-        self,
-        identity: TenantPrincipal,
-        trace_id: str,
-    ) -> list[dict[str, Any]]:
-        """GET Jaeger /api/traces/{id} — spans only when tenant matches; else empty."""
-        base = self._jaeger_base()
-        if not base:
-            return []
-        encoded = quote(trace_id, safe="")
-        url = f"{base}/api/traces/{encoded}"
-        timeout = self._settings.ai_http_timeout_seconds
-        async with httpx.AsyncClient(
-            transport=self._transport,
-            timeout=timeout,
-        ) as client:
-            try:
-                response = await client.get(url)
-            except (httpx.TimeoutException, httpx.HTTPError):
-                return []
-        if response.status_code == 404:
-            return []
-        if response.status_code >= 400:
-            raise AiUpstreamError(
-                "Jaeger query returned an error",
-                status_code=503 if response.status_code >= 500 else response.status_code,
-            )
-        try:
-            payload = response.json()
-        except ValueError:
-            return []
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(data, list) or not data:
-            return []
-        trace = data[0] if isinstance(data[0], dict) else None
-        if trace is None:
-            return []
-        if not self._trace_belongs_to_tenant(trace, identity.tenant_id):
-            # Foreign tenant — treat as missing (never leak spans).
-            return []
-        spans = trace.get("spans")
-        return spans if isinstance(spans, list) else []
+    async def run_events(self, identity: TenantPrincipal, ai_session_id: str, run_id: str) -> dict[str, Any]:
+        """GET .../trace/events: the journal events a run's trace was built from."""
+        payload = await self._json_request(
+            "GET",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/trace/events",
+            identity,
+            expected=(200,),
+        )
+        return payload if isinstance(payload, dict) else {"events": []}
+
+    async def trace_span(
+        self, identity: TenantPrincipal, ai_session_id: str, run_id: str, span_id: str
+    ) -> dict[str, Any]:
+        """GET .../trace/spans/{span}: one span with its full content."""
+        payload = await self._json_request(
+            "GET",
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}"
+            f"/trace/spans/{quote(span_id, safe='')}",
+            identity,
+            expected=(200,),
+        )
+        return payload if isinstance(payload, dict) else {}
 
     async def _json_request(
         self,
@@ -1136,7 +1063,7 @@ class AiClient:
         json_body: dict[str, Any] | None = None,
         expected: tuple[int, ...] = (200,),
         allow_empty: bool = False,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
         timeout: float | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> Any:

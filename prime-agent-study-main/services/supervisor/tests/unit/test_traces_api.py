@@ -85,7 +85,7 @@ class Api:
             events += [
                 (start + 100, ApprovalRequired(f"{run}-a", "Allow bash?", ["allow", "deny"], 60,
                                                metadata={"tool": "bash", "tool_call_id": f"{run}-c"})),
-                (start + 200, ApprovalResolved(f"{run}-a", "deny", "responded", responded_by="alice")),
+                (start + 200, ApprovalResolved(f"{run}-a", "deny", "denied", responded_by="alice")),
             ]
         events += [
             (start + 200, ToolStart(f"{run}-c", "bash", {"command": "make"})),
@@ -205,7 +205,12 @@ async def test_a_run_is_a_tree_and_a_span_opens_with_its_content(api: Api) -> No
     assert detail.json()["detail"]["args"] == {"command": "make"}
     assert detail.json()["detail"]["result"]["payload"]["stdout"] == "ok"
 
+    raw = await api.client.get(f"/v1/sessions/{sid}/runs/r1/trace/events", headers=ALICE)
+    assert [e["event_type"] for e in raw.json()["events"]][:3] == ["RunStart", "MessageEnd", "TurnStart"]
+
     base = f"/v1/sessions/{sid}/runs"
+    assert (await api.client.get(f"{base}/r1/trace/events", headers=BOB)).status_code == 404
+    assert (await api.client.get(f"{base}/nope/trace/events", headers=ALICE)).status_code == 404
     assert (await api.client.get(f"{base}/r1/trace", headers=BOB)).status_code == 404
     assert (await api.client.get(f"{base}/r1/trace", headers=T2)).status_code == 404
     assert (await api.client.get(f"{base}/nope/trace", headers=ALICE)).status_code == 404
@@ -231,3 +236,11 @@ async def test_a_run_is_recorded_when_it_starts_and_again_when_it_ends(api: Api)
     assert ended is not None and ended.status == "ok" and ended.duration_ms == 500
 
     await record_run(api.factory, reader, "no-such-session", "r1")  # never raises
+
+    # A row an older builder wrote is rebuilt the next time it is read.
+    async with api.factory() as db, db.begin():
+        stale = await db.get(RunTraceRow, (sid, "r1"))
+        assert stale is not None
+        stale.rollup, stale.status, stale.duration_ms = {"v": 1}, "error", 1
+    listed = (await api.client.get(f"/v1/sessions/{sid}/traces", headers=ALICE)).json()["items"]
+    assert [(i["status"], i["duration_ms"]) for i in listed] == [("ok", 500)]

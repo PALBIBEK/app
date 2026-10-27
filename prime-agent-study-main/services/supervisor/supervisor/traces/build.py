@@ -43,6 +43,7 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
 )
+from supervisor.policy.types import is_allow_choice
 from supervisor.traces.kinds import SpanKind
 from supervisor.traces.model import (
     Marker,
@@ -54,14 +55,18 @@ from supervisor.traces.model import (
     TimeSplit,
 )
 
-__all__ = ["DETAIL_LIMIT", "PREVIEW_LIMIT", "build_run_trace", "span_id", "trace_id"]
+__all__ = ["DETAIL_LIMIT", "EXCERPT_LIMIT", "PREVIEW_LIMIT", "build_run_trace", "span_id", "trace_id"]
 
 PREVIEW_LIMIT = 160
 """Characters in a one-line preview."""
+EXCERPT_LIMIT = 2_000
+"""Characters of a span's excerpt: enough to read inline, small enough for every span of a tree."""
 DETAIL_LIMIT = 64_000
 """Characters kept of one text in a span's detail; the rest is cut and its length noted."""
 
 _DENIED_CODES = frozenset({"APPROVAL_DENIED", "APPROVAL_TIMEOUT", "APPROVAL_TIMED_OUT"})
+_NOT_ALLOWED = frozenset({"denied", "timed_out", "cancelled"})
+"""``ApprovalResolved.status`` values under which the call did not run, whatever the choice."""
 _FAILED_SUBAGENT = frozenset({"error", "timeout", "failed"})
 _CANCELLED = frozenset({"aborted", "cancelled"})
 
@@ -98,6 +103,25 @@ def _cut(value: Any) -> Any:
     if isinstance(value, list):
         return [_cut(v) for v in value]
     return value
+
+
+def _excerpt(text: str | None) -> str | None:
+    if not text:
+        return None
+    return text if len(text) <= EXCERPT_LIMIT else text[:EXCERPT_LIMIT] + "…"
+
+
+def _result_text(result: dict[str, Any]) -> str | None:
+    """What a tool's result says, as text: an error, a command's output, a file's text."""
+    if not result.get("ok", True):
+        return str(result.get("error") or "failed")
+    payload = result.get("payload")
+    if isinstance(payload, dict) and ("stdout" in payload or "stderr" in payload):
+        out, err = str(payload.get("stdout") or ""), str(payload.get("stderr") or "")
+        return (out + ("\n" if out and err and not out.endswith("\n") else "") + err) or None
+    if isinstance(payload, str):
+        return payload
+    return _compact_json(payload) if payload is not None else None
 
 
 def _text(content: Iterable[Any]) -> str:
@@ -277,6 +301,7 @@ class _Builder:
             text = _text(p.content)
             root.detail.setdefault("input", _cut(text))
             root.preview = root.preview or _line(text)
+            root.excerpt = root.excerpt or _excerpt(text)
             root.seqs.append(env.seq)
             return
         if p.role != "assistant":
@@ -301,6 +326,7 @@ class _Builder:
             attrs["cost"] = round(float(attrs["cost"]), 6)
         span.attrs = {k: v for k, v in attrs.items() if v is not None}
         span.detail = {"text": _cut(text), "tool_calls": _cut(calls)}
+        span.excerpt = _excerpt(text)
         names = ", ".join(str(c["name"]) for c in calls)
         span.preview = _line(text) or (f"asks for {names}" if names else None)
         self._close(span, env)
@@ -349,16 +375,15 @@ class _Builder:
             return
         self._close(span, env)
         wait = env.ts_ms - span.start_ms
-        denied = p.choice not in ("allow", "approve", "approved", "yes") or p.status != "responded"
+        denied = p.status in _NOT_ALLOWED or not is_allow_choice(p.choice)
         span.attrs.update(decision=p.choice, outcome=p.status, responded_by=p.responded_by,
                           wait_ms=wait, denied=denied)
-        who = f" by {p.responded_by}" if p.responded_by else ""
         if p.status == "timed_out":
             span.preview = f"no answer in {_seconds(wait)}, so {p.choice}"
         elif p.status == "cancelled":
             span.preview = "cancelled"
-        else:
-            span.preview = f"{'denied' if denied else 'allowed'}{who} after {_seconds(wait)}"
+        else:  # who answered is a principal id: the product names it (``responded_by``)
+            span.preview = f"{'denied' if denied else 'allowed'} after {_seconds(wait)}"
 
     def _on_ToolStart(self, env: Envelope, p: ToolStart) -> None:
         span = self._tool_span(p.tool_call_id, p.tool_name, env)
@@ -375,6 +400,7 @@ class _Builder:
         del self.tools[p.tool_call_id]
         result = dict(p.result or {})
         span.detail["result"] = _cut(result)
+        span.excerpt = _excerpt(_result_text(result))
         start = int(span.attrs.get("exec_start_ms", env.ts_ms))
         span.attrs["exec_ms"] = p.duration_ms if p.duration_ms is not None else env.ts_ms - start
         payload = result.get("payload")
@@ -482,6 +508,7 @@ class _Builder:
             return
         span.attrs["stop_reason"] = p.stop_reason
         span.detail["output"] = _cut(p.output)
+        span.excerpt = _excerpt(p.output)
         span.preview = _line(p.output) or span.preview
         failed = p.stop_reason in _FAILED_SUBAGENT
         if failed:
@@ -501,6 +528,7 @@ class _Builder:
             return
         span.attrs.update(stop_reason=p.stop_reason, exit_code=p.exit_code)
         span.detail["output"] = _cut(p.output)
+        span.excerpt = _excerpt(p.output)
         failed = p.exit_code not in (None, 0) or p.stop_reason in _FAILED_SUBAGENT
         if failed:
             span.error = {"class": "JobFailed", "message": f"exit {p.exit_code}" if p.exit_code else p.stop_reason}
