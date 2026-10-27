@@ -169,6 +169,8 @@ class SessionManagerBase:
         self._composition_catalog = composition_catalog
         self._live = LiveHub(maxsize=live_queue_max)
         self._fanout: dict[str, asyncio.Task[None]] = {}
+        self._rollups: set[asyncio.Task[None]] = set()
+        """Trace rollups being written (``supervisor.traces``); held so none is collected mid-write."""
         self._hands = SessionHands(_HandHooks(self))
         # When sandboxes start and stop, where a profile does not say (supervisor.hands.lifecycle).
         self.sandbox_lifecycle = SandboxLifecycle.from_env()
@@ -393,10 +395,22 @@ class SessionManagerBase:
         self._live.publish(session_id, envelope)
         await self._project(session_id, envelope)
         if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
-            from supervisor.traces.store import record_run  # traces reads sessions: import late
-
-            await record_run(self._db, self._reader, session_id, turn_id)
+            self._record_trace(session_id, turn_id)
         return seq
+
+    def _record_trace(self, session_id: str, run_id: str) -> None:
+        """Refresh the run's trace rollup beside the event path, never on it: tracing must not
+        slow a run. A rollup lost to a crash is rebuilt the next time the run is read."""
+        from supervisor.traces.store import record_run  # traces reads sessions: import late
+
+        task = asyncio.create_task(record_run(self._db, self._reader, session_id, run_id))
+        self._rollups.add(task)
+        task.add_done_callback(self._rollups.discard)
+
+    async def drain_trace_rollups(self) -> None:
+        """Wait for the trace rollups being written (tests, and a clean shutdown)."""
+        if self._rollups:
+            await asyncio.gather(*self._rollups, return_exceptions=True)
 
     async def _workspace_effects(
         self,

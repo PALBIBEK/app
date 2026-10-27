@@ -141,6 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         state.draining = True
         try:
             await state.manager.drain(timeout_seconds=state.drain_grace_s)
+            await state.manager.drain_trace_rollups()
         except Exception:
             logger.exception("drain failed")
         try:
