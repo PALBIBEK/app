@@ -69,7 +69,12 @@ jobs:
         run: pip install -q -e ".[dev]"
       - name: Tests (the contract tests need a live supervisor, so they run in the e2e job)
         working-directory: backend
-        run: python -m pytest -q tests
+        run: |
+          set -o pipefail
+          python -m pytest -q -rfE tests | tee pytest.out || {
+            grep -E '^(FAILED|ERROR) ' pytest.out | head -20 | sed -E 's#^(FAILED|ERROR) (.*)$#::error title=backend test::\1 \2#'
+            exit 1
+          }
 
   frontend:
     runs-on: ubuntu-latest
