@@ -115,3 +115,17 @@ async def test_a_sealed_failure_is_read_with_the_key() -> None:
     assert failure.message == "Encoded failure"  # what the server holds
     assert await failure_text(converter, failure) == "the sandbox could not start"
     assert await failure_text(data_converter(), failure) is not None  # no key: no crash
+
+
+async def test_a_corrupt_sealed_failure_is_reported_as_the_server_holds_it() -> None:
+    from temporalio.api.failure.v1 import Failure
+    from temporalio.exceptions import ApplicationError
+
+    from supervisor.temporal.sessions import failure_text
+
+    converter = data_converter(_key())
+    failure = Failure()
+    await converter.encode_failure(ApplicationError("the sandbox could not start"), failure)
+    sealed = failure.encoded_attributes
+    sealed.data = sealed.data[:-1] + bytes([sealed.data[-1] ^ 1])  # one bit flipped
+    assert await failure_text(converter, failure) == "Encoded failure"

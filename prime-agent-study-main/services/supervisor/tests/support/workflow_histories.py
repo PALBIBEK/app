@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncIterator
 
 from temporalio.api.enums.v1 import EventType
@@ -26,6 +27,9 @@ async def replayable_histories(client: Client, query: str) -> AsyncIterator[Work
 
 
 def sealed(history: WorkflowHistory) -> bool:
-    """Whether the run's input was sealed by the codec: no replayer without its key reads it."""
-    start = history.events[0].workflow_execution_started_event_attributes
-    return any(p.metadata.get("encoding") == ENCODING for p in start.input.payloads)
+    """Whether any payload in the run was sealed by the codec (from its start, or once a key
+    was set partway): no replayer without the key reads it."""
+    return _SEALED in history.to_json()
+
+
+_SEALED = base64.b64encode(ENCODING).decode()  # how a payload's encoding shows in JSON

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Final, Literal
 
+from cryptography.exceptions import InvalidTag
 from temporalio.client import (
     Client,
     WithStartWorkflowOperation,
@@ -148,7 +149,7 @@ async def failure_text(converter: DataConverter, failure: Any) -> str | None:
     copy.CopyFrom(failure)  # decoding rewrites it in place
     try:
         text = str(await converter.decode_failure(copy))
-    except (KeyError, ValueError):  # sealed with a key this process lacks: what the server holds
+    except (KeyError, ValueError, InvalidTag):  # a key this process lacks, or a corrupt seal
         text = failure.message
     return text[:500] or None
 
