@@ -18,7 +18,7 @@ from typing import Any
 from supervisor.harness import HarnessCatalog, HarnessManifest, LoopSpec
 from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
-from supervisor.seams.compaction.core import COMPACTION_NOTICE, SUMMARY_MARKER
+from supervisor.seams.compaction.core import COMPACTION_NOTICE, is_summary
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion
 from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
@@ -28,7 +28,7 @@ from supervisor.seams.providers.tools import RegistryToolProvider
 def _compacted(text: str) -> bool:
     """A compaction's summary (or notice) stands in for turns already answered or in
     progress; it is not a new request, so the scripted model carries on rather than restart."""
-    return text.startswith((SUMMARY_MARKER, COMPACTION_NOTICE[:40]))
+    return is_summary(text) or text.startswith(COMPACTION_NOTICE[:40])
 
 
 def _notice(text: str) -> bool:

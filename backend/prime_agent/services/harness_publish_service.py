@@ -273,7 +273,7 @@ class HarnessPublisher:
                 "enabled": m.memory.compaction,
                 "reserve_tokens": 16_384,
                 "keep_recent_tokens": 20_000,
-                "pressure_ratio": 0.8,
+                "pressure_ratio": 1.0,  # pi compacts at window - reserve_tokens
             },
             "recall": {"enabled": False, "backend": "none"},
         })

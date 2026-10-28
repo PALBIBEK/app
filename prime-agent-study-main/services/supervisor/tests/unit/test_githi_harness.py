@@ -174,7 +174,7 @@ def test_a_summary_request_reads_the_span_as_a_transcript() -> None:
     assert [m["role"] for m in request] == ["system", "user"]
     text = request[1]["content"]
     assert "[User]: fix the bug" in text
-    assert '[Assistant tool calls]: read({"path": "a.py"})' in text
+    assert '[Assistant tool calls]: read(path="a.py")' in text
     assert "[Tool result]: print(1)" in text
 
 

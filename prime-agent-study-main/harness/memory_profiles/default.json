@@ -2,16 +2,16 @@
   "compaction": {
     "enabled": true,
     "keep_recent_tokens": 20000,
-    "pressure_ratio": 0.8,
+    "pressure_ratio": 1.0,
     "reserve_tokens": 16384
   },
-  "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
+  "digest": "sha256:6beabe3ba67110c3026b9ad604d3bc6cf91197ac3c7c67d2ef6be5f7be8c6189",
   "name": "default",
   "protocol_version": 1,
   "recall": {
     "backend": "none",
     "enabled": false
   },
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered"
 }

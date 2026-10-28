@@ -267,9 +267,11 @@ class PinnedContextMemory:
         if binding is None or not binding.profile.compaction_enabled:
             return False
         window = await binding.context_window()
-        tail = _latest_round(conversation, binding.limit(window), binding.memory) or _recent(
-            conversation, binding.keep_recent(window), binding.memory
-        )
+        # pi's keepRecentTokens, widened to the whole latest round when that is larger
+        # and fits: compacting right after a round must not hide its results.
+        recent = _recent(conversation, binding.keep_recent(window), binding.memory)
+        round_ = _latest_round(conversation, binding.limit(window), binding.memory)
+        tail = round_ if len(round_) > len(recent) else recent
         head = conversation[: len(conversation) - len(tail)]
         if not head:
             return False

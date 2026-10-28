@@ -29,6 +29,7 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | L4–L5 | A cut-off reply's calls and malformed arguments are refused, not run | same |
 | L6 | Every tool call answered | same |
 | L7 | Compaction before any model call that needs it (`COMPACT` activity, keyed by step), and recovery from a provider's context overflow: compact once, ask again, else end the run saying why. The run's request is kept verbatim beside the summary, and the tool round the model has not seen yet is kept whole when it fits | done (phase 3); background compaction later |
+| L20 | Compaction as pi's: triggered past the window less 16384 tokens (the default memory profile 1.1.0, and agents published from the builder); the newest 20000 tokens kept verbatim (widened to the latest round when that is larger); the summarizer reads pi's transcript (tool calls as `name(key=value)`, tool results cut at 2000 characters, thinking left out) with pi's prompts; the summary is framed as pi frames it ("The conversation history before this point was compacted into the following summary: <summary>…") and ends with the files the summarised turns read and changed (`<read-files>`, `<modified-files>`), carried from summary to summary | done (loop parity C) |
 | L8 | Durable execution: per-step journal, adoption, at-most-once tools | better |
 | L9 | Loop guard, durable approvals, cost budget | better |
 | L10 | Abort | same |

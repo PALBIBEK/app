@@ -42,7 +42,7 @@ from supervisor.catalog.core.types import (
 )
 from supervisor.catalog.repository import persist_offer
 from supervisor.hands import HandWorkspace
-from supervisor.seams.compaction import SUMMARY_MARKER
+from supervisor.seams.compaction.core import is_summary
 from supervisor.session.workspaces import session_workspace
 from supervisor.temporal.contracts import CreateSession, Message, job_ids
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
@@ -260,7 +260,7 @@ async def test_the_conversation_is_compacted_by_the_pinned_profile(
     second = calls[-1].messages
     texts = [m.content for m in second]
     assert not any(long.strip() in t for t in texts)  # the long turn was summarised away
-    assert any(t.startswith(SUMMARY_MARKER) for t in texts)
+    assert any(is_summary(t) for t in texts)
 
 
 async def test_after_a_compaction_the_model_reopens_a_tool_output_verbatim(
@@ -342,7 +342,7 @@ async def test_a_run_that_outgrows_the_window_compacts_and_still_answers(
     assert payloads(events, TurnEnd)[-1].stop_reason == "stop"  # answered, not cut off
     after = calls[-1].messages  # the request sent after the compaction
     assert not any(big in str(m.content) for m in after), "the read output was still sent"
-    assert any(str(m.content).startswith(SUMMARY_MARKER) or "summary" in str(m.content).lower() for m in after)
+    assert any(is_summary(str(m.content)) or "summary" in str(m.content).lower() for m in after)
 
 
 async def test_a_provider_overflow_is_compacted_once_and_the_step_asked_again(
