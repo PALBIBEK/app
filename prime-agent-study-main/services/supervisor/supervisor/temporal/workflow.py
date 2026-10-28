@@ -1163,10 +1163,8 @@ class AgentSessionWorkflow:
         """
         self._signalled += 1
         if not workflow.patched(f"{_HELD_MESSAGE}-{self._signalled}"):
-            workflow.logger.warning(
-                "message %s sent as a signal reached a build without its handler: unread",
-                message.command_id,
-            )
+            # Only in replay: an older build took this signal and left it unread, so the
+            # message was lost there (deploy workers before API servers to avoid it).
             return
         if not message.command_id or not message.text:
             workflow.logger.warning("dropped a message sent as a signal: no id or text")

@@ -210,6 +210,14 @@ class SessionWorkflows:
                 raise TemporalUnavailable(str(exc)) from exc
             raise
 
+    async def _polled_lately(self) -> bool:
+        """``worker_available``, where not knowing counts as no: the signal goes anyway."""
+        try:
+            return await self.worker_available()
+        except (RPCError, TemporalUnavailable) as exc:
+            logger.info("could not tell whether a worker is up (%s); not waiting for one", exc)
+            return False
+
     async def worker_available(self) -> bool:
         """Whether any worker polled this session queue recently (a server-side answer)."""
         from temporalio.api.enums.v1 import TaskQueueType
@@ -362,7 +370,7 @@ class SessionWorkflows:
                 except (TimeoutError, WorkflowUpdateRPCTimeoutOrCancelledError):
                     # Nothing took it: our bound passed (the SDK reports the cancelled wait
                     # as its own error), or the server's own RPC deadline did first.
-                    if not waited and await self.worker_available():
+                    if not waited and await self._polled_lately():
                         # A worker polled lately: it may only be busy, so wait once more for
                         # it to answer (its prepare, or a refusal) before sending a signal.
                         # Once: a worker that just died still looks polled for a while.
