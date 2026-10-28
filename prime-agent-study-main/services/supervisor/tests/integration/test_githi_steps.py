@@ -210,7 +210,10 @@ async def test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session(
         assert await state.manager.session_status(sid) == "active"
         await env.sessions.terminate(sid)
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["LoopGuard"]
-    assert len(payloads(events, ToolEnd)) == 2  # the third identical call never ran
+    ends = payloads(events, ToolEnd)
+    assert [e.is_error for e in ends[:2]] == [False, False]
+    (third,) = ends[2:]  # the third identical call never ran, and is answered so
+    assert third.result["code"] == "TOOL_NOT_RUN" and third.result["error"] == NOT_RUN_OUTCOME
 
 
 async def test_a_model_that_keeps_working_is_warned_then_made_to_answer_on_the_last_step(

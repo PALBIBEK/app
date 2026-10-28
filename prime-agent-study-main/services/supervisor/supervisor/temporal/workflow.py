@@ -497,7 +497,11 @@ class AgentSessionWorkflow:
                     "error",
                     error_class=kind,
                     detail=detail,
-                    **({"open_call_ids": list(st.open)} if st.open else {}),
+                    **(
+                        {"open_call_ids": list(st.open), "lost_reason": f"the run ended ({kind})"}
+                        if st.open
+                        else {}
+                    ),
                 )
             raise
 
@@ -531,6 +535,7 @@ class AgentSessionWorkflow:
                         error_class="LoopGuard",
                         detail=verdict.detail or "loop detected",
                         open_call_ids=list(st.open),
+                        lost_reason="the loop guard stopped the run",
                     )
         for call in st.calls:
             if call.approval is not None and not await self._approve(plan.run_id, call):
