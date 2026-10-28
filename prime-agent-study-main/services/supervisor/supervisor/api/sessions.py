@@ -285,6 +285,7 @@ async def post_message(
             status=str(response.get("status", "accepted")),
             queued=accepted.queued,
             steered=accepted.steered,
+            held=accepted.held,
         )
 
     try:

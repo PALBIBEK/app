@@ -177,6 +177,9 @@ class Accepted:
     # Steered into the run already working (``run_id``) rather than run on its own.
     steered: bool = False
     run_id: str | None = None
+    # No worker took it in time: the server keeps it (sent as a signal) and it runs once
+    # a worker comes. Queued, never refused here; a bad one is dropped by the session.
+    held: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,6 +519,9 @@ class EndRunRequest:
 
 # Session row statuses after which no turn can ever run again.
 CLOSED_STATUSES = frozenset({"failed", "terminated"})
+
+SUBMIT_SIGNAL = "submit_message_signal"
+"""A message sent when no worker took the submit update (pi-temporal's Signal fallback)."""
 
 
 @dataclass(frozen=True, slots=True)

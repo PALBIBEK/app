@@ -21,6 +21,8 @@ from temporalio.client import (
     WorkflowExecutionStatus,
     WorkflowHandle,
     WorkflowUpdateFailedError,
+    WorkflowUpdateRPCTimeoutOrCancelledError,
+    WorkflowUpdateStage,
 )
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
@@ -172,11 +174,23 @@ async def _connecting() -> AsyncIterator[None]:
         raise
 
 
+SUBMIT_ACCEPT_S = 10.0
+"""How long a message waits for a worker to take it before it is sent as a signal."""
+
+
 class SessionWorkflows:
-    def __init__(self, client: Client, *, task_queue: str, backlog_alert_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        client: Client,
+        *,
+        task_queue: str,
+        backlog_alert_s: float = 30.0,
+        submit_accept_s: float = SUBMIT_ACCEPT_S,
+    ) -> None:
         self._client = client
         self._task_queue = task_queue
         self.backlog_alert_s = backlog_alert_s
+        self._submit_accept_s = submit_accept_s
 
     @property
     def task_queue(self) -> str:
@@ -195,6 +209,14 @@ class SessionWorkflows:
             if exc.status in (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED):
                 raise TemporalUnavailable(str(exc)) from exc
             raise
+
+    async def _polled_lately(self) -> bool:
+        """``worker_available``, where not knowing counts as no: the signal goes anyway."""
+        try:
+            return await self.worker_available()
+        except (RPCError, TemporalUnavailable) as exc:
+            logger.info("could not tell whether a worker is up (%s); not waiting for one", exc)
+            return False
 
     async def worker_available(self) -> bool:
         """Whether any worker polled this session queue recently (a server-side answer)."""
@@ -323,13 +345,46 @@ class SessionWorkflows:
         )
 
     async def submit(self, session_id: str, message: Message) -> Accepted:
+        """Send ``message``; if no worker takes it within ``submit_accept_s`` (twice that
+        while one polled lately), send it as a signal, which the server keeps until a
+        worker comes (pi-temporal's fallback), so a message is not lost while every worker
+        is down. Either way it runs once: the session dedupes by command id.
+        """
         handle = self._handle(session_id)
+        waited = False
         async with _commands():
-            return await _delivered(
-                lambda: handle.execute_update(
-                    AgentSessionWorkflow.submit_message, message, id=f"msg:{message.command_id}"
-                )
-            )
+            while True:
+                try:
+                    update = await asyncio.wait_for(
+                        _delivered(
+                            lambda: handle.start_update(
+                                AgentSessionWorkflow.submit_message,
+                                message,
+                                # The same id each time: the server delivers it once.
+                                id=f"msg:{message.command_id}",
+                                wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                            )
+                        ),
+                        timeout=self._submit_accept_s,
+                    )
+                except (TimeoutError, WorkflowUpdateRPCTimeoutOrCancelledError):
+                    # Nothing took it: our bound passed (the SDK reports the cancelled wait
+                    # as its own error), or the server's own RPC deadline did first.
+                    if not waited and await self._polled_lately():
+                        # A worker polled lately: it may only be busy, so wait once more for
+                        # it to answer (its prepare, or a refusal) before sending a signal.
+                        # Once: a worker that just died still looks polled for a while.
+                        waited = True
+                        logger.info("message %s waits for a busy worker", message.command_id)
+                        continue
+                    logger.warning(
+                        "no worker took message %s in %.0fs; sent as a signal the server keeps",
+                        message.command_id,
+                        self._submit_accept_s,
+                    )
+                    await handle.signal(AgentSessionWorkflow.submit_message_signal, message)
+                    return Accepted(message.command_id, queued=True, held=True)
+                return await update.result()
 
     async def op(self, op: SessionOp) -> dict[str, Any] | None:
         """Run a session operation on the session's worker; a re-sent op_id runs once."""

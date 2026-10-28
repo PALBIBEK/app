@@ -317,6 +317,7 @@ class SessionService:
             status=str(upstream.get("status") or "accepted"),
             queued=upstream.get("queued") is True,
             steered=upstream.get("steered") is True,
+            held=upstream.get("held") is True,
         )
 
     async def invoke_tool(
