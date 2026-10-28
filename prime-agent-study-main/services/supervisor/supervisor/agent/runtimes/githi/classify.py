@@ -15,6 +15,7 @@ from supervisor.seams.core.types import INVALID_ARGUMENTS_KEY
 
 __all__ = [
     "FINAL_STEP_NOTICE",
+    "is_context_overflow",
     "is_final_step",
     "loop_spec",
     "refusal",
@@ -66,3 +67,30 @@ def refusal(
             "Send the call again with well-formed JSON arguments."
         )
     return None
+
+
+_OVERFLOW: Final = (
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "maximum context",
+    "context_window_full",
+    "prompt is too long",
+    "input is too long",
+    "too many tokens",
+    "token limit",
+    "reduce the length",
+    "string too long",
+)
+
+
+def is_context_overflow(error: BaseException | str) -> bool:
+    """Whether a model call failed because the request does not fit the model's window.
+
+    Providers say so in their own words (pi's ``isContextOverflow`` keeps the same list),
+    and the supervisor's own model layer raises ``ContextWindowFull`` before sending one.
+    """
+    if type(error).__name__ == "ContextWindowFull":
+        return True
+    text = str(error).lower()
+    return any(marker in text for marker in _OVERFLOW)

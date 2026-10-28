@@ -130,6 +130,10 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "heartbeats stop; the model call is retried on another worker",
         "One model call (needs no sandbox, so any worker thinks)",
     ),
+    Activity.COMPACT: StepPolicy(
+        Where.SESSION_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True, _ADOPTED,
+        "Summarise the conversation inside a run so the next model step fits",
+    ),
     Activity.CHECKPOINT: StepPolicy(
         Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False,
         "skipped; a lost checkpoint costs a restore, never the turn",

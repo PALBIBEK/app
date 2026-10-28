@@ -41,6 +41,7 @@ from temporalio.workflow import ParentClosePolicy
 
 from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
+    COMPACT,
     JOB_FINISHED_SIGNAL,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
@@ -343,9 +344,28 @@ class AgentSessionWorkflow:
                                 "without an answer; ask the agent to continue"
                             ),
                         )
-                    result = await self._model_step(
-                        StepRequest(self._session_id, plan.run_id, st.step)
+                    req = StepRequest(
+                        self._session_id, plan.run_id, st.step,
+                        can_compact=True, compacted=st.compacted,
                     )
+                    result = await self._model_step(req)
+                    if result.kind == COMPACT:
+                        # githi's prepare phase: the request does not fit the window. Compact
+                        # the conversation so far, then ask again; at most once per step.
+                        if st.compacted or not await self._session_activity(
+                            Activity.COMPACT, req, bool, track=True
+                        ):
+                            return await end(
+                                "error",
+                                error_class="ContextWindowFull",
+                                detail=(
+                                    "the conversation does not fit the model's context window, "
+                                    "even after compacting it; start a new session or pin a "
+                                    "model with a larger window"
+                                ),
+                            )
+                        st.compacted = True
+                        continue
                     if result.final:
                         return await end(result.stop_reason)
                     st.calls, st.phase = list(result.calls), RunPhase.TOOLS
@@ -354,6 +374,7 @@ class AgentSessionWorkflow:
                     if stopped is not None:
                         return stopped
                     st.step, st.calls, st.phase = st.step + 1, [], RunPhase.REQUEST
+                    st.compacted = False
         except (ActivityError, asyncio.CancelledError) as err:
             if is_cancelled_exception(err) and self._abort_requested:
                 return await end(

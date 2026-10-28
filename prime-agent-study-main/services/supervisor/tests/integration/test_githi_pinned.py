@@ -29,6 +29,7 @@ from supervisor.agent.events import (
     SubagentEnd,
     SubagentStart,
     ToolEnd,
+    TurnEnd,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoopError
 from supervisor.app import SupervisorState
@@ -283,14 +284,24 @@ async def test_after_a_compaction_the_model_reopens_a_tool_output_verbatim(
         await env.sessions.submit(sid, Message("c2", "what was in that file?"))
         events = await env.wait_for(state, sid, run_ended(2))
 
-    end = payloads(events, CompactionEnd)[-1]
+    # The compaction that summarised the read away: inside run 1 (its request plus the
+    # file twice outgrew the window) or as run 2 began.
+    end = next(
+        e
+        for e in payloads(events, CompactionEnd)
+        if e.replaced_to_seq is not None and e.replaced_to_seq >= read.seq
+    )
     assert end.stop_reason == "ok"
     assert end.replaced_from_seq is not None and end.replaced_to_seq is not None
     assert end.replaced_from_seq <= read.seq <= end.replaced_to_seq
     # The model was shown the summary, with the range it can reopen ...
-    shown = [m.content for m in calls[-2].messages]
+    agent = [c for c in calls if c.tools]
+    asked = next(c for c in agent if c.messages[-1].content == "what was in that file?")
+    shown = [m.content for m in asked.messages]
     assert any(f"#{end.replaced_from_seq}–#{end.replaced_to_seq}" in t for t in shown)
     assert not any(marker in t for t in shown), "the tool output was still in context"
+    # ... and the output it reopened reached it, even past a compaction inside the run.
+    assert any(marker in str(m.content) for m in agent[-1].messages)
     # ... and reopened the tool output from it, verbatim.
     reopened = payloads(events, ToolEnd)[-1]
     assert reopened.tool_name == "history" and not reopened.is_error
@@ -301,6 +312,69 @@ async def test_after_a_compaction_the_model_reopens_a_tool_output_verbatim(
     async for history in replayable_histories(env.client, query):
         result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
         assert result.replay_failure is None, result.replay_failure
+
+
+def _run_errors(events: list[Any]) -> list[str]:
+    return [e.payload.error_class for e in events if type(e.payload).__name__ == "ErrorEvent"]
+
+
+async def test_a_run_that_outgrows_the_window_compacts_and_still_answers(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """githi's prepare phase: a step whose request is past the pinned limit is not sent;
+    the conversation so far, this run included, is summarised, and the step asks again."""
+    big = "".join(f"row {n}: the quick brown fox jumps over the lazy dog {n * 7919 % 1000}\n" for n in range(120))
+    gateway = model(("write", {"path": "big.txt", "content": big}), ("read", {"path": "big.txt"}))
+    calls = recording(gateway)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(
+            env, state, memory={"context_window": 2_000, "reserve_tokens": 100, "keep_recent_tokens": 50}
+        )
+        await env.sessions.submit(sid, Message("c1", "save this table and read it back"))
+        events = await env.wait_for(state, sid, run_ended(1))
+
+    ends = payloads(events, CompactionEnd)
+    assert ends and ends[-1].in_run and ends[-1].stop_reason == "ok"
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"  # answered, not cut off
+    after = calls[-1].messages  # the request sent after the compaction
+    assert not any(big in str(m.content) for m in after), "the read output was still sent"
+    assert any(str(m.content).startswith(SUMMARY_MARKER) or "summary" in str(m.content).lower() for m in after)
+
+
+async def test_a_provider_overflow_is_compacted_once_and_the_step_asked_again(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(("write", {"path": "a.txt", "content": "x" * 400}), ("read", {"path": "a.txt"}))
+    gateway.overflow_calls = {1}  # the step after both tools ran
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(env, state, memory={"keep_recent_tokens": 20})
+        await env.sessions.submit(sid, Message("c1", "write it and read it " + "please " * 40))
+        events = await env.wait_for(state, sid, run_ended(1))
+
+    assert [e.in_run for e in payloads(events, CompactionEnd)] == [True]
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    assert _run_errors(events) == []
+
+
+async def test_a_step_that_still_overflows_after_compacting_ends_the_run_saying_why(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(("write", {"path": "a.txt", "content": "x" * 400}), ("read", {"path": "a.txt"}))
+    gateway.overflow_calls = {1, 2}
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(env, state, memory={"keep_recent_tokens": 20})
+        await env.sessions.submit(sid, Message("c1", "write it and read it " + "please " * 40))
+        events = await env.wait_for(state, sid, run_ended(1))
+        # The session stays usable: the next message runs.
+        gateway.overflow_calls = set()
+        await env.sessions.submit(sid, Message("c2", "try again"))
+        events = await env.wait_for(state, sid, run_ended(2))
+
+    assert "ContextWindowFull" in _run_errors(events)
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
 
 
 @pytest.mark.parametrize(

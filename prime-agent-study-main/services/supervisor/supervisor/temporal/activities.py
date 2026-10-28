@@ -203,6 +203,11 @@ class SessionActivities:
         with _as_application_error():
             return await self._steps.model_step(req)
 
+    @activity.defn(name=Activity.COMPACT)
+    async def compact(self, req: StepRequest) -> bool:
+        with _as_application_error():
+            return await self._steps.compact(req)
+
     @activity.defn(name=Activity.CHECKPOINT)
     async def checkpoint(self, session_id: str) -> None:
         with _as_application_error():
@@ -266,6 +271,7 @@ class SessionActivities:
             self.terminate,
             self.begin_run,
             self.model_step,
+            self.compact,
             self.checkpoint,
             self.tool_call,
             self.request_approval,

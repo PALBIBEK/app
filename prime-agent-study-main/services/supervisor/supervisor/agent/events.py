@@ -218,6 +218,9 @@ class CompactionEnd:
     # with the ``history`` tool, so a compaction is never the only copy.
     replaced_from_seq: int | None = None
     replaced_to_seq: int | None = None
+    # Inside a run (before a model step): ``messages`` is the whole conversation so far,
+    # this run's messages included, and the run carries on from it.
+    in_run: bool = False
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 

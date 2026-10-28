@@ -56,13 +56,13 @@ Keep each section concise. Preserve exact file paths, function names, and error
 messages."""
 
 SUMMARIZATION_PROMPT = (
-    "The messages above are a conversation to summarize. Create a structured "
+    "The conversation above is to be summarized. Create a structured "
     "context checkpoint that another LLM will use to continue the work.\n\n"
     "Use this EXACT format:\n\n" + _FORMAT
 )
 
 UPDATE_SUMMARIZATION_PROMPT = (
-    "The messages above are NEW conversation messages to incorporate into the "
+    "The conversation above is NEW messages to incorporate into the "
     "existing summary in <previous-summary> tags.\n\n"
     "Update the existing summary with the new information. RULES:\n"
     "- PRESERVE all existing information from the previous summary\n"
@@ -126,21 +126,61 @@ def build_summary_request(
     messages: list[dict[str, Any]],
     previous_summary: str | None = None,
 ) -> list[dict[str, Any]]:
-    request: list[dict[str, Any]] = [
-        {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
-        *messages,
-    ]
+    """The summary call: the span as one transcript (pi's ``serializeConversation``).
+
+    Sent as text, not as the original messages: a span's tool results without the call
+    that made them are refused by providers ("tool messages must include a
+    tool_call_id"), and a model shown a live conversation tends to continue it
+    rather than summarise it.
+    """
+    transcript = f"<conversation>\n{serialize_conversation(messages)}\n</conversation>\n\n"
     if previous_summary:
-        request.append({
-            "role": "user",
-            "content": (
-                f"<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
-                + UPDATE_SUMMARIZATION_PROMPT
-            ),
-        })
+        prompt = (
+            transcript
+            + f"<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
+            + UPDATE_SUMMARIZATION_PROMPT
+        )
     else:
-        request.append({"role": "user", "content": SUMMARIZATION_PROMPT})
-    return request
+        prompt = transcript + SUMMARIZATION_PROMPT
+    return [
+        {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+
+
+def _text(msg: dict[str, Any]) -> str:
+    raw = msg.get("content")
+    if isinstance(raw, list):
+        texts = [str(p.get("text") or "") for p in raw if isinstance(p, dict) and p.get("text")]
+        if texts or not raw:
+            return "\n".join(texts)
+    return _content(msg)
+
+
+def _call_text(call: dict[str, Any]) -> str:
+    inner = call.get("function")
+    fn: dict[str, Any] = inner if isinstance(inner, dict) else call
+    args = fn.get("arguments", {})
+    return f"{fn.get('name', '?')}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)})"
+
+
+def serialize_conversation(messages: list[dict[str, Any]]) -> str:
+    """The messages as a plain transcript a summarizer reads (and cannot continue)."""
+    lines: list[str] = []
+    for msg in messages:
+        role, text = _role(msg), _text(msg).strip()
+        if role == "assistant":
+            if text:
+                lines.append(f"[Assistant]: {text}")
+            if calls := _tool_calls(msg):
+                lines.append("[Assistant tool calls]: " + "; ".join(_call_text(c) for c in calls))
+        elif role == "tool":
+            lines.append(f"[Tool result]: {text}")
+        elif role == "system":
+            lines.append(f"[System]: {text}")
+        else:
+            lines.append(f"[User]: {text}")
+    return "\n\n".join(lines)
 
 
 def extract_previous_summary(messages: list[dict[str, Any]]) -> str | None:
