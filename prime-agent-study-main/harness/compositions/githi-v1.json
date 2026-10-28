@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:2e16a43e288bdc19c64b4f91868670aa1d3fc95fd5100265207655ea494c0efc",
+  "digest": "sha256:47f77a8aedc7087e5d505eabc089faf936524c54712e5cdeb9668b073d02d06f",
   "harness_version": "githi-v1",
   "memory_profile": {
     "digest": "sha256:e1d99c598f42e686b715798985f93134fe395072900e55ed20def1f1143e8940",
@@ -15,10 +15,10 @@
     "id": "coding-prompt"
   },
   "protocol_version": 1,
-  "semver": "1.2.0",
+  "semver": "1.3.0",
   "status": "offered",
   "tool_set": {
-    "digest": "sha256:36645ade9736cdd80e843271e713edb3aa1f6a36c76c87e2b110161ea691354b",
+    "digest": "sha256:8e7b030cdd09eac4457e531ec87de7525e51265208f0be4db7fd663039a064bf",
     "id": "githi-tools"
   }
 }

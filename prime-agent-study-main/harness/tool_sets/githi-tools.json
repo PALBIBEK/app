@@ -16,79 +16,103 @@
       "tool_class": "pure"
     },
     "edit": {
-      "description": "Replace exact text in a workspace file. Each old_text must occur exactly once unless replace_all is set; pass edits to make several replacements at once. Read the file first.",
-      "digest": "sha256:2b9a48a98555b58e2d708edc0ba7633901a7ff46d16333709e7a37ec71932e20",
+      "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+      "digest": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
       "name": "edit",
       "parameters": {
         "properties": {
           "edits": {
-            "description": "Several replacements applied together, all or none; use instead of old_text/new_text",
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
             "items": {
               "properties": {
-                "new_text": {
+                "newText": {
+                  "description": "Replacement text for this targeted edit.",
                   "type": "string"
                 },
-                "old_text": {
+                "oldText": {
+                  "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
                   "type": "string"
                 }
               },
               "required": [
-                "old_text",
-                "new_text"
+                "oldText",
+                "newText"
               ],
               "type": "object"
             },
-            "maxItems": 50,
             "type": "array"
           },
-          "file_path": {
-            "description": "Path to file (absolute under workspace, or relative)",
+          "path": {
+            "description": "Path to the file to edit (relative or absolute)",
             "type": "string"
-          },
-          "new_text": {
-            "description": "Text to put in its place",
-            "type": "string"
-          },
-          "old_text": {
-            "description": "Exact text to replace, including whitespace; must occur in the file",
-            "type": "string"
-          },
-          "replace_all": {
-            "description": "Replace every occurrence instead of requiring exactly one (default: false)",
-            "type": "boolean"
           }
         },
         "required": [
-          "file_path"
+          "path",
+          "edits"
         ],
         "type": "object"
       },
       "tool_class": "idempotent"
     },
-    "grep": {
-      "description": "Search files in the workspace for a regex/string pattern. Returns 'path:line:text' for each matching line.",
-      "digest": "sha256:0c5c8bc3023256bfbc1e827eebe5be7592ffaaaff8b13376f7091c6ca8bb151b",
-      "name": "grep",
+    "find": {
+      "description": "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first).",
+      "digest": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
+      "name": "find",
       "parameters": {
         "properties": {
-          "case_insensitive": {
-            "description": "Ignore case (default: false)",
-            "type": "boolean"
-          },
-          "glob": {
-            "description": "Only search files matching this pattern, e.g. '*.py'",
-            "type": "string"
-          },
-          "max_matches": {
-            "description": "Stop after this many matching lines (default: 100)",
+          "limit": {
+            "description": "Maximum number of results (default: 1000)",
             "type": "integer"
           },
           "path": {
-            "description": "File or directory to search (default: workspace root)",
+            "description": "Directory to search in (default: current directory)",
             "type": "string"
           },
           "pattern": {
-            "description": "Regular expression to search for",
+            "description": "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "grep": {
+      "description": "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 50KB (whichever is hit first). Long lines are truncated to 500 chars.",
+      "digest": "sha256:131c8e915889645d50128c9dbebeee4d29496be58c45bf7d25b6c28a4b4abf3c",
+      "name": "grep",
+      "parameters": {
+        "properties": {
+          "context": {
+            "description": "Number of lines to show before and after each match (default: 0)",
+            "type": "integer"
+          },
+          "glob": {
+            "description": "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'",
+            "type": "string"
+          },
+          "ignoreCase": {
+            "description": "Case-insensitive search (default: false)",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Maximum number of matches to return (default: 100)",
+            "type": "integer"
+          },
+          "literal": {
+            "description": "Treat pattern as literal string instead of regex (default: false)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Directory or file to search (default: current directory)",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Search pattern (regex or literal string)",
             "type": "string"
           }
         },
@@ -100,18 +124,18 @@
       "tool_class": "pure"
     },
     "ls": {
-      "description": "List a directory in the workspace. Directory names end with '/'.",
-      "digest": "sha256:ac8dc665b579eec9d9494c88d7b20cd20331540ac9eb486af0ce33609e396f45",
+      "description": "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
+      "digest": "sha256:0d1463d45c60c0d0b77bd3fe9f8eb2388777fb861c2f77ac741ffe01c179e0a9",
       "name": "ls",
       "parameters": {
         "properties": {
-          "path": {
-            "description": "Directory path (default: workspace root)",
-            "type": "string"
+          "limit": {
+            "description": "Maximum number of entries to return (default: 500)",
+            "type": "integer"
           },
-          "show_hidden": {
-            "description": "Include dotfiles (default: false)",
-            "type": "boolean"
+          "path": {
+            "description": "Directory to list (default: current directory)",
+            "type": "string"
           }
         },
         "required": [],
@@ -120,28 +144,28 @@
       "tool_class": "pure"
     },
     "read": {
-      "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and when you need the full file, continue with offset until complete.",
-      "digest": "sha256:3f529e9d8496d754af411b15235569e34e049f21b40a534f3db29399418b55a6",
+      "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+      "digest": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
       "name": "read",
       "parameters": {
         "properties": {
-          "file_path": {
-            "description": "Path to file (absolute under workspace, or relative)",
-            "type": "string"
-          },
           "limit": {
-            "description": "Most lines to return (optional; at most 2000)",
+            "description": "Maximum number of lines to read",
             "minimum": 1,
             "type": "integer"
           },
           "offset": {
-            "description": "1-indexed line to start from (optional)",
+            "description": "Line number to start reading from (1-indexed)",
             "minimum": 1,
             "type": "integer"
+          },
+          "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
           }
         },
         "required": [
-          "file_path"
+          "path"
         ],
         "type": "object"
       },
@@ -166,22 +190,22 @@
       "tool_class": "idempotent"
     },
     "write": {
-      "description": "Write or overwrite a file in the workspace. Creates parent directories if needed.",
-      "digest": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260",
+      "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+      "digest": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a",
       "name": "write",
       "parameters": {
         "properties": {
           "content": {
-            "description": "Content to write",
+            "description": "Content to write to the file",
             "type": "string"
           },
-          "file_path": {
-            "description": "Path to file (absolute under workspace, or relative)",
+          "path": {
+            "description": "Path to the file to write (relative or absolute)",
             "type": "string"
           }
         },
         "required": [
-          "file_path",
+          "path",
           "content"
         ],
         "type": "object"
@@ -191,15 +215,16 @@
   },
   "name": "githi-tools",
   "protocol_version": 1,
-  "semver": "1.2.0",
+  "semver": "1.3.0",
   "status": "offered",
   "tools": {
     "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
-    "edit": "sha256:2b9a48a98555b58e2d708edc0ba7633901a7ff46d16333709e7a37ec71932e20",
-    "grep": "sha256:0c5c8bc3023256bfbc1e827eebe5be7592ffaaaff8b13376f7091c6ca8bb151b",
-    "ls": "sha256:ac8dc665b579eec9d9494c88d7b20cd20331540ac9eb486af0ce33609e396f45",
-    "read": "sha256:3f529e9d8496d754af411b15235569e34e049f21b40a534f3db29399418b55a6",
+    "edit": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
+    "find": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
+    "grep": "sha256:131c8e915889645d50128c9dbebeee4d29496be58c45bf7d25b6c28a4b4abf3c",
+    "ls": "sha256:0d1463d45c60c0d0b77bd3fe9f8eb2388777fb861c2f77ac741ffe01c179e0a9",
+    "read": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
     "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
-    "write": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260"
+    "write": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a"
   }
 }

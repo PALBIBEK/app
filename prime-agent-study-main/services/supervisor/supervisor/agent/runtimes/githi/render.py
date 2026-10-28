@@ -17,10 +17,13 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
-__all__ = ["MAX_RESULT_CHARS", "MAX_RESULT_LINES", "bound", "tool_result_text"]
+__all__ = ["MAX_RESULT_CHARS", "MAX_RESULT_LINES", "bound", "tool_result_failed", "tool_result_text"]
 
-MAX_RESULT_CHARS: Final = 50 * 1024
-MAX_RESULT_LINES: Final = 2000
+MAX_RESULT_CHARS: Final = 50 * 1024 + 1024
+MAX_RESULT_LINES: Final = 2000 + 16
+"""pi's 2000 lines / 50 KB, with room for the note a tool adds below a page it cut
+(read's "Use offset=…", bash's "Full output: …"): those tools bound themselves, and
+this only stops a tool that does not."""
 
 
 def bound(text: str, *, chars: int = MAX_RESULT_CHARS, lines: int = MAX_RESULT_LINES) -> str:
@@ -35,6 +38,43 @@ def bound(text: str, *, chars: int = MAX_RESULT_CHARS, lines: int = MAX_RESULT_L
         cut = len(text) - 2 * half
         text = f"{text[:half]}\n[... {cut} characters cut ...]\n{text[-half:]}"
     return text
+
+
+def _size(size: int) -> str:
+    return f"{size}B" if size < 1024 else f"{size / 1024:.1f}KB" if size < 1024 * 1024 else f"{size / 1048576:.1f}MB"
+
+
+def _shell(payload: Mapping[str, Any]) -> str:
+    """pi's bash result: the output's tail, where the rest is, how the command ended."""
+    text = str(payload.get("output") or "")
+    cut = payload.get("truncation")
+    if isinstance(cut, Mapping):
+        where = payload.get("full_output") or "not kept"
+        if cut.get("partial"):
+            note = (
+                f"[Showing last {_size(int(cut.get('shown_bytes') or 0))} of line {cut.get('end')}"
+                f" (line is {_size(int(cut.get('line_bytes') or 0))}). Full output: {where}]"
+            )
+        elif cut.get("by") == "lines":
+            note = f"[Showing lines {cut.get('start')}-{cut.get('end')} of {cut.get('total')}. Full output: {where}]"
+        else:
+            note = f"[Showing lines {cut.get('start')}-{cut.get('end')} of {cut.get('total')} (50.0KB limit). Full output: {where}]"
+        text = f"{text}\n\n{note}"
+    if payload.get("timed_out"):
+        status = f"Command timed out after {float(payload.get('timeout_s') or 0):g} seconds"
+        return f"{text}\n\n{status}" if text else status
+    text = text or "(no output)"
+    code = payload.get("exit_code")
+    if code not in (None, 0):
+        return f"{text}\n\nCommand exited with code {code}"
+    return text
+
+
+_DONE: Final[dict[str, Any]] = {
+    # What pi's tools tell the model on success (the payload keeps the rest for people).
+    "write": lambda p: f"Successfully wrote to {p.get('path')}",
+    "edit": lambda p: f"Successfully replaced {p.get('replacements')} block(s) in {p.get('path')}.",
+}
 
 
 def _command(payload: Mapping[str, Any]) -> str:
@@ -82,23 +122,46 @@ def _payload(payload: Any) -> str:
     if isinstance(payload, str):
         return payload
     if isinstance(payload, Mapping):
+        if "exit_code" in payload and "output" in payload:
+            return _shell(payload)
         if "exit_code" in payload and ("stdout" in payload or "stderr" in payload):
             return _command(payload)
         return _fields(payload)
     return _value(payload)
 
 
-def tool_result_text(result: Mapping[str, Any] | Any) -> str:
-    """The text the model reads for one journaled tool result (any shape journaled so far)."""
+def tool_result_failed(result: Mapping[str, Any] | Any) -> bool:
+    """Whether the model is told this result failed: the tool failed, or (pi's bash)
+    the command exited non-zero or timed out."""
+    if not isinstance(result, Mapping):
+        return False
+    ok = result.get("ok")
+    if ok is False or (ok is None and result.get("error")):
+        return True
+    payload = result.get("payload")
+    return (
+        isinstance(payload, Mapping)
+        and "output" in payload
+        and (bool(payload.get("timed_out")) or payload.get("exit_code") not in (None, 0))
+    )
+
+
+def tool_result_text(result: Mapping[str, Any] | Any, tool: str | None = None) -> str:
+    """The text the model reads for one journaled tool result (any shape journaled so far).
+
+    A failure is its message, as pi's results read: the error code stays in the
+    journal, and the provider is told the result failed (``tool_result_failed``).
+    """
     if not isinstance(result, Mapping):
         return bound(_value(result))
     if isinstance(result.get("text"), str):
         return bound(result["text"])
-    body = _payload(result.get("payload"))
+    payload = result.get("payload")
     ok = result.get("ok")
     if ok is False or (ok is None and result.get("error")):
-        code = result.get("code")
         error = str(result.get("error") or "the tool failed")
-        head = f"Error{f' ({code})' if code else ''}: {error}"
-        return bound(f"{head}\n{body}" if body and body != error else head)
-    return bound(body or "[done]")
+        body = _payload(payload)
+        return bound(f"{error}\n{body}" if body and body != error else error)
+    if tool in _DONE and isinstance(payload, Mapping) and payload.get("path") is not None:
+        return bound(_DONE[tool](payload))
+    return bound(_payload(payload) or "[done]")

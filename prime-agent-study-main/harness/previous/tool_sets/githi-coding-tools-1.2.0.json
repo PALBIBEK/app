@@ -1,0 +1,246 @@
+{
+  "definitions": {
+    "bash": {
+      "description": "Run a shell command in the workspace. Returns exit code, stdout and stderr.",
+      "digest": "sha256:559029e5c3ece73b3f2a10a2fff09cd5abc3ed4882c0ff558672154fe34d0fd2",
+      "name": "bash",
+      "parameters": {
+        "properties": {
+          "command": {
+            "description": "The bash command to run",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Seconds before the command is killed (capped by the session's limit)",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    "echo": {
+      "description": "Echo text (dev / smoke tool)",
+      "digest": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
+      "name": "echo",
+      "parameters": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "edit": {
+      "description": "Replace exact text in a workspace file. Each old_text must occur exactly once unless replace_all is set; pass edits to make several replacements at once. Read the file first.",
+      "digest": "sha256:2b9a48a98555b58e2d708edc0ba7633901a7ff46d16333709e7a37ec71932e20",
+      "name": "edit",
+      "parameters": {
+        "properties": {
+          "edits": {
+            "description": "Several replacements applied together, all or none; use instead of old_text/new_text",
+            "items": {
+              "properties": {
+                "new_text": {
+                  "type": "string"
+                },
+                "old_text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "old_text",
+                "new_text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
+            "type": "string"
+          },
+          "new_text": {
+            "description": "Text to put in its place",
+            "type": "string"
+          },
+          "old_text": {
+            "description": "Exact text to replace, including whitespace; must occur in the file",
+            "type": "string"
+          },
+          "replace_all": {
+            "description": "Replace every occurrence instead of requiring exactly one (default: false)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
+    "git_commit": {
+      "description": "Stage every change in the workspace and create a git commit.",
+      "digest": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
+      "name": "git_commit",
+      "parameters": {
+        "properties": {
+          "message": {
+            "description": "Commit message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "grep": {
+      "description": "Search files in the workspace for a regex/string pattern. Returns 'path:line:text' for each matching line.",
+      "digest": "sha256:0c5c8bc3023256bfbc1e827eebe5be7592ffaaaff8b13376f7091c6ca8bb151b",
+      "name": "grep",
+      "parameters": {
+        "properties": {
+          "case_insensitive": {
+            "description": "Ignore case (default: false)",
+            "type": "boolean"
+          },
+          "glob": {
+            "description": "Only search files matching this pattern, e.g. '*.py'",
+            "type": "string"
+          },
+          "max_matches": {
+            "description": "Stop after this many matching lines (default: 100)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "File or directory to search (default: workspace root)",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Regular expression to search for",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "ls": {
+      "description": "List a directory in the workspace. Directory names end with '/'.",
+      "digest": "sha256:ac8dc665b579eec9d9494c88d7b20cd20331540ac9eb486af0ce33609e396f45",
+      "name": "ls",
+      "parameters": {
+        "properties": {
+          "path": {
+            "description": "Directory path (default: workspace root)",
+            "type": "string"
+          },
+          "show_hidden": {
+            "description": "Include dotfiles (default: false)",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "read": {
+      "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and when you need the full file, continue with offset until complete.",
+      "digest": "sha256:3f529e9d8496d754af411b15235569e34e049f21b40a534f3db29399418b55a6",
+      "name": "read",
+      "parameters": {
+        "properties": {
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Most lines to return (optional; at most 2000)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "1-indexed line to start from (optional)",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "remember": {
+      "description": "Store a durable fact in long-term memory (append-only, safe to retry).",
+      "digest": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+      "name": "remember",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Fact or note to remember",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
+    "write": {
+      "description": "Write or overwrite a file in the workspace. Creates parent directories if needed.",
+      "digest": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260",
+      "name": "write",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Content to write",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "Path to file (absolute under workspace, or relative)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    }
+  },
+  "name": "githi-coding-tools",
+  "protocol_version": 1,
+  "semver": "1.2.0",
+  "status": "offered",
+  "tools": {
+    "bash": "sha256:559029e5c3ece73b3f2a10a2fff09cd5abc3ed4882c0ff558672154fe34d0fd2",
+    "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
+    "edit": "sha256:2b9a48a98555b58e2d708edc0ba7633901a7ff46d16333709e7a37ec71932e20",
+    "git_commit": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
+    "grep": "sha256:0c5c8bc3023256bfbc1e827eebe5be7592ffaaaff8b13376f7091c6ca8bb151b",
+    "ls": "sha256:ac8dc665b579eec9d9494c88d7b20cd20331540ac9eb486af0ce33609e396f45",
+    "read": "sha256:3f529e9d8496d754af411b15235569e34e049f21b40a534f3db29399418b55a6",
+    "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+    "write": "sha256:a4c935f399fee0d550c09d3d66f693d83bd56a51eeb7b522980b03fd6e3e6260"
+  }
+}

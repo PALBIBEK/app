@@ -57,12 +57,12 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 
 | # | Tool | Status |
 |---|---|---|
-| T1 | edit: batch edits, CRLF and BOM kept, curly quotes matched, diff returned | done (phase 1) |
-| T2 | bash: output capped; the full output kept in `.githi/output/` and named in the result | done (phase 5) |
-| T3 | read: 2000 lines / 50 KB per call with the offset to continue; binary and images reported | done (phase 1) |
-| T4 | grep, ls, write | same |
-| T5 | Tool results reach the model as text, failures stated plainly | done (phase 1) |
-| T6 | Tool descriptions as pi's | done (phase 1) |
+| T1 | edit: pi's arguments (`path`, `edits[{oldText, newText}]`; a JSON-string or single-object `edits` accepted, as pi's `prepareArguments`), pi's matching (exact, then tolerant of trailing whitespace, Unicode compatibility forms, quotes, dashes and spaces, every untouched line's bytes kept), CRLF and BOM kept, pi's error texts; the model reads "Successfully replaced N block(s) in path.", the diff is kept for people | done (phase 1, loop parity B) |
+| T2 | bash: stdout and stderr as one stream in the order written; the last 2000 lines / 50 KB shown, the whole kept in `.githi/output/` and named ("[Showing lines a-b of N. Full output: …]"); "(no output)"; a non-zero exit ends "Command exited with code N" and is flagged as an error, a timeout "Command timed out after N seconds" | done (phase 5, loop parity B) |
+| T3 | read: 2000 lines / 50 KB per call with pi's notes ("Showing lines a-b of N (50.0KB limit). Use offset=…"), a line longer than a page pointed to bash rather than cut, pi's offset error; binary and images reported | done (phase 1, loop parity B) |
+| T4 | grep (`path:line: text`, context lines, `literal`, `ignoreCase`, `limit`), find (new: glob, directories marked), ls (dotfiles listed, `limit`): pi's arguments, results and notes ("100 matches limit reached. Use limit=200 for more, or refine pattern"), `.gitignore` respected; write: "Successfully wrote to path" | done (loop parity B) |
+| T5 | Tool results reach the model as text; a failure is its message (pi's), flagged to the provider; bad arguments are pi's "Validation failed for tool …" with the arguments received; an optional argument sent as null is one not sent | done (phase 1, loop parity B) |
+| T6 | Tool descriptions and parameters as pi's: the registry publishes them (so agents published from the builder get them), and the shipped tool sets `githi-tools` / `githi-coding-tools` 1.3.0 carry them, with find; calls in the older tool sets' argument names still parse | done (phase 1, loop parity B) |
 | T7 | websearch, webfetch, image, ask_user | later (each needs a backend or UI contract) |
 
 ### Model layer, memory, subagents

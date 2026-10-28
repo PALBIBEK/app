@@ -8,6 +8,7 @@ from supervisor.tools.builtin import (  # noqa: F401 — imported to register
     bash,
     echo,
     edit,
+    find,
     git_commit,
     grep,
     ls,

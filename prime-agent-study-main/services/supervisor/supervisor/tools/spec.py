@@ -16,6 +16,7 @@ import asyncio
 import copy
 import functools
 import inspect
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -156,10 +157,17 @@ class ToolSpec[ArgsT: BaseModel]:
         }
 
     def parse(self, raw: Mapping[str, Any]) -> ArgsT:
+        # As pi: an optional argument sent as null is an argument not sent.
+        fields = self.args_model.model_fields
+        args = {
+            k: v
+            for k, v in raw.items()
+            if v is not None or k not in fields or fields[k].is_required()
+        }
         try:
-            return self.args_model.model_validate(dict(raw))
+            return self.args_model.model_validate(args)
         except ValidationError as exc:
-            raise InvalidArguments(_explain(self.name, exc)) from None
+            raise InvalidArguments(_explain(self.name, exc, raw)) from None
 
     async def run(self, raw: Mapping[str, Any], ctx: ToolContext) -> Any:
         """Validate ``raw`` and run the handler within the context's time budget."""
@@ -179,8 +187,11 @@ def _summary(doc: str | None) -> str:
     return " ".join(doc.split("\n\n", 1)[0].split())
 
 
-def _explain(name: str, exc: ValidationError) -> str:
-    problems = "; ".join(
-        f"{'.'.join(map(str, err['loc'])) or 'arguments'}: {err['msg']}" for err in exc.errors()
+def _explain(name: str, exc: ValidationError, raw: Mapping[str, Any]) -> str:
+    """pi's validation failure: each problem, then the arguments as received, so the
+    model sees what it sent beside what was wrong with it."""
+    problems = "\n".join(
+        f"  - {'.'.join(map(str, err['loc'])) or 'root'}: {err['msg']}" for err in exc.errors()
     )
-    return f"invalid arguments for {name}: {problems}"
+    sent = json.dumps(dict(raw), indent=2, ensure_ascii=False, default=str)
+    return f'Validation failed for tool "{name}":\n{problems or "Unknown validation error"}\n\nReceived arguments:\n{sent}'

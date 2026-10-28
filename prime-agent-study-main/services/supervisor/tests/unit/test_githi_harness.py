@@ -3,10 +3,46 @@
 from __future__ import annotations
 
 from supervisor.agent.runtimes.githi.prompt import system_prompt, tool_line
-from supervisor.agent.runtimes.githi.render import bound, tool_result_text
+from supervisor.agent.runtimes.githi.render import bound, tool_result_failed, tool_result_text
 
 
-def test_a_command_reads_like_a_terminal_and_a_failure_says_so() -> None:
+def test_a_command_reads_as_pis_bash_result() -> None:
+    def shell(**payload: object) -> dict[str, object]:
+        return {"ok": True, "payload": {"exit_code": 0, "output": "", **payload}}
+
+    assert tool_result_text(shell(output="a\nb\n")) == "a\nb\n"
+    assert not tool_result_failed(shell(output="a\n"))
+    assert tool_result_text(shell()) == "(no output)"
+    failed = shell(exit_code=3, output="checking\nboom\n")
+    assert tool_result_text(failed) == "checking\nboom\n\n\nCommand exited with code 3"
+    assert tool_result_failed(failed)  # sent to the provider flagged, as pi's isError
+    assert tool_result_text(shell(exit_code=1)) == "(no output)\n\nCommand exited with code 1"
+    killed = shell(exit_code=-9, output="started\n", timed_out=True, timeout_s=5.0)
+    assert tool_result_text(killed) == "started\n\n\nCommand timed out after 5 seconds"
+    assert tool_result_text(shell(exit_code=-9, timed_out=True, timeout_s=2.5)) == (
+        "Command timed out after 2.5 seconds"
+    )
+    assert tool_result_failed(killed)
+    cut = shell(
+        output="1999\n2000",
+        truncation={"by": "lines", "start": 2, "end": 2001, "total": 2001, "shown_bytes": 9, "partial": False},
+        full_output=".githi/output/bash-1.log",
+    )
+    assert tool_result_text(cut) == (
+        "1999\n2000\n\n[Showing lines 2-2001 of 2001. Full output: .githi/output/bash-1.log]"
+    )
+    by_bytes = shell(output="x", truncation={"by": "bytes", "start": 9, "end": 10, "total": 10, "partial": False},
+                     full_output="f.log")
+    assert tool_result_text(by_bytes).endswith("[Showing lines 9-10 of 10 (50.0KB limit). Full output: f.log]")
+    partial = shell(output="xyz", truncation={"by": "bytes", "start": 1, "end": 1, "total": 1, "partial": True,
+                                              "shown_bytes": 51200, "line_bytes": 2 * 1024 * 1024},
+                    full_output="f.log")
+    assert tool_result_text(partial).endswith(
+        "[Showing last 50.0KB of line 1 (line is 2.0MB). Full output: f.log]"
+    )
+
+
+def test_a_command_journalled_in_the_older_shape_still_reads() -> None:
     ok = {
         "ok": True,
         "payload": {"exit_code": 0, "stdout": "a\nb\n", "stderr": ""},
@@ -43,23 +79,34 @@ def test_text_stays_text_and_structure_reads_as_fields() -> None:
     assert tool_result_text({"ok": True, "payload": None}) == "[done]"
 
 
-def test_errors_are_named_with_their_code_and_old_shapes_still_read() -> None:
-    assert (
-        tool_result_text(
-            {"ok": False, "payload": None, "error": "denied by approval", "code": "APPROVAL_DENIED"}
-        )
-        == "Error (APPROVAL_DENIED): denied by approval"
-    )
+def test_write_and_edit_report_as_pis_do() -> None:
+    edited = {"ok": True, "payload": {"path": "a.py", "replacements": 2, "diff": "--- a/a.py\n"}}
+    assert tool_result_text(edited, "edit") == "Successfully replaced 2 block(s) in a.py."
+    written = {"ok": True, "payload": {"path": "new/b.txt", "bytes": 3}}
+    assert tool_result_text(written, "write") == "Successfully wrote to new/b.txt"
+    assert tool_result_text({"ok": True, "payload": "x"}, "edit") == "x"  # not the payload it knows
+
+
+def test_an_error_reads_as_its_message_and_old_shapes_still_read() -> None:
+    """As pi's: a failed call's result is the error's message, flagged as an error to
+    the provider; the code stays in the journal for traces."""
+    denied = {"ok": False, "payload": None, "error": "denied by approval", "code": "APPROVAL_DENIED"}
+    assert tool_result_text(denied) == "denied by approval"
+    assert tool_result_failed(denied)
     lost = {"error": "outcome unknown: worker lost", "code": "TOOL_OUTCOME_UNKNOWN"}  # no "ok"
-    assert tool_result_text(lost) == "Error (TOOL_OUTCOME_UNKNOWN): outcome unknown: worker lost"
+    assert tool_result_text(lost) == "outcome unknown: worker lost"
+    assert tool_result_failed(lost)
     assert tool_result_text({"text": "already rendered", "ok": True}) == "already rendered"
+    assert not tool_result_failed({"ok": True, "payload": "x"})
 
 
 def test_long_results_keep_head_and_tail() -> None:
     text = "\n".join(f"line {i}" for i in range(5000))
     out = bound(text)
     assert out.startswith("line 0\n") and out.endswith("line 4999")
-    assert "[... 3000 lines cut ...]" in out
+    assert "[... 2984 lines cut ...]" in out  # 2000 lines and room for a tool's own note
+    page = "\n".join(["row"] * 2000) + "\n\n[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]"
+    assert bound(page) == page  # a page a tool already cut is not cut again
     wide = bound("x" * 200, chars=100)
     assert wide.startswith("x" * 50) and "[... 100 characters cut ...]" in wide
 
@@ -102,7 +149,8 @@ def test_the_prompt_is_stable_so_the_provider_cache_hits() -> None:
     first, again = system_prompt("Pinned.", tools), system_prompt("Pinned.", list(tools))
     assert first == again
     assert "Use bash for file operations" not in first  # grep is offered
-    assert "Use edit for precise changes (old_text must match exactly)" in first
+    assert "Use edit for precise changes (edits[].oldText must match exactly)" in first
+    assert "- grep: Search file contents for patterns (respects .gitignore)" in first
     assert (
         system_prompt("", [])
         == "<rules>\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n.\n</cwd>"
