@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from supervisor.agent.events import ErrorEvent, MessageEnd, ToolEnd, ToolStart, TurnEnd
 from supervisor.temporal.contracts import Message, Phase
-from supervisor.temporal.steps import UNKNOWN_OUTCOME
+from supervisor.temporal.steps import UNKNOWN_OUTCOME, GithiSteps
 from supervisor.temporal.worker import session_worker
 from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
 from tests.support.scripted import ScriptedGateway, slow_tool
@@ -89,3 +91,30 @@ async def test_a_hard_deadline_stops_the_run_mid_call(
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["RunDeadline"]
     (end,) = payloads(events, ToolEnd)
     assert end.result["error"] == UNKNOWN_OUTCOME
+
+
+async def test_a_deadline_while_nothing_can_be_cancelled_ends_the_run_before_its_next_step(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The deadline fires while the user's words are placed in the run (a step it does not
+    cancel): the run ends there, and the model is not asked again."""
+    gateway = model(WRITE)
+    state = await env.state()
+    place = GithiSteps.place_inputs
+
+    async def slow_place(self: GithiSteps, req: Any) -> None:
+        await asyncio.sleep(3)  # the deadline (2 s) fires meanwhile
+        await place(self, req)
+
+    with slow_tool("write", 1.0), patch.object(GithiSteps, "place_inputs", slow_place):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state, "githi-deadline")
+            await env.sessions.submit(sid, Message("c1", "write it"))
+            await env.wait_for(state, sid, has_event(lambda p: isinstance(p, ToolStart)))
+            accepted = await env.sessions.submit(sid, Message("c2", "and look at this", steer=True))
+            assert accepted.steered
+            events = await env.wait_for(state, sid, run_ended(), timeout=30)
+            await _idle(env, sid)
+
+    assert [e.error_class for e in payloads(events, ErrorEvent)] == ["RunDeadline"]
+    assert len(gateway.seen) == 1, "the model was asked again after the deadline"
