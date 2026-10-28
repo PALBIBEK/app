@@ -795,7 +795,7 @@ class GithiSteps:
                     sid, hand, call["name"], provider, _as_tool_result(end.result)
                 )
                 result, is_error = asdict(checked), not checked.ok
-        await self._record(
+        if not await self._claim(
             sid,
             run_id,
             f"{call_id}:end",
@@ -806,7 +806,11 @@ class GithiSteps:
                 is_error=is_error,
                 duration_ms=int((time.monotonic() - started) * 1000),
             ),
-        )
+        ):
+            # A closer answered it first (a stop, a lost worker): its answer stands, so
+            # the call has one result.
+            done = await self._keyed(sid, run_id, f"{call_id}:end")
+            return bool(done.is_error) if done is not None else is_error
         return is_error
 
     # --- approvals -----------------------------------------------------------
@@ -988,7 +992,7 @@ class GithiSteps:
         )
         start = None if claimed else await self._keyed(sid, run_id, f"{call_id}:start")
         started = not claimed and not getattr(start, "not_run", False)
-        await self._record(
+        await self._claim(  # lost: the call ended after all, with its own result
             sid,
             run_id,
             f"{call_id}:end",

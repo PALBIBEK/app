@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -27,8 +28,10 @@ from supervisor.agent.events import (
 from supervisor.app import SupervisorState
 from supervisor.temporal.contracts import (
     Activity,
+    CreateSession,
     Message,
     Phase,
+    Timing,
 )
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.steps import (
@@ -346,6 +349,41 @@ async def test_abort_during_an_approval_wait(
     assert payloads(events, ApprovalResolved)[0].choice == "deny"
     (end,) = payloads(events, ToolEnd)  # every call of the round is answered
     assert end.result["code"] == "TOOL_NOT_RUN" and end.result["error"] == NOT_RUN_OUTCOME
+
+
+async def test_an_abort_while_the_sessions_worker_is_gone_still_closes_the_run(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Stopped while its worker is dead (its call not yet timed out): the run's close
+    waits for the session to be adopted, then runs there, so the run ends aborted."""
+    model(WRITE)
+    observer = await env.state()
+    name, digest = await env.composition(observer, "githi-v1")
+    worker, _ = await spawn_worker(env, {"scripted_calls": [list(WRITE)], "slow_tool": ["write", 120]})
+    sid = uuid.uuid4().hex
+    try:
+        await env.sessions.create(
+            sid,
+            CreateSession("t1", "githi-v1", composition_id=name, composition_digest=digest, principal_id="alice"),
+            # The call outlives the stop (its heartbeat limit is long), so the stop finds
+            # the run working and its close meets the dead worker's queue.
+            timing=Timing(placement_timeout_s=2.0, heartbeat_timeout_s=60.0, turn_timeout_s=120.0),
+        )
+        await env.sessions.submit(sid, Message("c1", "write a note"))
+        await env.wait_for(observer, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
+    finally:
+        worker.kill()  # SIGKILL mid-tool
+        await worker.wait()
+    await env.sessions.abort(sid)
+
+    adopter = await env.state()
+    async with session_worker(env.client, adopter, task_queue=env.queue):
+        events = await env.wait_for(observer, sid, run_ended(), timeout=60)
+        scheduled = await env.activity_types(sid)
+    assert scheduled.count(Activity.END_RUN) == 2, "the close met the dead queue, then ran again"
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    (end,) = payloads(events, ToolEnd)
+    assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
 
 
 @pytest.mark.parametrize(

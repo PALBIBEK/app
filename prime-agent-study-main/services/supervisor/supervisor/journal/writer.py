@@ -332,5 +332,7 @@ async def _run_to_completion[T](work: Coroutine[Any, Any, T]) -> T:
 
 
 def _log_failure(task: asyncio.Future[Any]) -> None:
-    if not task.cancelled() and (exc := task.exception()) is not None:
+    if not task.cancelled() and (exc := task.exception()) is not None and not isinstance(
+        exc, _AlreadyAppended
+    ):  # a lost claim is an answer, not a failure
         logging.getLogger(__name__).error("journal write failed after cancellation", exc_info=exc)

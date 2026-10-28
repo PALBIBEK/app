@@ -989,8 +989,10 @@ class AgentSessionWorkflow:
                     await self._adopt()
                 if not rerun_after_adopt:
                     raise
-                if one and self._abort_requested:
-                    raise asyncio.CancelledError  # stopped while it waited to be adopted
+                if one and track and self._abort_requested:
+                    # A step the stop would have cancelled, had it been running: it is not
+                    # run again. Closing work (ending the run, an approval's answer) is.
+                    raise asyncio.CancelledError
             finally:
                 self._tracked.pop(task, None)
 
@@ -1064,6 +1066,8 @@ class AgentSessionWorkflow:
             await self._cancel_job(op.args["child_id"])  # a durable background job
             return OpResult()
         lost = LostCall(self._session_id, None, op.op_id) if op.kind is Op.INVOKE_TOOL else None
+        if lost is not None and workflow.patched(_ONE_ADOPTION):
+            self._running_once[lost.call_id] = lost  # closed too if the session is adopted
         try:
             result = await self._session_activity(
                 Activity.SESSION_OP,
@@ -1088,6 +1092,9 @@ class AgentSessionWorkflow:
                     non_retryable=True,
                 ) from err
             raise _domain_error(err) from err
+        finally:
+            if lost is not None:
+                self._running_once.pop(lost.call_id, None)
         if op.kind is Op.START_BACKGROUND:
             await self._start_job(op, provider=(result.body or {}).get("provider"))
         return result

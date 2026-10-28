@@ -411,8 +411,12 @@ class SessionManagerBase:
         event_key: str,
     ) -> int | None:
         """Journal ``payload`` under ``event_key`` only if no event holds the key yet (an
-        atomic claim); its seq, or None when another writer holds it. For events with no
-        workspace effects (a tool call's start)."""
+        atomic claim); its seq, or None when another writer holds it (a tool call's start,
+        and its end, which the call and a closer may race to write). Its workspace effects
+        run first, as ``_record``'s do: harmless if the claim is lost."""
+        await self._workspace_effects(
+            session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
+        )
         seq = await self._writer.append_once(
             session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
