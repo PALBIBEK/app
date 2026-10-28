@@ -46,13 +46,13 @@ await p.getByTestId('connection').filter({ hasText: 'Live' }).waitFor({ timeout:
 const box = p.getByPlaceholder(/Send a message|Send another/);
 await box.fill('/tool write {"file_path": "notes.txt", "content": "first line\\nsecond line\\n"}');
 await box.press('Enter');
-await p.getByText(/echo:.*path: notes\.txt/).first().waitFor({ timeout: 30000 }); // the model reads results as text
+await p.getByText(/echo:.*Successfully wrote to notes\.txt/).first().waitFor({ timeout: 30000 }); // the model reads pi's result text
 await box.fill('/tool bash {"command": "echo checking && exit 3"}');
 await box.press('Enter');
 await p.getByTestId('approval-banner').waitFor({ timeout: 30000 });
 await p.waitForTimeout(1500); // some time waiting on a person, so the split shows it
 await p.getByTestId('approval-approve').click();
-await p.getByText(/exit code 3: the command failed/).first().waitFor({ timeout: 30000 });
+await p.getByText(/Command exited with code 3/).first().waitFor({ timeout: 30000 });
 console.log('1 two runs done');
 
 // The runs list: both runs, newest first, with the agent and its version.
