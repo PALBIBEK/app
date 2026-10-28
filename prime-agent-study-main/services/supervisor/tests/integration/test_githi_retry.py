@@ -36,6 +36,10 @@ def test_which_model_errors_are_worth_retrying() -> None:
     assert not is_retryable(ModelGatewayError(401, "invalid api key"))
     assert not is_retryable(ModelGatewayError(400, "This model's maximum context length is 8192 tokens"))
     assert not is_retryable(ValueError("unknown route"))
+    from supervisor.models.transports import ModelCallError
+
+    assert is_retryable(ModelCallError("503 overloaded", status=503))
+    assert not is_retryable(ModelCallError("429 budget spent", status=429, error_type="VIRTUAL_KEY_BUDGET_EXCEEDED"))
     spec = RetrySpec(max_retries=3, base_delay_s=2, max_delay_s=60)
     assert [retry_delay(spec, n, ConnectionError()) for n in (1, 2, 3, 4)] == [2, 4, 8, None]
     assert retry_delay(spec, 1, ModelGatewayError(429, "", retry_after=7)) == 7

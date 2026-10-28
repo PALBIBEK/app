@@ -36,6 +36,7 @@ from supervisor.models.transports.base import (
     ModelCallError,
     StopReason,
     WireCall,
+    emit_delta,
     merged_headers,
     parse_json,
     parse_partial_json,
@@ -266,7 +267,13 @@ def call_responses(call: WireCall) -> AssistantTurn:
     stream = _ResponsesStream()
     for event in stream_events(call, url, headers, body):
         if event.data and event.data != "[DONE]":
-            stream.feed(parse_json(event.data, "Responses"))
+            payload = parse_json(event.data, "Responses")
+            stream.feed(payload)
+            kind = payload.get("type") if isinstance(payload, dict) else None
+            if kind in ("response.output_text.delta", "response.refusal.delta"):
+                emit_delta(call, "text", payload.get("delta"))
+            elif kind in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
+                emit_delta(call, "thinking", payload.get("delta"))
     if stream.final is None:
         raise ModelCallError("OpenAI Responses stream ended before a terminal response event")
     _attach_encrypted_reasoning(stream.final, stream.reasoning_by_id)

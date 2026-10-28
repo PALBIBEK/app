@@ -464,12 +464,16 @@ class AiClient:
         *,
         text: str,
         command_id: str,
+        steer: bool = False,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {"text": text, "command_id": command_id}
+        if steer:
+            body["steer"] = True
         return await self._json_request(
             "POST",
             f"/v1/sessions/{ai_session_id}/messages",
             identity,
-            json_body={"text": text, "command_id": command_id},
+            json_body=body,
             expected=(202,),
         )
 

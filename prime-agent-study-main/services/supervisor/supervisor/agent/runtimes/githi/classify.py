@@ -161,6 +161,8 @@ def is_retryable(error: BaseException) -> bool:
     """
     if is_context_overflow(error):
         return False
+    if getattr(error, "retryable", None) is False:
+        return False  # the model layer knows better (a spent gateway budget never refills)
     if isinstance(error, (ConnectionError, TimeoutError)):
         return True
     status = _status(error)

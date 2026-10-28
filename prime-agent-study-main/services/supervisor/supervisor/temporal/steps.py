@@ -10,6 +10,8 @@ the journal, so tool arguments and results never enter workflow history.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 import time
 from collections.abc import Awaitable
 from dataclasses import asdict
@@ -54,6 +56,7 @@ from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import RecoveryAction
 from supervisor.harness.core.enums import ToolClass as HarnessToolClass
+from supervisor.journal.partials import PartialOutputs, PartialSink
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory.binding import Strategy
@@ -113,6 +116,8 @@ async def heartbeating[T](work: Awaitable[T]) -> T:
             activity.heartbeat()
     finally:
         task.cancel()
+
+logger = logging.getLogger(__name__)
 
 
 def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, Any]]:
@@ -179,6 +184,14 @@ SKIPPED_FOR_STEERING = (
 """pi's "Skipped due to queued user message": the rest of a round gives way to the user."""
 
 
+def _streams(gateway: Any) -> bool:
+    """Whether the gateway's ``complete`` hands over the reply as it streams (``on_delta``)."""
+    try:
+        return "on_delta" in inspect.signature(gateway.complete).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _in_call_order(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Each reply's tool results in the order it made the calls.
 
@@ -242,6 +255,7 @@ class GithiSteps:
         self._memory = SessionMemory(manager.memory, reader, one_shot_for=self.one_shot_for)
         self._pinned = PinnedContextMemory(manager, record=self._record, keyed=self._keyed)
         self._subagents = SubagentTools(manager, reader)
+        self._partials = PartialOutputs(manager._db)
 
     @property
     def memory(self) -> SessionMemory:
@@ -402,16 +416,27 @@ class GithiSteps:
                 chat.append(ChatMessage(role="system", content=steps_left_notice(left)))
             assert runtime.seams is not None and runtime.seams.model_gateway is not None
             choice: dict[str, Any] = {"tool_choice": "none"} if final and schemas else {}
+            gateway: Any = runtime.seams.model_gateway
+            # The reply as it streams, for clients to show while it is written (Pi
+            # Durable's PartialOutput); only where the gateway can hand it over.
+            sink = PartialSink(self._partials, sid, run_id, req.step) if _streams(gateway) else None
             try:
-                completion = await heartbeating(
+                call = asyncio.ensure_future(
                     asyncio.to_thread(
-                        runtime.seams.model_gateway.complete,
+                        gateway.complete,
                         chat,
                         schemas,
                         model=runtime.model,
                         **choice,
+                        **({"on_delta": sink.on_delta} if sink is not None else {}),
                     )
                 )
+                flushing = asyncio.ensure_future(sink.flushing(call)) if sink is not None else None
+                try:
+                    completion = await heartbeating(call)
+                finally:
+                    if flushing is not None:
+                        flushing.cancel()
             except Exception as exc:
                 # The provider (or the model layer) says the request does not fit: nothing
                 # was answered. The workflow compacts and asks again, once; a step that
@@ -437,6 +462,8 @@ class GithiSteps:
                 sid, Decimal(str(usage.cost_total)), usage.total_tokens
             )
             await self._record(sid, run_id, key, assistant)
+            if sink is not None:
+                await self._clear_partial(sid)
         # Checked on replay too, so a retried step cannot hand out calls past the limit.
         if (spent := await self._manager._budget.check(sid)).exceeded:
             return await self._budget_stop(sid, spent.exceeded_reason)
@@ -486,6 +513,12 @@ class GithiSteps:
             ),
         )
         return StepResult(calls=[], final=False, kind=RETRY, delay_s=delay)
+
+    async def _clear_partial(self, session_id: str) -> None:
+        try:
+            await self._partials.clear(session_id)
+        except Exception:
+            logger.debug("partial output clear failed session=%s", session_id, exc_info=True)
 
     async def compact(self, req: StepRequest) -> bool:
         """Compact the conversation so far, this run included, before ``req.step``'s request."""

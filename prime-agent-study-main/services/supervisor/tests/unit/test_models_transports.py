@@ -821,3 +821,33 @@ def test_completion_view_keeps_text_calls_and_parts() -> None:
         "cost": pytest.approx(0.3),
         "cost_total": pytest.approx(0.3),
     }
+
+
+def test_every_transport_hands_the_reply_over_as_it_streams() -> None:
+    """``on_delta`` sees text and thinking in the order they arrive (streamed partials),
+    and a hook that fails never fails the call."""
+    cases = [
+        (call_completions, CHAT_STREAM, gateway_spec("mixed")),
+        (
+            call_messages,
+            ANTHROPIC_STREAM,
+            gateway_spec("claude", providers=["anthropic"]).evolve(base_url="https://gw.example"),
+        ),
+        (call_responses, RESPONSES_STREAM, gateway_spec("gpt", providers=["openai"])),
+    ]
+    for transport, stream, spec in cases:
+        seen: list[tuple[str, str]] = []
+        transport(call(spec, Upstream(event_stream(stream)), Context("s", (UserMessage("hi"),), (TOOL,)),
+                       on_delta=lambda kind, chunk, seen=seen: seen.append((kind, chunk))))
+        assert seen, transport.__name__
+        assert {kind for kind, _ in seen} <= {"text", "thinking"}
+
+        def broken(kind: str, chunk: str) -> None:
+            raise RuntimeError("display failed")
+
+        transport(call(spec, Upstream(event_stream(stream)), Context("s", (UserMessage("hi"),), (TOOL,)),
+                       on_delta=broken))
+    seen = []
+    call_messages(call(cases[1][2], Upstream(event_stream(ANTHROPIC_STREAM)), Context("s", (UserMessage("hi"),), (TOOL,)),
+                       on_delta=lambda kind, chunk: seen.append((kind, chunk))))
+    assert seen == [("thinking", "let me look")]

@@ -7,6 +7,7 @@ handover race yields neither gaps nor duplicates.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 
@@ -15,6 +16,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from supervisor.api import deps
 from supervisor.api.wire import envelope_to_wire
+from supervisor.journal.partials import Partial, PartialOutputs
 from supervisor.journal.reader import JournalReader
 from supervisor.session import Dropped, LiveSubscription, SessionManager
 
@@ -27,6 +29,29 @@ _JOURNAL_POLL_SECS = 0.25
 
 def _sse_data(wire_json: str, *, event_id: int) -> str:
     return f"id: {event_id}\ndata: {wire_json}\n\n"
+
+
+async def _partial(partials: PartialOutputs, session_id: str) -> Partial | None:
+    try:
+        return await partials.get(session_id)
+    except Exception:
+        logger.debug("partial output read failed session=%s", session_id, exc_info=True)
+        return None
+
+
+def _partial_wire(partial: Partial, cursor: int) -> str:
+    """A partial in the wire shape; ``seq`` is the last journalled one (not a position)."""
+    return json.dumps(
+        {
+            "seq": cursor,
+            "event_id": f"partial:{partial.run_id}:{partial.step}",
+            "turn_id": partial.run_id,
+            "type": "partial_output",
+            "ts_ms": partial.updated_ms,
+            "data": {"step": partial.step, "text": partial.text, "thinking": partial.thinking},
+        },
+        ensure_ascii=False,
+    )
 
 
 def _sse_comment(text: str) -> str:
@@ -102,14 +127,20 @@ async def iter_journal_sse(
     heartbeat_secs: float | None = None,
     poll_secs: float = _JOURNAL_POLL_SECS,
     max_events: int | None = None,
+    partials: PartialOutputs | None = None,
 ) -> AsyncIterator[str]:
     """Resumable SSE body that follows the journal, so it works for sessions running
     in any worker and from any API replica.
+
+    With ``partials``, the reply the model is writing is sent too, as it grows: a
+    ``partial_output`` event with no ``id`` (it is not in the journal, so a reconnect
+    resumes after the last journalled event and never replays one).
 
     shortcut: polls the journal; switch to Postgres LISTEN/NOTIFY if poll load shows up.
     """
     hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
     emitted, idle = 0, 0.0
+    shown: tuple[str, int, int] | None = None  # the partial last sent: run, step, updated
     while is_disconnected is None or not is_disconnected():
         batch = await reader.read(session_id, since=cursor)
         for env in batch:
@@ -120,6 +151,12 @@ async def iter_journal_sse(
         if batch:
             idle = 0.0
             continue
+        if partials is not None and (partial := await _partial(partials, session_id)) is not None:
+            key = (partial.run_id, partial.step, partial.updated_ms)
+            if key != shown:
+                shown, idle = key, 0.0
+                yield f"data: {_partial_wire(partial, cursor)}\n\n"
+                continue
         if idle >= hb:
             yield _sse_comment("ping")
             idle = 0.0
@@ -163,7 +200,12 @@ async def stream_events(
 
     async def gen() -> AsyncIterator[str]:
         body = (
-            iter_journal_sse(session_id=session_id, cursor=cursor, reader=reader)
+            iter_journal_sse(
+                session_id=session_id,
+                cursor=cursor,
+                reader=reader,
+                partials=PartialOutputs(reader.session_factory),
+            )
             if deps.get_workflows(request) is not None
             else iter_sse(session_id=session_id, cursor=cursor, manager=manager, reader=reader)
         )

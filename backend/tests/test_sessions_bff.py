@@ -355,6 +355,9 @@ async def test_message_mints_command_id_and_maps_turn_id(
             body = json.loads(request.content.decode())
             seen["command_id"] = body["command_id"]
             seen["text"] = body["text"]
+            seen["steer"] = body.get("steer", False)
+            if body.get("steer"):  # joins the running turn
+                return httpx.Response(202, json={"turn_id": "turn-9", "status": "accepted", "steered": True})
             return httpx.Response(202, json={"turn_id": "turn-9", "status": "accepted", "queued": True})
         return httpx.Response(404)
 
@@ -372,12 +375,19 @@ async def test_message_mints_command_id_and_maps_turn_id(
             f"/api/v1/sessions/{link.id}/messages",
             json={"content": "hello"},
         )
+        assert seen["text"] == "hello" and seen["steer"] is False
+        assert seen["command_id"] == r.json()["command_id"]
+        steered = await api.post(
+            f"/api/v1/sessions/{link.id}/messages",
+            json={"content": "look at this instead", "steer": True},
+        )
     assert r.status_code == 202
     assert r.json()["turn_id"] == "turn-9"
     assert r.json()["queued"] is True  # behind a running turn: the UI can say so
     assert r.json()["command_id"]
-    assert seen["text"] == "hello"
-    assert seen["command_id"] == r.json()["command_id"]
+    assert seen["text"] == "look at this instead" and seen["steer"] is True
+    assert steered.json()["steered"] is True and steered.json()["turn_id"] == "turn-9"
+    assert r.json()["steered"] is False
 
 
 @pytest.mark.asyncio
