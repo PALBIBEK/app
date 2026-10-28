@@ -46,6 +46,7 @@ from supervisor.temporal.contracts import (
     RETRY,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
+    SUBMIT_SIGNAL,
     Accepted,
     Activity,
     ApprovalAsk,
@@ -1119,6 +1120,10 @@ class AgentSessionWorkflow:
         if self._creation_error is not None:
             raise self._creation_error
         async with self._submit_lock:
+            if message.command_id in self._state.seen_commands:
+                # The same message, sent as a signal too (no worker took this update in
+                # time), got here first while this one waited.
+                return Accepted(message.command_id, queued=self._is_queued(message.command_id))
             if message.steer and self._steerable is not None:
                 # pi's steer: placed in the working run at its next step, not queued.
                 self._remember(message.command_id)
@@ -1136,6 +1141,33 @@ class AgentSessionWorkflow:
             self._remember(message.command_id)
             self._state.pending.append(message)
             return Accepted(message.command_id, queued=False)
+
+    @workflow.signal(name=SUBMIT_SIGNAL)
+    async def submit_message_signal(self, message: Message) -> None:
+        """A message sent when no worker took ``submit_message`` in time (pi-temporal's
+        Signal fallback): the server keeps a signal until a worker comes, so the message
+        is not lost while none is up. A signal cannot answer, so a message the update
+        would refuse (empty, for a closed or failed session, already seen) is logged and
+        dropped, and one for an idle session is queued without the update's prepare
+        (its run's first step meets what the prepare would have).
+        """
+        if not message.command_id or not message.text:
+            workflow.logger.warning("dropped a message sent as a signal: no id or text")
+            return
+        await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
+        async with self._submit_lock:
+            if self._terminate_requested or self._state.phase in (Phase.TERMINATED, Phase.FAILED):
+                workflow.logger.warning(
+                    "dropped message %s sent as a signal: the session is closed", message.command_id
+                )
+                return
+            if message.command_id in self._state.seen_commands:
+                return  # the update delivered it after all, or it was sent twice
+            self._remember(message.command_id)
+            if message.steer and self._steerable is not None:
+                self._state.steering.append(message)
+            else:
+                self._state.pending.append(message)
 
     @submit_message.validator
     def _validate_submit(self, message: Message) -> None:

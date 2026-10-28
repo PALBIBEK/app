@@ -52,6 +52,8 @@ export const SessionMessageResponseSchema = z.object({
   status: z.string(),
   /** True when the message waits behind a turn already running. */
   queued: z.boolean().default(false),
+  /** True when no worker was up: the message is kept and runs once one comes. */
+  held: z.boolean().default(false),
 });
 
 /** One run: what happened to one message (fetched by the turn_id its message got). */

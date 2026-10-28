@@ -89,6 +89,8 @@ class PostMessageResponse(BaseModel):
     """True when the message waits behind a running turn; None when not known."""
     steered: bool = False
     """The message joined the running turn (``turn_id``) rather than starting its own."""
+    held: bool = False
+    """No worker is up: the message is kept and runs once one comes."""
 
 
 class ForkSessionRequest(BaseModel):

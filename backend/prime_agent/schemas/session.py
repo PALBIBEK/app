@@ -113,6 +113,7 @@ class SessionMessageResponse(BaseModel):
     status: str = "accepted"
     queued: bool = False  # true when it waits behind a turn already running
     steered: bool = False  # true when it joined the running turn (turn_id) instead
+    held: bool = False  # true when no worker was up: kept, it runs once one comes
 
 
 class SessionToolInvokeRequest(BaseModel):
