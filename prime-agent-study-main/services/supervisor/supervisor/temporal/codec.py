@@ -15,9 +15,10 @@ error can quote the task.
 * A plain payload still reads, so history written before a key was set stays readable
   (and the release replay gate's recorded histories replay). This protects what the
   server stores; it is not a guard against someone who can write history directly.
-* Search attributes are never encrypted, and a session's memo (its tenant and
-  principal, which authorise reading it) is stored plain on purpose, so a key's
-  rotation never locks a running session out (``sessions._plain_memo``).
+* Search attributes and the trace context header (span ids) are never encrypted, and a
+  session's memo (its tenant and principal, which authorise reading it) is stored plain
+  on purpose, so a key's rotation never locks a running session out
+  (``sessions._plain_memo``).
 
 Keys are 32 bytes (AES-256), given as base64 or 64 hex digits.
 
