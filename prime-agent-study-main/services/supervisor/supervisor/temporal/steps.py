@@ -32,6 +32,7 @@ from supervisor.agent.events import (
     MemoryRecall,
     MessageEnd,
     ModelRetry,
+    ProjectContext,
     RunEnd,
     RunStart,
     ToolEnd,
@@ -53,6 +54,7 @@ from supervisor.agent.runtimes.githi.classify import (
     unique_call_ids,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoop
+from supervisor.agent.runtimes.githi.prompt import in_pi_order
 from supervisor.agent.runtimes.githi.render import tool_result_text
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
@@ -72,6 +74,7 @@ from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager
+from supervisor.session.project_context import read_project_context
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
 from supervisor.temporal.contracts import (
@@ -183,6 +186,8 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                     "role": "tool",
                     "tool_call_id": event.tool_call_id,
                     "content": [{"type": "text", "text": tool_result_text(event.result)}],
+                    # Read back by the provider layer as the result's error flag.
+                    **({"is_error": True} if event.is_error else {}),
                 }
             )
     messages = _in_call_order(messages)
@@ -194,6 +199,12 @@ SKIPPED_FOR_STEERING = (
     "then make this call again if it is still needed."
 )
 """pi's "Skipped due to queued user message": the rest of a round gives way to the user."""
+
+
+def _project(run: list[Any]) -> list[tuple[str, str]]:
+    """The project instructions this run read as it began (none: empty)."""
+    found = [env.payload for env in run if isinstance(env.payload, ProjectContext)]
+    return [(found[-1].path, found[-1].text)] if found else []
 
 
 def _call_ids(run: list[Any]) -> set[str]:
@@ -311,6 +322,10 @@ class GithiSteps:
             MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
         )
         await self._memory.checkpoint(session_id, run_id, self._record)
+        if (project := await read_project_context(self._manager, session_id)) is not None:
+            await self._record(
+                session_id, run_id, "project", ProjectContext(project.path, project.text, project.digest)
+            )
         # Between turns: compact what this run carries over, per the pinned memory profile.
         await heartbeating(
             self._pinned.compact(
@@ -424,7 +439,7 @@ class GithiSteps:
                 and await self._pinned.over_limit(sid, history, run)
             ):
                 return StepResult(calls=[], final=False, kind=COMPACT)
-            chat = loop.messages_for_model(history, schemas)
+            chat = loop.messages_for_model(history, schemas, project=_project(run))
             files = self._manager.files
             if files is not None and self._manager._hands.recipe(sid) is not None and (note := await files.context_note(sid)):
                 # Where this session's attachments are and where outputs go, after the pinned
@@ -827,7 +842,8 @@ class GithiSteps:
         names = {s["function"]["name"] for s in schemas}
         platform = (await self._memory.tools(session_id)).schemas()
         platform += await self._subagents.schemas(session_id)
-        return schemas + [s for s in platform if s["function"]["name"] not in names]
+        # pi's own tools first, in pi's order (read, bash, edit, write …), as its prompt lists them.
+        return in_pi_order(schemas + [s for s in platform if s["function"]["name"] not in names])
 
     async def _catalog_has(self, session_id: str, name: str) -> bool:
         return (await self._runtime(session_id)).loop().offers(name)

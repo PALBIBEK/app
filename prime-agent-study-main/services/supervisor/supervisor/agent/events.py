@@ -358,6 +358,18 @@ class Settled:
 
 
 @dataclass(frozen=True)
+class ProjectContext:
+    """The project's own instructions for the agent (``AGENTS.md``, ``CLAUDE.md``), read
+    from the workspace as the run began; githi puts them in the system prompt, as pi does.
+    """
+
+    path: str
+    text: str
+    digest: str
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
+@dataclass(frozen=True)
 class WorkspaceRestored:
     """A hand's new sandbox was filled from its last checkpoint, and calls that changed
     files after that checkpoint ended before it was taken: their changes are gone.
@@ -429,6 +441,7 @@ AgentEvent = (
     | HandStopped
     | Settled
     | ModelRetry
+    | ProjectContext
     | WorkspaceRestored
     | ErrorEvent
 )

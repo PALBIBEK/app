@@ -163,6 +163,7 @@ class SessionManagerBase:
         vault: Vault | None = None,
     ) -> None:
         self._db = session_factory
+        self._workspace_store = workspace_store
         self._writer = writer
         self._reader = reader
         self._registry = registry

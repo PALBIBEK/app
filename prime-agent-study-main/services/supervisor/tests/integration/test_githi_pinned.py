@@ -32,6 +32,7 @@ from supervisor.agent.events import (
     TurnEnd,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoopError
+from supervisor.agent.runtimes.githi.prompt import TOOL_ORDER
 from supervisor.app import SupervisorState
 from supervisor.catalog.core.types import (
     DigestRef,
@@ -139,7 +140,9 @@ async def test_every_model_call_is_built_from_the_pins(
     assert len(calls) == 2
     for call in calls:
         assert call.model == pins["model_route"] == "echo"  # the composition's route
-        assert call.tools == PINNED_TOOLS + PLATFORM_TOOLS
+        offered = PINNED_TOOLS + PLATFORM_TOOLS
+        pi_first = [n for n in TOOL_ORDER if n in offered]
+        assert call.tools == pi_first + [n for n in offered if n not in pi_first]  # pi's order
         system = call.messages[0]
         assert system.role == "system" and "You are an expert coding assistant." in system.content
         assert "<tools>\n- " in system.content and system.content.endswith("<cwd>\n.\n</cwd>")

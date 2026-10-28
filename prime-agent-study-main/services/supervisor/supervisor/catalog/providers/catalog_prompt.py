@@ -16,7 +16,7 @@ class CatalogPromptAssembler:
 
     def assemble(self, bindings: PromptBindings) -> AssembledPrompt:
         parts: list[str] = []
-        if self._pack.persona:
+        if self._pack.persona and bindings.include_persona:
             parts.append(self._pack.persona)
         for section in sorted(self._pack.sections, key=lambda s: (s.order, s.id)):
             text = section.text

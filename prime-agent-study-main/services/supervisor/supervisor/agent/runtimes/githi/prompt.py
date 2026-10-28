@@ -19,7 +19,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Final
 
-__all__ = ["BASE_RULES", "PROJECT_ROOT", "ROOT_RULE", "WORKSPACE", "system_prompt", "tool_line"]
+__all__ = [
+    "BASE_RULES",
+    "PROJECT_ROOT",
+    "ROOT_RULE",
+    "TOOL_ORDER",
+    "WORKSPACE",
+    "in_pi_order",
+    "system_prompt",
+    "tool_line",
+]
 
 WORKSPACE: Final = "/workspace"
 """Where the file tools root their paths (``/workspace/x`` and ``x`` are the same file)."""
@@ -68,6 +77,22 @@ RULES: Final[dict[str, tuple[str, ...]]] = {
 
 BASE_RULES: Final = ("Be concise in your responses", "Show file paths clearly when working with files")
 
+TOOL_ORDER: Final = ("read", "bash", "edit", "write", "grep", "find", "ls")
+"""The order pi offers its tools in (its defaults first); other tools follow, as given."""
+
+
+def in_pi_order(tools: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``tools`` with pi's own tools first, in pi's order; the rest keep their order."""
+    rank = {name: n for n, name in enumerate(TOOL_ORDER)}
+    return sorted(tools, key=lambda t: rank.get(_name(t), len(rank)))
+
+
+def _project_context(files: Sequence[tuple[str, str]]) -> str:
+    blocks = [
+        f'<project_instructions path="{path}">\n{text.strip()}\n</project_instructions>' for path, text in files
+    ]
+    return "\n\n".join(["Project-specific instructions and guidelines:", *blocks])
+
 
 def _name(schema: dict[str, Any]) -> str:
     return str((schema.get("function") or {}).get("name") or "")
@@ -93,8 +118,17 @@ def _rules(names: Sequence[str]) -> list[str]:
     return [*rules, *BASE_RULES]
 
 
-def system_prompt(pinned: str, tools: Sequence[dict[str, Any]], *, cwd: str = PROJECT_ROOT) -> str:
-    """The pinned prompt, then the offered tools, their rules, and the working directory."""
+def system_prompt(
+    pinned: str,
+    tools: Sequence[dict[str, Any]],
+    *,
+    cwd: str = PROJECT_ROOT,
+    project: Sequence[tuple[str, str]] = (),
+) -> str:
+    """The pinned prompt, then the offered tools, their rules, the project's own
+    instructions (``AGENTS.md`` and the like: ``project`` is (path, text) pairs), and
+    the working directory, in pi's order."""
+    tools = in_pi_order(tools)
     names = [n for n in (_name(t) for t in tools) if n]
     sections = [pinned.strip()] if pinned.strip() else []
     if tools:
@@ -105,5 +139,7 @@ def system_prompt(pinned: str, tools: Sequence[dict[str, Any]], *, cwd: str = PR
         )
     rules = "\n".join(f"- {r}" for r in [*([ROOT_RULE] if cwd == PROJECT_ROOT and tools else []), *_rules(names)])
     sections.append(f"<rules>\n{rules}\n</rules>")
+    if project:
+        sections.append(f"<project_context>\n{_project_context(project)}\n</project_context>")
     sections.append(f"<cwd>\n{cwd}\n</cwd>")
     return "\n\n".join(sections)

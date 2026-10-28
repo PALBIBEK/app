@@ -25,14 +25,14 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 
 | # | Capability | Status |
 |---|---|---|
-| L1–L3 | Step limit from the pins (default 30), "N steps left" on the last requests, a final step with no tools | same |
+| L1–L3 | Step limit from the pins (new agents: 200; pi has none, so a high limit only stops a run that never ends), "N steps left" on the last requests, a final step with no tools | same |
 | L4–L5 | A cut-off reply's calls and malformed arguments are refused, not run | same |
 | L6 | Every tool call answered | same |
 | L7 | Compaction before any model call that needs it (`COMPACT` activity, keyed by step), and recovery from a provider's context overflow: compact once, ask again, else end the run saying why. The run's request is kept verbatim beside the summary, and the tool round the model has not seen yet is kept whole when it fits | done (phase 3); background compaction later |
 | L8 | Durable execution: per-step journal, adoption, at-most-once tools | better |
 | L9 | Loop guard, durable approvals, cost budget | better |
 | L10 | Abort | same |
-| L11 | Steering: a message sent with `steer` while a run works joins it before its next step (the round's calls not yet run are skipped, as pi skips them); one sent as the model answers continues the run; one that arrives as the run ends runs next as a follow-up | done (phase 6) |
+| L11 | Steering: a message sent with `steer` while a run works joins it before its next step, once the round under way has finished (pi's loop places it there); one sent as the model answers continues the run; one that arrives as the run ends runs next as a follow-up | done (phase 6) |
 | L12 | Streaming: the reply and its thinking are shown as the model writes them (`partial_output` on the event stream, written a few times a second outside the journal, never replayed, removed once journalled), from whichever worker thinks; tool output streams later | done (phase 6) for text and thinking |
 | L13 | The loop as explicit phases over a checkpoint | done (phase 2) |
 | L14 | Retryable model errors (429, 5xx, overload, dropped connection) wait on a durable workflow timer and are asked again: `Retry-After` honoured, 3 retries doubling from 2 s, each journalled as `ModelRetry`; an abort ends the wait; a refused request (401, bad body) ends the run at once instead of five blind attempts. A step whose worker keeps dying stops after its activity attempts, and the run ends saying so | done (phase 4); the retries and their waits are pinned in the harness `loop:` block (phase 7) |
@@ -48,6 +48,10 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 |---|---|---|
 | P1 | pi's structure: preamble (the pinned pack), `<tools>`, `<rules>`, `<cwd>`; stable, so the provider's cache hits | done (phase 1) |
 | P2 | Skills listed in the prompt | later (needs a skills artifact kind in the catalog) |
+| P3 | The project's own instructions: the first of `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` … in the workspace root, read as each run begins (from the live sandbox, else the saved files), in `<project_context>` before `<cwd>` | done (loop parity A) |
+| P4 | Tools listed and offered in pi's order (read, bash, edit, write, grep, find, ls), others after; no persona label line above the preamble | done (loop parity A) |
+| P5 | A failed tool result reaches the provider flagged as an error (Anthropic `is_error`), as pi sends it | done (loop parity A; lost when results became text in phase 1) |
+| P6 | Thinking at medium for every model unless pinned, pi's default | done (loop parity A) |
 
 ### Tools
 

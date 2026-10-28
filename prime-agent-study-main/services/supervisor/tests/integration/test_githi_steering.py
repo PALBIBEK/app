@@ -1,5 +1,5 @@
 """pi's steering, made durable: a message sent while a run works joins that run at its
-next step; the round's calls not yet run give way to it.
+next step, once the round under way has finished (as pi's loop places it).
 
 Against a real Temporal server, with a scripted gateway and a slow tool to steer during.
 """
@@ -41,12 +41,13 @@ async def test_a_steering_message_joins_the_working_run(
     assert event_types(events).count("RunStart") == 1, "the message joined the run, it did not start one"
     assert _user_texts(events) == ["list, then write", "actually, stop and look at this"]
     first_write = next(e for e in payloads(events, ToolEnd) if e.tool_name == "write")
-    assert first_write.result["code"] == "SKIPPED_FOR_USER_MESSAGE"  # gave way to the user
+    assert not first_write.is_error, "the round finished: the write the model asked for ran"
     # The model's next request read the message, after the round it interrupted.
     asked = next(s for s in gateway.seen if any(m.content == "actually, stop and look at this" for m in s))
     assert asked[-1].role == "user"
     steer_seq = next(e.seq for e in events if isinstance(e.payload, MessageEnd) and e.payload.role == "user" and e.seq > 1)
-    assert steer_seq > max(e.seq for e in events if isinstance(e.payload, ToolEnd) and e.payload.tool_name == "ls")
+    round_end = min(e.seq for e in events if isinstance(e.payload, ToolEnd) and e.payload.tool_name == "write")
+    assert steer_seq > round_end, "placed after the round, before the next request"
 
 
 async def test_a_steering_message_to_an_idle_session_runs_on_its_own(

@@ -74,7 +74,8 @@ class PolicySpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_steps: int = Field(default=30, ge=1, le=500)
+    max_steps: int = Field(default=200, ge=1, le=500)
+    """pi's loop has no step limit; a high one stops only a run that never ends."""
     max_cost_per_session: float = Field(default=5.0, gt=0, le=10_000)
     max_tokens_per_turn: int = Field(default=200_000, ge=1_000, le=10_000_000)
     require_approval: list[str] = Field(default_factory=list)
@@ -142,7 +143,7 @@ def default_manifest(sandbox: SandboxSpec | None = None) -> HarnessManifest:
                 PromptSection(id="rules", text="Run the tests before you finish."),
             ],
         ),
-        tools=["read", "grep", "ls", "write", "edit", "bash"],
+        tools=["read", "bash", "edit", "write"],  # pi's default tools, in pi's order
         model="gateway/echo",
         policy=PolicySpec(require_approval=["bash"]),
         **({"sandbox": sandbox} if sandbox is not None else {}),

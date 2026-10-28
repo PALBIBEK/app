@@ -226,5 +226,6 @@ CONTEXT_BUDGET_CAP_TOKENS = 150_000
 
 
 def default_thinking_level(spec: ModelSpec) -> ThinkingLevel:
-    """What an unspecified ("auto") effort means for a model: low for Anthropic, else medium."""
-    return "low" if "anthropic" in spec.provider.lower() else "medium"
+    """What an unspecified ("auto") effort means for a model: medium, pi's default for all."""
+    del spec
+    return "medium"
