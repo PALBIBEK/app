@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -23,6 +23,8 @@ from supervisor.agent.events import (
     RunEnd,
     RunStart,
     ToolEnd,
+    ToolStart,
+    WorkspaceRestored,
 )
 from supervisor.agent.seams import RuntimeSeams
 from supervisor.catalog import MemoryProfile, SessionPins
@@ -680,6 +682,7 @@ class _HandHooks:
             if state is not None:
                 state.ready = True
             return
+        await self._tell_what_was_lost(key, sandbox)
         if m._checkpoints is not None and await m._has_checkpoint(key):
             await m._checkpoints.restore(key, sandbox, processes=m._hand_isolated(key))
             if state is not None and state.scope_id is not None:
@@ -691,6 +694,33 @@ class _HandHooks:
             await m._workspace_svc.ensure_hydrated(state, sandbox, force=True)
         if hand == DEFAULT_HAND and m.files is not None:
             await m.files.deliver(session_id, sandbox)  # this session's attachments, read-only
+
+    async def _tell_what_was_lost(self, key: str, sandbox: Sandbox) -> None:
+        """Journal the calls whose changes this restore cannot bring back, for the model.
+
+        A sandbox's files are saved after each step; a call that changed them and ended
+        after the last save, in a sandbox that is gone, ran as far as the journal knows
+        but left nothing behind. Recorded in the run still open, if any.
+        """
+        m = self._m
+        session_id, hand = split_key(key)
+        events = await m._reader.read(session_id, since=-1)
+        lost, run_id = lost_calls(events, hand), open_run(events)
+        if not lost or run_id is None:
+            return
+        text = (
+            f"[The sandbox was rebuilt from its last checkpoint after its worker or container "
+            f"stopped. The file changes made by these calls after that checkpoint are gone, "
+            f"though their results above say they ran: {', '.join(lost[:10])}. Check the "
+            f"files they touched and redo what is missing.]"
+        )
+        await m._record(
+            session_id,
+            WorkspaceRestored(hand=hand, hand_id=sandbox.id, lost=lost, text=text),
+            turn_id=run_id,
+            trace_id=m._trace_for(session_id),
+            event_key=f"{run_id}:hand:{sandbox.id}:restored",
+        )
 
     async def provisioned(self, key: str, sandbox: Sandbox, cause: str) -> None:
         if split_key(key)[0] in self._m._creating:
@@ -715,3 +745,41 @@ class _HandHooks:
             trace_id=self._m._trace_for(session_id),
             event_key=f"hand:{sandbox.id}:lost",
         )
+
+
+def lost_calls(events: Sequence[Envelope], hand: str) -> list[str]:
+    """Calls on ``hand`` that changed files and ended after its last checkpoint.
+
+    Read-only tools (registry class PURE), tools that need no workspace (``remember``),
+    failed calls and tools outside the registry (subagents) are left out.
+    """
+    from supervisor.tools import default_registry
+    from supervisor.tools.spec import ToolClass
+
+    registry = default_registry()
+    after = 0
+    for i, env in enumerate(events):
+        if isinstance(env.payload, HandCheckpointed) and env.payload.hand == hand:
+            after = i + 1
+    hands: dict[str, str] = {}
+    lost: list[str] = []
+    for env in events[after:]:
+        p = env.payload
+        if isinstance(p, ToolStart):
+            hands[p.tool_call_id] = str((p.args or {}).get("hand") or DEFAULT_HAND)
+        elif isinstance(p, ToolEnd) and not p.is_error and hands.get(p.tool_call_id, DEFAULT_HAND) == hand:
+            spec = registry.get(p.tool_name)
+            if spec is not None and spec.needs_workspace and spec.tool_class is not ToolClass.PURE:
+                lost.append(f"{p.tool_name} ({p.tool_call_id})")
+    return lost
+
+
+def open_run(events: Sequence[Envelope]) -> str | None:
+    """The run still going (its RunStart has no RunEnd yet), if any."""
+    current: str | None = None
+    for env in events:
+        if isinstance(env.payload, RunStart):
+            current = env.turn_id
+        elif isinstance(env.payload, RunEnd):
+            current = None
+    return current

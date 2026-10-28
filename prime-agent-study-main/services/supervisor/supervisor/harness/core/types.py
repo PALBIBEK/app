@@ -193,19 +193,38 @@ class LoopSpec:
         warn_steps_remaining: From this many steps left, each request says how many remain
         force_answer_on_final_step: The last step offers no tools, so the run ends with
             an answer rather than at the limit with none
+        max_run_seconds: Wall-clock limit for one run (None: no limit beyond the turn
+            timeout); past it the run ends at its next step, saying so
+        model_retries: Times a model call that may pass (rate limit, overload, a dropped
+            connection) is asked again, on a durable timer
+        retry_base_seconds: The first wait; it doubles each retry
+        retry_max_seconds: The longest wait, a provider's Retry-After included
     """
 
     max_steps: int = 30
     warn_steps_remaining: int = 3
     force_answer_on_final_step: bool = True
+    max_run_seconds: float | None = None
+    model_retries: int = 3
+    retry_base_seconds: float = 2.0
+    retry_max_seconds: float = 60.0
 
     def body_for_digest(self) -> dict[str, Any]:
-        """Return canonical body for digest computation."""
-        return {
+        """Return canonical body for digest computation.
+
+        Settings added later appear only when set away from their defaults, so every
+        manifest published before them keeps its digest (and its pins).
+        """
+        body: dict[str, Any] = {
             "max_steps": self.max_steps,
             "warn_steps_remaining": self.warn_steps_remaining,
             "force_answer_on_final_step": self.force_answer_on_final_step,
         }
+        defaults = LoopSpec()
+        for name in ("max_run_seconds", "model_retries", "retry_base_seconds", "retry_max_seconds"):
+            if getattr(self, name) != getattr(defaults, name):
+                body[name] = getattr(self, name)
+        return body
 
 
 @dataclass(frozen=True, slots=True)

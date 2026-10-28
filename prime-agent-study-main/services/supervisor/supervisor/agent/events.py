@@ -358,6 +358,22 @@ class Settled:
 
 
 @dataclass(frozen=True)
+class WorkspaceRestored:
+    """A hand's new sandbox was filled from its last checkpoint, and calls that changed
+    files after that checkpoint ended before it was taken: their changes are gone.
+
+    The journal still says they ran, so the model is told (after the round it is in)
+    which calls to check and redo. ``lost``: "name (call id)" of each.
+    """
+
+    hand: str
+    hand_id: str
+    lost: list[str]
+    text: str
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
+@dataclass(frozen=True)
 class ModelRetry:
     """A model call failed in a way that may pass (rate limit, overload, a dropped
     connection); the run waits ``delay_s`` on a durable timer and asks again.
@@ -413,6 +429,7 @@ AgentEvent = (
     | HandStopped
     | Settled
     | ModelRetry
+    | WorkspaceRestored
     | ErrorEvent
 )
 

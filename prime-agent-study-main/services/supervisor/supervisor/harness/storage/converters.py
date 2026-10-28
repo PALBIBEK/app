@@ -232,7 +232,19 @@ def loop_spec_from_dict(data: dict[str, Any]) -> LoopSpec:
         max_steps=int(data.get("max_steps", 30)),
         warn_steps_remaining=int(data.get("warn_steps_remaining", 3)),
         force_answer_on_final_step=bool(data.get("force_answer_on_final_step", True)),
+        max_run_seconds=(
+            float(data["max_run_seconds"]) if data.get("max_run_seconds") is not None else None
+        ),
+        model_retries=int(data.get("model_retries", 3)),
+        retry_base_seconds=float(data.get("retry_base_seconds", 2.0)),
+        retry_max_seconds=float(data.get("retry_max_seconds", 60.0)),
     )
+    if spec.max_run_seconds is not None and spec.max_run_seconds <= 0:
+        raise ManifestValidationError("loop.max_run_seconds", "must be > 0")
+    if not 0 <= spec.model_retries <= 10:
+        raise ManifestValidationError("loop.model_retries", "must be between 0 and 10")
+    if spec.retry_base_seconds <= 0 or spec.retry_max_seconds < spec.retry_base_seconds:
+        raise ManifestValidationError("loop.retry_max_seconds", "must be >= retry_base_seconds > 0")
     if spec.max_steps < 1:
         raise ManifestValidationError("loop.max_steps", "must be >= 1")
     if spec.warn_steps_remaining < 0:

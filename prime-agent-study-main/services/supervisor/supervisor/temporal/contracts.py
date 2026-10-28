@@ -243,6 +243,8 @@ class RunPlan:
     max_steps: int = 0
     # Capture this turn into long-term memory (in a burst, after quiet).
     capture: CaptureConfig | None = None
+    # The pinned wall-clock limit for the run (loop.max_run_seconds); None: none.
+    max_run_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

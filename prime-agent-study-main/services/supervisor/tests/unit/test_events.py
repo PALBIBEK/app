@@ -38,6 +38,7 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
     Usage,
+    WorkspaceRestored,
 )
 
 
@@ -184,6 +185,7 @@ def test_agent_event_union_covers_all_payloads() -> None:
         ToolEnd,
         Settled,
         ModelRetry,
+        WorkspaceRestored,
         ErrorEvent,
         ApprovalRequired,
         ApprovalResolved,

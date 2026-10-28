@@ -20,6 +20,8 @@ const manifest: Manifest = {
     repetition: 'abort',
     oscillation: 'abort',
     stall_iterations: 10,
+    max_run_minutes: 0,
+    model_retries: 3,
   },
 };
 

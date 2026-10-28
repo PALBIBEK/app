@@ -64,6 +64,7 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
     Usage,
+    WorkspaceRestored,
 )
 from supervisor.agent.factory import RuntimeNames, create_runtime, known_runtime_names
 from supervisor.agent.seams import EMPTY_SEAMS, RuntimeSeams
@@ -130,6 +131,7 @@ __all__ = [
     "TurnEnd",
     "TurnStart",
     "Usage",
+    "WorkspaceRestored",
     "create_runtime",
     "known_runtime_names",
     "require",

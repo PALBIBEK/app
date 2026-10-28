@@ -341,6 +341,7 @@ class AgentSessionWorkflow:
         guard = _guard(plan.guard)
         st = RunState()
         self._steerable = plan.run_id
+        started = workflow.now()
 
         async def end(stop_reason: str, **details: Any) -> TurnOutcome:
             self._steerable = None  # a message sent from here on runs after this run
@@ -357,6 +358,18 @@ class AgentSessionWorkflow:
                         type(None),
                     )
                 if st.phase is RunPhase.REQUEST:
+                    if (
+                        plan.max_run_s is not None
+                        and (workflow.now() - started).total_seconds() > plan.max_run_s
+                    ):
+                        return await end(
+                            "error",
+                            error_class="RunTimeLimit",
+                            detail=(
+                                f"the run's time limit ({plan.max_run_s:g} s) was reached after "
+                                f"{st.step} model steps; ask the agent to continue"
+                            ),
+                        )
                     if st.step >= plan.max_steps:
                         return await end(
                             "error",

@@ -27,6 +27,7 @@ __all__ = [
     "retry_delay",
     "retry_spec",
     "steps_left_notice",
+    "unique_call_ids",
 ]
 
 FINAL_STEP_NOTICE: Final = (
@@ -173,8 +174,12 @@ def is_retryable(error: BaseException) -> bool:
 
 
 def retry_spec(manifest: Any) -> RetrySpec:
-    """The manifest's retry settings; pi's defaults for manifests without them."""
-    return getattr(manifest, "retry", None) or DEFAULT_RETRY
+    """The retry settings the manifest pins (its ``loop:`` block); pi's defaults without."""
+    loop = getattr(manifest, "loop", None)
+    if loop is None:
+        return DEFAULT_RETRY
+    pinned = RetrySpec(loop.model_retries, loop.retry_base_seconds, loop.retry_max_seconds)
+    return DEFAULT_RETRY if pinned == RetrySpec() else pinned
 
 
 def retry_delay(spec: RetrySpec, attempt: int, error: BaseException) -> float | None:
@@ -189,3 +194,23 @@ def retry_delay(spec: RetrySpec, attempt: int, error: BaseException) -> float | 
     if isinstance(asked, (int, float)):
         return float(asked) if asked <= spec.max_delay_s else None
     return float(min(spec.base_delay_s * 2 ** (attempt - 1), spec.max_delay_s))
+
+
+def unique_call_ids(parts: list[dict[str, Any]], taken: set[str], step: int) -> list[dict[str, Any]]:
+    """The reply's parts with every tool-call id unique in the run.
+
+    Calls are journalled by id, so an id the run has seen already would be answered
+    with the earlier call's result without running. Some models send no id, or the
+    same one each step ("call_0"); those are renamed here, before the reply is
+    journalled, so the model reads its calls back under the names it is answered by.
+    """
+    out: list[dict[str, Any]] = []
+    used = set(taken)
+    for n, part in enumerate(parts):
+        if part.get("type") == "tool_call":
+            raw = str(part.get("id") or "")
+            if not raw or raw in used:
+                part = {**part, "id": f"{raw or 'call'}~{step}.{n}"}
+            used.add(str(part["id"]))
+        out.append(part)
+    return out

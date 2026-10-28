@@ -243,9 +243,13 @@ async def test_an_adopted_sandbox_keeps_its_newer_files() -> None:
     async def has_checkpoint(key: str) -> bool:
         return True
 
+    class Reader:
+        async def read(self, session_id: str, since: int = -1) -> list[object]:
+            return []
+
     manager = SimpleNamespace(
         _workspace={}, _checkpoints=Checkpoints(), _has_checkpoint=has_checkpoint,
-        _hand_isolated=lambda key: False, files=None,
+        _hand_isolated=lambda key: False, files=None, _reader=Reader(),
     )
     hooks = _HandHooks(manager)  # type: ignore[arg-type]
     await hooks.hydrate("s", object(), adopted=True)  # type: ignore[arg-type]
@@ -265,3 +269,32 @@ async def test_a_host_sandbox_path_names_the_same_file(tmp_path: Path) -> None:
     assert workspace.relpath("/workspace/cli.py") == "cli.py"
     await workspace.write_bytes(f"{root}/cli.py", b"print(1)\n")
     assert (root / "cli.py").read_text() == "print(1)\n"
+
+
+
+def test_a_restore_names_the_calls_whose_changes_it_cannot_bring_back() -> None:
+    """Changes are saved after each step: a file-changing call that ended after the last
+    save, in a sandbox that is gone, is lost though the journal says it ran."""
+    from supervisor.agent.events import Envelope, HandCheckpointed, RunStart, ToolEnd, ToolStart
+    from supervisor.session.manager_base import lost_calls, open_run
+
+    def env(seq: int, payload: object, run: str = "r1") -> Envelope:
+        return Envelope("s", seq, f"e{seq}", seq, run, None, payload)  # type: ignore[arg-type]
+
+    def call(seq: int, cid: str, name: str, *, error: bool = False, **args: object) -> list[Envelope]:
+        return [env(seq, ToolStart(cid, name, dict(args))),
+                env(seq + 1, ToolEnd(cid, name, {"ok": not error}, is_error=error))]
+
+    events = [
+        env(0, RunStart()),
+        *call(1, "c1", "write", path="a"),
+        env(3, HandCheckpointed(hand_id="h", files=1, removed=0, processes=[], hand="default")),
+        *call(4, "c2", "edit", path="a"),
+        *call(6, "c3", "read", path="a"),  # read-only: nothing to lose
+        *call(8, "c4", "bash", error=True, command="x"),  # failed: changed nothing it reported
+        *call(10, "c5", "write", path="b", hand="gpu"),  # another hand
+        *call(12, "c6", "remember", text="x"),  # touches no files
+    ]
+    assert lost_calls(events, "default") == ["edit (c2)"]
+    assert lost_calls(events, "gpu") == ["write (c5)"]  # no checkpoint of its own yet
+    assert open_run(events) == "r1"

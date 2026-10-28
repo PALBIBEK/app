@@ -38,6 +38,7 @@ from supervisor.agent.events import (
     ToolStart,
     TurnEnd,
     TurnStart,
+    WorkspaceRestored,
 )
 from supervisor.agent.runtimes.githi.classify import (
     FINAL_STEP_NOTICE,
@@ -49,6 +50,7 @@ from supervisor.agent.runtimes.githi.classify import (
     retry_delay,
     retry_spec,
     steps_left_notice,
+    unique_call_ids,
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoop
 from supervisor.agent.runtimes.githi.render import tool_result_text
@@ -134,8 +136,17 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     """
     messages = list(prior)
     user_at: int | None = None
+    notes: list[str] = []  # WorkspaceRestored, waiting for their round's results
     for envelope in run:
         event = envelope.payload
+        if isinstance(event, WorkspaceRestored):
+            # Shown once the round it happened in has its results (a note between a
+            # reply's calls and their results would break the exchange).
+            notes.append(event.text)
+            continue
+        if notes and isinstance(event, MessageEnd):
+            messages += [{"role": "user", "content": [{"type": "text", "text": n}]} for n in notes]
+            notes = []
         if isinstance(event, CompactionEnd) and event.in_run and event.stop_reason == "ok":
             # A compaction inside this run: its messages are the whole conversation up to
             # here (summary + what it kept), and the run carries on from them.
@@ -174,7 +185,8 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                     "content": [{"type": "text", "text": tool_result_text(event.result)}],
                 }
             )
-    return _in_call_order(messages)
+    messages = _in_call_order(messages)
+    return messages + [{"role": "user", "content": [{"type": "text", "text": n}]} for n in notes]
 
 
 SKIPPED_FOR_STEERING = (
@@ -182,6 +194,17 @@ SKIPPED_FOR_STEERING = (
     "then make this call again if it is still needed."
 )
 """pi's "Skipped due to queued user message": the rest of a round gives way to the user."""
+
+
+def _call_ids(run: list[Any]) -> set[str]:
+    """Tool-call ids the run's replies already used."""
+    return {
+        str(p.get("id"))
+        for env in run
+        if isinstance(env.payload, MessageEnd) and env.payload.role == "assistant"
+        for p in env.payload.content
+        if p.get("type") == "tool_call"
+    }
 
 
 def _streams(gateway: Any) -> bool:
@@ -311,6 +334,7 @@ class GithiSteps:
             guard=guard,
             max_steps=loop_spec(manifest).max_steps,
             capture=await self._capture_plan(session_id),
+            max_run_s=loop_spec(manifest).max_run_seconds,
         )
 
     async def _announce_background(self, session_id: str, run_id: str) -> None:
@@ -451,7 +475,7 @@ class GithiSteps:
             usage = AgentLoop.usage_from_completion(completion)
             assistant = MessageEnd(
                 role="assistant",
-                content=AgentLoop.assistant_content(completion),
+                content=unique_call_ids(AgentLoop.assistant_content(completion), _call_ids(run), req.step),
                 usage=usage,
                 model=completion.model,
                 finish_reason=completion.finish_reason,
