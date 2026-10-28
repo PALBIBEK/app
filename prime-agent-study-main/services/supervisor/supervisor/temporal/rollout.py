@@ -33,6 +33,7 @@ from typing import Any, Final
 from temporalio.api.enums.v1 import EventType, VersionDrainageStatus, WorkerDeploymentVersionStatus
 from temporalio.client import Client, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.converter import DataConverter
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
 
@@ -223,11 +224,14 @@ class ReplayReport:
         return not self.failures
 
 
-def _replayer() -> Replayer:
+def _replayer(converter: DataConverter | None = None) -> Replayer:
     from supervisor.temporal.job_workflow import SubagentJobWorkflow
     from supervisor.temporal.workflow import AgentSessionWorkflow
 
-    return Replayer(workflows=[AgentSessionWorkflow, SubagentJobWorkflow], data_converter=pydantic_data_converter)
+    return Replayer(
+        workflows=[AgentSessionWorkflow, SubagentJobWorkflow],
+        data_converter=converter or pydantic_data_converter,
+    )
 
 
 def _replayable(history: WorkflowHistory) -> bool:
@@ -235,7 +239,9 @@ def _replayable(history: WorkflowHistory) -> bool:
     return any(e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED for e in history.events)
 
 
-async def replay(histories: AsyncIterator[WorkflowHistory]) -> ReplayReport:
+async def replay(
+    histories: AsyncIterator[WorkflowHistory], converter: DataConverter | None = None
+) -> ReplayReport:
     """Replay ``histories`` against the workflow code in this process."""
     checked, failures = 0, []
 
@@ -244,7 +250,8 @@ async def replay(histories: AsyncIterator[WorkflowHistory]) -> ReplayReport:
             if _replayable(h):
                 yield h
 
-    async with _replayer().workflow_replay_iterator(usable()) as results:
+    # Sealed histories (a codec key) open with the converter that sealed them.
+    async with _replayer(converter).workflow_replay_iterator(usable()) as results:
         async for result in results:
             checked += 1
             if result.replay_failure is not None:
@@ -266,7 +273,7 @@ async def live_histories(client: Client, *, limit: int = 50) -> AsyncIterator[Wo
 
 async def check(client: Client, *, limit: int = 50) -> ReplayReport:
     """The pre-deploy gate: can this code replay what is running now?"""
-    return await replay(live_histories(client, limit=limit))
+    return await replay(live_histories(client, limit=limit), client.data_converter)
 
 
 async def file_histories(directory: Path) -> AsyncIterator[WorkflowHistory]:

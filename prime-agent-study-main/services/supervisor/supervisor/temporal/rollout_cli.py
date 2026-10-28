@@ -56,7 +56,13 @@ async def _run(args: argparse.Namespace) -> int:
         print(policy_table())
         return 0
     if args.command == "check" and args.dir is not None:
-        report = await rollout.replay(rollout.file_histories(args.dir))
+        from supervisor.temporal.codec import data_converter
+
+        settings = TemporalSettings.from_env()  # exported sealed histories open with the key
+        report = await rollout.replay(
+            rollout.file_histories(args.dir),
+            data_converter(settings.codec_key, settings.codec_old_keys),
+        )
         return _report(report)
 
     from supervisor.temporal.client import connect

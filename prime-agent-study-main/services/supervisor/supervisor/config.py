@@ -57,6 +57,11 @@ class TemporalSettings:
     build_id: str = ""
     # auto: a new build promotes itself once polling; manual: `rollout ramp/promote` does.
     rollout: str = "auto"
+    # Encrypted history (supervisor.temporal.codec): every client and worker seals what
+    # it hands Temporal with this key (32 bytes, base64 or hex); old keys still open what
+    # they sealed, so a key rotates. None: payloads go as they are.
+    codec_key: str | None = None
+    codec_old_keys: tuple[str, ...] = ()
 
     @property
     def versioned(self) -> bool:
@@ -75,6 +80,10 @@ class TemporalSettings:
             deployment_name=os.environ.get("WORKER_DEPLOYMENT_NAME", "").strip(),
             build_id=os.environ.get("WORKER_BUILD_ID", "").strip(),
             rollout=_rollout_mode(os.environ.get("WORKER_ROLLOUT", "auto")),
+            codec_key=os.environ.get("TEMPORAL_CODEC_KEY", "").strip() or None,
+            codec_old_keys=tuple(
+                k.strip() for k in os.environ.get("TEMPORAL_CODEC_OLD_KEYS", "").split(",") if k.strip()
+            ),
         )
 
 
