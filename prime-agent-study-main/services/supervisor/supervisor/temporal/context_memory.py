@@ -301,7 +301,7 @@ class PinnedContextMemory:
             preparation,
             tail,
             _replaced_range(list(events), tail),
-            request=request.strip() if kept else "",
+            request=_clipped(request.strip(), binding.keep_recent(window), binding.memory) if kept else "",
         )
         end = dataclasses.replace(end, in_run=True)
         await self._record(session_id, run_id, f"{step}:compaction:end", end)
@@ -381,6 +381,14 @@ class PinnedContextMemory:
 
 
 REQUEST_HEADING: Final = "The request this run is working on, verbatim:"
+
+
+def _clipped(text: str, tokens: int, memory: ContextMemoryProvider) -> str:
+    """``text`` within about ``tokens``: its start and end, the middle cut and said so."""
+    if memory.estimate_tokens([{"role": "user", "content": text}]) <= tokens:
+        return text
+    half = max(tokens * 2, 200)  # ~4 characters a token, half at each end
+    return f"{text[:half]}\n[... {len(text) - 2 * half} characters cut from the middle ...]\n{text[-half:]}"
 
 
 def _mentions(message: dict[str, Any], text: str) -> bool:

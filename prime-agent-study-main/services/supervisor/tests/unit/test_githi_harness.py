@@ -72,3 +72,20 @@ def test_the_prompt_is_stable_so_the_provider_cache_hits() -> None:
     assert "Use bash for file operations" not in first  # grep is offered
     assert "Use edit for precise changes (old_text must match exactly)" in first
     assert system_prompt("", []) == "<rules>\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n/workspace\n</cwd>"
+
+
+def test_a_summary_request_reads_the_span_as_a_transcript() -> None:
+    from supervisor.seams.compaction.core import build_summary_request
+
+    span = [
+        {"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "name": "read", "arguments": {"path": "a.py"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "print(1)"},
+    ]
+    request = build_summary_request(span)
+    # Only system + one user message: no orphaned tool messages for a provider to refuse.
+    assert [m["role"] for m in request] == ["system", "user"]
+    text = request[1]["content"]
+    assert "[User]: fix the bug" in text
+    assert '[Assistant tool calls]: read({"path": "a.py"})' in text
+    assert "[Tool result]: print(1)" in text

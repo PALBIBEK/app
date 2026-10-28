@@ -381,8 +381,10 @@ class GithiSteps:
             except Exception as exc:
                 # The provider (or the model layer) says the request does not fit: nothing
                 # was answered. The workflow compacts and asks again, once; a step that
-                # still overflows after that ends the run saying so.
-                if req.can_compact and is_context_overflow(exc):
+                # still overflows after that ends the run saying so. Not the first step:
+                # earlier turns were compacted as the run began, so what overflows is
+                # the request itself, which a summary cannot shrink.
+                if req.step > 0 and req.can_compact and is_context_overflow(exc):
                     return StepResult(calls=[], final=False, kind=COMPACT)
                 raise
             usage = AgentLoop.usage_from_completion(completion)

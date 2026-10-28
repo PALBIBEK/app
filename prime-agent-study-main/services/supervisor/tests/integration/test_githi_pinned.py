@@ -284,8 +284,13 @@ async def test_after_a_compaction_the_model_reopens_a_tool_output_verbatim(
         await env.sessions.submit(sid, Message("c2", "what was in that file?"))
         events = await env.wait_for(state, sid, run_ended(2))
 
-    # The compaction as run 2 began (run 1 may also have compacted inside itself).
-    end = next(e for e in reversed(payloads(events, CompactionEnd)) if not e.in_run)
+    # The compaction that summarised the read away: inside run 1 (its request plus the
+    # file twice outgrew the window) or as run 2 began.
+    end = next(
+        e
+        for e in payloads(events, CompactionEnd)
+        if e.replaced_to_seq is not None and e.replaced_to_seq >= read.seq
+    )
     assert end.stop_reason == "ok"
     assert end.replaced_from_seq is not None and end.replaced_to_seq is not None
     assert end.replaced_from_seq <= read.seq <= end.replaced_to_seq
