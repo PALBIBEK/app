@@ -117,6 +117,9 @@ _STEER_AFTER_ROUND = "steer-after-round"
 # A round's calls run at once, each its own activity (pi, pi-temporal's stepped mode), and a
 # call that is lost or fails is answered as unknown while the run goes on.
 _PARALLEL_ROUND = "parallel-round"
+# Patch id: a stop (an abort, the hard deadline) that lands while nothing cancellable
+# runs ends the run before its next step. Before it, the next step still ran.
+_STOP_BETWEEN_STEPS = "stop-between-steps"
 # Steps that find the session's worker gone together adopt it once (a parallel round's
 # calls, or a checkpoint beside a model step); histories before it adopted per step.
 _ONE_ADOPTION = "one-adoption"
@@ -324,8 +327,11 @@ class AgentSessionWorkflow:
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
         try:
+            used = self._state.tokens_used
             plan = await self._session_activity(
-                Activity.BEGIN_RUN, TurnRequest(self._session_id, message), RunPlan
+                Activity.BEGIN_RUN,
+                TurnRequest(self._session_id, message, **({"tokens_used": used} if used else {})),
+                RunPlan,
             )
             outcome = await (
                 self._run_whole(message)
@@ -449,14 +455,10 @@ class AgentSessionWorkflow:
 
         try:
             while True:
-                if st.phase is RunPhase.REQUEST and self._state.steering:
-                    # What the user said while the run worked joins it before its next step.
-                    steering, self._state.steering = list(self._state.steering), []
-                    await self._session_activity(
-                        Activity.PLACE_INPUTS,
-                        PlaceInputs(self._session_id, plan.run_id, st.step, steering),
-                        type(None),
-                    )
+                if self._stopped_between_steps() or (
+                    st.phase is RunPhase.REQUEST and await self._place_steering(plan, st)
+                ):
+                    return await halted()
                 if st.phase is RunPhase.REQUEST:
                     elapsed = (workflow.now() - started).total_seconds()
                     bound = _run_bound(plan, st.step, elapsed, run_tokens, self._state.tokens_used)
@@ -550,6 +552,24 @@ class AgentSessionWorkflow:
             if deadline is not None and not deadline.done():
                 deadline.cancel()
 
+    def _stopped_between_steps(self) -> bool:
+        """Stopped while nothing it could cancel ran (between steps, placing the user's
+        words, compacting): the run ends before its next step starts."""
+        return self._abort_requested and workflow.patched(_STOP_BETWEEN_STEPS)
+
+    async def _place_steering(self, plan: RunPlan, st: RunState) -> bool:
+        """What the user said while the run worked joins it before its next step; whether
+        the run was stopped meanwhile."""
+        if not self._state.steering:
+            return False
+        steering, self._state.steering = list(self._state.steering), []
+        await self._session_activity(
+            Activity.PLACE_INPUTS,
+            PlaceInputs(self._session_id, plan.run_id, st.step, steering),
+            type(None),
+        )
+        return self._stopped_between_steps()
+
     def _start_deadline(self, seconds: float | None) -> asyncio.Task[None] | None:
         """pi-temporal's hard deadline: a durable timer that stops the run mid-call."""
         if seconds is None:
@@ -557,6 +577,8 @@ class AgentSessionWorkflow:
 
         async def expire() -> None:
             await workflow.sleep(seconds)
+            if self._abort_requested:
+                return  # the user stopped it first: it ends as aborted
             self._deadline_hit = True
             self._stop_run()
 

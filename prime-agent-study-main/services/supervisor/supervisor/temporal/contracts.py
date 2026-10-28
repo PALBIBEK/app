@@ -203,6 +203,9 @@ class Placement:
 class TurnRequest:
     session_id: str
     message: Message
+    # The session's tokens so far, as the workflow counts them: a run that begins past its
+    # session's token bound does no work before it ends (no compaction, no recall).
+    tokens_used: int = 0
 
 
 class RetryMode(StrEnum):
