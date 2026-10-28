@@ -45,6 +45,7 @@ from supervisor.agent.events import (
     TurnEnd,
     TurnStart,
     Usage,
+    WorkspaceRestored,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "Settled": Settled,
     "ErrorEvent": ErrorEvent,
     "ModelRetry": ModelRetry,
+    "WorkspaceRestored": WorkspaceRestored,
     "ApprovalRequired": ApprovalRequired,
     "ApprovalResolved": ApprovalResolved,
     "SubagentStart": SubagentStart,

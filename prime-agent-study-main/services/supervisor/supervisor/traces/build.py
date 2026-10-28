@@ -43,6 +43,7 @@ from supervisor.agent.events import (
     ToolStart,
     TurnEnd,
     TurnStart,
+    WorkspaceRestored,
 )
 from supervisor.policy.types import is_allow_choice
 from supervisor.traces.kinds import SpanKind
@@ -447,6 +448,10 @@ class _Builder:
         self._marker(env, "model_retry",
                      f"model call failed ({p.error_class}); retrying in {p.delay_s:g}s, "
                      f"attempt {p.attempt} of {p.max_attempts}")
+
+    def _on_WorkspaceRestored(self, env: Envelope, p: WorkspaceRestored) -> None:
+        self._marker(env, "workspace_restored",
+                     f"{p.hand} sandbox restored from its checkpoint; lost: {', '.join(p.lost[:5])}")
 
     def _on_HandProvisioned(self, env: Envelope, p: HandProvisioned) -> None:
         cause = p.cause.replace("_", " ")

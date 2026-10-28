@@ -244,6 +244,8 @@ export function PolicyTab({ m, onChange }: { m: Manifest; onChange: Edit }): JSX
       <NumberField id="max_cost" label="Cost cap per session ($)" step={0.5} value={p.max_cost_per_session} onChange={(v) => set({ max_cost_per_session: v })} />
       <NumberField id="max_tokens" label="Tokens per turn" value={p.max_tokens_per_turn} onChange={(v) => set({ max_tokens_per_turn: v })} />
       <NumberField id="stall" label="Stop after this many calls that get nowhere" value={p.stall_iterations} onChange={(v) => set({ stall_iterations: v })} />
+      <NumberField id="max_run_minutes" label="Time limit per run (minutes)" hint="0: no limit. The run stops at its next step and says so." value={p.max_run_minutes} onChange={(v) => set({ max_run_minutes: v })} />
+      <NumberField id="model_retries" label="Retries when the model provider is busy" hint="Rate limits and overloads wait and ask again; a refused request does not." value={p.model_retries} onChange={(v) => set({ model_retries: v })} />
       {guard('repetition', 'Same call repeated')}
       {guard('oscillation', 'Calls going back and forth')}
       <NumberField id="approval_timeout" label="Wait for an approval (seconds)" value={p.approval_timeout_s} onChange={(v) => set({ approval_timeout_s: v })} />

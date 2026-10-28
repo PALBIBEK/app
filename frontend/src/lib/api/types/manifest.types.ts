@@ -42,6 +42,10 @@ export const ManifestSchema = z.object({
     repetition: z.enum(['abort', 'warn', 'off']),
     oscillation: z.enum(['abort', 'warn', 'off']),
     stall_iterations: z.number(),
+    /** Wall-clock limit for one run, in minutes; 0: none. */
+    max_run_minutes: z.number().default(0),
+    /** Times a model call that may pass (rate limit, overload) is asked again. */
+    model_retries: z.number().default(3),
   }),
 });
 

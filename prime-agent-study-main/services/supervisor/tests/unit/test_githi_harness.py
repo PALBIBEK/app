@@ -143,3 +143,44 @@ def test_tool_results_are_read_back_in_the_order_the_calls_were_made() -> None:
     out = _in_call_order([asked, *done, later])
     assert [m.get("tool_call_id") for m in out[1:4]] == ["a", "b", "c"]
     assert out[0] is asked and out[-1] is later
+
+
+def test_a_restore_notice_reaches_the_model_after_the_round_it_happened_in() -> None:
+    """Between a reply's calls and their results a note would break the exchange: it is
+    shown once the round's results are in."""
+    from supervisor.agent.events import Envelope, MessageEnd, ToolEnd, ToolStart, WorkspaceRestored
+    from supervisor.temporal.steps import conversation
+
+    def env(seq: int, payload: object) -> Envelope:
+        return Envelope("s", seq, f"e{seq}", seq, "r1", None, payload)  # type: ignore[arg-type]
+
+    call = {"type": "tool_call", "id": "c2", "name": "read", "arguments": {"path": "a"}}
+    run = [
+        env(0, MessageEnd(role="user", content=[{"type": "text", "text": "go"}])),
+        env(1, MessageEnd(role="assistant", content=[call])),
+        env(2, ToolStart("c2", "read", {"path": "a"})),
+        env(3, WorkspaceRestored(hand="default", hand_id="h2", lost=["edit (c1)"], text="[rebuilt: redo edit (c1)]")),
+        env(4, ToolEnd("c2", "read", {"ok": True, "payload": "x"}, is_error=False)),
+    ]
+    roles = [(m["role"], m.get("tool_call_id")) for m in conversation([], run)]
+    assert roles == [("user", None), ("assistant", None), ("tool", "c2"), ("user", None)]
+    assert conversation([], run)[-1]["content"][0]["text"] == "[rebuilt: redo edit (c1)]"
+    later = [*run, env(5, MessageEnd(role="assistant", content=[{"type": "text", "text": "ok"}]))]
+    assert [m["role"] for m in conversation([], later)][-2:] == ["user", "assistant"]
+
+
+def test_a_tool_call_id_the_run_has_used_is_renamed_before_it_is_journalled() -> None:
+    """Calls are journalled by id: a reused id ("call_0" each step) or none at all would
+    be answered with an earlier call's result without running."""
+    from supervisor.agent.runtimes.githi.classify import unique_call_ids
+
+    parts = [
+        {"type": "text", "text": "x"},
+        {"type": "tool_call", "id": "call_0", "name": "ls", "arguments": {}},
+        {"type": "tool_call", "id": "", "name": "ls", "arguments": {}},
+        {"type": "tool_call", "id": "fresh", "name": "ls", "arguments": {}},
+        {"type": "tool_call", "id": "fresh", "name": "ls", "arguments": {}},
+    ]
+    ids = [p.get("id") for p in unique_call_ids(parts, {"call_0"}, 2)][1:]
+    assert ids == ["call_0~2.1", "call~2.2", "fresh", "fresh~2.4"]
+    assert len(set(ids)) == len(ids)

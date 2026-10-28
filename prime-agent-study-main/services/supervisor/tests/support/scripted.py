@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from supervisor.harness import HarnessCatalog, HarnessManifest
+from supervisor.harness import HarnessCatalog, HarnessManifest, LoopSpec
 from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.compaction.core import COMPACTION_NOTICE, SUMMARY_MARKER
@@ -28,6 +29,11 @@ def _compacted(text: str) -> bool:
     """A compaction's summary (or notice) stands in for turns already answered or in
     progress; it is not a new request, so the scripted model carries on rather than restart."""
     return text.startswith((SUMMARY_MARKER, COMPACTION_NOTICE[:40]))
+
+
+def _notice(text: str) -> bool:
+    """A note the supervisor adds for the model (a sandbox rebuilt), not the user's request."""
+    return text.startswith("[The sandbox was rebuilt")
 
 
 @dataclasses.dataclass
@@ -65,6 +71,8 @@ class ScriptedGateway:
     child_gate: threading.Event | None = None
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     tool_choices: list[str | None] = dataclasses.field(default_factory=list)
+    # Ask for ``calls`` one per step, in order, then answer (a multi-step run).
+    one_at_a_time: bool = False
     # The answer streamed to ``on_delta`` first, a chunk every ``stream_pause`` seconds.
     stream_chunks: list[str] = dataclasses.field(default_factory=list)
     stream_pause: float = 0.0
@@ -115,6 +123,8 @@ class ScriptedGateway:
                 )
         results = sum(1 for m in messages if m.role == "tool")
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
+        if self.one_at_a_time:
+            return self._next_of(messages, usage)
         fresh = messages[-1].role == "user" and not _compacted(messages[-1].content)
         asking = bool(self.calls) and (fresh or self.repeat or self.vary_args)
         if not asking:
@@ -140,6 +150,31 @@ class ScriptedGateway:
         return Completion(
             message, model="scripted", usage=usage, tool_calls=calls, finish_reason=finish
         )
+
+    def _next_of(self, messages: list[ChatMessage], usage: dict[str, Any]) -> Completion:
+        """``calls[k]`` where k is the tool results since the last user message; then answer."""
+        last_user = max(
+            (i for i, m in enumerate(messages) if m.role == "user" and not _compacted(m.content) and not _notice(m.content)),
+            default=-1,
+        )
+        since = messages[last_user + 1 :]
+        # As a model told its sandbox was rebuilt would: redo each lost step, once.
+        asked = {c.get("id") for m in since for c in (m.tool_calls or [])}
+        lost = [int(n) for m in since if m.role == "user" and _notice(m.content)
+                for n in re.findall(r"\(step-(\d+)\)", m.content)]
+        for n in lost:
+            if f"redo-{n}" not in asked:
+                name, args = self.calls[n]
+                calls = [{"id": f"redo-{n}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
+                return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted", usage=usage,
+                                  tool_calls=calls, finish_reason="tool_calls")
+        done = sum(1 for m in since if m.role == "tool" and not str(m.tool_call_id or "").startswith("redo-"))
+        if done >= len(self.calls):
+            return Completion(ChatMessage("assistant", f"done after {done} steps"), model="scripted", usage=usage)
+        name, args = self.calls[done]
+        calls = [{"id": f"step-{done}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
+        return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted", usage=usage,
+                          tool_calls=calls, finish_reason="tool_calls")
 
     def _child(self, messages: list[ChatMessage]) -> Completion:
         if self.child_gate is not None and not self.child_gate.wait(timeout=60):
@@ -251,8 +286,21 @@ def budget_variant(catalog: HarnessCatalog) -> None:
     githi_variant(catalog, "githi-budget", budget=budget)
 
 
+def loop_variant(catalog: HarnessCatalog) -> None:
+    """githi with a 1 s run time limit (``githi-loop``), or one quick model retry
+    (``githi-retry``), pinned in ``loop:``."""
+    base = catalog.resolve_sync("githi-v1").loop or LoopSpec()
+    githi_variant(catalog, "githi-loop", loop=dataclasses.replace(base, max_run_seconds=1.0))
+    githi_variant(
+        catalog,
+        "githi-retry",
+        loop=dataclasses.replace(base, model_retries=1, retry_base_seconds=0.1, retry_max_seconds=1.0),
+    )
+
+
 def all_variants(catalog: HarnessCatalog) -> HarnessCatalog:
     approval_variants(catalog)
     once_variant(catalog)
     budget_variant(catalog)
+    loop_variant(catalog)
     return catalog

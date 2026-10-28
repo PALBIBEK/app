@@ -300,7 +300,14 @@ class HarnessPublisher:
                 "on_timeout": p.on_approval_timeout,
                 "require_approval": list(p.require_approval),
             },
-            "loop": {"max_steps": p.max_steps, "warn_steps_remaining": min(3, p.max_steps - 1), "force_answer_on_final_step": True},
+            "loop": {
+                "max_steps": p.max_steps,
+                "warn_steps_remaining": min(3, p.max_steps - 1),
+                "force_answer_on_final_step": True,
+                # Only when set, so a release without them keeps its digest.
+                **({"max_run_seconds": p.max_run_minutes * 60} if p.max_run_minutes else {}),
+                **({"model_retries": p.model_retries} if p.model_retries != 3 else {}),
+            },
             **({"subagents": base_manifest["subagents"]} if base_manifest.get("subagents") else {}),
         }
         if self._checks is None:
