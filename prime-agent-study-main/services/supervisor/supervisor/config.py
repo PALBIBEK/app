@@ -44,7 +44,7 @@ class TemporalSettings:
     namespace: str = _TEMPORAL_NAMESPACE
     task_queue: str = _TEMPORAL_TASK_QUEUE
     # Temporal Cloud API key; setting it also turns on TLS.
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     # How many runs one worker carries at once (its activity slots): run more workers for more.
     max_concurrent_runs: int = 50
     # A worker serves GET /healthz and /readyz on this port for its orchestrator (0: off).
@@ -60,8 +60,8 @@ class TemporalSettings:
     # Encrypted history (supervisor.temporal.codec): every client and worker seals what
     # it hands Temporal with this key (32 bytes, base64 or hex); old keys still open what
     # they sealed, so a key rotates. None: payloads go as they are.
-    codec_key: str | None = None
-    codec_old_keys: tuple[str, ...] = ()
+    codec_key: str | None = field(default=None, repr=False)
+    codec_old_keys: tuple[str, ...] = field(default=(), repr=False)
 
     @property
     def versioned(self) -> bool:

@@ -15,9 +15,20 @@ error can quote the task.
 * A plain payload still reads, so history written before a key was set stays readable
   (and the release replay gate's recorded histories replay). This protects what the
   server stores; it is not a guard against someone who can write history directly.
-* Search attributes and memos the server indexes are never encrypted.
+* Search attributes are never encrypted, and a session's memo (its tenant and
+  principal, which authorise reading it) is stored plain on purpose, so a key's
+  rotation never locks a running session out (``sessions._plain_memo``).
 
 Keys are 32 bytes (AES-256), given as base64 or 64 hex digits.
+
+A process opens only what a key it holds sealed, so a key is added and made current in
+two rolling restarts, never one:
+
+1. Turning encryption on, or rotating: add the new key to ``TEMPORAL_CODEC_OLD_KEYS`` on
+   every client and worker (with no ``TEMPORAL_CODEC_KEY``, a process opens sealed
+   payloads but writes plain ones). Once every process has restarted, each can open it.
+2. Make it ``TEMPORAL_CODEC_KEY`` everywhere (keeping the previous one in
+   ``TEMPORAL_CODEC_OLD_KEYS``) and restart again. Only now is anything sealed with it.
 """
 
 from __future__ import annotations
@@ -59,8 +70,8 @@ def parse_key(text: str) -> bytes:
             candidates.append(bytes.fromhex(value))
         except ValueError:
             pass
-    try:
-        candidates.append(base64.b64decode(value + "=" * (-len(value) % 4), validate=False))
+    try:  # validated: a stray character is an error, never a different key
+        candidates.append(base64.b64decode(value + "=" * (-len(value) % 4), validate=True))
     except (binascii.Error, ValueError):
         pass
     for key in candidates:
@@ -74,13 +85,16 @@ def key_id(key: bytes) -> str:
 
 
 class AesGcmCodec(PayloadCodec):
-    """Seals payloads with the current key; opens them with it or any old key."""
+    """Seals payloads with the current key; opens them with it or any old key. With no
+    current key it only opens (step 1 of adding a key): what it writes stays plain."""
 
-    def __init__(self, key: bytes, old_keys: Sequence[bytes] = ()) -> None:
-        self._current = (key_id(key), AESGCM(key))
-        self._keys = {key_id(k): AESGCM(k) for k in (*old_keys, key)}
+    def __init__(self, key: bytes | None, old_keys: Sequence[bytes] = ()) -> None:
+        self._current = None if key is None else (key_id(key), AESGCM(key))
+        self._keys = {key_id(k): AESGCM(k) for k in (*old_keys, *([key] if key else []))}
 
     async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if self._current is None:
+            return list(payloads)
         kid, aead = self._current
         out: list[Payload] = []
         for payload in payloads:
@@ -119,12 +133,17 @@ def data_converter(key: str | None = None, old_keys: Iterable[str] = ()) -> Data
 
     With a key, failures' messages and stack traces move into a sealed payload too. A
     process without a key still reads a plain failure, and reads an encoded one's
-    message once it has the key; without a key nothing changes from pydantic's.
+    message once it has the key. With old keys only, it opens what they sealed and
+    writes plain; with neither, nothing changes from pydantic's.
     """
-    if not key:
+    olds = [parse_key(k) for k in old_keys if k.strip()]
+    if not key and not olds:
         return pydantic_data_converter
+    codec = AesGcmCodec(parse_key(key) if key else None, olds)
+    if not key:
+        return dataclasses.replace(pydantic_data_converter, payload_codec=codec)
     return dataclasses.replace(
         pydantic_data_converter,
-        payload_codec=AesGcmCodec(parse_key(key), [parse_key(k) for k in old_keys if k.strip()]),
+        payload_codec=codec,
         failure_converter_class=DefaultFailureConverterWithEncodedAttributes,
     )
