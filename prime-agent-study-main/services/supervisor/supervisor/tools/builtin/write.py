@@ -9,16 +9,16 @@ from supervisor.tools.spec import ToolClass
 
 
 class WriteArgs(ToolArgs):
-    file_path: str = path_field("file_path", "path")
-    """Path to file (absolute under workspace, or relative)"""
+    file_path: str = path_field("path", "file_path")
+    """Path to the file to write (relative or absolute)"""
 
     content: str
-    """Content to write"""
+    """Content to write to the file"""
 
 
 @tool(tool_class=ToolClass.IDEMPOTENT)
 async def write(args: WriteArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Write or overwrite a file in the workspace. Creates parent directories if needed."""
+    """Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."""
     workspace = ctx.workspace
     rel = workspace.relpath(args.file_path)
     data = args.content.encode("utf-8")

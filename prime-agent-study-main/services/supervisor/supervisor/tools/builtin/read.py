@@ -7,6 +7,8 @@ Three kinds of file, told apart by content rather than by name:
   resume hint is what turns the cap from a wall into a loop the model can drive:
   without it a 5,000-line file is unreadable past the cap. Lines are not numbered:
   a numbered line invites the model to copy the number into an edit's old text.
+  A line longer than the whole page is not cut: the model is told how to read it
+  with bash (pi's notes, word for word).
 * **images** are reported as images (kind and size), not decoded as text.
 * **anything else binary** is reported as binary. Decoding it as UTF-8 would hand the
   model a screen of replacement characters marked as a success, which it has no way
@@ -24,11 +26,15 @@ from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
 from supervisor.tools.registry import tool
 from supervisor.tools.spec import ToolClass
+from supervisor.tools.truncate import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    format_size,
+    truncate_head,
+)
 
-MAX_LINES: Final = 2000
-MAX_BYTES: Final = 50 * 1024
-MAX_LINE_CHARS: Final = 2000
-"""A longer line (minified code, a data blob) is cut: one line must not fill the page."""
+MAX_LINES: Final = DEFAULT_MAX_LINES
+MAX_BYTES: Final = DEFAULT_MAX_BYTES
 
 _IMAGES: Final = (
     (b"\x89PNG\r\n\x1a\n", "png"),
@@ -47,27 +53,20 @@ def _image_kind(data: bytes) -> str | None:
     return None
 
 
-def _clip(line: str) -> str:
-    if len(line) > MAX_LINE_CHARS:
-        end = "\n" if line.endswith("\n") else ""
-        return f"{line[:MAX_LINE_CHARS]} [... line cut at {MAX_LINE_CHARS} characters]{end}"
-    return line
-
-
 class ReadArgs(ToolArgs):
-    file_path: str = path_field("file_path", "path")
-    """Path to file (absolute under workspace, or relative)"""
+    file_path: str = path_field("path", "file_path")
+    """Path to the file to read (relative or absolute)"""
 
     offset: int | None = Field(default=None, ge=1)
-    """1-indexed line to start from (optional)"""
+    """Line number to start reading from (1-indexed)"""
 
     limit: int | None = Field(default=None, ge=1)
-    """Most lines to return (optional; at most 2000)"""
+    """Maximum number of lines to read"""
 
 
 @tool(tool_class=ToolClass.PURE)
 async def read(args: ReadArgs, ctx: ToolContext) -> str:
-    """Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and when you need the full file, continue with offset until complete.
+    """Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.
 
     Binary files and images are reported, not decoded.
     """
@@ -81,28 +80,27 @@ async def read(args: ReadArgs, ctx: ToolContext) -> str:
     text = data.decode("utf-8", errors="replace")
     if not text:
         return f"{rel} is empty."
-    lines = text.splitlines(keepends=True)
-    total = len(lines)
+    rows = text.split("\n")
+    ends_with_newline = len(rows) > 1 and rows[-1] == ""
+    if ends_with_newline:
+        rows.pop()  # a trailing newline ends the last line; it does not start one
+    total = len(rows)
     start = (args.offset or 1) - 1
     if start >= total:
-        raise InvalidArguments(f"offset {args.offset} is past the end of {rel}, which has {total} lines")
-    stop = min(total, start + min(args.limit or MAX_LINES, MAX_LINES))
-    page: list[str] = []
-    size = 0
-    capped = stop - start == MAX_LINES and stop < total
-    for index in range(start, stop):
-        line = _clip(lines[index])
-        if page and size + len(line) > MAX_BYTES:
-            capped = True
-            break
-        page.append(line)
-        size += len(line)
-    shown_to = start + len(page)
-    body = "".join(page)  # the text exactly, its line endings included
-    if shown_to < total:
-        body = body.rstrip("\n")
-        if capped or args.limit is None:
-            body += f"\n\n[Showing lines {start + 1}-{shown_to} of {total}. Use offset={shown_to + 1} to continue.]"
-        else:
-            body += f"\n\n[{total - shown_to} more lines in file. Use offset={shown_to + 1} to continue.]"
-    return body
+        raise InvalidArguments(f"Offset {args.offset} is beyond end of file ({total} lines total)")
+    stop = min(total, start + args.limit) if args.limit else total
+    page = truncate_head("\n".join(rows[start:stop]))
+    first = start + 1
+    if page.truncated and page.output_lines == 0:
+        size = format_size(len(rows[start].encode("utf-8")))
+        return (
+            f"[Line {first} is {size}, exceeds {format_size(MAX_BYTES)} limit. "
+            f"Use bash: sed -n '{first}p' {rel} | head -c {MAX_BYTES}]"
+        )
+    last = start + page.output_lines if page.truncated else stop
+    if page.truncated:
+        limit = "" if page.truncated_by == "lines" else f" ({format_size(MAX_BYTES)} limit)"
+        return f"{page.content}\n\n[Showing lines {first}-{last} of {total}{limit}. Use offset={last + 1} to continue.]"
+    if last < total:
+        return f"{page.content}\n\n[{total - last} more lines in file. Use offset={last + 1} to continue.]"
+    return page.content + ("\n" if ends_with_newline else "")

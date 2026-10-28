@@ -169,8 +169,8 @@ def _tool_preview(name: str, args: dict[str, Any]) -> str:
         return _line(f"$ {args['command']}") or name
     if (path := _path(args)) is not None:
         return f"{name} {path}"
-    if name == "grep" and args.get("pattern"):
-        return _line(f"grep {args['pattern']}") or name
+    if name in ("grep", "find") and args.get("pattern"):
+        return _line(f"{name} {args['pattern']}") or name
     return (_line(f"{name} {_compact_json(args)}") or name) if args else name
 
 
@@ -178,11 +178,33 @@ def _change(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
     """For a call that changes a file: the path and the text removed and added."""
     path = _path(args)
     if name == "edit" and path:
-        return {"path": path, "removed": args.get("old_text", ""), "added": args.get("new_text", ""),
+        removed, added = _edit_texts(args)
+        return {"path": path, "removed": removed, "added": added,
                 "replace_all": bool(args.get("replace_all"))}
     if name == "write" and path:
         return {"path": path, "removed": None, "added": args.get("content", "")}
     return None
+
+
+def _edit_texts(args: dict[str, Any]) -> tuple[str, str]:
+    """An edit call's old and new text: pi's ``edits[]`` (each block, in order, joined
+    by a line of dots), else the older top-level ``old_text``/``new_text``."""
+    edits = args.get("edits")
+    if isinstance(edits, str):
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            edits = None
+    if isinstance(edits, dict):
+        edits = [edits]
+    items = [e for e in edits if isinstance(e, dict)] if isinstance(edits, list) else []
+    if not items:
+        return str(args.get("old_text") or ""), str(args.get("new_text") or "")
+
+    def side(*keys: str) -> str:
+        return "\n…\n".join(str(next((e[k] for k in keys if k in e), "")) for e in items)
+
+    return side("oldText", "old_text"), side("newText", "new_text")
 
 
 def _result_preview(name: str, result: dict[str, Any]) -> str | None:
@@ -190,11 +212,14 @@ def _result_preview(name: str, result: dict[str, Any]) -> str | None:
         return _line(str(result.get("error") or "failed"))
     payload = result.get("payload")
     if isinstance(payload, dict) and "exit_code" in payload:
-        out = _line(str(payload.get("stdout") or payload.get("stderr") or ""), PREVIEW_LIMIT - 12)
+        out = _line(
+            str(payload.get("output") or payload.get("stdout") or payload.get("stderr") or ""),
+            PREVIEW_LIMIT - 12,
+        )
         return f"exit {payload['exit_code']}" + (f" · {out}" if out else "")
     if isinstance(payload, str):
         n = payload.count("\n") + (0 if payload.endswith("\n") else 1) if payload else 0
-        return f"{n} line{'' if n == 1 else 's'}" if name in ("read", "ls", "grep") else _line(payload)
+        return f"{n} line{'' if n == 1 else 's'}" if name in ("read", "ls", "grep", "find") else _line(payload)
     if isinstance(payload, dict) and "bytes" in payload:
         return f"{payload['bytes']} bytes written"
     return _line(_compact_json(payload)) if payload is not None else None

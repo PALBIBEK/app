@@ -29,11 +29,15 @@ def test_long_output_keeps_its_start_and_end_within_the_cap() -> None:
 
 @pytest.mark.asyncio
 async def test_bash_says_how_to_see_the_rest(tmp_path: Path) -> None:
+    from supervisor.agent.runtimes.githi.render import tool_result_text
     from supervisor.tools import default_registry
     from supervisor.tools.context import ToolContext
 
     ctx = ToolContext(session_id="s1", bound_workspace=HostWorkspace(tmp_path), timeout_s=30)
     payload = await default_registry()["bash"].run({"command": "seq 1 300000"}, ctx)
-    assert payload["stdout"].endswith("300000\n")
-    assert payload["full_output"] in payload["notice"]  # where the whole output is kept
+    assert payload["output"].endswith("299999\n300000")  # the tail, as pi keeps it
+    text = tool_result_text({"ok": True, "payload": payload}, "bash")
+    assert text.endswith(
+        f"[Showing lines 298001-300000 of 300000. Full output: {payload['full_output']}]"
+    )  # where the whole output is kept
     assert (tmp_path / payload["full_output"]).read_text().endswith("300000\n")
