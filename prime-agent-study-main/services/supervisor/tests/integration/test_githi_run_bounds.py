@@ -14,8 +14,9 @@ from unittest.mock import patch
 import pytest
 
 from supervisor.agent.events import ErrorEvent, MessageEnd, ToolEnd, ToolStart, TurnEnd
+from supervisor.session.manager import SessionManager
 from supervisor.temporal.contracts import Message, Phase
-from supervisor.temporal.steps import UNKNOWN_OUTCOME, GithiSteps
+from supervisor.temporal.steps import NOT_RUN_OUTCOME, UNKNOWN_OUTCOME, GithiSteps
 from supervisor.temporal.worker import session_worker
 from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
 from tests.support.scripted import ScriptedGateway, slow_tool
@@ -118,3 +119,33 @@ async def test_a_deadline_while_nothing_can_be_cancelled_ends_the_run_before_its
 
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["RunDeadline"]
     assert len(gateway.seen) == 1, "the model was asked again after the deadline"
+
+
+async def test_a_stop_after_the_model_asked_for_calls_answers_each_as_not_run(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The abort lands while the checkpoint beside a finished model step still runs (a
+    step it does not cancel): the run ends before its round, and the round's call is
+    answered as not run rather than left without a result."""
+    gateway = model(WRITE)
+    state = await env.state()
+    checkpoint = SessionManager.checkpoint
+
+    async def slow_checkpoint(self: SessionManager, session_id: str) -> Any:
+        await asyncio.sleep(3)
+        return await checkpoint(self, session_id)
+
+    with patch.object(SessionManager, "checkpoint", slow_checkpoint):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "write it"))
+            await env.wait_for(state, sid, has_event(lambda p: isinstance(p, MessageEnd) and p.role == "assistant"))
+            await env.sessions.abort(sid)
+            events = await env.wait_for(state, sid, run_ended(), timeout=30)
+            await _idle(env, sid)
+
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    (end,) = payloads(events, ToolEnd)
+    assert end.result["error"] == NOT_RUN_OUTCOME
+    assert [s.not_run for s in payloads(events, ToolStart)] == [True], "nothing ran it"
+    assert len(gateway.seen) == 1

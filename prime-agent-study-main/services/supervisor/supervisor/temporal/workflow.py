@@ -458,7 +458,7 @@ class AgentSessionWorkflow:
                 if self._stopped_between_steps() or (
                     st.phase is RunPhase.REQUEST and await self._place_steering(plan, st)
                 ):
-                    return await halted()
+                    return await halted(**self._unanswered(st))
                 if st.phase is RunPhase.REQUEST:
                     elapsed = (workflow.now() - started).total_seconds()
                     bound = _run_bound(plan, st.step, elapsed, run_tokens, self._state.tokens_used)
@@ -551,6 +551,14 @@ class AgentSessionWorkflow:
         finally:
             if deadline is not None and not deadline.done():
                 deadline.cancel()
+
+    def _unanswered(self, st: RunState) -> dict[str, Any]:
+        """What a stop between steps leaves without a result: the round the model just
+        asked for, none of it started (END_RUN answers each as not run)."""
+        if st.phase is not RunPhase.TOOLS or not st.calls:
+            return {}
+        why = "the run's hard time limit stopped it" if self._deadline_hit else "the run was aborted"
+        return {"open_call_ids": [c.call_id for c in st.calls], "lost_reason": f"{why} before the call ran"}
 
     def _stopped_between_steps(self) -> bool:
         """Stopped while nothing it could cancel ran (between steps, placing the user's
