@@ -14,7 +14,8 @@ const EXPLAINED: Record<string, string> = {
   TOOL_TIMEOUT: 'The tool took too long and was stopped.',
   TOOL_NOT_FOUND: 'The harness does not have this tool.',
   TOOL_NOT_IMPLEMENTED: 'The supervisor cannot run this tool.',
-  TOOL_OUTCOME_UNKNOWN: 'The call was interrupted; whether it took effect is unknown, so it was not repeated.',
+  TOOL_OUTCOME_UNKNOWN: 'The call was interrupted; whether it took effect is unknown, so it was not repeated. The agent was told and carried on.',
+  TOOL_NOT_RUN: 'The run stopped before this call started, so it did not run.',
   WORKSPACE_UNAVAILABLE: 'The agent’s workspace is not available right now.',
   BAD_ARGS: 'The tool was called with arguments it does not accept.',
 };

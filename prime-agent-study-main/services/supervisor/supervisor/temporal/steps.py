@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import posixpath
 import time
 from collections.abc import Awaitable
 from dataclasses import asdict
@@ -108,6 +109,7 @@ from supervisor.temporal.subagent_tools import (
 )
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
+TOOL_NOT_RUN = "TOOL_NOT_RUN"
 
 async def heartbeating[T](work: Awaitable[T]) -> T:
     """Await ``work`` while heartbeating, so a dead worker is noticed and aborts arrive."""
@@ -200,6 +202,46 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     messages = _in_call_order(messages)
     return messages + [{"role": "user", "content": [{"type": "text", "text": n}]} for n in notes]
 
+
+FILE_TOOLS = frozenset({"read", "write", "edit"})
+
+
+def call_lane(name: str, args: dict[str, Any]) -> str | None:
+    """The calls a call must not overtake (pi's file mutation queue): the file a file tool
+    names, normalised so ``./a``, ``a`` and ``/workspace/a`` are one; the memory and
+    subagent tools keep their order among themselves. None: it runs whenever it can."""
+    if name in PLATFORM_TOOLS or name in SUBAGENT_TOOLS or name == SUBAGENT_RESULT:
+        return "platform"
+    path = (args.get("path") or args.get("file_path")) if name in FILE_TOOLS else None
+    if not isinstance(path, str) or not path.strip():
+        return None
+    text = path.strip()
+    for root in ("/workspace/", "/workspace"):
+        if text == root.rstrip("/") or text.startswith(root):
+            text = text[len(root) :]
+            break
+    return "file:" + (posixpath.normpath(text or ".").lstrip("/") or ".")
+
+
+UNKNOWN_OUTCOME = (
+    "The outcome of this tool call is unknown. The session stopped before its result was "
+    "recorded, so it is not known whether the call ran. It can have taken effect. Check the "
+    "current state before you try again."
+)
+"""What the model reads for a call that started and left no result (pi's
+``unknownToolCallOutcome``, as pi-temporal reports a lost or stopped call)."""
+
+NOT_RUN_OUTCOME = "This tool call did not run. The turn stopped before it started."
+"""What the model reads for a call nothing started (pi-temporal's ``notRunOutcome``)."""
+
+BEHIND_UNKNOWN = (
+    "This tool call did not run: an earlier call of this round that changes the same file "
+    "(or the same memory or subagents) has an unknown outcome, and this call was made "
+    "assuming it took effect. Check the current state, then make this call again if it is "
+    "still needed."
+)
+"""A change queued behind a lost change in its lane (pi's file mutation queue keeps
+order; ours also keeps a change from landing on a state it was not planned for)."""
 
 SKIPPED_FOR_STEERING = (
     "not run: the user sent a new message while this round was running. Read it first, "
@@ -380,6 +422,13 @@ class GithiSteps:
         sid, run_id = req.session_id, req.run_id
         if req.lost_call_id is not None:
             await self.close_lost_call(LostCall(sid, run_id, req.lost_call_id, req.lost_reason))
+        for call_id in req.open_call_ids:  # each a no-op once its call ended
+            await self.close_lost_call(LostCall(sid, run_id, call_id, req.lost_reason))
+        why = f"the run ended ({req.stop_reason}) before the call's result was recorded"
+        for call_id in await self._unanswered(sid, run_id):
+            # Asked for, never answered: a stop between the model's reply and its round
+            # (pi-temporal's recovery seal answers these too). Not run, unless it started.
+            await self.close_lost_call(LostCall(sid, run_id, call_id, why))
         if req.close_session and await self._manager.session_status(sid) == "active":
             runtime = self._manager._registry.get(sid)
             await self._manager._policy_abort(
@@ -399,6 +448,22 @@ class GithiSteps:
         last_seq = await self._record(sid, run_id, "end", RunEnd(messages=history))
         status = await self._manager.session_status(sid) or "terminated"
         return TurnOutcome(req.command_id, req.stop_reason, last_seq, status)
+
+    async def _unanswered(self, session_id: str, run_id: str) -> list[str]:
+        """The calls the run's model asked for that have no result yet, in order."""
+        asked: list[str] = []
+        ended: set[str] = set()
+        for envelope in await self._reader.read_turn(session_id, run_id):
+            event = envelope.payload
+            if isinstance(event, MessageEnd) and event.role == "assistant":
+                asked += [
+                    str(part["id"])
+                    for part in event.content
+                    if isinstance(part, dict) and part.get("type") == "tool_call"
+                ]
+            elif isinstance(event, ToolEnd):
+                ended.add(event.tool_call_id)
+        return [call_id for call_id in asked if call_id not in ended]
 
     # --- model ---------------------------------------------------------------
 
@@ -522,7 +587,7 @@ class GithiSteps:
             self._plan(manifest, call, refused=refusal(spec, req.step, assistant, call) is not None)
             for call in calls
         ]
-        return StepResult(calls=plans, final=False)
+        return StepResult(calls=plans, final=False, lanes=True)
 
     async def _retry_or_fail(self, req: StepRequest, exc: Exception) -> StepResult:
         """pi's auto-retry: a call that may pass is asked again after a durable wait.
@@ -625,6 +690,7 @@ class GithiSteps:
                 and name != SUBAGENT_RESULT
                 and manifest.recovery.classify(name) is HarnessToolClass.PURE
             ),
+            lane=call_lane(name, dict(call.get("arguments") or {})),
         )
 
     async def _budget_stop(self, session_id: str, reason: str | None) -> StepResult:
@@ -682,12 +748,20 @@ class GithiSteps:
         if (done := await self._keyed(sid, run_id, f"{call_id}:end")) is not None:
             return bool(done.is_error)
         call, step, assistant = await self._located(sid, run_id, call_id)
-        await self._record(
+        if activity.in_activity() and activity.is_cancelled():
+            raise asyncio.CancelledError  # stopped before it started: the stop answers it
+        # The start is the claim (pi-temporal's dispatch claim): taken atomically, so a
+        # call closed unrun never starts late, and a retried attempt of a call that did
+        # start runs again only as its recovery class allows (Temporal retries it or not).
+        if not await self._claim(
             sid,
             run_id,
             f"{call_id}:start",
             ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"]),
-        )
+        ):
+            start = await self._keyed(sid, run_id, f"{call_id}:start")
+            if getattr(start, "not_run", False):
+                return True  # closed before it ran: its end says so
         started = time.monotonic()
         tools = await self._memory.tools(sid)
         refused = refusal(loop_spec(await self._manifest(sid)), step, assistant, call)
@@ -699,6 +773,8 @@ class GithiSteps:
         elif req.denied:
             result = denied_result("denied by approval", "APPROVAL_DENIED")
             is_error = True
+        elif req.behind_unknown:
+            result, is_error = denied_result(BEHIND_UNKNOWN, TOOL_NOT_RUN), True
         elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
             output = await tools.call(call["name"], call["arguments"])
             result, is_error = _platform_result(output.text, output.is_error), output.is_error
@@ -740,7 +816,7 @@ class GithiSteps:
                     sid, hand, call["name"], provider, _as_tool_result(end.result)
                 )
                 result, is_error = asdict(checked), not checked.ok
-        await self._record(
+        if not await self._claim(
             sid,
             run_id,
             f"{call_id}:end",
@@ -751,7 +827,11 @@ class GithiSteps:
                 is_error=is_error,
                 duration_ms=int((time.monotonic() - started) * 1000),
             ),
-        )
+        ):
+            # A closer answered it first (a stop, a lost worker): its answer stands, so
+            # the call has one result.
+            done = await self._keyed(sid, run_id, f"{call_id}:end")
+            return bool(done.is_error) if done is not None else is_error
         return is_error
 
     # --- approvals -----------------------------------------------------------
@@ -866,6 +946,13 @@ class GithiSteps:
             session_id, event, turn_id=run_id, trace_id=trace_id, event_key=f"{run_id}:{key}"
         )
 
+    async def _claim(self, session_id: str, run_id: str, key: str, event: Any) -> bool:
+        """Journal ``event`` under ``key`` if no event holds it yet; whether this one won."""
+        seq = await self._manager._record_once(
+            session_id, event, turn_id=run_id, trace_id=None, event_key=f"{run_id}:{key}"
+        )
+        return seq is not None
+
     async def _keyed(self, session_id: str, run_id: str, key: str) -> Any | None:
         envelope = await self._reader.event(
             session_id, keyed_event_id(session_id, f"{run_id}:{key}")
@@ -900,7 +987,7 @@ class GithiSteps:
         second ToolEnd, and a re-sent invoke returns it instead of running again.
         """
         sid, run_id, call_id = lost.session_id, lost.run_id, lost.call_id
-        error = f"outcome unknown: {lost.reason}"
+        error = UNKNOWN_OUTCOME
         if run_id is None:
             outbox = self._manager._tool_outbox
             row = await outbox.get_by_key(idempotency_key(sid, call_id))
@@ -913,20 +1000,34 @@ class GithiSteps:
                     trace_id=None,
                 )
             return
-        await self._record(
+        if await self._keyed(sid, run_id, f"{call_id}:end") is not None:
+            return  # it ended after all
+        # Not run only if this claim of its start wins (nothing started it, and now nothing
+        # can); otherwise it may have run.
+        call = await self._call(sid, run_id, call_id)
+        claimed = await self._claim(
+            sid,
+            run_id,
+            f"{call_id}:start",
+            ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"], not_run=True),
+        )
+        start = None if claimed else await self._keyed(sid, run_id, f"{call_id}:start")
+        started = not claimed and not getattr(start, "not_run", False)
+        await self._claim(  # lost: the call ended after all, with its own result
             sid,
             run_id,
             f"{call_id}:end",
             ToolEnd(
                 tool_call_id=call_id,
-                tool_name=await self._tool_name(sid, run_id, call_id),
-                result={"error": error, "code": TOOL_OUTCOME_UNKNOWN},
+                tool_name=call["name"],
+                result=(
+                    {"error": error, "code": TOOL_OUTCOME_UNKNOWN, "reason": lost.reason}
+                    if started
+                    else {"error": NOT_RUN_OUTCOME, "code": TOOL_NOT_RUN, "reason": lost.reason}
+                ),
                 is_error=True,
             ),
         )
-
-    async def _tool_name(self, session_id: str, run_id: str, call_id: str) -> str:
-        return (await self._call(session_id, run_id, call_id))["name"]
 
     async def _close_interrupted_run(self, session_id: str, run_id: str) -> None:
         """A run left open by a crashed whole-turn activity is closed before a new one starts."""

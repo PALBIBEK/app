@@ -1,4 +1,4 @@
-"""A step's tool calls as one round: approvals first, read-only calls together.
+"""A step's tool calls as one round: the loop guard and every approval first, then the calls.
 
 Against a real Temporal server, with a scripted gateway asking for several calls in
 one reply.
@@ -22,7 +22,7 @@ GREP = ("grep", {"pattern": "hello", "path": "."})
 READ = ("read", {"path": "notes.txt"})
 
 
-async def test_read_only_calls_run_together_and_are_read_back_in_order(
+async def test_a_rounds_results_are_read_back_in_the_order_asked(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
     gateway = model(LS, GREP, ("ls", {"path": "src"}))
@@ -33,31 +33,11 @@ async def test_read_only_calls_run_together_and_are_read_back_in_order(
         events = await env.wait_for(state, sid, run_ended())
         scheduled = await env.activity_types(sid)
 
-    assert scheduled.count(Activity.TOOL_BATCH) == 1
-    assert Activity.TOOL_CALL not in scheduled
+    assert scheduled.count(Activity.TOOL_CALL) == 3  # each its own step (test_githi_round_parallel)
     assert len(payloads(events, ToolEnd)) == 3
     shown = [m.tool_call_id for m in gateway.seen[-1] if m.role == "tool"]
     assert shown == ["call-0-0", "call-0-1", "call-0-2"]  # as asked, whatever finished first
     assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
-
-
-async def test_a_call_that_changes_files_runs_alone_and_before_what_follows(
-    env: Env, model: Callable[..., ScriptedGateway]
-) -> None:
-    model(WRITE, READ, GREP)
-    state = await env.state()
-    async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await env.create(state)
-        await env.sessions.submit(sid, Message("c1", "write it, then read it"))
-        events = await env.wait_for(state, sid, run_ended())
-        scheduled = await env.activity_types(sid)
-
-    assert scheduled.count(Activity.TOOL_CALL) == 1 and scheduled.count(Activity.TOOL_BATCH) == 1
-    ends = {e.tool_name: e for e in payloads(events, ToolEnd)}
-    assert ends["read"].result["payload"] == "hello"  # the write landed first
-    starts = [e.seq for e in events if isinstance(e.payload, ToolStart)]
-    write_end = next(e.seq for e in events if isinstance(e.payload, ToolEnd) and e.payload.tool_name == "write")
-    assert all(seq > write_end for seq in starts[1:])
 
 
 async def test_every_approval_is_asked_before_any_call_runs(
@@ -74,5 +54,5 @@ async def test_every_approval_is_asked_before_any_call_runs(
         await env.sessions.respond_approval(sid, approval_id, "allow")
         events = await env.wait_for(state, sid, run_ended())
 
-    assert [e.tool_name for e in payloads(events, ToolEnd)] == ["ls", "write"]
+    assert sorted(e.tool_name for e in payloads(events, ToolEnd)) == ["ls", "write"]
     assert not any(e.is_error for e in payloads(events, ToolEnd))

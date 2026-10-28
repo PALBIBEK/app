@@ -46,7 +46,7 @@ from supervisor.harness import (
     manifest_from_dict,
 )
 from supervisor.journal.reader import JournalReader
-from supervisor.journal.writer import JournalWriter
+from supervisor.journal.writer import JournalWriter, keyed_event_id
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
 from supervisor.policy.approvals import ApprovalBroker
@@ -399,6 +399,40 @@ class SessionManagerBase:
         await self._project(session_id, envelope)
         if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
             self._record_trace(session_id, turn_id, ended=isinstance(payload, RunEnd))
+        return seq
+
+    async def _record_once(
+        self,
+        session_id: str,
+        payload: Any,
+        *,
+        turn_id: str | None,
+        trace_id: str | None,
+        event_key: str,
+    ) -> int | None:
+        """Journal ``payload`` under ``event_key`` only if no event holds the key yet (an
+        atomic claim); its seq, or None when another writer holds it (a tool call's start,
+        and its end, which the call and a closer may race to write). Its workspace effects
+        run first, as ``_record``'s do: harmless if the claim is lost."""
+        await self._workspace_effects(
+            session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
+        )
+        seq = await self._writer.append_once(
+            session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
+        )
+        if seq is None:
+            return None
+        envelope = Envelope(
+            session_id=session_id,
+            seq=seq,
+            event_id=keyed_event_id(session_id, event_key),
+            ts_ms=int(time.time() * 1000),
+            turn_id=turn_id,
+            trace_id=trace_id,
+            payload=payload,
+        )
+        self._live.publish(session_id, envelope)
+        await self._project(session_id, envelope)
         return seq
 
     def _trace_model_client(self, row: SessionRow) -> Any:

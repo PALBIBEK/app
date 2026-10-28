@@ -106,6 +106,32 @@ class JournalWriter:
             session_id, [(event, turn_id, trace_id)], event_ids=[event_id]
         )
 
+    async def append_once(
+        self,
+        session_id: str,
+        event: AgentEvent,
+        *,
+        turn_id: str | None,
+        trace_id: str | None,
+        event_key: str,
+    ) -> int | None:
+        """Append under ``event_key`` only if nothing holds that key yet: its seq, or None
+        when another writer already did. Atomic: the check runs inside the append's
+        transaction, after the session row's lock, so of two writers racing for one key
+        exactly one wins (a claim: who may run a tool call, who closes it unrun).
+        """
+        event_id = keyed_event_id(session_id, event_key)
+        if await self.seq_of(session_id, event_id) is not None:
+            return None
+        try:
+            return await _run_to_completion(
+                self._append_batch(
+                    session_id, [(event, turn_id, trace_id)], event_ids=[event_id], if_absent=True
+                )
+            )
+        except _AlreadyAppended:
+            return None
+
     async def seq_of(self, session_id: str, event_id: str) -> int | None:
         async with self._factory() as db:
             seq = (
@@ -141,6 +167,7 @@ class JournalWriter:
         events: list[tuple[AgentEvent, str | None, str | None]],
         *,
         event_ids: list[str | None] | None,
+        if_absent: bool = False,
     ) -> int:
         n = len(events)
 
@@ -162,6 +189,15 @@ class JournalWriter:
                 },
             )
             last_seq = result.scalar_one()
+            if if_absent and event_ids and event_ids[0] is not None:
+                # Under the session row's lock: a writer that got here first has committed.
+                taken = await db.execute(
+                    select(EventRow.seq).where(
+                        EventRow.session_id == session_id, EventRow.event_id == event_ids[0]
+                    )
+                )
+                if taken.scalar_one_or_none() is not None:
+                    raise _AlreadyAppended  # rolls the seq allocation back
             first = int(last_seq) - n + 1
             now_ms = int(time.time() * 1000)
             index_update: RunEnd | None = None
@@ -281,6 +317,10 @@ class JournalWriter:
         return {"_type": event_type_name(event), "_blob_ref": digest}
 
 
+class _AlreadyAppended(Exception):
+    """``append_once`` lost the race for its key."""
+
+
 async def _run_to_completion[T](work: Coroutine[Any, Any, T]) -> T:
     """Await ``work``; if the caller is cancelled, ``work`` still finishes (and its error is logged)."""
     task = asyncio.ensure_future(work)
@@ -292,5 +332,7 @@ async def _run_to_completion[T](work: Coroutine[Any, Any, T]) -> T:
 
 
 def _log_failure(task: asyncio.Future[Any]) -> None:
-    if not task.cancelled() and (exc := task.exception()) is not None:
+    if not task.cancelled() and (exc := task.exception()) is not None and not isinstance(
+        exc, _AlreadyAppended
+    ):  # a lost claim is an answer, not a failure
         logging.getLogger(__name__).error("journal write failed after cancellation", exc_info=exc)

@@ -118,7 +118,9 @@ async def test_a_hand_is_lent_to_a_background_subagent_and_comes_back(
         sid = await create_with_hands(env, state, "build")
         await env.sessions.submit(sid, Message("c1", "write a note, and have a job build"))
         first = await env.wait_for(state, sid, run_ended(1))
-        started = payloads(first, ToolEnd)[1].result["payload"]
+        # The write and the subagent run at once (different lanes): find it by name.
+        (spawn,) = [e for e in payloads(first, ToolEnd) if e.tool_name == "subagent"]
+        started = spawn.result["payload"]
         assert started["status"] == "started" and started["hand"] == "build"
 
         # While the job holds it, the session's own call on that hand is refused.

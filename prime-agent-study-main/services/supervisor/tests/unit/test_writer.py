@@ -214,3 +214,23 @@ async def test_run_end_updates_session_index(tmp_path: Path) -> None:
                 )
             ).scalar_one()
             assert row == 2
+
+
+@pytest.mark.asyncio
+async def test_a_claim_under_one_key_is_won_once(tmp_path: Path) -> None:
+    """append_once is a claim: of many writers racing for one key, exactly one appends,
+    and the rest are told so (a tool's start, which a closer takes to keep it unrun)."""
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'claim.db'}") as (_engine, factory):
+        w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
+        await w.ensure_session("s1", runtime="echo")
+
+        async def claim(not_run: bool) -> int | None:
+            event = ToolStart(tool_call_id="c1", tool_name="write", args={}, not_run=not_run)
+            return await w.append_once("s1", event, turn_id="t1", trace_id=None, event_key="r1:c1:start")
+
+        won = await asyncio.gather(*[claim(i % 2 == 0) for i in range(20)])
+        assert sum(seq is not None for seq in won) == 1
+        async with factory() as db:
+            rows = (await db.execute(select(EventRow).where(EventRow.session_id == "s1"))).scalars().all()
+        assert [r.type for r in rows] == ["ToolStart"]
+        assert await claim(False) is None, "a later claim loses too"

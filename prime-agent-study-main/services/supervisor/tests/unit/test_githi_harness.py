@@ -259,3 +259,16 @@ def test_the_persona_label_stays_out_of_githis_prompt() -> None:
     assembler = CatalogPromptAssembler(pack)
     assert assembler.assemble(PromptBindings(include_persona=False)).text == "You are an expert."
     assert assembler.assemble(PromptBindings()).text.startswith("coder\n\n")  # other runtimes unchanged
+
+
+def test_a_calls_lane_is_the_file_it_names_or_the_platform_tools() -> None:
+    from supervisor.temporal.steps import call_lane
+
+    same = {call_lane("write", {"path": p}) for p in ("a.py", "./a.py", "/workspace/a.py", "src/../a.py")}
+    assert same == {"file:a.py"}
+    assert call_lane("edit", {"file_path": "src/b.py"}) == "file:src/b.py"
+    assert call_lane("read", {"path": "/workspace"}) == "file:."
+    assert call_lane("bash", {"command": "ls"}) is None  # runs whenever it can, as pi's
+    assert call_lane("grep", {"pattern": "x", "path": "a.py"}) is None
+    assert call_lane("memory", {"action": "add"}) == call_lane("subagent", {}) == "platform"
+    assert call_lane("write", {"content": "no path"}) is None

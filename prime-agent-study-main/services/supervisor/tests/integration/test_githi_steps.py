@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -27,11 +28,18 @@ from supervisor.agent.events import (
 from supervisor.app import SupervisorState
 from supervisor.temporal.contracts import (
     Activity,
+    CreateSession,
     Message,
     Phase,
+    Timing,
 )
 from supervisor.temporal.sessions import SessionCommandError
-from supervisor.temporal.steps import FINAL_STEP_NOTICE, steps_left_notice
+from supervisor.temporal.steps import (
+    FINAL_STEP_NOTICE,
+    NOT_RUN_OUTCOME,
+    UNKNOWN_OUTCOME,
+    steps_left_notice,
+)
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
@@ -205,7 +213,10 @@ async def test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session(
         assert await state.manager.session_status(sid) == "active"
         await env.sessions.terminate(sid)
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["LoopGuard"]
-    assert len(payloads(events, ToolEnd)) == 2  # the third identical call never ran
+    ends = payloads(events, ToolEnd)
+    assert [e.is_error for e in ends[:2]] == [False, False]
+    (third,) = ends[2:]  # the third identical call never ran, and is answered so
+    assert third.result["code"] == "TOOL_NOT_RUN" and third.result["error"] == NOT_RUN_OUTCOME
 
 
 async def test_a_model_that_keeps_working_is_warned_then_made_to_answer_on_the_last_step(
@@ -280,7 +291,8 @@ async def test_spending_the_budget_stops_the_run_and_refuses_new_turns(
         assert (await env.sessions.submit(sid, Message("c2", "queued"))).queued
         events = await env.wait_for(state, sid, lambda ev: len(payloads(ev, ErrorEvent)) >= 2)
         assert [e.error_class for e in payloads(events, ErrorEvent)] == ["BudgetExceeded"] * 2
-        assert not payloads(events, ToolEnd), "no tool runs once the budget is spent"
+        # No tool runs once the budget is spent: the call asked for is answered unrun.
+        assert [e.result["code"] for e in payloads(events, ToolEnd)] == ["TOOL_NOT_RUN"]
         assert event_types(events).count("RunStart") == 1, "the queued turn never starts"
         async with asyncio.timeout(10):
             while (await env.sessions.status(sid)).phase is not Phase.IDLE:
@@ -336,7 +348,43 @@ async def test_abort_during_an_approval_wait(
         events = await env.wait_for(state, sid, run_ended())
     assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
     assert payloads(events, ApprovalResolved)[0].choice == "deny"
-    assert not payloads(events, ToolEnd)
+    (end,) = payloads(events, ToolEnd)  # every call of the round is answered
+    assert end.result["code"] == "TOOL_NOT_RUN" and end.result["error"] == NOT_RUN_OUTCOME
+
+
+async def test_an_abort_while_the_sessions_worker_is_gone_still_closes_the_run(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Stopped while its worker is dead (its call not yet timed out): the run's close
+    waits for the session to be adopted, then runs there, so the run ends aborted."""
+    model(WRITE)
+    observer = await env.state()
+    name, digest = await env.composition(observer, "githi-v1")
+    worker, _ = await spawn_worker(env, {"scripted_calls": [list(WRITE)], "slow_tool": ["write", 120]})
+    sid = uuid.uuid4().hex
+    try:
+        await env.sessions.create(
+            sid,
+            CreateSession("t1", "githi-v1", composition_id=name, composition_digest=digest, principal_id="alice"),
+            # The call outlives the stop (its heartbeat limit is long), so the stop finds
+            # the run working and its close meets the dead worker's queue.
+            timing=Timing(placement_timeout_s=2.0, heartbeat_timeout_s=60.0, turn_timeout_s=120.0),
+        )
+        await env.sessions.submit(sid, Message("c1", "write a note"))
+        await env.wait_for(observer, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
+    finally:
+        worker.kill()  # SIGKILL mid-tool
+        await worker.wait()
+    await env.sessions.abort(sid)
+
+    adopter = await env.state()
+    async with session_worker(env.client, adopter, task_queue=env.queue):
+        events = await env.wait_for(observer, sid, run_ended(), timeout=60)
+        scheduled = await env.activity_types(sid)
+    assert scheduled.count(Activity.END_RUN) == 2, "the close met the dead queue, then ran again"
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    (end,) = payloads(events, ToolEnd)
+    assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
 
 
 @pytest.mark.parametrize(
@@ -347,7 +395,9 @@ async def test_abort_during_an_approval_wait(
 async def test_worker_killed_during_a_tool(
     env: Env, model: Callable[..., ScriptedGateway], harness: str, interrupted: bool
 ) -> None:
-    model(WRITE)
+    """A lost at-most-once call is never run again; as pi-temporal's, the model is told its
+    outcome is unknown and the run goes on (the model checks, then answers)."""
+    gateway = model(WRITE)
     observer = await env.state()
     # Published before the worker process boots, so it hydrates the composition.
     await env.composition(observer, harness)
@@ -369,7 +419,10 @@ async def test_worker_killed_during_a_tool(
     (end,) = payloads(events, ToolEnd)
     if interrupted:
         assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
-        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["TurnInterrupted"]
+        assert not payloads(events, ErrorEvent), "the run is not ended for a lost call"
+        assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+        read = [m.content for m in gateway.seen[-1] if m.role == "tool"]
+        assert read == [UNKNOWN_OUTCOME], "the model is told, in pi's words"
     else:
         assert not end.is_error, "an idempotent tool re-runs on the adopting worker"
         assert not payloads(events, ErrorEvent)

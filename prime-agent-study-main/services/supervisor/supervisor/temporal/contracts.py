@@ -267,6 +267,9 @@ class PlannedCall:
     # Read-only (the pinned recovery class is PURE): runs beside the round's other
     # read-only calls (pi's parallel tool execution) instead of after them.
     parallel: bool = False
+    # Calls with the same lane run in the order made (pi's file mutation queue): the file a
+    # file tool names, or "platform" for the memory and subagent tools. None: no order.
+    lane: str | None = None
 
 
 class RunPhase(StrEnum):
@@ -292,6 +295,10 @@ class RunState:
     """``tool:args-hash`` the run has already run (the stall guard counts only new ones)."""
     in_flight: str | None = None
     """The call whose tool step is running, closed as lost if the run is aborted."""
+    open: list[str] = field(default_factory=list)
+    """The round's calls not yet answered (a parallel round), closed if the run is aborted."""
+    lanes: bool = False
+    """This round's calls were planned with lanes (StepResult.lanes)."""
     compacted: bool = False
     """This step's conversation was compacted once; it is not compacted twice."""
     attempt: int = 0
@@ -328,6 +335,9 @@ class StepResult:
     kind: str = ""
     # RETRY: seconds to wait before asking again.
     delay_s: float = 0.0
+    # The calls were planned with lanes (PlannedCall.lane), so they may run at once; a
+    # step planned by an older worker (no lanes) runs its round in order.
+    lanes: bool = False
 
 
 COMPACT = "compact"
@@ -342,6 +352,9 @@ class ToolRequest:
     denied: bool = False
     # Not run: the user steered the run while its round was under way.
     skipped: bool = False
+    # Not run: an earlier change in its lane (the same file, or the platform tools) has an
+    # unknown outcome, and this change was made assuming it took effect.
+    behind_unknown: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,6 +497,9 @@ class EndRunRequest:
     # A tool call that started but whose outcome is unknown (worker lost, or aborted).
     lost_call_id: str | None = None
     lost_reason: str = LOST_WORKER
+    # Every call of the round the run stopped in that has no result yet: each is closed,
+    # as unknown when it started and as not run when it did not (pi-temporal's recovery seal).
+    open_call_ids: list[str] = field(default_factory=list)
 
 
 # Session row statuses after which no turn can ever run again.

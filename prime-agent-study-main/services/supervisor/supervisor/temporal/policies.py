@@ -151,8 +151,8 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
     ),
     Activity.TOOL_CALL: StepPolicy(
         Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
-        "re-run on the adopting worker; an at-most-once tool is not: its call is closed as "
-        "lost and the run ends, saying so",
+        "re-run on the adopting worker; an at-most-once tool is not: its call is answered "
+        "as an unknown outcome and the run goes on (the model checks)",
         "One tool call in the sandbox",
         retry_note="once for at-most-once tools",
     ),
