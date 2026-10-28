@@ -293,7 +293,12 @@ class HarnessPublisher:
                 "default": (base_manifest.get("recovery") or {}).get("default", "fail"),
                 "by_tool_class": (base_manifest.get("recovery") or {}).get("by_tool_class", {}),
             },
-            "budget": {"max_cost_per_session": p.max_cost_per_session, "max_tokens_per_turn": p.max_tokens_per_turn},
+            "budget": {
+                "max_cost_per_session": p.max_cost_per_session,
+                "max_tokens_per_turn": p.max_tokens_per_turn,
+                # Only when set, so a release without it keeps its digest.
+                **({"max_tokens_per_session": p.max_tokens_per_session} if p.max_tokens_per_session else {}),
+            },
             "guards": {"repetition": p.repetition, "oscillation": p.oscillation, "stall_iterations": p.stall_iterations},
             "approvals": {
                 "timeout_s": p.approval_timeout_s,
@@ -306,6 +311,7 @@ class HarnessPublisher:
                 "force_answer_on_final_step": True,
                 # Only when set, so a release without them keeps its digest.
                 **({"max_run_seconds": p.max_run_minutes * 60} if p.max_run_minutes else {}),
+                **({"hard_run_seconds": p.hard_run_minutes * 60} if p.hard_run_minutes else {}),
                 **({"model_retries": p.model_retries} if p.model_retries != 3 else {}),
             },
             **({"subagents": base_manifest["subagents"]} if base_manifest.get("subagents") else {}),

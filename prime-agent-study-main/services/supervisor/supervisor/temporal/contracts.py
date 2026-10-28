@@ -245,6 +245,12 @@ class RunPlan:
     capture: CaptureConfig | None = None
     # The pinned wall-clock limit for the run (loop.max_run_seconds); None: none.
     max_run_s: float | None = None
+    # The pinned deadline that stops the run mid-call (loop.hard_run_seconds); None: none.
+    hard_run_s: float | None = None
+    # Tokens the run may use (budget.max_tokens_per_turn), and the session
+    # (budget.max_tokens_per_session), counted by the workflow; None: no bound.
+    max_run_tokens: int | None = None
+    max_session_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +344,9 @@ class StepResult:
     # The calls were planned with lanes (PlannedCall.lane), so they may run at once; a
     # step planned by an older worker (no lanes) runs its round in order.
     lanes: bool = False
+    # What this step's model call used (input and output tokens), for the run's and the
+    # session's token bounds; 0 when nothing was asked.
+    tokens: int = 0
 
 
 COMPACT = "compact"
@@ -533,6 +542,8 @@ class Carried:
     capture_due: float | None = None
     # Steering messages waiting for the running run's next step (bounded by the run).
     steering: list[Message] = field(default_factory=list)
+    # Tokens the session's model steps have used (budget.max_tokens_per_session).
+    tokens_used: int = 0
 
 
 @dataclass(frozen=True, slots=True)

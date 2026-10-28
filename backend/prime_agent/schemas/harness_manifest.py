@@ -86,6 +86,10 @@ class PolicySpec(BaseModel):
     stall_iterations: int = Field(default=10, ge=1, le=1_000)
     max_run_minutes: int = Field(default=0, ge=0, le=1_440)
     """Wall-clock limit for one run; 0: none (the run ends at its next step, saying so)."""
+    hard_run_minutes: int = Field(default=0, ge=0, le=1_440)
+    """A deadline for one run that stops it where it is, mid-call; 0: none."""
+    max_tokens_per_session: int = Field(default=0, ge=0, le=1_000_000_000)
+    """Tokens the whole session may use; 0: no limit (later messages end at once past it)."""
     model_retries: int = Field(default=3, ge=0, le=10)
     """Times a model call that may pass (rate limit, overload) is asked again."""
 

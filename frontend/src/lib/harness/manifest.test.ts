@@ -21,6 +21,8 @@ const manifest: Manifest = {
     oscillation: 'abort',
     stall_iterations: 10,
     max_run_minutes: 0,
+    hard_run_minutes: 0,
+    max_tokens_per_session: 0,
     model_retries: 3,
   },
 };
