@@ -7,13 +7,16 @@ of the round: an unknown outcome for one that started, "did not run" for the res
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
-from supervisor.agent.events import ErrorEvent, ToolEnd, ToolStart, TurnEnd
+from supervisor.agent.events import ErrorEvent, MessageEnd, ToolEnd, ToolStart, TurnEnd
 from supervisor.temporal.contracts import Activity, Message
-from supervisor.temporal.steps import BEHIND_UNKNOWN, NOT_RUN_OUTCOME, UNKNOWN_OUTCOME
+from supervisor.temporal.steps import BEHIND_UNKNOWN, NOT_RUN_OUTCOME, UNKNOWN_OUTCOME, GithiSteps
 from supervisor.temporal.worker import session_worker
 from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended, spawn_worker
 from tests.support.scripted import ScriptedGateway, slow_tool
@@ -145,3 +148,32 @@ async def test_a_worker_lost_mid_round_answers_its_calls_and_the_run_goes_on(
     assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
     read = [m.content for m in gateway.seen[-1] if m.role == "tool"]
     assert read == [UNKNOWN_OUTCOME, UNKNOWN_OUTCOME, BEHIND_UNKNOWN], "told in call order"
+
+
+async def test_a_stop_after_the_model_asked_for_calls_still_answers_them(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The model's reply (with its calls) is journalled, then the run is stopped before
+    the workflow saw the reply: the run's close answers each call it asked for as not
+    run, so the conversation never holds a call without a result."""
+    model(WRITE, LS)
+    state = await env.state()
+    step = GithiSteps.model_step
+
+    async def slow_reply(self: GithiSteps, req: Any) -> Any:
+        result = await step(self, req)  # journalled
+        await asyncio.sleep(3)  # the stop lands here
+        return result
+
+    with patch.object(GithiSteps, "model_step", slow_reply):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "write and list"))
+            await env.wait_for(state, sid, has_event(lambda p: isinstance(p, MessageEnd) and p.role == "assistant"))
+            await env.sessions.abort(sid)
+            events = await env.wait_for(state, sid, run_ended(), timeout=30)
+
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    ends = {e.tool_call_id: e for e in payloads(events, ToolEnd)}
+    assert set(ends) == {"call-0-0", "call-0-1"}
+    assert all(e.result["error"] == NOT_RUN_OUTCOME for e in ends.values())

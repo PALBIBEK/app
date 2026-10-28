@@ -424,6 +424,11 @@ class GithiSteps:
             await self.close_lost_call(LostCall(sid, run_id, req.lost_call_id, req.lost_reason))
         for call_id in req.open_call_ids:  # each a no-op once its call ended
             await self.close_lost_call(LostCall(sid, run_id, call_id, req.lost_reason))
+        why = f"the run ended ({req.stop_reason}) before the call's result was recorded"
+        for call_id in await self._unanswered(sid, run_id):
+            # Asked for, never answered: a stop between the model's reply and its round
+            # (pi-temporal's recovery seal answers these too). Not run, unless it started.
+            await self.close_lost_call(LostCall(sid, run_id, call_id, why))
         if req.close_session and await self._manager.session_status(sid) == "active":
             runtime = self._manager._registry.get(sid)
             await self._manager._policy_abort(
@@ -443,6 +448,22 @@ class GithiSteps:
         last_seq = await self._record(sid, run_id, "end", RunEnd(messages=history))
         status = await self._manager.session_status(sid) or "terminated"
         return TurnOutcome(req.command_id, req.stop_reason, last_seq, status)
+
+    async def _unanswered(self, session_id: str, run_id: str) -> list[str]:
+        """The calls the run's model asked for that have no result yet, in order."""
+        asked: list[str] = []
+        ended: set[str] = set()
+        for envelope in await self._reader.read_turn(session_id, run_id):
+            event = envelope.payload
+            if isinstance(event, MessageEnd) and event.role == "assistant":
+                asked += [
+                    str(part["id"])
+                    for part in event.content
+                    if isinstance(part, dict) and part.get("type") == "tool_call"
+                ]
+            elif isinstance(event, ToolEnd):
+                ended.add(event.tool_call_id)
+        return [call_id for call_id in asked if call_id not in ended]
 
     # --- model ---------------------------------------------------------------
 

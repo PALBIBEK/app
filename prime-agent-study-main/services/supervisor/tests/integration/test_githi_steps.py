@@ -291,7 +291,8 @@ async def test_spending_the_budget_stops_the_run_and_refuses_new_turns(
         assert (await env.sessions.submit(sid, Message("c2", "queued"))).queued
         events = await env.wait_for(state, sid, lambda ev: len(payloads(ev, ErrorEvent)) >= 2)
         assert [e.error_class for e in payloads(events, ErrorEvent)] == ["BudgetExceeded"] * 2
-        assert not payloads(events, ToolEnd), "no tool runs once the budget is spent"
+        # No tool runs once the budget is spent: the call asked for is answered unrun.
+        assert [e.result["code"] for e in payloads(events, ToolEnd)] == ["TOOL_NOT_RUN"]
         assert event_types(events).count("RunStart") == 1, "the queued turn never starts"
         async with asyncio.timeout(10):
             while (await env.sessions.status(sid)).phase is not Phase.IDLE:
