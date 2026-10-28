@@ -112,6 +112,8 @@ _STALL_COUNTS_PROGRESS = "stall-counts-progress"
 _PHASE_LOOP = "phase-loop"
 # A round asks for every approval first, then runs its read-only calls together.
 _TOOL_ROUND = "tool-round"
+# A steering message waits for the round to finish (pi), instead of skipping its rest.
+_STEER_AFTER_ROUND = "steer-after-round"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -511,9 +513,10 @@ class AgentSessionWorkflow:
         failed: dict[str, bool] = {}
         at = 0
         while at < len(st.calls):
-            if self._state.steering:
-                # The user spoke: the calls not yet run give way (pi's skipped calls), and
-                # the next step reads the message.
+            if self._state.steering and not workflow.patched(_STEER_AFTER_ROUND):
+                # Runs recorded before steer-after-round: the calls not yet run gave way
+                # to the user. Now the round finishes, as pi's does, and the next step
+                # reads the message.
                 rest = st.calls[at:]
                 ids = [c.call_id for c in rest]
                 await self._session_activity(

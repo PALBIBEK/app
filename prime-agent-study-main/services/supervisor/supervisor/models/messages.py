@@ -222,7 +222,10 @@ def context_from_chat(
             call_id = message.tool_call_id or ""
             body.append(
                 ToolResultMessage(
-                    call_id, names.get(call_id, ""), message.content, _tool_failed(message.content)
+                    call_id,
+                    names.get(call_id, ""),
+                    message.content,
+                    bool(getattr(message, "is_error", False)) or _tool_failed(message.content),
                 )
             )
     return Context(

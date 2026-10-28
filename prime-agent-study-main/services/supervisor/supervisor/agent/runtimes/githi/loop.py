@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -130,16 +130,22 @@ class AgentLoop:
     # --- pieces of a stepped turn --------------------------------------------------
 
     def messages_for_model(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        *,
+        project: Sequence[tuple[str, str]] = (),
     ) -> list[ChatMessage]:
         """The conversation as the model sees it, led by the system prompt: the pinned
-        prompt pack, the tools this run offers, and the working directory."""
+        prompt pack, the tools this run offers, the project's instructions, and the
+        working directory."""
         chat = self.to_chat_messages(messages)
         assembler = self._seams.prompt_assembler if self._seams else None
         if assembler is None:
             return chat
-        pinned = assembler.assemble(PromptBindings(cwd=WORKSPACE)).text
-        return [ChatMessage(role="system", content=system_prompt(pinned, tools or [])), *chat]
+        pinned = assembler.assemble(PromptBindings(cwd=WORKSPACE, include_persona=False)).text
+        prompt = system_prompt(pinned, tools or [], project=project)
+        return [ChatMessage(role="system", content=prompt), *chat]
 
     @property
     def tool_provider(self) -> Any:
@@ -238,6 +244,7 @@ class AgentLoop:
                     tool_call_id=m.get("tool_call_id"),
                     parts=m.get("parts") or None,
                     model=m.get("model"),
+                    is_error=bool(m.get("is_error")),
                 )
             )
         return out

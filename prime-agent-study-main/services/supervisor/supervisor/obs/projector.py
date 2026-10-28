@@ -52,6 +52,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "ToolEnd": "close_tool",
     "ErrorEvent": "status_on_enclosing",
     "ModelRetry": "event_on_turn",
+    "ProjectContext": "event_on_turn",
     "WorkspaceRestored": "event_on_turn",
     "ApprovalRequired": "platform_span",
     "ApprovalResolved": "close_approval",

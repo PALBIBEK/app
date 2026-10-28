@@ -108,7 +108,7 @@ def test_thinking_levels_follow_the_level_map() -> None:
     assert haiku.clamp_thinking_level("max") == "high"
     router = _spec("openrouter/auto")
     assert router.reasoning
-    assert default_thinking_level(_spec("claude-opus-5")) == "low"
+    assert default_thinking_level(_spec("claude-opus-5")) == "medium"  # pi's default, every model
     assert default_thinking_level(_spec("gpt-5.6-sol")) == "medium"
 
 

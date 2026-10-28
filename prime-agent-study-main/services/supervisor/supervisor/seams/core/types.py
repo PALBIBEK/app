@@ -45,6 +45,9 @@ class PromptBindings:
     skill_listing: str = ""
     extra: str = ""
     custom: str = ""
+    # The pack's persona is a short role label ("coder") for lists and builders; a
+    # runtime whose prompt starts with the pack's own text leaves it out.
+    include_persona: bool = True
 
 
 @dataclass
@@ -148,6 +151,9 @@ class ChatMessage:
     tool_call_id: str | None = None
     parts: list[dict[str, Any]] | None = None
     model: str | None = None
+    # A tool result that failed: providers with a field for it (Anthropic's is_error)
+    # are told, as pi tells them; chat completions has none and reads the text.
+    is_error: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """OpenAI chat-completions message. Tool calls may be ``{id, name, arguments}``."""

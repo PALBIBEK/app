@@ -184,3 +184,30 @@ def test_a_tool_call_id_the_run_has_used_is_renamed_before_it_is_journalled() ->
     ids = [p.get("id") for p in unique_call_ids(parts, {"call_0"}, 2)][1:]
     assert ids == ["call_0~2.1", "call~2.2", "fresh", "fresh~2.4"]
     assert len(set(ids)) == len(ids)
+
+
+def test_the_prompt_lists_pis_tools_first_and_carries_the_projects_instructions() -> None:
+    def fn(name: str) -> dict[str, object]:
+        return {"type": "function", "function": {"name": name, "description": f"{name} tool."}}
+
+    prompt = system_prompt("Pinned.", [fn("memory"), fn("write"), fn("ls"), fn("read"), fn("bash"), fn("edit")],
+                           project=[("AGENTS.md", "Run `make test` before you finish.\n")])
+    listed = [line.split(":")[0][2:] for line in prompt.split("<tools>\n")[1].split("\n\n")[0].splitlines()]
+    assert listed == ["read", "bash", "edit", "write", "ls", "memory"]  # pi's order, then the rest
+    assert (
+        "<project_context>\nProject-specific instructions and guidelines:\n\n"
+        '<project_instructions path="AGENTS.md">\nRun `make test` before you finish.\n</project_instructions>\n'
+        "</project_context>\n\n<cwd>"
+    ) in prompt
+
+
+def test_the_persona_label_stays_out_of_githis_prompt() -> None:
+    from supervisor.catalog.core.types import PromptPack, PromptSection
+    from supervisor.catalog.providers.catalog_prompt import CatalogPromptAssembler
+    from supervisor.seams.core.types import PromptBindings
+
+    pack = PromptPack(name="p", persona="coder", sections=(PromptSection(id="intro", text="You are an expert.", order=1),),
+                      vars=(), semver="1.0.0", digest="", status="offered", protocol_version=1)  # type: ignore[call-arg]
+    assembler = CatalogPromptAssembler(pack)
+    assert assembler.assemble(PromptBindings(include_persona=False)).text == "You are an expert."
+    assert assembler.assemble(PromptBindings()).text.startswith("coder\n\n")  # other runtimes unchanged
