@@ -293,6 +293,7 @@ class SessionService:
                 link.ai_session_id,
                 text=body.content,
                 command_id=command_id,
+                steer=body.steer,
             )
         except AiUpstreamError as exc:
             code = "AI_UPSTREAM_ERROR"
@@ -315,6 +316,7 @@ class SessionService:
             command_id=command_id,
             status=str(upstream.get("status") or "accepted"),
             queued=upstream.get("queued") is True,
+            steered=upstream.get("steered") is True,
         )
 
     async def invoke_tool(

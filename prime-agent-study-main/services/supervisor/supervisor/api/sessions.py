@@ -270,6 +270,7 @@ async def post_message(
                     body.command_id,
                     body.text,
                     parse_traceparent(request.headers.get("traceparent")),
+                    steer=body.steer,
                 ),
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
@@ -277,12 +278,13 @@ async def post_message(
         # The run id the workflow gives this message's run: the client can fetch the run by it.
         _, response = await deps.claim_command(
             request, session_id, body.command_id, body.text,
-            turn_id=run_id_for(session_id, body.command_id),
+            turn_id=accepted.run_id if accepted.steered and accepted.run_id else run_id_for(session_id, body.command_id),
         )
         return PostMessageResponse(
             turn_id=str(response["turn_id"]),
             status=str(response.get("status", "accepted")),
             queued=accepted.queued,
+            steered=accepted.steered,
         )
 
     try:

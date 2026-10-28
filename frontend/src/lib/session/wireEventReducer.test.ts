@@ -100,3 +100,25 @@ describe('applyWireEvent hands', () => {
     expect(s.sandbox?.status).toBe('ready');
   });
 });
+
+describe('applyWireEvent partial_output', () => {
+  const partial = (text: string, last: number): WireEvent =>
+    ({ seq: last, event_id: 'partial:r1:0', turn_id: 'r1', type: 'partial_output', ts_ms: 1, data: { step: 0, text, thinking: '' } }) as WireEvent;
+
+  it('shows the reply as it streams and drops it once the journal has the reply', () => {
+    let state = applyWireEvent(createSessionViewState(), ev('run_start', {}));
+    const last = state.lastSeq;
+    state = applyWireEvent(state, partial('The ans', last));
+    state = applyWireEvent(state, partial('The answer is 42', last)); // same seq: not a replay
+    expect(state.partial?.text).toBe('The answer is 42');
+    expect(state.lastSeq).toBe(last); // a partial is not a position to resume from
+    state = applyWireEvent(state, ev('message_end', { role: 'assistant', content: [{ type: 'text', text: 'The answer is 42.' }] }));
+    expect(state.partial).toBeNull();
+    expect(state.messages.map((m) => m.content)).toEqual(['The answer is 42.']);
+  });
+
+  it('ignores a partial when no run is open (a late frame after the run ended)', () => {
+    const state = applyWireEvent(createSessionViewState(), partial('stale', 0));
+    expect(state.partial).toBeNull();
+  });
+});

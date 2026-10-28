@@ -66,6 +66,7 @@ from supervisor.temporal.contracts import (
     Op,
     OpResult,
     Phase,
+    PlaceInputs,
     Placement,
     PlannedCall,
     RetryMode,
@@ -165,6 +166,8 @@ class AgentSessionWorkflow:
         self._placement_timeout = timedelta(seconds=inp.timing.placement_timeout_s)
         self._state = inp.carried or Carried()
         self._running: Message | None = None
+        # The run a steering message joins: set while a phase-loop run is working.
+        self._steerable: str | None = None
         self._turn: asyncio.Task[object] | None = None
         self._terminate_requested = False
         self._abort_requested = False
@@ -257,6 +260,11 @@ class AgentSessionWorkflow:
                 workflow.logger.warning("turn %s failed: %s", message.command_id, err)
         finally:
             self._running, self._turn, self._abort_requested = None, None, False
+            self._steerable = None
+            if self._state.steering:
+                # Arrived as the run ended: they run next, in order (pi's follow-ups).
+                self._state.pending[:0] = self._state.steering
+                self._state.steering = []
             self._state.turns_completed += 1
             if self._state.phase is Phase.RUNNING:
                 self._state.phase = Phase.IDLE
@@ -332,12 +340,22 @@ class AgentSessionWorkflow:
         """
         guard = _guard(plan.guard)
         st = RunState()
+        self._steerable = plan.run_id
 
         async def end(stop_reason: str, **details: Any) -> TurnOutcome:
+            self._steerable = None  # a message sent from here on runs after this run
             return await self._end_run(message, plan, stop_reason, **details)
 
         try:
             while True:
+                if st.phase is RunPhase.REQUEST and self._state.steering:
+                    # What the user said while the run worked joins it before its next step.
+                    steering, self._state.steering = list(self._state.steering), []
+                    await self._session_activity(
+                        Activity.PLACE_INPUTS,
+                        PlaceInputs(self._session_id, plan.run_id, st.step, steering),
+                        type(None),
+                    )
                 if st.phase is RunPhase.REQUEST:
                     if st.step >= plan.max_steps:
                         return await end(
@@ -384,6 +402,10 @@ class AgentSessionWorkflow:
                                 ),
                             )
                         st.compacted = True
+                        continue
+                    if result.final and result.stop_reason == "stop" and self._state.steering:
+                        # The user spoke while the model answered: the run goes on with it.
+                        st.step, st.compacted, st.attempt = st.step + 1, False, 0
                         continue
                     if result.final:
                         return await end(result.stop_reason)
@@ -476,6 +498,19 @@ class AgentSessionWorkflow:
         failed: dict[str, bool] = {}
         at = 0
         while at < len(st.calls):
+            if self._state.steering:
+                # The user spoke: the calls not yet run give way (pi's skipped calls), and
+                # the next step reads the message.
+                rest = st.calls[at:]
+                ids = [c.call_id for c in rest]
+                await self._session_activity(
+                    Activity.TOOL_BATCH,
+                    ToolBatch(self._session_id, plan.run_id, ids, skipped=ids),
+                    list[bool],
+                    track=True,
+                )
+                failed |= dict.fromkeys(ids, True)
+                break
             batch = [st.calls[at]]
             while batch[-1].parallel and at + len(batch) < len(st.calls) and st.calls[at + len(batch)].parallel:
                 batch.append(st.calls[at + len(batch)])
@@ -804,6 +839,11 @@ class AgentSessionWorkflow:
         if self._creation_error is not None:
             raise self._creation_error
         async with self._submit_lock:
+            if message.steer and self._steerable is not None:
+                # pi's steer: placed in the working run at its next step, not queued.
+                self._remember(message.command_id)
+                self._state.steering.append(message)
+                return Accepted(message.command_id, queued=False, steered=True, run_id=self._steerable)
             if self._running is not None or self._state.pending:
                 self._remember(message.command_id)
                 self._state.pending.append(message)

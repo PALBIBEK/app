@@ -101,6 +101,8 @@ class SessionMessageRequest(BaseModel):
 
     content: str = Field(..., min_length=1)
     command_id: str | None = Field(default=None, min_length=1)
+    # Sent while a run works: join it at its next step (steering) instead of queueing.
+    steer: bool = False
 
 
 class SessionMessageResponse(BaseModel):
@@ -110,6 +112,7 @@ class SessionMessageResponse(BaseModel):
     command_id: str
     status: str = "accepted"
     queued: bool = False  # true when it waits behind a turn already running
+    steered: bool = False  # true when it joined the running turn (turn_id) instead
 
 
 class SessionToolInvokeRequest(BaseModel):

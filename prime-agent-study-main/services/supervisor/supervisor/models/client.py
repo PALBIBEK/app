@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -201,6 +201,7 @@ class RoutedModelClient:
         *,
         model: str | None = None,
         tool_choice: str | None = None,
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> tuple[ModelSpec, AssistantTurn]:
         """One agent model call at the session's effort; the spec it resolved to and its turn."""
         spec = self.spec(model)
@@ -209,6 +210,7 @@ class RoutedModelClient:
             context_from_chat(messages, tools),
             thinking=self.thinking_level(spec),
             tool_choice=tool_choice,
+            on_delta=on_delta,
         )
 
     def call(
@@ -220,6 +222,7 @@ class RoutedModelClient:
         max_tokens: int | None = None,
         tool_choice: Any = None,
         max_retries: int | None = None,
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> AssistantTurn:
         """Send ``context`` to ``spec`` through the gateway.
 
@@ -245,6 +248,7 @@ class RoutedModelClient:
             tool_choice=tool_choice,
             payload_hook=wire_body,
             max_retries=DEFAULT_MAX_RETRIES if max_retries is None else max_retries,
+            on_delta=on_delta,
         )
         call = WireCall(
             spec=routed.spec,
@@ -273,8 +277,10 @@ class RoutedModelClient:
         *,
         model: str | None = None,
         tool_choice: str | None = None,
+        on_delta: Callable[[str, str], None] | None = None,
     ) -> Completion:
-        spec, turn = self.turn(messages, tools, model=model, tool_choice=tool_choice)
+        """``on_delta`` sees the reply as it streams in: ("text" | "thinking", chunk)."""
+        spec, turn = self.turn(messages, tools, model=model, tool_choice=tool_choice, on_delta=on_delta)
         return completion(spec, turn)
 
     def stream(

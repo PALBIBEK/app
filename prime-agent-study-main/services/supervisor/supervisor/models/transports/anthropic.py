@@ -34,6 +34,7 @@ from supervisor.models.transports.base import (
     ModelCallError,
     StopReason,
     WireCall,
+    emit_delta,
     merged_headers,
     parse_json,
     parse_partial_json,
@@ -326,7 +327,13 @@ def call_messages(call: WireCall) -> AssistantTurn:
         if event.event == "error":
             raise ModelCallError(event.data, error_type="stream_error")
         if event.event in _MESSAGE_EVENTS:
-            stream.feed(parse_json(event.data, f"Anthropic {event.event}"))
+            payload = parse_json(event.data, f"Anthropic {event.event}")
+            stream.feed(payload)
+            delta = payload.get("delta") if isinstance(payload, dict) else None
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                emit_delta(call, "text", delta.get("text"))
+            elif isinstance(delta, dict) and delta.get("type") == "thinking_delta":
+                emit_delta(call, "thinking", delta.get("thinking"))
     if stream.started and not stream.finished:
         raise ModelCallError("Anthropic stream ended before message_stop")
     usage = stream.usage

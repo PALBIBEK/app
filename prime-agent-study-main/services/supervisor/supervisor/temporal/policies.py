@@ -139,6 +139,11 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "skipped; a lost checkpoint costs a restore, never the turn",
         "Save what the last tools changed in the sandbox (beside the model call)",
     ),
+    Activity.PLACE_INPUTS: StepPolicy(
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        "retried on another worker (each message is keyed, so it lands once)",
+        "Place steering messages in the running run before its next step",
+    ),
     Activity.TOOL_BATCH: StepPolicy(
         Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
         "re-run on the adopting worker (read-only calls; each one's result is kept)",

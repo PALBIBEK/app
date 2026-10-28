@@ -33,6 +33,7 @@ from supervisor.models.transports.base import (
     ModelCallError,
     StopReason,
     WireCall,
+    emit_delta,
     merged_headers,
     parse_json,
     parse_partial_json,
@@ -303,6 +304,7 @@ def call_completions(call: WireCall) -> AssistantTurn:
             chunk = parse_json(event.data, "chat completion")
             if isinstance(chunk, dict):
                 stream.feed(chunk)
+                _emit_chunk(call, chunk)
     if stream.stop is None:
         raise ModelCallError("Stream ended without finish_reason")
     return AssistantTurn(
@@ -312,6 +314,19 @@ def call_completions(call: WireCall) -> AssistantTurn:
         stop_reason=stream.stop,
         response_id=stream.response_id,
     )
+
+
+def _emit_chunk(call: WireCall, chunk: Mapping[str, Any]) -> None:
+    choices = chunk.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    delta = (choice.get("delta") if isinstance(choice, dict) else None) or {}
+    if not isinstance(delta, dict):
+        return
+    emit_delta(call, "text", delta.get("content"))
+    for name in _REASONING_FIELDS:
+        if delta.get(name):
+            emit_delta(call, "thinking", delta.get(name))
+            break
 
 
 class _CompletionStream:

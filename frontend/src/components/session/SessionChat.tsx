@@ -350,9 +350,22 @@ export function SessionChat({
                 ))}
               </div>
             ) : null}
-            {thinking ? (
-              <div className="flex items-center gap-2 pl-10 text-sm text-ink-2">
-                <CircleNotch size={15} className="animate-spin text-accent-600" /> Thinking…
+            {state.partial?.text ? (
+              <MessageBubble
+                key="partial"
+                message={{ id: 'partial', role: 'assistant', content: state.partial.text, timestamp: new Date().toISOString() }}
+                agentName={agentName}
+                userInitials={initials(user?.name)}
+              />
+            ) : null}
+            {thinking && !state.partial?.text ? (
+              <div className="flex items-start gap-2 pl-10 text-sm text-ink-2" aria-live="polite">
+                <CircleNotch size={15} className="mt-0.5 shrink-0 animate-spin text-accent-600" />
+                {state.partial?.thinking ? (
+                  <span className="line-clamp-3 whitespace-pre-wrap italic">{state.partial.thinking.slice(-400)}</span>
+                ) : (
+                  'Thinking…'
+                )}
               </div>
             ) : null}
             <div ref={endRef} />

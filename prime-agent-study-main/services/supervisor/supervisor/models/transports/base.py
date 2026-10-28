@@ -7,6 +7,7 @@ behind an idle connection, and a turn's native blocks are rebuilt exactly.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import random
 import time
@@ -45,6 +46,17 @@ class RequestOptions:
     timeout_s: float = 600.0
     payload_hook: PayloadHook | None = None
     """Last edit to the request body before it is sent (wire model id, request overrides)."""
+    on_delta: Callable[[str, str], None] | None = None
+    """Called with ("text" | "thinking", chunk) as the reply streams in (best effort)."""
+
+
+def emit_delta(call: WireCall, kind: str, chunk: object) -> None:
+    """Hand a streamed chunk to the caller's ``on_delta``; its failure never fails the call."""
+    hook = call.options.on_delta
+    if hook is None or not isinstance(chunk, str) or not chunk:
+        return
+    with contextlib.suppress(Exception):  # a display hook must not break the model call
+        hook(kind, chunk)
 
 
 @dataclass(frozen=True, slots=True)

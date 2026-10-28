@@ -39,6 +39,15 @@ export interface SessionViewState {
   usage: { input_tokens: number; output_tokens: number; cost: number };
   /** The session's (default) sandbox, from its hand events; null until one is built. */
   sandbox: SandboxView | null;
+  /** The reply the model is writing now (streamed, not yet in the journal). */
+  partial: PartialReply | null;
+}
+
+export interface PartialReply {
+  runId: string;
+  step: number;
+  text: string;
+  thinking: string;
 }
 
 export interface SandboxView {
@@ -65,6 +74,7 @@ export function createSessionViewState(): SessionViewState {
     runSteps: 0,
     usage: { input_tokens: 0, output_tokens: 0, cost: 0 },
     sandbox: null,
+    partial: null,
   };
 }
 
@@ -97,6 +107,19 @@ export function displaySubagentProvider(provider: string): {
 }
 
 export function applyWireEvent(state: SessionViewState, event: WireEvent): SessionViewState {
+  if (event.type === 'partial_output') {
+    // Not a journal event (its seq is the last one journalled): never a replay, never kept.
+    if (!state.running) return state;
+    return {
+      ...state,
+      partial: {
+        runId: String(event.turn_id ?? ''),
+        step: Number(event.data.step ?? 0),
+        text: String(event.data.text ?? ''),
+        thinking: String(event.data.thinking ?? ''),
+      },
+    };
+  }
   // A reconnect resumes after the last seq seen; anything at or before it is a replay.
   if (event.seq <= state.lastSeq) return state;
   const next: SessionViewState = {
@@ -168,6 +191,7 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       break;
     }
     case 'message_end': {
+      next.partial = null; // the reply it was streaming is journalled now
       const roleRaw = String(event.data.role ?? 'assistant');
       const role =
         roleRaw === 'user' || roleRaw === 'system' ? roleRaw : 'assistant';
@@ -258,6 +282,7 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
     case 'settled':
     case 'run_end': {
       next.settled = true;
+      next.partial = null;
       next.running = false;
       next.pendingApprovals = [];
       next.awaitingApproval = false;

@@ -65,6 +65,9 @@ class ScriptedGateway:
     child_gate: threading.Event | None = None
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     tool_choices: list[str | None] = dataclasses.field(default_factory=list)
+    # The answer streamed to ``on_delta`` first, a chunk every ``stream_pause`` seconds.
+    stream_chunks: list[str] = dataclasses.field(default_factory=list)
+    stream_pause: float = 0.0
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def complete(
@@ -74,8 +77,14 @@ class ScriptedGateway:
         *,
         model: str | None = None,
         tool_choice: str | None = None,
+        on_delta: Any = None,
     ) -> Completion:
         self.tool_choices.append(tool_choice)
+        if self.stream_chunks and on_delta is not None and tools:
+            for chunk in self.stream_chunks:
+                on_delta("text", chunk)
+                time.sleep(self.stream_pause)
+            return Completion(ChatMessage("assistant", "".join(self.stream_chunks)), model="scripted", usage={})
         if tool_choice == "none":  # the model is told to answer: it does
             with self._lock:
                 self.seen.append(list(messages))

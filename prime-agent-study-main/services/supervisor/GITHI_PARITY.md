@@ -32,8 +32,8 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | L8 | Durable execution: per-step journal, adoption, at-most-once tools | better |
 | L9 | Loop guard, durable approvals, cost budget | better |
 | L10 | Abort | same |
-| L11 | Steering a running run; follow-ups after it | next (phase 6) |
-| L12 | Streaming text, thinking and tool output | next (phase 6) |
+| L11 | Steering: a message sent with `steer` while a run works joins it before its next step (the round's calls not yet run are skipped, as pi skips them); one sent as the model answers continues the run; one that arrives as the run ends runs next as a follow-up | done (phase 6) |
+| L12 | Streaming: the reply and its thinking are shown as the model writes them (`partial_output` on the event stream, written a few times a second outside the journal, never replayed, removed once journalled), from whichever worker thinks; tool output streams later | done (phase 6) for text and thinking |
 | L13 | The loop as explicit phases over a checkpoint | done (phase 2) |
 | L14 | Retryable model errors (429, 5xx, overload, dropped connection) wait on a durable workflow timer and are asked again: `Retry-After` honoured, 3 retries doubling from 2 s, each journalled as `ModelRetry`; an abort ends the wait; a refused request (401, bad body) ends the run at once instead of five blind attempts. A step whose worker keeps dying stops after its activity attempts, and the run ends saying so | done (phase 4); retry settings as pins in phase 7 |
 | L15 | A step's calls as one round: the loop guard and every approval before any call runs; consecutive read-only calls (pinned class PURE) run together in one `session.tool_batch` activity, and their results are read back in the order asked; a call that changes anything runs alone, after what came before. Replay per tool: at-most-once tools are never re-run | done (phase 5) |

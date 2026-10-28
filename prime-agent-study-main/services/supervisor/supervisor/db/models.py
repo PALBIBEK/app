@@ -557,3 +557,22 @@ class TraceJudgeRow(Base):
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class PartialOutputRow(Base):
+    """What the model has written so far in the step it is on: one row per session,
+    replaced as the reply streams and removed once it is journalled.
+
+    Not part of the journal: a reconnecting client is never replayed partials, and a
+    step retried on another worker starts its row again. It lets every API replica
+    show a reply as it is written (pi's streamed message), whichever worker thinks.
+    """
+
+    __tablename__ = "partial_outputs"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    step: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    thinking: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)

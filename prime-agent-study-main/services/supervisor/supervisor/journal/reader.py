@@ -24,6 +24,10 @@ class JournalReader:
         self._factory = session_factory
         self._blob_dir = Path(blob_dir) if blob_dir is not None else None
 
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        return self._factory
+
     async def read(self, session_id: str, *, since: int = -1) -> list[Envelope]:
         """Return envelopes with seq > since (exclusive), in order."""
         async with self._factory() as db:
