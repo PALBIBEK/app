@@ -60,6 +60,7 @@ class Activity(StrEnum):
     # Save what the last tools changed in the sandbox; on the worker holding it.
     CHECKPOINT = "session.checkpoint"
     # Summarise the conversation inside a run so the next model step fits its window.
+    TOOL_BATCH = "session.tool_batch"
     COMPACT = "session.compact"
     TOOL_CALL = "session.tool_call"
     REQUEST_APPROVAL = "session.request_approval"
@@ -254,6 +255,9 @@ class PlannedCall:
     args_hash: str
     retry: RetryMode
     approval: ApprovalNeeded | None = None
+    # Read-only (the pinned recovery class is PURE): runs beside the round's other
+    # read-only calls (pi's parallel tool execution) instead of after them.
+    parallel: bool = False
 
 
 class RunPhase(StrEnum):
@@ -327,6 +331,16 @@ class ToolRequest:
     run_id: str
     call_id: str
     denied: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ToolBatch:
+    """Read-only calls of one round, run together on the session's worker."""
+
+    session_id: str
+    run_id: str
+    call_ids: list[str]
+    denied: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

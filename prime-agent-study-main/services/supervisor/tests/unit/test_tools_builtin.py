@@ -284,3 +284,12 @@ async def test_bash_runs_inside_the_sandbox(tmp_path: Path) -> None:
     out = await _run("bash", ctx, command="echo hi > made.txt; cat made.txt; exit 2")
     assert (out["exit_code"], out["stdout"]) == (2, "hi\n")
     assert await sandbox.read_file("/workspace/made.txt") == b"hi\n"
+
+
+async def test_bash_keeps_the_whole_of_an_output_it_cuts(host: ToolContext, tmp_path: Path) -> None:
+    out = await _run("bash", host, command="seq 1 20000")
+    assert "cut from the middle" in out["stdout"]
+    spill = out["full_output"]
+    assert spill.startswith(".githi/output/") and spill in out["notice"]
+    kept = (tmp_path / spill).read_text()
+    assert kept.splitlines()[0] == "1" and kept.splitlines()[-1] == "20000"

@@ -36,7 +36,7 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | L12 | Streaming text, thinking and tool output | next (phase 6) |
 | L13 | The loop as explicit phases over a checkpoint | done (phase 2) |
 | L14 | Retryable model errors (429, 5xx, overload, dropped connection) wait on a durable workflow timer and are asked again: `Retry-After` honoured, 3 retries doubling from 2 s, each journalled as `ModelRetry`; an abort ends the wait; a refused request (401, bad body) ends the run at once instead of five blind attempts. A step whose worker keeps dying stops after its activity attempts, and the run ends saying so | done (phase 4); retry settings as pins in phase 7 |
-| L15 | Parallel tool rounds; per-tool replay policy | next (phase 5) |
+| L15 | A step's calls as one round: the loop guard and every approval before any call runs; consecutive read-only calls (pinned class PURE) run together in one `session.tool_batch` activity, and their results are read back in the order asked; a call that changes anything runs alone, after what came before. Replay per tool: at-most-once tools are never re-run | done (phase 5) |
 
 ### Prompt
 
@@ -50,7 +50,7 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | # | Tool | Status |
 |---|---|---|
 | T1 | edit: batch edits, CRLF and BOM kept, curly quotes matched, diff returned | done (phase 1) |
-| T2 | bash: output capped; the full output saved to a file it names | next (phase 5) |
+| T2 | bash: output capped; the full output kept in `.githi/output/` and named in the result | done (phase 5) |
 | T3 | read: 2000 lines / 50 KB per call with the offset to continue; binary and images reported | done (phase 1) |
 | T4 | grep, ls, write | same |
 | T5 | Tool results reach the model as text, failures stated plainly | done (phase 1) |

@@ -139,6 +139,11 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "skipped; a lost checkpoint costs a restore, never the turn",
         "Save what the last tools changed in the sandbox (beside the model call)",
     ),
+    Activity.TOOL_BATCH: StepPolicy(
+        Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
+        "re-run on the adopting worker (read-only calls; each one's result is kept)",
+        "A round's read-only tool calls, run together in the sandbox",
+    ),
     Activity.TOOL_CALL: StepPolicy(
         Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
         "re-run on the adopting worker; an at-most-once tool is not: its call is closed as "

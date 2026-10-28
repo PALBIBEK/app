@@ -62,11 +62,14 @@ async def test_a_dead_sandbox_is_replaced_and_its_files_come_back(
         assert first is not None
         shutil.rmtree(first.root)  # type: ignore[attr-defined]  # the sandbox dies
 
-        gateway.calls = [READ, READ]  # the first read hits the dead sandbox
+        # The read hits the dead sandbox; the edit (it changes files, so it runs alone,
+        # after the read) finds the replacement holding the checkpoint's files. Two
+        # reads would now run together, and both could meet the dead sandbox.
+        gateway.calls = [READ, ("edit", {"file_path": "notes.txt", "old_text": "hello", "new_text": "hello!"})]
         await env.sessions.submit(sid, Message("c2", "read it back"))
         events = await env.wait_for(state, sid, run_ended(2))
 
-    (saved,) = payloads(events, HandCheckpointed)
+    saved = payloads(events, HandCheckpointed)[0]  # (the edit is saved after it)
     assert (saved.hand_id, saved.files) == (first.id, 1), "saved while the model answered"
     (lost,) = payloads(events, HandLost)
     assert lost.hand_id == first.id
@@ -75,7 +78,7 @@ async def test_a_dead_sandbox_is_replaced_and_its_files_come_back(
     reset, again = payloads(events, ToolEnd)[1:]
     assert reset.result["code"] == "WORKSPACE_RESET"
     assert "restored as they were at the last checkpoint" in reset.result["error"]
-    assert again.result == {"ok": True, "payload": "hello", "error": None, "code": None}
+    assert again.result["ok"] and again.result["payload"]["replacements"] == 1  # "hello" came back
     assert await state.manager.session_status(sid) == "active", "the session goes on"
 
 

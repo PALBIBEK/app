@@ -77,6 +77,8 @@ class CommandResult:
     stderr: str
     timed_out: bool = False
     truncated: bool = False
+    # When the output was cut: all of it, stdout then stderr, for the tool to keep.
+    full: bytes | None = None
 
 
 @runtime_checkable
@@ -105,6 +107,19 @@ class Workspace(Protocol):
         """Run a shell command in the workspace root, with ``env`` added to its
         scrubbed environment. Raises ``UnsupportedCapability``."""
         ...
+
+
+def host_relative(path: str, sandbox: Sandbox) -> str:
+    """``path`` under a host-process sandbox's own directory, made relative to it.
+
+    Commands in such a sandbox run in that directory, so ``pwd`` shows it and the model
+    may name files by it; they are the same files as ``/workspace/...``.
+    """
+    root = str((getattr(sandbox.info, "labels", None) or {}).get("host_root") or "").rstrip("/")
+    text = str(path).strip()
+    if root and (text == root or text.startswith(root + "/")):
+        return text[len(root) :].lstrip("/")
+    return path
 
 
 def logical_relpath(path: str) -> str:
@@ -235,7 +250,12 @@ class HostWorkspace:
             stderr=stderr,
             timed_out=timed_out,
             truncated=cut_out or cut_err,
+            full=_full(out, err) if cut_out or cut_err else None,
         )
+
+
+def _full(out: bytes, err: bytes) -> bytes:
+    return out + (b"\n[stderr]\n" + err if err else b"")
 
 
 def _clip(raw: bytes) -> tuple[str, bool]:
@@ -347,7 +367,7 @@ class SandboxWorkspace:
         return f"SandboxWorkspace({self._sandbox.info.provider}:{self._sandbox.id})"
 
     def relpath(self, path: str) -> str:
-        return logical_relpath(path)
+        return logical_relpath(host_relative(path, self._sandbox))
 
     def _abs(self, rel: str) -> str:
         root = self._sandbox.info.workdir.rstrip("/") or LOGICAL_ROOT
@@ -407,6 +427,7 @@ class SandboxWorkspace:
             stdout=stdout,
             stderr=stderr,
             truncated=cut_out or cut_err,
+            full=_full(done.stdout, done.stderr) if cut_out or cut_err else None,
         )
 
 

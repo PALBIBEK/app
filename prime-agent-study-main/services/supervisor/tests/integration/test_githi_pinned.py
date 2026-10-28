@@ -142,7 +142,7 @@ async def test_every_model_call_is_built_from_the_pins(
         assert call.tools == PINNED_TOOLS + PLATFORM_TOOLS
         system = call.messages[0]
         assert system.role == "system" and "You are an expert coding assistant." in system.content
-        assert "<tools>\n- " in system.content and system.content.endswith("<cwd>\n/workspace\n</cwd>")
+        assert "<tools>\n- " in system.content and system.content.endswith("<cwd>\n.\n</cwd>")
 
 
 async def test_a_githi_model_turn_never_runs_outside_the_workflow(
