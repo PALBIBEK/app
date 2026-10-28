@@ -109,6 +109,19 @@ class Workspace(Protocol):
         ...
 
 
+def host_relative(path: str, sandbox: Sandbox) -> str:
+    """``path`` under a host-process sandbox's own directory, made relative to it.
+
+    Commands in such a sandbox run in that directory, so ``pwd`` shows it and the model
+    may name files by it; they are the same files as ``/workspace/...``.
+    """
+    root = str((getattr(sandbox.info, "labels", None) or {}).get("host_root") or "").rstrip("/")
+    text = str(path).strip()
+    if root and (text == root or text.startswith(root + "/")):
+        return text[len(root) :].lstrip("/")
+    return path
+
+
 def logical_relpath(path: str) -> str:
     """Normalize a model-supplied path without touching any filesystem."""
     text = str(path).strip().replace("\\", "/")
@@ -354,7 +367,7 @@ class SandboxWorkspace:
         return f"SandboxWorkspace({self._sandbox.info.provider}:{self._sandbox.id})"
 
     def relpath(self, path: str) -> str:
-        return logical_relpath(path)
+        return logical_relpath(host_relative(path, self._sandbox))
 
     def _abs(self, rel: str) -> str:
         root = self._sandbox.info.workdir.rstrip("/") or LOGICAL_ROOT

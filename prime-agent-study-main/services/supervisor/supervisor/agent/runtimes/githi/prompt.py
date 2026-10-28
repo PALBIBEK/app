@@ -19,9 +19,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Final
 
-__all__ = ["BASE_RULES", "WORKSPACE", "system_prompt", "tool_line"]
+__all__ = ["BASE_RULES", "PROJECT_ROOT", "ROOT_RULE", "WORKSPACE", "system_prompt", "tool_line"]
 
 WORKSPACE: Final = "/workspace"
+"""Where the file tools root their paths (``/workspace/x`` and ``x`` are the same file)."""
+
+PROJECT_ROOT: Final = "."
+"""The ``<cwd>`` githi shows: the project root, as a relative path. A sandbox's commands
+run at its root, which is ``/workspace`` in a container but a directory of its own for a
+host-process sandbox, so an absolute path in the prompt was wrong for one of them (a live
+run spent eight steps looking for ``/workspace``)."""
+
+ROOT_RULE: Final = (
+    "Your working directory is the project root: bash runs there, and file paths are "
+    "relative to it (e.g. src/app.py)"
+)
 
 SNIPPETS: Final[dict[str, str]] = {
     "read": "Read file contents",
@@ -81,7 +93,7 @@ def _rules(names: Sequence[str]) -> list[str]:
     return [*rules, *BASE_RULES]
 
 
-def system_prompt(pinned: str, tools: Sequence[dict[str, Any]], *, cwd: str = WORKSPACE) -> str:
+def system_prompt(pinned: str, tools: Sequence[dict[str, Any]], *, cwd: str = PROJECT_ROOT) -> str:
     """The pinned prompt, then the offered tools, their rules, and the working directory."""
     names = [n for n in (_name(t) for t in tools) if n]
     sections = [pinned.strip()] if pinned.strip() else []
@@ -91,7 +103,7 @@ def system_prompt(pinned: str, tools: Sequence[dict[str, Any]], *, cwd: str = WO
             f"<tools>\n{listing}\n\nIn addition to the tools above, you may have access to other "
             "custom tools depending on the project.\n</tools>"
         )
-    rules = "\n".join(f"- {r}" for r in _rules(names))
+    rules = "\n".join(f"- {r}" for r in [*([ROOT_RULE] if cwd == PROJECT_ROOT and tools else []), *_rules(names)])
     sections.append(f"<rules>\n{rules}\n</rules>")
     sections.append(f"<cwd>\n{cwd}\n</cwd>")
     return "\n\n".join(sections)

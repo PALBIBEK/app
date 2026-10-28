@@ -8,7 +8,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from supervisor.tools.errors import PathEscape, WorkspaceReset, WorkspaceUnavailable
-from supervisor.tools.workspace import CommandResult, Entry, SandboxWorkspace, logical_relpath
+from supervisor.tools.workspace import (
+    CommandResult,
+    Entry,
+    SandboxWorkspace,
+    host_relative,
+    logical_relpath,
+)
 
 if TYPE_CHECKING:
     from supervisor.sandbox.base import Sandbox
@@ -43,7 +49,8 @@ class HandWorkspace:
         )
 
     def relpath(self, path: str) -> str:
-        return logical_relpath(path)
+        sandbox = self._current()
+        return logical_relpath(host_relative(path, sandbox) if sandbox is not None else path)
 
     async def read_bytes(self, path: str) -> bytes:
         return await self._in_sandbox(lambda ws: ws.read_bytes(path))

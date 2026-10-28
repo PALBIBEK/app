@@ -87,9 +87,10 @@ def test_the_prompt_follows_pi_preamble_tools_rules_cwd() -> None:
         "<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n"
         "- remember: Save a fact\n\nIn addition to the tools above, you may have access to other custom "
         "tools depending on the project.\n</tools>\n\n"
-        "<rules>\n- Use bash for file operations like ls, rg, find\n"
+        "<rules>\n- Your working directory is the project root: bash runs there, and file paths are "
+        "relative to it (e.g. src/app.py)\n- Use bash for file operations like ls, rg, find\n"
         "- Use read to examine files instead of cat or sed.\n- Be concise in your responses\n"
-        "- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n/workspace\n</cwd>"
+        "- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n.\n</cwd>"
     )
 
 
@@ -104,7 +105,7 @@ def test_the_prompt_is_stable_so_the_provider_cache_hits() -> None:
     assert "Use edit for precise changes (old_text must match exactly)" in first
     assert (
         system_prompt("", [])
-        == "<rules>\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n/workspace\n</cwd>"
+        == "<rules>\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<cwd>\n.\n</cwd>"
     )
 
 

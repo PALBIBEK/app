@@ -49,7 +49,7 @@ class Hooks:
         self.events: list[tuple[str, str, str]] = []
         self.fail_hydrate = fail_hydrate
 
-    async def hydrate(self, session_id: str, sandbox: Sandbox) -> None:
+    async def hydrate(self, session_id: str, sandbox: Sandbox, *, adopted: bool = False) -> None:
         if self.fail_hydrate:
             raise RuntimeError("store unreachable")
 
@@ -221,3 +221,47 @@ async def test_an_observation_of_a_replaced_sandbox_is_not_checkpointed(tmp_path
 
 async def _none(*_: object) -> None:
     return None
+
+
+async def test_an_adopted_sandbox_keeps_its_newer_files() -> None:
+    """A tool can end after the last checkpoint and before its worker dies: the sandbox
+    left behind holds that change, so adopting it must not restore the checkpoint."""
+    from types import SimpleNamespace
+
+    from supervisor.session.manager_base import _HandHooks
+
+    calls: list[str] = []
+
+    class Checkpoints:
+        async def observe(self, key: str, sandbox: object, *, processes: bool) -> None:
+            calls.append("observe")
+
+        async def restore(self, key: str, sandbox: object, *, processes: bool) -> int:
+            calls.append("restore")
+            return 0
+
+    async def has_checkpoint(key: str) -> bool:
+        return True
+
+    manager = SimpleNamespace(
+        _workspace={}, _checkpoints=Checkpoints(), _has_checkpoint=has_checkpoint,
+        _hand_isolated=lambda key: False, files=None,
+    )
+    hooks = _HandHooks(manager)  # type: ignore[arg-type]
+    await hooks.hydrate("s", object(), adopted=True)  # type: ignore[arg-type]
+    assert calls == ["observe"]
+    await hooks.hydrate("s", object())  # type: ignore[arg-type]
+    assert calls == ["observe", "restore"]  # a fresh sandbox does load the checkpoint
+
+
+async def test_a_host_sandbox_path_names_the_same_file(tmp_path: Path) -> None:
+    """``pwd`` in a host-process sandbox shows its own directory; a path under it is
+    the same file as the workspace-relative one, not an escape."""
+    root = tmp_path / "box"
+    root.mkdir()
+    sandbox = LocalProcessSandbox(root, "box")
+    workspace = HandWorkspace(lambda: sandbox)
+    assert workspace.relpath(f"{root}/cli.py") == "cli.py"
+    assert workspace.relpath("/workspace/cli.py") == "cli.py"
+    await workspace.write_bytes(f"{root}/cli.py", b"print(1)\n")
+    assert (root / "cli.py").read_text() == "print(1)\n"

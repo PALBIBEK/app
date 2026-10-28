@@ -663,14 +663,23 @@ class _HandHooks:
     def __init__(self, manager: SessionManagerBase) -> None:
         self._m = manager
 
-    async def hydrate(self, key: str, sandbox: Sandbox) -> None:
+    async def hydrate(self, key: str, sandbox: Sandbox, *, adopted: bool = False) -> None:
         """A new sandbox starts empty: load the hand's last checkpoint, else the session's scope.
 
         Only the default hand mirrors the session's scope; a named hand starts empty.
+        An adopted sandbox (a dead worker's, still alive) already holds the newest files:
+        restoring the checkpoint over it would undo every tool that ended after it, while
+        the journal says they ran. It is observed instead, so the next checkpoint saves it.
         """
         m = self._m
         session_id, hand = split_key(key)
         state = m._workspace.get(session_id) if hand == DEFAULT_HAND else None
+        if adopted:
+            if m._checkpoints is not None:
+                await m._checkpoints.observe(key, sandbox, processes=m._hand_isolated(key))
+            if state is not None:
+                state.ready = True
+            return
         if m._checkpoints is not None and await m._has_checkpoint(key):
             await m._checkpoints.restore(key, sandbox, processes=m._hand_isolated(key))
             if state is not None and state.scope_id is not None:

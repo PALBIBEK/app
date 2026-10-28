@@ -27,8 +27,12 @@ _LOGS_TIMEOUT_S = 10.0
 class HandEvents(Protocol):
     """What the session layer does around a sandbox's life (journal, files)."""
 
-    async def hydrate(self, session_id: str, sandbox: Sandbox) -> None:
-        """Put the session's saved files into a sandbox that is about to serve it."""
+    async def hydrate(self, session_id: str, sandbox: Sandbox, *, adopted: bool = False) -> None:
+        """Put the session's saved files into a sandbox that is about to serve it.
+
+        ``adopted``: a sandbox a dead worker left, still alive; its files are newer than
+        any checkpoint (a tool may have ended after the last one), so none is restored.
+        """
         ...
 
     async def provisioned(self, session_id: str, sandbox: Sandbox, cause: str) -> None: ...
@@ -202,7 +206,7 @@ class SessionHands:
             adopted = await recipe.adopt(session_id)
             if adopted is None:
                 return None
-            await self._events.hydrate(session_id, adopted)
+            await self._events.hydrate(session_id, adopted, adopted=True)
             self.live[session_id] = adopted
             self.last_used[session_id] = time.monotonic()
             logger.info(
