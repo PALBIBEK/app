@@ -62,8 +62,8 @@ async def test_a_dead_sandbox_is_replaced_and_its_files_come_back(
         assert first is not None
         shutil.rmtree(first.root)  # type: ignore[attr-defined]  # the sandbox dies
 
-        # The read hits the dead sandbox; the edit (it changes files, so it runs alone,
-        # after the read) finds the replacement holding the checkpoint's files. Two
+        # The read hits the dead sandbox; the edit (it changes the file the read names, so
+        # it waits for the read) finds the replacement holding the checkpoint's files. Two
         # reads would now run together, and both could meet the dead sandbox.
         gateway.calls = [READ, ("edit", {"file_path": "notes.txt", "old_text": "hello", "new_text": "hello!"})]
         await env.sessions.submit(sid, Message("c2", "read it back"))

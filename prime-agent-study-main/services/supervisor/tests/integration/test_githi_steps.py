@@ -31,7 +31,7 @@ from supervisor.temporal.contracts import (
     Phase,
 )
 from supervisor.temporal.sessions import SessionCommandError
-from supervisor.temporal.steps import FINAL_STEP_NOTICE, steps_left_notice
+from supervisor.temporal.steps import FINAL_STEP_NOTICE, UNKNOWN_OUTCOME, steps_left_notice
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
@@ -347,7 +347,9 @@ async def test_abort_during_an_approval_wait(
 async def test_worker_killed_during_a_tool(
     env: Env, model: Callable[..., ScriptedGateway], harness: str, interrupted: bool
 ) -> None:
-    model(WRITE)
+    """A lost at-most-once call is never run again; as pi-temporal's, the model is told its
+    outcome is unknown and the run goes on (the model checks, then answers)."""
+    gateway = model(WRITE)
     observer = await env.state()
     # Published before the worker process boots, so it hydrates the composition.
     await env.composition(observer, harness)
@@ -369,7 +371,10 @@ async def test_worker_killed_during_a_tool(
     (end,) = payloads(events, ToolEnd)
     if interrupted:
         assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
-        assert [e.error_class for e in payloads(events, ErrorEvent)] == ["TurnInterrupted"]
+        assert not payloads(events, ErrorEvent), "the run is not ended for a lost call"
+        assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+        read = [m.content for m in gateway.seen[-1] if m.role == "tool"]
+        assert read == [UNKNOWN_OUTCOME], "the model is told, in pi's words"
     else:
         assert not end.is_error, "an idempotent tool re-runs on the adopting worker"
         assert not payloads(events, ErrorEvent)

@@ -114,6 +114,12 @@ _PHASE_LOOP = "phase-loop"
 _TOOL_ROUND = "tool-round"
 # A steering message waits for the round to finish (pi), instead of skipping its rest.
 _STEER_AFTER_ROUND = "steer-after-round"
+# A round's calls run at once, each its own activity (pi, pi-temporal's stepped mode), and a
+# call that is lost or fails is answered as unknown while the run goes on.
+_PARALLEL_ROUND = "parallel-round"
+# Steps that find the session's worker gone together adopt it once (a parallel round's
+# calls, or a checkpoint beside a model step); histories before it adopted per step.
+_ONE_ADOPTION = "one-adoption"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -144,6 +150,36 @@ def _failure(err: ActivityError) -> tuple[str, str]:
     return type(cause or err).__name__, str(cause or err)
 
 
+def _in_lanes(
+    calls: list[PlannedCall],
+    start: Callable[[PlannedCall, list[asyncio.Future[bool]]], asyncio.Future[bool]],
+) -> list[asyncio.Future[bool]]:
+    """Start every call, each after the calls in its lane it must not overtake.
+
+    A read waits for the change before it; a change waits for that and for the reads
+    since, so each sees the file as the model's order has it (pi's file mutation queue,
+    reads included). A call with no lane waits for nothing.
+    """
+    changed: dict[str, asyncio.Future[bool]] = {}
+    reads: dict[str, list[asyncio.Future[bool]]] = {}
+    tasks: list[asyncio.Future[bool]] = []
+    for call in calls:
+        lane = call.lane
+        before: list[asyncio.Future[bool]] = []
+        if lane is not None:
+            before = [changed[lane]] if lane in changed else []
+            if not call.parallel:
+                before += reads.pop(lane, [])
+        task = start(call, before)
+        if lane is not None:
+            if call.parallel:
+                reads.setdefault(lane, []).append(task)
+            else:
+                changed[lane] = task
+        tasks.append(task)
+    return tasks
+
+
 def _guard(settings: GuardSettings | None) -> LoopGuard | None:
     if settings is None:
         return None
@@ -171,6 +207,10 @@ class AgentSessionWorkflow:
         # The run a steering message joins: set while a phase-loop run is working.
         self._steerable: str | None = None
         self._turn: asyncio.Task[object] | None = None
+        # Every tracked step running now (a parallel round runs several): an abort stops all.
+        self._tracked: set[asyncio.Task[Any]] = set()
+        # Calls of one round can find the session's worker gone together: one adopts it.
+        self._adopting = asyncio.Lock()
         self._terminate_requested = False
         self._abort_requested = False
         self._creation_error: ApplicationError | None = None
@@ -427,7 +467,9 @@ class AgentSessionWorkflow:
                     st.calls, st.phase = list(result.calls), RunPhase.TOOLS
                 else:
                     stopped = await (
-                        self._round(plan, st, guard, end)
+                        self._parallel_round(plan, st, guard, end)
+                        if workflow.patched(_PARALLEL_ROUND)
+                        else self._round(plan, st, guard, end)
                         if workflow.patched(_TOOL_ROUND)
                         else self._tool_round(plan, st, guard, end)
                     )
@@ -441,11 +483,79 @@ class AgentSessionWorkflow:
                     "aborted",
                     lost_call_id=st.in_flight,
                     lost_reason="the run was aborted while the tool ran",
+                    **({"open_call_ids": list(st.open)} if st.open else {}),
                 )
             if isinstance(err, ActivityError):
                 kind, detail = _failure(err)
                 return await end("error", error_class=kind, detail=detail)
             raise
+
+    async def _parallel_round(
+        self,
+        plan: RunPlan,
+        st: RunState,
+        guard: LoopGuard | None,
+        end: Callable[..., Any],
+    ) -> TurnOutcome | None:
+        """The step's calls at once, as pi runs them (pi-temporal's stepped mode).
+
+        The loop guard sees every call and every approval is asked first, as before. Then
+        each call is its own tool step, all started together; a call waits only for the
+        earlier ones in its lane that change something (the same file, or the platform
+        tools), so a read sees the write before it. A call that is lost or fails is
+        answered as unknown (or as not run, if nothing started it) and the run goes on:
+        the model reads that and checks. An abort stops every running call; END_RUN
+        answers each call of the round that has no result.
+        """
+        denied: set[str] = set()
+        for call in st.calls:
+            if guard is not None:
+                verdict = guard.observe("run", call.name, call.args_hash)
+                if verdict.tripped and verdict.action is GuardAction.ABORT:
+                    return await end(
+                        "error", error_class="LoopGuard", detail=verdict.detail or "loop detected"
+                    )
+        for call in st.calls:
+            if call.approval is not None and not await self._approve(plan.run_id, call):
+                denied.add(call.call_id)
+        st.open = [c.call_id for c in st.calls]
+
+        async def settle(call: PlannedCall, before: list[asyncio.Future[bool]]) -> bool:
+            if before:
+                await workflow.wait(before)  # their outcomes, whatever they were
+            if self._abort_requested:
+                raise asyncio.CancelledError  # stopped before it started: END_RUN says so
+            try:
+                failed = await self._call_tool(plan.run_id, call, denied=call.call_id in denied)
+            except ActivityError as err:
+                if is_cancelled_exception(err):
+                    raise
+                # It may or may not have run: never run it again, never guess. The model is
+                # told, and the run goes on (pi-temporal's recovery seal).
+                workflow.logger.warning("tool %s lost: %s", call.call_id, _failure(err)[1])
+                await workflow.execute_activity(
+                    Activity.CLOSE_LOST_CALL,
+                    LostCall(self._session_id, plan.run_id, call.call_id, _failure(err)[1]),
+                    task_queue=workflow.info().task_queue,
+                    **self._options(Activity.CLOSE_LOST_CALL),
+                )
+                failed = True
+            st.open.remove(call.call_id)  # answered (an abort leaves it for END_RUN)
+            return failed
+
+        tasks = _in_lanes(st.calls, lambda call, before: asyncio.ensure_future(settle(call, before)))
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        if self._abort_requested:
+            raise asyncio.CancelledError
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                raise outcome
+        for call, call_failed in zip(st.calls, outcomes, strict=True):
+            key = f"{call.name}:{call.args_hash}"
+            if guard is not None and not call_failed and key not in st.tried:
+                guard.progress("run")  # a stall is calls that get nowhere, not many calls
+            st.tried.add(key)
+        return None
 
     async def _tool_round(
         self,
@@ -814,27 +924,43 @@ class AgentSessionWorkflow:
             task = start(queue)
             if track:
                 self._turn = task
+                self._tracked.add(task)
             try:
                 return await task
             except ActivityError as err:
                 if not _is_placement_lost(err) or self._state.placement is None:
                     raise
                 workflow.logger.warning("session worker %s lost; adopting", queue)
-                if lost is not None and workflow.patched(_CLOSE_LOST_BEFORE_ADOPT):
-                    await workflow.execute_activity(
-                        Activity.CLOSE_LOST_CALL,
-                        lost,
-                        task_queue=workflow.info().task_queue,
-                        **self._options(Activity.CLOSE_LOST_CALL),
-                    )
-                self._state.placement = await workflow.execute_activity(
-                    Activity.ADOPT,
-                    self._session_id,
-                    result_type=Placement,
-                    **self._options(Activity.ADOPT),
-                )
+                if workflow.patched(_ONE_ADOPTION):
+                    async with self._adopting:
+                        await self._close_lost(lost)
+                        if self._state.placement.task_queue == queue:
+                            # Not adopted yet by a step beside this one.
+                            await self._adopt()
+                else:
+                    await self._close_lost(lost)
+                    await self._adopt()
                 if not rerun_after_adopt:
                     raise
+            finally:
+                self._tracked.discard(task)
+
+    async def _close_lost(self, lost: LostCall | None) -> None:
+        if lost is not None and workflow.patched(_CLOSE_LOST_BEFORE_ADOPT):
+            await workflow.execute_activity(
+                Activity.CLOSE_LOST_CALL,
+                lost,
+                task_queue=workflow.info().task_queue,
+                **self._options(Activity.CLOSE_LOST_CALL),
+            )
+
+    async def _adopt(self) -> None:
+        self._state.placement = await workflow.execute_activity(
+            Activity.ADOPT,
+            self._session_id,
+            result_type=Placement,
+            **self._options(Activity.ADOPT),
+        )
 
     # --- messages ------------------------------------------------------------
 
@@ -1008,8 +1134,9 @@ class AgentSessionWorkflow:
         if self._running is None:
             return
         self._abort_requested = True  # also wakes a turn waiting on an approval
-        if self._turn is not None and not self._turn.done():
-            self._turn.cancel()
+        for task in {self._turn, *self._tracked} - {None}:
+            if task is not None and not task.done():
+                task.cancel()
 
     @workflow.update
     async def cancel_queued(self, command_id: str) -> bool:
