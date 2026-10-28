@@ -94,7 +94,7 @@ def test_compaction_starts_before_a_call_would_be_refused() -> None:
 
 
 def test_a_span_too_big_for_one_summary_is_summarised_in_pieces_that_fit() -> None:
-    from supervisor.seams.compaction.core import SUMMARY_MARKER, summarize_span
+    from supervisor.seams.compaction.core import is_summary, summarize_span
 
     calls: list[int] = []
 
@@ -108,5 +108,5 @@ def test_a_span_too_big_for_one_summary_is_summarised_in_pieces_that_fit() -> No
     span = [{"role": "user", "content": "a" * 1_000}, {"role": "assistant", "content": "b" * 1_000},
             {"role": "user", "content": "c" * 8_000}]  # the last one alone is too big
     summary = summarize_span(span, summarizer=summarizer)
-    assert summary.startswith(SUMMARY_MARKER) and "+" in summary, summary  # a summary, not the bare notice
+    assert is_summary(summary) and "+" in summary, summary  # a summary, not the bare notice
     assert max(c for c in calls if c <= 3_000) and calls[-1] <= 3_000  # it ended on a call that fit

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,17 @@ COMPACTION_NOTICE = (
     "this point, re-derive them rather than recalling them.]"
 )
 SUMMARY_MARKER = "[context checkpoint]"
+"""How summaries journalled before pi's framing began (still recognised)."""
+
+SUMMARY_PREFIX = (
+    "The conversation history before this point was compacted into the following summary:\n\n<summary>\n"
+)
+SUMMARY_SUFFIX = "\n</summary>"
+"""pi's framing of a compaction summary, as the model reads it (``COMPACTION_SUMMARY_PREFIX``)."""
+
+TOOL_RESULT_MAX_CHARS = 2000
+"""A tool result in the transcript a summarizer reads keeps its first 2000 characters
+(pi's ``TOOL_RESULT_MAX_CHARS``): the summary needs what happened, not every byte."""
 
 SUMMARIZATION_SYSTEM_PROMPT = (
     "You are a context summarization assistant. Your task is to read a "
@@ -27,11 +39,16 @@ SUMMARIZATION_SYSTEM_PROMPT = (
     "conversation. ONLY output the structured summary."
 )
 
-_FORMAT = """## Goal
-[What is the user trying to accomplish? Can be multiple items.]
+SUMMARIZATION_PROMPT = """The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
 
 ## Constraints & Preferences
-- [Constraints, preferences or requirements the user stated, or "(none)"]
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
 
 ## Progress
 ### Done
@@ -50,29 +67,50 @@ _FORMAT = """## Goal
 1. [Ordered list of what should happen next]
 
 ## Critical Context
-- [Data, examples or references needed to continue, or "(none)"]
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error
-messages."""
+Keep each section concise. Preserve exact file paths, function names, and error messages."""
+"""pi's prompt, word for word (``compaction.ts``)."""
 
-SUMMARIZATION_PROMPT = (
-    "The conversation above is to be summarized. Create a structured "
-    "context checkpoint that another LLM will use to continue the work.\n\n"
-    "Use this EXACT format:\n\n" + _FORMAT
-)
+UPDATE_SUMMARIZATION_PROMPT = """The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
-UPDATE_SUMMARIZATION_PROMPT = (
-    "The conversation above is NEW messages to incorporate into the "
-    "existing summary in <previous-summary> tags.\n\n"
-    "Update the existing summary with the new information. RULES:\n"
-    "- PRESERVE all existing information from the previous summary\n"
-    "- ADD new progress, decisions and context from the new messages\n"
-    "- UPDATE Progress: move items from \"In Progress\" to \"Done\" when completed\n"
-    "- UPDATE \"Next Steps\" based on what was accomplished\n"
-    "- PRESERVE exact file paths, function names and error messages\n"
-    "- If something is no longer relevant, you may remove it\n\n"
-    "Use this EXACT format:\n\n" + _FORMAT
-)
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
 Summarizer = Callable[[list[dict[str, Any]], str | None], str]
 
@@ -134,10 +172,11 @@ def build_summary_request(
     rather than summarise it.
     """
     transcript = f"<conversation>\n{serialize_conversation(messages)}\n</conversation>\n\n"
-    if previous_summary:
+    previous = without_file_operations(previous_summary) if previous_summary else ""
+    if previous:
         prompt = (
             transcript
-            + f"<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
+            + f"<previous-summary>\n{previous}\n</previous-summary>\n\n"
             + UPDATE_SUMMARIZATION_PROMPT
         )
     else:
@@ -149,23 +188,51 @@ def build_summary_request(
 
 
 def _text(msg: dict[str, Any]) -> str:
+    """The visible text: thinking is left out (pi's ``serializeConversation``)."""
     raw = msg.get("content")
     if isinstance(raw, list):
-        texts = [str(p.get("text") or "") for p in raw if isinstance(p, dict) and p.get("text")]
-        if texts or not raw:
+        texts = [
+            str(p.get("text") or "")
+            for p in raw
+            if isinstance(p, dict) and p.get("text") and p.get("type", "text") == "text"
+        ]
+        if texts or not raw or all(isinstance(p, dict) for p in raw):
             return "\n".join(texts)
     return _content(msg)
 
 
-def _call_text(call: dict[str, Any]) -> str:
+def _arguments(call: dict[str, Any]) -> tuple[str, dict[str, Any] | str]:
     inner = call.get("function")
     fn: dict[str, Any] = inner if isinstance(inner, dict) else call
     args = fn.get("arguments", {})
-    return f"{fn.get('name', '?')}({args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)})"
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+        except ValueError:
+            return str(fn.get("name", "?")), args
+        args = parsed if isinstance(parsed, dict) else args
+    return str(fn.get("name", "?")), args if isinstance(args, (dict, str)) else {}
+
+
+def _call_text(call: dict[str, Any]) -> str:
+    """``name(key=value, ...)``, each value as JSON (pi's)."""
+    name, args = _arguments(call)
+    if isinstance(args, str):
+        return f"{name}({args})"
+    shown = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items())
+    return f"{name}({shown})"
+
+
+def _clip_result(text: str) -> str:
+    if len(text) <= TOOL_RESULT_MAX_CHARS:
+        return text
+    return f"{text[:TOOL_RESULT_MAX_CHARS]}\n\n[... {len(text) - TOOL_RESULT_MAX_CHARS} more characters truncated]"
 
 
 def serialize_conversation(messages: list[dict[str, Any]]) -> str:
-    """The messages as a plain transcript a summarizer reads (and cannot continue)."""
+    """The messages as a plain transcript a summarizer reads (and cannot continue):
+    pi's ``serializeConversation``, so tool results are cut to their first 2000
+    characters and thinking is left out."""
     lines: list[str] = []
     for msg in messages:
         role, text = _role(msg), _text(msg).strip()
@@ -175,19 +242,87 @@ def serialize_conversation(messages: list[dict[str, Any]]) -> str:
             if calls := _tool_calls(msg):
                 lines.append("[Assistant tool calls]: " + "; ".join(_call_text(c) for c in calls))
         elif role == "tool":
-            lines.append(f"[Tool result]: {text}")
+            if text:
+                lines.append(f"[Tool result]: {_clip_result(text)}")
         elif role == "system":
-            lines.append(f"[System]: {text}")
-        else:
+            if text:
+                lines.append(f"[System]: {text}")
+        elif text:
             lines.append(f"[User]: {text}")
     return "\n\n".join(lines)
 
 
+# --- the files a summarised span touched (pi's <read-files> / <modified-files>) ---------
+
+_READS: Final = frozenset({"read"})
+_WRITES: Final = frozenset({"write", "edit"})
+_FILE_LIST: Final = re.compile(r"\n*<(read-files|modified-files)>\n(.*?)\n</\1>", re.DOTALL)
+
+
+def file_operations(
+    messages: list[dict[str, Any]], previous_summary: str | None = None
+) -> tuple[list[str], list[str]]:
+    """(files only read, files written or edited) by the span's tool calls, with those
+    the previous summary listed: carried from summary to summary, as pi carries them."""
+    read: set[str] = set()
+    modified: set[str] = set()
+    for kind, body in _FILE_LIST.findall(previous_summary or ""):
+        (read if kind == "read-files" else modified).update(p for p in body.splitlines() if p.strip())
+    for msg in messages:
+        if not _is_assistant(msg):
+            continue
+        for call in _tool_calls(msg):
+            name, args = _arguments(call)
+            path = (args.get("path") or args.get("file_path")) if isinstance(args, dict) else None
+            if not isinstance(path, str) or not path:
+                continue
+            if name in _READS:
+                read.add(path)
+            elif name in _WRITES:
+                modified.add(path)
+    return sorted(read - modified), sorted(modified)
+
+
+def format_file_operations(read: list[str], modified: list[str]) -> str:
+    """pi's ``formatFileOperations``: the lists as tags after the summary, or ""."""
+    sections = []
+    if read:
+        sections.append("<read-files>\n" + "\n".join(read) + "\n</read-files>")
+    if modified:
+        sections.append("<modified-files>\n" + "\n".join(modified) + "\n</modified-files>")
+    return "\n\n" + "\n\n".join(sections) if sections else ""
+
+
+def without_file_operations(summary: str) -> str:
+    return _FILE_LIST.sub("", summary).strip()
+
+
+def is_summary(text: str) -> bool:
+    """Whether ``text`` is a compaction summary (pi's framing, or the older marker)."""
+    return text.startswith((SUMMARY_PREFIX, SUMMARY_MARKER))
+
+
+def framed_summary(summary: str) -> str:
+    return f"{SUMMARY_PREFIX}{summary.strip()}{SUMMARY_SUFFIX}"
+
+
+def _summary_body(content: str) -> str | None:
+    if content.startswith(SUMMARY_PREFIX):
+        body = content[len(SUMMARY_PREFIX) :]
+        end = body.find(SUMMARY_SUFFIX)
+        return (body[:end] if end != -1 else body).strip()
+    if content.startswith(SUMMARY_MARKER):
+        return content[len(SUMMARY_MARKER) :].strip()
+    return None
+
+
 def extract_previous_summary(messages: list[dict[str, Any]]) -> str | None:
+    """The latest summary in ``messages``: its text inside the framing (not the notes
+    the run added after it), file lists included."""
     for msg in reversed(messages):
-        content = _content(msg)
-        if content.startswith(SUMMARY_MARKER):
-            return content[len(SUMMARY_MARKER) :].strip()
+        body = _summary_body(_text(msg) if isinstance(msg.get("content"), list) else _content(msg))
+        if body is not None:
+            return body
     return None
 
 
@@ -282,7 +417,8 @@ def summarize_span(
     if not summary or not summary.strip():
         logger.warning("compaction summarizer returned nothing; dropping the span behind a notice")
         return COMPACTION_NOTICE
-    return f"{SUMMARY_MARKER}\n{summary.strip()}"
+    read, modified = file_operations(messages, previous_summary)
+    return framed_summary(without_file_operations(summary) + format_file_operations(read, modified))
 
 
 _SPLIT_DEPTH = 10
