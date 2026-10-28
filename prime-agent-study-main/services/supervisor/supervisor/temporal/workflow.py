@@ -121,6 +121,9 @@ _PARALLEL_ROUND = "parallel-round"
 # Patch id: a stop (an abort, the hard deadline) that lands while nothing cancellable
 # runs ends the run before its next step. Before it, the next step still ran.
 _STOP_BETWEEN_STEPS = "stop-between-steps"
+# Patch id prefix: each message sent as a signal (``submit_message_signal``) is read only
+# by a build that has the handler; ``-<n>`` numbers the run's signals.
+_HELD_MESSAGE = "held-message"
 # Steps that find the session's worker gone together adopt it once (a parallel round's
 # calls, or a checkpoint beside a model step); histories before it adopted per step.
 _ONE_ADOPTION = "one-adoption"
@@ -267,6 +270,7 @@ class AgentSessionWorkflow:
         self._deadline_hit = False
         self._creation_error: ApplicationError | None = None
         self._submit_lock = asyncio.Lock()
+        self._signalled = 0  # messages sent as signals to this run (each its own patch)
         # Approvals this workflow is waiting on (stepped turns), and their decisions.
         self._awaiting: dict[str, ApprovalNeeded] = {}
         self._decisions: dict[str, str] = {}
@@ -1150,7 +1154,20 @@ class AgentSessionWorkflow:
         would refuse (empty, for a closed or failed session, already seen) is logged and
         dropped, and one for an idle session is queued without the update's prepare
         (its run's first step meets what the prepare would have).
+
+        Each such message takes its own ``workflow.patched`` id: a signal that reached a
+        build without this handler was left unread there, so its replay leaves it unread
+        too (rather than starting a run the history never had). Its own id, not one for
+        all: a patch answers the same for the whole run, and a later signal, handled by
+        a build with the handler, must still be read.
         """
+        self._signalled += 1
+        if not workflow.patched(f"{_HELD_MESSAGE}-{self._signalled}"):
+            workflow.logger.warning(
+                "message %s sent as a signal reached a build without its handler: unread",
+                message.command_id,
+            )
+            return
         if not message.command_id or not message.text:
             workflow.logger.warning("dropped a message sent as a signal: no id or text")
             return

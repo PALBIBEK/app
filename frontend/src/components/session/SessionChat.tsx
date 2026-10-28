@@ -131,7 +131,7 @@ export function SessionChat({
     try {
       const sent = await sessionsAPI.sendMessage(session.id, text);
       if (sent.queued) setQueuedRuns((q) => new Map(q).set(text, { runId: sent.turn_id, cancelled: false }));
-      if (sent.held) toast.info('No worker is running right now. Your message is kept and runs as soon as one starts.');
+      if (sent.held) toast.info('No worker has taken your message yet. It is kept and runs as soon as one does.');
       setRunsKey((k) => k + 1);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send');
