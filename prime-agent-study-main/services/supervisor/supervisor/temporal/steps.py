@@ -234,6 +234,15 @@ UNKNOWN_OUTCOME = (
 NOT_RUN_OUTCOME = "This tool call did not run. The turn stopped before it started."
 """What the model reads for a call nothing started (pi-temporal's ``notRunOutcome``)."""
 
+BEHIND_UNKNOWN = (
+    "This tool call did not run: an earlier call of this round that changes the same file "
+    "(or the same memory or subagents) has an unknown outcome, and this call was made "
+    "assuming it took effect. Check the current state, then make this call again if it is "
+    "still needed."
+)
+"""A change queued behind a lost change in its lane (pi's file mutation queue keeps
+order; ours also keeps a change from landing on a state it was not planned for)."""
+
 SKIPPED_FOR_STEERING = (
     "not run: the user sent a new message while this round was running. Read it first, "
     "then make this call again if it is still needed."
@@ -557,7 +566,7 @@ class GithiSteps:
             self._plan(manifest, call, refused=refusal(spec, req.step, assistant, call) is not None)
             for call in calls
         ]
-        return StepResult(calls=plans, final=False)
+        return StepResult(calls=plans, final=False, lanes=True)
 
     async def _retry_or_fail(self, req: StepRequest, exc: Exception) -> StepResult:
         """pi's auto-retry: a call that may pass is asked again after a durable wait.
@@ -718,12 +727,20 @@ class GithiSteps:
         if (done := await self._keyed(sid, run_id, f"{call_id}:end")) is not None:
             return bool(done.is_error)
         call, step, assistant = await self._located(sid, run_id, call_id)
-        await self._record(
+        if activity.in_activity() and activity.is_cancelled():
+            raise asyncio.CancelledError  # stopped before it started: the stop answers it
+        # The start is the claim (pi-temporal's dispatch claim): taken atomically, so a
+        # call closed unrun never starts late, and a retried attempt of a call that did
+        # start runs again only as its recovery class allows (Temporal retries it or not).
+        if not await self._claim(
             sid,
             run_id,
             f"{call_id}:start",
             ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"]),
-        )
+        ):
+            start = await self._keyed(sid, run_id, f"{call_id}:start")
+            if getattr(start, "not_run", False):
+                return True  # closed before it ran: its end says so
         started = time.monotonic()
         tools = await self._memory.tools(sid)
         refused = refusal(loop_spec(await self._manifest(sid)), step, assistant, call)
@@ -735,6 +752,8 @@ class GithiSteps:
         elif req.denied:
             result = denied_result("denied by approval", "APPROVAL_DENIED")
             is_error = True
+        elif req.behind_unknown:
+            result, is_error = denied_result(BEHIND_UNKNOWN, TOOL_NOT_RUN), True
         elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
             output = await tools.call(call["name"], call["arguments"])
             result, is_error = _platform_result(output.text, output.is_error), output.is_error
@@ -902,6 +921,13 @@ class GithiSteps:
             session_id, event, turn_id=run_id, trace_id=trace_id, event_key=f"{run_id}:{key}"
         )
 
+    async def _claim(self, session_id: str, run_id: str, key: str, event: Any) -> bool:
+        """Journal ``event`` under ``key`` if no event holds it yet; whether this one won."""
+        seq = await self._manager._record_once(
+            session_id, event, turn_id=run_id, trace_id=None, event_key=f"{run_id}:{key}"
+        )
+        return seq is not None
+
     async def _keyed(self, session_id: str, run_id: str, key: str) -> Any | None:
         envelope = await self._reader.event(
             session_id, keyed_event_id(session_id, f"{run_id}:{key}")
@@ -951,15 +977,24 @@ class GithiSteps:
             return
         if await self._keyed(sid, run_id, f"{call_id}:end") is not None:
             return  # it ended after all
-        # Nothing started it (no ToolStart journalled): say so, rather than "it may have run".
-        started = await self._keyed(sid, run_id, f"{call_id}:start") is not None
+        # Not run only if this claim of its start wins (nothing started it, and now nothing
+        # can); otherwise it may have run.
+        call = await self._call(sid, run_id, call_id)
+        claimed = await self._claim(
+            sid,
+            run_id,
+            f"{call_id}:start",
+            ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"], not_run=True),
+        )
+        start = None if claimed else await self._keyed(sid, run_id, f"{call_id}:start")
+        started = not claimed and not getattr(start, "not_run", False)
         await self._record(
             sid,
             run_id,
             f"{call_id}:end",
             ToolEnd(
                 tool_call_id=call_id,
-                tool_name=await self._tool_name(sid, run_id, call_id),
+                tool_name=call["name"],
                 result=(
                     {"error": error, "code": TOOL_OUTCOME_UNKNOWN, "reason": lost.reason}
                     if started
@@ -968,9 +1003,6 @@ class GithiSteps:
                 is_error=True,
             ),
         )
-
-    async def _tool_name(self, session_id: str, run_id: str, call_id: str) -> str:
-        return (await self._call(session_id, run_id, call_id))["name"]
 
     async def _close_interrupted_run(self, session_id: str, run_id: str) -> None:
         """A run left open by a crashed whole-turn activity is closed before a new one starts."""

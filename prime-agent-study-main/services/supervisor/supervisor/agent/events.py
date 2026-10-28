@@ -115,6 +115,9 @@ class ToolStart:
     tool_name: str
     args: dict[str, Any]
     category: EventCategory = field(default=EventCategory.TOOL, repr=False)
+    # The call was closed before anything ran it (a stop, a lost step): this start is the
+    # claim that keeps a late attempt from running it; its ToolEnd says it did not run.
+    not_run: bool = False
 
 
 @dataclass(frozen=True)

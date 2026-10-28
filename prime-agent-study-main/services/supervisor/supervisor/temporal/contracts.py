@@ -297,6 +297,8 @@ class RunState:
     """The call whose tool step is running, closed as lost if the run is aborted."""
     open: list[str] = field(default_factory=list)
     """The round's calls not yet answered (a parallel round), closed if the run is aborted."""
+    lanes: bool = False
+    """This round's calls were planned with lanes (StepResult.lanes)."""
     compacted: bool = False
     """This step's conversation was compacted once; it is not compacted twice."""
     attempt: int = 0
@@ -333,6 +335,9 @@ class StepResult:
     kind: str = ""
     # RETRY: seconds to wait before asking again.
     delay_s: float = 0.0
+    # The calls were planned with lanes (PlannedCall.lane), so they may run at once; a
+    # step planned by an older worker (no lanes) runs its round in order.
+    lanes: bool = False
 
 
 COMPACT = "compact"
@@ -347,6 +352,9 @@ class ToolRequest:
     denied: bool = False
     # Not run: the user steered the run while its round was under way.
     skipped: bool = False
+    # Not run: an earlier change in its lane (the same file, or the platform tools) has an
+    # unknown outcome, and this change was made assuming it took effect.
+    behind_unknown: bool = False
 
 
 @dataclass(frozen=True, slots=True)

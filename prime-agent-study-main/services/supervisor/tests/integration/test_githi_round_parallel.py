@@ -11,11 +11,11 @@ from collections.abc import Callable
 
 import pytest
 
-from supervisor.agent.events import ToolEnd, ToolStart, TurnEnd
+from supervisor.agent.events import ErrorEvent, ToolEnd, ToolStart, TurnEnd
 from supervisor.temporal.contracts import Activity, Message
-from supervisor.temporal.steps import NOT_RUN_OUTCOME, UNKNOWN_OUTCOME
+from supervisor.temporal.steps import BEHIND_UNKNOWN, NOT_RUN_OUTCOME, UNKNOWN_OUTCOME
 from supervisor.temporal.worker import session_worker
-from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
+from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended, spawn_worker
 from tests.support.scripted import ScriptedGateway, slow_tool
 
 pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
@@ -106,3 +106,42 @@ async def test_a_stop_answers_every_call_of_the_round(
     assert ends["call-0-0"].result["error"] == UNKNOWN_OUTCOME  # it started: it may have run
     assert ends["call-0-1"].result["error"] == NOT_RUN_OUTCOME  # it was waiting on the write
     assert all(e.is_error for e in ends.values())
+
+
+async def test_a_worker_lost_mid_round_answers_its_calls_and_the_run_goes_on(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Two at-most-once writes lost together are each answered as unknown, a change queued
+    behind one of them is not run (it was made assuming the first took effect), the
+    session is adopted, not failed, and the model is told and answers."""
+    rewrite = ("write", {"file_path": "notes.txt", "content": "second"})
+    gateway = model(WRITE, WRITE_B, rewrite)
+    observer = await env.state()
+    await env.composition(observer, "githi-once")  # before the worker boots: it hydrates it
+    worker, _ = await spawn_worker(
+        env, {"scripted_calls": [list(WRITE), list(WRITE_B), list(rewrite)], "slow_tool": ["write", 120]}
+    )
+    try:
+        sid = await env.create(observer, "githi-once")
+        await env.sessions.submit(sid, Message("c1", "write both, then rewrite the first"))
+        await env.wait_for(
+            observer, sid, lambda events: len(payloads(events, ToolStart)) >= 2, timeout=30
+        )
+    finally:
+        worker.kill()  # SIGKILL while both writes run
+        await worker.wait()
+
+    adopter = await env.state()
+    async with session_worker(env.client, adopter, task_queue=env.queue):
+        events = await env.wait_for(observer, sid, run_ended(), timeout=90)
+        scheduled = await env.activity_types(sid)
+
+    ends = {e.tool_call_id: e for e in payloads(events, ToolEnd)}
+    assert ends["call-0-0"].result["error"] == UNKNOWN_OUTCOME
+    assert ends["call-0-1"].result["error"] == UNKNOWN_OUTCOME
+    assert ends["call-0-2"].result["error"] == BEHIND_UNKNOWN, "a change behind a lost one is not run"
+    assert not payloads(events, ErrorEvent), "the session was adopted, not failed"
+    assert scheduled.count(Activity.ADOPT) == 1
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    read = [m.content for m in gateway.seen[-1] if m.role == "tool"]
+    assert read == [UNKNOWN_OUTCOME, UNKNOWN_OUTCOME, BEHIND_UNKNOWN], "told in call order"

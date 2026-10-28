@@ -31,7 +31,12 @@ from supervisor.temporal.contracts import (
     Phase,
 )
 from supervisor.temporal.sessions import SessionCommandError
-from supervisor.temporal.steps import FINAL_STEP_NOTICE, UNKNOWN_OUTCOME, steps_left_notice
+from supervisor.temporal.steps import (
+    FINAL_STEP_NOTICE,
+    NOT_RUN_OUTCOME,
+    UNKNOWN_OUTCOME,
+    steps_left_notice,
+)
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
@@ -336,7 +341,8 @@ async def test_abort_during_an_approval_wait(
         events = await env.wait_for(state, sid, run_ended())
     assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
     assert payloads(events, ApprovalResolved)[0].choice == "deny"
-    assert not payloads(events, ToolEnd)
+    (end,) = payloads(events, ToolEnd)  # every call of the round is answered
+    assert end.result["code"] == "TOOL_NOT_RUN" and end.result["error"] == NOT_RUN_OUTCOME
 
 
 @pytest.mark.parametrize(
