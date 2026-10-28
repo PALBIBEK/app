@@ -281,6 +281,8 @@ class RunState:
     """The call whose tool step is running, closed as lost if the run is aborted."""
     compacted: bool = False
     """This step's conversation was compacted once; it is not compacted twice."""
+    attempt: int = 0
+    """Retries of this step's model call so far (pi's auto-retry; reset each step)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +298,10 @@ class StepRequest:
     can_compact: bool = False
     # This step already compacted once: a request still too large ends the run.
     compacted: bool = False
+    # The phase loop retries a failed model call on a durable timer: the step answers
+    # RETRY (journalled as ModelRetry) instead of failing. ``attempt``: retries so far.
+    can_retry: bool = False
+    attempt: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,9 +313,12 @@ class StepResult:
     # COMPACT: the request would not fit the model's window (estimated, or the provider
     # said so); nothing was sent and nothing journalled as the reply. Otherwise empty.
     kind: str = ""
+    # RETRY: seconds to wait before asking again.
+    delay_s: float = 0.0
 
 
 COMPACT = "compact"
+RETRY = "retry"
 
 
 @dataclass(frozen=True, slots=True)

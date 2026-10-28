@@ -35,7 +35,7 @@ Legend: **done** (phase that did it) · **next** (phase that will) · **same** (
 | L11 | Steering a running run; follow-ups after it | next (phase 6) |
 | L12 | Streaming text, thinking and tool output | next (phase 6) |
 | L13 | The loop as explicit phases over a checkpoint | done (phase 2) |
-| L14 | Retryable model errors back off with durable sleeps; crash loops are parked | next (phase 4) |
+| L14 | Retryable model errors (429, 5xx, overload, dropped connection) wait on a durable workflow timer and are asked again: `Retry-After` honoured, 3 retries doubling from 2 s, each journalled as `ModelRetry`; an abort ends the wait; a refused request (401, bad body) ends the run at once instead of five blind attempts. A step whose worker keeps dying stops after its activity attempts, and the run ends saying so | done (phase 4); retry settings as pins in phase 7 |
 | L15 | Parallel tool rounds; per-tool replay policy | next (phase 5) |
 
 ### Prompt

@@ -41,6 +41,8 @@ class ScriptedGateway:
     calls: list[tuple[str, dict[str, Any]]]
     cost_per_call: float = 0.0
     fail_first: int = 0
+    # Raised by the agent's first calls, in order (a provider's 429, 503, 401 ...).
+    errors_first: list[Exception] = dataclasses.field(default_factory=list)
     vary_args: bool = False
     repeat: bool = False
     # The first step's reply is cut off by the output limit (finish_reason "length"),
@@ -91,6 +93,9 @@ class ScriptedGateway:
         with self._lock:
             self.seen.append(list(messages))
             self.tools_seen.append(list(tools))
+            summarizing = bool(messages) and messages[0].content.startswith("You are a context summarization")
+            if self.errors_first and not summarizing:
+                raise self.errors_first.pop(0)
             if self.fail_first > 0:
                 self.fail_first -= 1
                 raise ConnectionError("model gateway unavailable (scripted)")

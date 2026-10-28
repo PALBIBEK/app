@@ -7,6 +7,8 @@ answers them, a retried or re-homed activity, a replay) reaches the same decisio
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Any, Final
 
 from supervisor.agent.events import MessageEnd
@@ -14,11 +16,16 @@ from supervisor.harness import LoopSpec
 from supervisor.seams.core.types import INVALID_ARGUMENTS_KEY
 
 __all__ = [
+    "DEFAULT_RETRY",
     "FINAL_STEP_NOTICE",
+    "RetrySpec",
     "is_context_overflow",
     "is_final_step",
+    "is_retryable",
     "loop_spec",
     "refusal",
+    "retry_delay",
+    "retry_spec",
     "steps_left_notice",
 ]
 
@@ -94,3 +101,89 @@ def is_context_overflow(error: BaseException | str) -> bool:
         return True
     text = str(error).lower()
     return any(marker in text for marker in _OVERFLOW)
+
+
+# --- retrying a model call (pi's auto-retry) ----------------------------------------
+
+
+@dataclass(frozen=True)
+class RetrySpec:
+    """How a failed model call is asked again: pi's defaults (3 retries, 2 s doubling).
+
+    The wait is a durable timer in the workflow, so it survives a worker restart and
+    holds no worker while it runs; a provider's ``Retry-After`` is honoured up to
+    ``max_delay_s`` (pi's ``maxRetryDelayMs``): longer than that, the run ends saying so
+    instead of hanging.
+    """
+
+    max_retries: int = 3
+    base_delay_s: float = 2.0
+    max_delay_s: float = 60.0
+
+
+DEFAULT_RETRY: Final = RetrySpec()
+
+_RETRY_STATUS: Final = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529})
+_RETRY_TEXT: Final = (
+    "overloaded",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "timed out",
+    "timeout",
+    "connection",
+    "network",
+    "econnreset",
+    "fetch failed",
+    "try again",
+)
+_STATUS: Final = re.compile(r"model gateway error (\d{3})")
+
+
+def _status(error: BaseException) -> int | None:
+    status = getattr(error, "status", None)
+    if isinstance(status, int):
+        return status
+    found = _STATUS.search(str(error))
+    return int(found.group(1)) if found else None
+
+
+def is_retryable(error: BaseException) -> bool:
+    """Whether a failed model call may succeed if asked again unchanged.
+
+    A rate limit, an overloaded or unavailable provider, or a dropped connection may
+    pass; a refused request (bad key, unknown model, invalid body) or one that does
+    not fit the window will fail the same way again (the window is compacted instead).
+    """
+    if is_context_overflow(error):
+        return False
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    status = _status(error)
+    if status is not None:
+        return status in _RETRY_STATUS
+    text = str(error).lower()
+    return any(marker in text for marker in _RETRY_TEXT)
+
+
+def retry_spec(manifest: Any) -> RetrySpec:
+    """The manifest's retry settings; pi's defaults for manifests without them."""
+    return getattr(manifest, "retry", None) or DEFAULT_RETRY
+
+
+def retry_delay(spec: RetrySpec, attempt: int, error: BaseException) -> float | None:
+    """Seconds to wait before retry ``attempt`` (1-based); None: do not retry.
+
+    The provider's ``Retry-After`` when it gave one, else ``base_delay_s`` doubling.
+    None past ``max_retries``, or when the provider asks for longer than ``max_delay_s``.
+    """
+    if attempt > spec.max_retries:
+        return None
+    asked = getattr(error, "retry_after", None)
+    if isinstance(asked, (int, float)):
+        return float(asked) if asked <= spec.max_delay_s else None
+    return float(min(spec.base_delay_s * 2 ** (attempt - 1), spec.max_delay_s))

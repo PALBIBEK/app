@@ -358,6 +358,24 @@ class Settled:
 
 
 @dataclass(frozen=True)
+class ModelRetry:
+    """A model call failed in a way that may pass (rate limit, overload, a dropped
+    connection); the run waits ``delay_s`` on a durable timer and asks again.
+
+    pi's ``auto_retry_start``: shown to the user as "retrying (attempt of max_attempts)",
+    so a slow provider reads as a wait, not a hang or an error.
+    """
+
+    step: int
+    attempt: int
+    max_attempts: int
+    delay_s: float
+    error_class: str
+    detail: str
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
+@dataclass(frozen=True)
 class ErrorEvent:
     error_class: str
     retryable: bool
@@ -394,6 +412,7 @@ AgentEvent = (
     | HandLost
     | HandStopped
     | Settled
+    | ModelRetry
     | ErrorEvent
 )
 
