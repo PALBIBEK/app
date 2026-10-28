@@ -97,17 +97,20 @@ class BudgetTracker:
         """
         self._tokens_this_turn[session_id] = 0
 
-    async def check(self, session_id: str) -> BudgetState:
+    async def check(self, session_id: str, *, turn_tokens: bool = True) -> BudgetState:
         """Check current budget state before turn.
 
         Args:
             session_id: Session to check
+            turn_tokens: Also hold the turn to ``max_tokens_per_turn`` as this worker
+                counted it; False where the workflow counts a run's tokens itself (a
+                stepped run, whose model steps run on any worker)
 
         Returns:
             Current budget state (``exceeded`` set; the caller decides to refuse)
         """
         cost = await self._load_cost(session_id)
-        tokens = self._tokens_this_turn.get(session_id, 0)
+        tokens = self._tokens_this_turn.get(session_id, 0) if turn_tokens else 0
         return self._evaluate(session_id, cost=cost, tokens=tokens)
 
     async def record(

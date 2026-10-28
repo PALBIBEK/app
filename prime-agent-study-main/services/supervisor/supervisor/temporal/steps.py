@@ -203,6 +203,16 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     return messages + [{"role": "user", "content": [{"type": "text", "text": n}]} for n in notes]
 
 
+def _tokens(assistant: MessageEnd) -> int:
+    """What the journalled reply's model call used (the same on a retried step)."""
+    usage: Any = assistant.usage
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    return int(usage.input_tokens + usage.output_tokens)
+
+
 FILE_TOOLS = frozenset({"read", "write", "edit"})
 
 
@@ -371,6 +381,12 @@ class GithiSteps:
             MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
         )
         await self._memory.checkpoint(session_id, run_id, self._record)
+        manifest = await self._manifest(session_id)
+        bound = manifest.budget.max_tokens_per_session if manifest.budget else None
+        if bound is not None and req.tokens_used > bound:
+            # Past the session's bound: the run ends at its first step, so it does no work
+            # first (pi-temporal checks before anything runs).
+            return self._plan_run(run_id, manifest, capture=None)
         if (project := await read_project_context(self._manager, session_id)) is not None:
             await self._record(
                 session_id, run_id, "project", ProjectContext(project.path, project.text, project.digest)
@@ -385,7 +401,9 @@ class GithiSteps:
             )
         )
         await self._announce_background(session_id, run_id)
-        manifest = await self._manifest(session_id)
+        return self._plan_run(run_id, manifest, capture=await self._capture_plan(session_id))
+
+    def _plan_run(self, run_id: str, manifest: Any, *, capture: Any) -> RunPlan:
         guards = manifest.guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
@@ -397,8 +415,11 @@ class GithiSteps:
             stepped=True,
             guard=guard,
             max_steps=loop_spec(manifest).max_steps,
-            capture=await self._capture_plan(session_id),
+            capture=capture,
             max_run_s=loop_spec(manifest).max_run_seconds,
+            hard_run_s=loop_spec(manifest).hard_run_seconds,
+            max_run_tokens=manifest.budget.max_tokens_per_turn if manifest.budget else None,
+            max_session_tokens=manifest.budget.max_tokens_per_session if manifest.budget else None,
         )
 
     async def _announce_background(self, session_id: str, run_id: str) -> None:
@@ -487,7 +508,9 @@ class GithiSteps:
         sid, run_id = req.session_id, req.run_id
         key = f"{req.step}:assistant"
         if (assistant := await self._keyed(sid, run_id, key)) is None:
-            state = await self._manager._budget.check(sid)
+            # Cost here; tokens per run and per session are the workflow's to count (a
+            # model step runs on any worker, so a worker's own count would not see them all).
+            state = await self._manager._budget.check(sid, turn_tokens=False)
             if state.exceeded:
                 return await self._budget_stop(sid, state.exceeded_reason)
             runtime = await self._brain(sid)
@@ -576,18 +599,19 @@ class GithiSteps:
             if sink is not None:
                 await self._clear_partial(sid)
         # Checked on replay too, so a retried step cannot hand out calls past the limit.
-        if (spent := await self._manager._budget.check(sid)).exceeded:
-            return await self._budget_stop(sid, spent.exceeded_reason)
+        tokens = _tokens(assistant)
+        if (spent := await self._manager._budget.check(sid, turn_tokens=False)).exceeded:
+            return await self._budget_stop(sid, spent.exceeded_reason, tokens=tokens)
         calls = [p for p in assistant.content if p.get("type") == "tool_call"]
         if not calls:
-            return StepResult(calls=[], final=True)
+            return StepResult(calls=[], final=True, tokens=tokens)
         manifest = await self._manifest(sid)
         spec = loop_spec(manifest)
         plans = [
             self._plan(manifest, call, refused=refusal(spec, req.step, assistant, call) is not None)
             for call in calls
         ]
-        return StepResult(calls=plans, final=False, lanes=True)
+        return StepResult(calls=plans, final=False, lanes=True, tokens=tokens)
 
     async def _retry_or_fail(self, req: StepRequest, exc: Exception) -> StepResult:
         """pi's auto-retry: a call that may pass is asked again after a durable wait.
@@ -693,8 +717,11 @@ class GithiSteps:
             lane=call_lane(name, dict(call.get("arguments") or {})),
         )
 
-    async def _budget_stop(self, session_id: str, reason: str | None) -> StepResult:
-        """Budget is spent: close the session to new turns (it reopens if limits change)."""
+    async def _budget_stop(
+        self, session_id: str, reason: str | None, *, tokens: int = 0
+    ) -> StepResult:
+        """Budget is spent: close the session to new turns (it reopens if limits change).
+        ``tokens``: what the step's model call used, which the provider billed all the same."""
         if await self._manager.session_status(session_id) == "active":
             await self._manager._policy_abort(
                 session_id,
@@ -703,7 +730,7 @@ class GithiSteps:
                 detail=reason or "budget exceeded",
                 status="budget_exceeded",
             )
-        return StepResult(calls=[], final=True, stop_reason="budget_exceeded")
+        return StepResult(calls=[], final=True, stop_reason="budget_exceeded", tokens=tokens)
 
     # --- tools ---------------------------------------------------------------
 

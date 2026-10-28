@@ -284,6 +284,9 @@ def once_variant(catalog: HarnessCatalog) -> None:
 def budget_variant(catalog: HarnessCatalog) -> None:
     budget = BudgetSpec(max_cost_per_session=0.01, max_tokens_per_turn=None)
     githi_variant(catalog, "githi-budget", budget=budget)
+    # Each scripted model call reports 15 tokens: a run past 20, a session past 40.
+    githi_variant(catalog, "githi-run-tokens", budget=BudgetSpec(max_tokens_per_turn=20))
+    githi_variant(catalog, "githi-session-tokens", budget=BudgetSpec(max_tokens_per_session=40))
 
 
 def loop_variant(catalog: HarnessCatalog) -> None:
@@ -291,6 +294,7 @@ def loop_variant(catalog: HarnessCatalog) -> None:
     (``githi-retry``), pinned in ``loop:``."""
     base = catalog.resolve_sync("githi-v1").loop or LoopSpec()
     githi_variant(catalog, "githi-loop", loop=dataclasses.replace(base, max_run_seconds=1.0))
+    githi_variant(catalog, "githi-deadline", loop=dataclasses.replace(base, hard_run_seconds=2.0))
     githi_variant(
         catalog,
         "githi-retry",

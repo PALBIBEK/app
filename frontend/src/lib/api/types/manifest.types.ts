@@ -44,6 +44,10 @@ export const ManifestSchema = z.object({
     stall_iterations: z.number(),
     /** Wall-clock limit for one run, in minutes; 0: none. */
     max_run_minutes: z.number().default(0),
+    /** A deadline that stops a run where it is, in minutes; 0: none. */
+    hard_run_minutes: z.number().default(0),
+    /** Tokens the whole session may use; 0: no limit. */
+    max_tokens_per_session: z.number().default(0),
     /** Times a model call that may pass (rate limit, overload) is asked again. */
     model_retries: z.number().default(3),
   }),

@@ -698,7 +698,9 @@ class SessionManager(UpkeepOps):
         # by the tool call that builds it (hand_for_call).
         if ws is not None and self._hands.sandbox(session_id) is not None:
             self._workspace_svc.assert_ready(ws)
-        state = await self._budget.check(session_id)
+        # The turn has not started: what the last one used (max_tokens_per_turn) does not
+        # hold it back; the session's cost does.
+        state = await self._budget.check(session_id, turn_tokens=False)
         if state.exceeded:
             raise BudgetExceeded.from_state(state)
         self.prewarm(session_id)

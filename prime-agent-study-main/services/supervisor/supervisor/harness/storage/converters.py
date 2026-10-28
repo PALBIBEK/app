@@ -72,8 +72,8 @@ def tool_spec_to_dict(spec: ToolSpec) -> dict[str, str]:
 
 
 def budget_spec_to_dict(spec: BudgetSpec) -> dict[str, Any]:
-    """Convert BudgetSpec to dict."""
-    return asdict(spec)
+    """Convert BudgetSpec to dict (settings added later only when set)."""
+    return spec.body_for_digest()
 
 
 def guard_spec_to_dict(spec: GuardSpec) -> dict[str, Any]:
@@ -169,7 +169,17 @@ def budget_spec_from_dict(data: dict[str, Any]) -> BudgetSpec:
             if data.get("max_tokens_per_turn") is not None
             else None
         ),
+        max_tokens_per_session=_positive_int(data, "max_tokens_per_session"),
     )
+
+
+def _positive_int(data: dict[str, Any], key: str) -> int | None:
+    if data.get(key) is None:
+        return None
+    value = int(data[key])
+    if value <= 0:
+        raise ManifestValidationError(f"budget.{key}", "must be > 0")
+    return value
 
 
 def guard_spec_from_dict(data: dict[str, Any]) -> GuardSpec:
@@ -235,12 +245,17 @@ def loop_spec_from_dict(data: dict[str, Any]) -> LoopSpec:
         max_run_seconds=(
             float(data["max_run_seconds"]) if data.get("max_run_seconds") is not None else None
         ),
+        hard_run_seconds=(
+            float(data["hard_run_seconds"]) if data.get("hard_run_seconds") is not None else None
+        ),
         model_retries=int(data.get("model_retries", 3)),
         retry_base_seconds=float(data.get("retry_base_seconds", 2.0)),
         retry_max_seconds=float(data.get("retry_max_seconds", 60.0)),
     )
     if spec.max_run_seconds is not None and spec.max_run_seconds <= 0:
         raise ManifestValidationError("loop.max_run_seconds", "must be > 0")
+    if spec.hard_run_seconds is not None and spec.hard_run_seconds <= 0:
+        raise ManifestValidationError("loop.hard_run_seconds", "must be > 0")
     if not 0 <= spec.model_retries <= 10:
         raise ManifestValidationError("loop.model_retries", "must be between 0 and 10")
     if spec.retry_base_seconds <= 0 or spec.retry_max_seconds < spec.retry_base_seconds:

@@ -60,18 +60,30 @@ class BudgetSpec:
 
     Attributes:
         max_cost_per_session: Maximum cost in USD per session
-        max_tokens_per_turn: Maximum tokens per LLM turn
+        max_tokens_per_turn: Tokens (input and output, every model call) one run may use;
+            past it the run ends at its next step, saying so, and the session goes on
+        max_tokens_per_session: Tokens the whole session may use; past it the run ends,
+            and each later message ends at once without asking the model (pi-temporal's
+            session bound)
     """
 
     max_cost_per_session: float | None = None
     max_tokens_per_turn: int | None = None
+    max_tokens_per_session: int | None = None
 
     def body_for_digest(self) -> dict[str, Any]:
-        """Return canonical body for digest computation."""
-        return {
+        """Return canonical body for digest computation.
+
+        ``max_tokens_per_session`` appears only when set, so every manifest published
+        before it keeps its digest (and its pins).
+        """
+        body: dict[str, Any] = {
             "max_cost_per_session": self.max_cost_per_session,
             "max_tokens_per_turn": self.max_tokens_per_turn,
         }
+        if self.max_tokens_per_session is not None:
+            body["max_tokens_per_session"] = self.max_tokens_per_session
+        return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +207,9 @@ class LoopSpec:
             an answer rather than at the limit with none
         max_run_seconds: Wall-clock limit for one run (None: no limit beyond the turn
             timeout); past it the run ends at its next step, saying so
+        hard_run_seconds: A deadline for one run that stops it where it is, a running
+            model or tool call included (pi-temporal's hard deadline); its calls are
+            answered as unknown, and the session goes on
         model_retries: Times a model call that may pass (rate limit, overload, a dropped
             connection) is asked again, on a durable timer
         retry_base_seconds: The first wait; it doubles each retry
@@ -205,6 +220,7 @@ class LoopSpec:
     warn_steps_remaining: int = 3
     force_answer_on_final_step: bool = True
     max_run_seconds: float | None = None
+    hard_run_seconds: float | None = None
     model_retries: int = 3
     retry_base_seconds: float = 2.0
     retry_max_seconds: float = 60.0
@@ -221,7 +237,13 @@ class LoopSpec:
             "force_answer_on_final_step": self.force_answer_on_final_step,
         }
         defaults = LoopSpec()
-        for name in ("max_run_seconds", "model_retries", "retry_base_seconds", "retry_max_seconds"):
+        for name in (
+            "max_run_seconds",
+            "hard_run_seconds",
+            "model_retries",
+            "retry_base_seconds",
+            "retry_max_seconds",
+        ):
             if getattr(self, name) != getattr(defaults, name):
                 body[name] = getattr(self, name)
         return body

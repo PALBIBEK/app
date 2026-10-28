@@ -136,6 +136,8 @@ async def test_publish_sends_leaves_then_the_composition_and_binds_the_harness(d
         manifest["sandbox"]["provider"] = "local_docker"
         manifest["policy"]["max_steps"] = 12
         manifest["policy"]["max_run_minutes"] = 20
+        manifest["policy"]["hard_run_minutes"] = 30
+        manifest["policy"]["max_tokens_per_session"] = 2_000_000
         assert (await api.put(f"/api/v1/harnesses/{harness.id}/manifest", json=manifest)).status_code == 200
         r = await api.post(f"/api/v1/harnesses/{harness.id}/publish")
         again = await api.post(f"/api/v1/harnesses/{harness.id}/publish")
@@ -155,6 +157,8 @@ async def test_publish_sends_leaves_then_the_composition_and_binds_the_harness(d
     assert hv["loop"]["max_steps"] == 12 and hv["approvals"]["require_approval"] == ["bash"]
     assert hv["loop"]["max_run_seconds"] == 1200  # pinned with the release
     assert "model_retries" not in hv["loop"]  # left at its default: the digest is unchanged
+    assert hv["loop"]["hard_run_seconds"] == 1800  # pi-temporal's hard deadline
+    assert hv["budget"]["max_tokens_per_session"] == 2_000_000
     assert hv["tools"]["bash"] == {"class": "non_atomic"} and hv["image_digest"] == "img@sha256:abc"
     comp = bodies["composition"]
     assert comp["plug_bindings"]["model_route"] == "githi"  # gateway/githi → the route
