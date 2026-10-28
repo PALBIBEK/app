@@ -44,7 +44,7 @@ class TemporalSettings:
     namespace: str = _TEMPORAL_NAMESPACE
     task_queue: str = _TEMPORAL_TASK_QUEUE
     # Temporal Cloud API key; setting it also turns on TLS.
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     # How many runs one worker carries at once (its activity slots): run more workers for more.
     max_concurrent_runs: int = 50
     # A worker serves GET /healthz and /readyz on this port for its orchestrator (0: off).
@@ -57,6 +57,11 @@ class TemporalSettings:
     build_id: str = ""
     # auto: a new build promotes itself once polling; manual: `rollout ramp/promote` does.
     rollout: str = "auto"
+    # Encrypted history (supervisor.temporal.codec): every client and worker seals what
+    # it hands Temporal with this key (32 bytes, base64 or hex); old keys still open what
+    # they sealed, so a key rotates. None: payloads go as they are.
+    codec_key: str | None = field(default=None, repr=False)
+    codec_old_keys: tuple[str, ...] = field(default=(), repr=False)
 
     @property
     def versioned(self) -> bool:
@@ -75,6 +80,10 @@ class TemporalSettings:
             deployment_name=os.environ.get("WORKER_DEPLOYMENT_NAME", "").strip(),
             build_id=os.environ.get("WORKER_BUILD_ID", "").strip(),
             rollout=_rollout_mode(os.environ.get("WORKER_ROLLOUT", "auto")),
+            codec_key=os.environ.get("TEMPORAL_CODEC_KEY", "").strip() or None,
+            codec_old_keys=tuple(
+                k.strip() for k in os.environ.get("TEMPORAL_CODEC_OLD_KEYS", "").split(",") if k.strip()
+            ),
         )
 
 

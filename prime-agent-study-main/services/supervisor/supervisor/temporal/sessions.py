@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Final, Literal
 
+from cryptography.exceptions import InvalidTag
 from temporalio.client import (
     Client,
     WithStartWorkflowOperation,
@@ -25,6 +26,7 @@ from temporalio.client import (
     WorkflowUpdateStage,
 )
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -140,9 +142,29 @@ async def _commands() -> AsyncIterator[None]:
         raise
 
 
-def _pending(raw: Any) -> tuple[bool, str | None]:
+async def failure_text(converter: DataConverter, failure: Any) -> str | None:
+    """A failure's message. With encrypted history it is sealed in the failure's
+    attributes (the server holds only "Encoded failure"), so it is opened first."""
+    copy = type(failure)()
+    copy.CopyFrom(failure)  # decoding rewrites it in place
+    try:
+        text = str(await converter.decode_failure(copy))
+    except (KeyError, ValueError, InvalidTag):  # a key this process lacks, or a corrupt seal
+        text = failure.message
+    return text[:500] or None
+
+
+def _plain_memo(client: Client, values: dict[str, Any]) -> dict[str, Any]:
+    """The memo as plain payloads, which the client stores as they are: never sealed by the
+    codec, so a session whose run outlives a codec key's rotation (continue-as-new carries
+    the memo over as it is) is still authorised by the tenant and principal it holds."""
+    converter = client.data_converter.payload_converter
+    return {key: converter.to_payloads([value])[0] for key, value in values.items()}
+
+
+def _pending(raw: Any) -> tuple[bool, Any]:
     """From a workflow's description: is work waiting with no worker to take it, and is a step
-    failing and being retried (its last error)?"""
+    failing and being retried (its last failure, as the server holds it)?"""
     from temporalio.api.enums.v1 import PendingActivityState, PendingWorkflowTaskState
 
     now = time.time()
@@ -154,12 +176,12 @@ def _pending(raw: Any) -> tuple[bool, str | None]:
     unserved = task.state == PendingWorkflowTaskState.PENDING_WORKFLOW_TASK_STATE_SCHEDULED and waited(
         task.scheduled_time
     )
-    retrying: str | None = None
+    retrying: Any = None
     for act in raw.pending_activities:
         if act.state == PendingActivityState.PENDING_ACTIVITY_STATE_SCHEDULED and waited(act.scheduled_time):
             unserved = True
-        if act.attempt > 1 and act.last_failure.message:
-            retrying = act.last_failure.message[:500]
+        if act.attempt > 1 and act.HasField("last_failure"):
+            retrying = act.last_failure
     return unserved, retrying
 
 
@@ -262,7 +284,9 @@ class SessionWorkflows:
                 task_queue=self._task_queue,
                 id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
                 id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
-                memo={"tenant_id": spec.tenant_id, "principal_id": spec.principal_id or ""},
+                memo=_plain_memo(
+                    self._client, {"tenant_id": spec.tenant_id, "principal_id": spec.principal_id or ""}
+                ),
             )
 
     async def startup(self, session_id: str) -> tuple[Startup, dict[str, Any]] | None:
@@ -280,7 +304,8 @@ class SessionWorkflows:
             raise
         memo = dict(await desc.memo())
         worker = await self.worker_available()
-        unserved, retrying = _pending(desc.raw_description)
+        unserved, failure = _pending(desc.raw_description)
+        retrying = None if failure is None else await failure_text(self._client.data_converter, failure)
         worker = worker and not unserved
         if desc.status is not WorkflowExecutionStatus.RUNNING:
             try:

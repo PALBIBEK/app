@@ -16,6 +16,8 @@ from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 
+from tests.support.workflow_histories import sealed
+
 SUGGEST_CONTINUE_AS_NEW_AFTER = 60
 
 
@@ -47,8 +49,10 @@ async def record_histories(client: Client, out: Path, *, per_shape: int = 1) -> 
     query = "(WorkflowType = 'AgentSession' or WorkflowType = 'SubagentJob') and ExecutionStatus != 'Running'"
     async for run in client.list_workflows(query):
         history = await client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
-        if not any(e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED for e in history.events):
-            continue
+        if sealed(history) or not any(
+            e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED for e in history.events
+        ):
+            continue  # sealed: the release gate replays without the key
         steps = sorted({
             e.activity_task_scheduled_event_attributes.activity_type.name
             for e in history.events
