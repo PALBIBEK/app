@@ -79,6 +79,7 @@ from supervisor.temporal.contracts import (
     EndRunRequest,
     GuardSettings,
     LostCall,
+    PlaceInputs,
     PlannedCall,
     RetryMode,
     RunPlan,
@@ -169,6 +170,13 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                 }
             )
     return _in_call_order(messages)
+
+
+SKIPPED_FOR_STEERING = (
+    "not run: the user sent a new message while this round was running. Read it first, "
+    "then make this call again if it is still needed."
+)
+"""pi's "Skipped due to queued user message": the rest of a round gives way to the user."""
 
 
 def _in_call_order(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -554,17 +562,36 @@ class GithiSteps:
 
     # --- tools ---------------------------------------------------------------
 
+    async def place_inputs(self, req: PlaceInputs) -> None:
+        """Journal steering messages as the user's, before step ``req.step`` (pi's steer)."""
+        for message in req.messages:
+            await self._record(
+                req.session_id,
+                req.run_id,
+                f"{req.step}:steer:{message.command_id}",
+                MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
+                trace_id=message.trace_id,
+            )
+
     async def tool_batch(self, batch: ToolBatch) -> list[bool]:
         """Run a round's read-only calls together; whether each errored, in order.
 
         Each is ``tool_call``, keyed as one, so a retried batch re-runs only the calls
         that had not ended, and the journal holds each result once.
         """
-        denied = set(batch.denied)
+        denied, skipped = set(batch.denied), set(batch.skipped)
         return list(
             await asyncio.gather(
                 *(
-                    self.tool_call(ToolRequest(batch.session_id, batch.run_id, call_id, denied=call_id in denied))
+                    self.tool_call(
+                        ToolRequest(
+                            batch.session_id,
+                            batch.run_id,
+                            call_id,
+                            denied=call_id in denied,
+                            skipped=call_id in skipped,
+                        )
+                    )
                     for call_id in batch.call_ids
                 )
             )
@@ -587,6 +614,9 @@ class GithiSteps:
         refused = refusal(loop_spec(await self._manifest(sid)), step, assistant, call)
         if refused is not None:
             result, is_error = denied_result(refused[1], refused[0]), True
+        elif req.skipped:
+            result = denied_result(SKIPPED_FOR_STEERING, "SKIPPED_FOR_USER_MESSAGE")
+            is_error = True
         elif req.denied:
             result = denied_result("denied by approval", "APPROVAL_DENIED")
             is_error = True

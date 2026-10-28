@@ -36,6 +36,7 @@ from supervisor.temporal.contracts import (
     JobSpec,
     LostCall,
     OpResult,
+    PlaceInputs,
     Placement,
     RunPlan,
     SessionOp,
@@ -219,6 +220,11 @@ class SessionActivities:
         with _as_application_error():
             return await heartbeating(self._steps.tool_call(req))
 
+    @activity.defn(name=Activity.PLACE_INPUTS)
+    async def place_inputs(self, req: PlaceInputs) -> None:
+        with _as_application_error():
+            await self._steps.place_inputs(req)
+
     @activity.defn(name=Activity.TOOL_BATCH)
     async def tool_batch(self, batch: ToolBatch) -> list[bool]:
         with _as_application_error():
@@ -281,6 +287,7 @@ class SessionActivities:
             self.checkpoint,
             self.tool_call,
             self.tool_batch,
+            self.place_inputs,
             self.request_approval,
             self.resolve_approval,
             self.end_run,

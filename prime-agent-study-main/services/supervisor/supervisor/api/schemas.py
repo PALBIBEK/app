@@ -75,6 +75,9 @@ def _no_nul(value: str) -> str:
 class PostMessageRequest(BaseModel):
     text: str = Field(min_length=1)
     command_id: str = Field(min_length=1, max_length=COMMAND_ID_MAX)
+    steer: bool = False
+    """Sent while a run works: join that run at its next step (pi's steering) instead of
+    waiting for it to end. Ignored when no run is working."""
 
     _text_no_nul = field_validator("text", "command_id")(_no_nul)
 
@@ -84,6 +87,8 @@ class PostMessageResponse(BaseModel):
     status: str = "accepted"
     queued: bool | None = None
     """True when the message waits behind a running turn; None when not known."""
+    steered: bool = False
+    """The message joined the running turn (``turn_id``) rather than starting its own."""
 
 
 class ForkSessionRequest(BaseModel):

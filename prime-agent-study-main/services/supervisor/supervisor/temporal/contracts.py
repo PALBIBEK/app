@@ -60,6 +60,7 @@ class Activity(StrEnum):
     # Save what the last tools changed in the sandbox; on the worker holding it.
     CHECKPOINT = "session.checkpoint"
     # Summarise the conversation inside a run so the next model step fits its window.
+    PLACE_INPUTS = "session.place_inputs"
     TOOL_BATCH = "session.tool_batch"
     COMPACT = "session.compact"
     TOOL_CALL = "session.tool_call"
@@ -162,6 +163,9 @@ class Message:
     command_id: str
     text: str
     trace_id: str | None = None
+    # pi's steering: sent while a run works, it is placed in that run at its next step
+    # (the round's calls not yet run are skipped) instead of waiting for the run to end.
+    steer: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +174,9 @@ class Accepted:
 
     command_id: str
     queued: bool
+    # Steered into the run already working (``run_id``) rather than run on its own.
+    steered: bool = False
+    run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +338,18 @@ class ToolRequest:
     run_id: str
     call_id: str
     denied: bool = False
+    # Not run: the user steered the run while its round was under way.
+    skipped: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceInputs:
+    """Steering messages placed in a run before its step ``step``."""
+
+    session_id: str
+    run_id: str
+    step: int
+    messages: list[Message]
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +360,7 @@ class ToolBatch:
     run_id: str
     call_ids: list[str]
     denied: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,6 +513,8 @@ class Carried:
     # Turns waiting to be captured into memory, and when the burst is due (epoch s).
     capture_runs: list[str] = field(default_factory=list)
     capture_due: float | None = None
+    # Steering messages waiting for the running run's next step (bounded by the run).
+    steering: list[Message] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
