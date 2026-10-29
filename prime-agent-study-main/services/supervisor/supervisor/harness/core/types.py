@@ -65,17 +65,20 @@ class BudgetSpec:
         max_tokens_per_session: Tokens the whole session may use; past it the run ends,
             and each later message ends at once without asking the model (pi-temporal's
             session bound)
+        max_seconds_per_session: Seconds the session's runs may take in all (idle time is
+            free); past it, as for ``max_tokens_per_session``
     """
 
     max_cost_per_session: float | None = None
     max_tokens_per_turn: int | None = None
     max_tokens_per_session: int | None = None
+    max_seconds_per_session: float | None = None
 
     def body_for_digest(self) -> dict[str, Any]:
         """Return canonical body for digest computation.
 
-        ``max_tokens_per_session`` appears only when set, so every manifest published
-        before it keeps its digest (and its pins).
+        The session bounds appear only when set, so every manifest published before them
+        keeps its digest (and its pins).
         """
         body: dict[str, Any] = {
             "max_cost_per_session": self.max_cost_per_session,
@@ -83,6 +86,8 @@ class BudgetSpec:
         }
         if self.max_tokens_per_session is not None:
             body["max_tokens_per_session"] = self.max_tokens_per_session
+        if self.max_seconds_per_session is not None:
+            body["max_seconds_per_session"] = self.max_seconds_per_session
         return body
 
 

@@ -139,6 +139,10 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         Where.SESSION_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True, _ADOPTED,
         "Summarise the conversation inside a run so the next model step fits",
     ),
+    Activity.COMPACT_COUNTED: StepPolicy(
+        Where.SESSION_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True, _ADOPTED,
+        "Summarise the conversation inside a run so the next model step fits; what it spent",
+    ),
     Activity.CHECKPOINT: StepPolicy(
         Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False,
         "skipped; a lost checkpoint costs a restore, never the turn",

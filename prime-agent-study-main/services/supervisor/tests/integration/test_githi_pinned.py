@@ -14,6 +14,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -359,6 +360,47 @@ async def test_a_provider_overflow_is_compacted_once_and_the_step_asked_again(
     assert [e.in_run for e in payloads(events, CompactionEnd)] == [True]
     assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
     assert _run_errors(events) == []
+
+
+async def test_a_summarys_spend_inside_a_run_counts_like_a_model_steps(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Each scripted call spends 15 tokens and $0.01. The summary of a compaction inside the
+    run is journalled with what it spent, counted toward the session's tokens and charged
+    to its cost, like the model steps around it."""
+    gateway = model(("write", {"path": "a.txt", "content": "x" * 400}), ("read", {"path": "a.txt"}))
+    gateway.overflow_calls = {1}  # the step after both tools ran: compacted in the run
+    gateway.cost_per_call = 0.01
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(env, state, memory={"keep_recent_tokens": 20})
+        await env.sessions.submit(sid, Message("c1", "write it and read it " + "please " * 40))
+        events = await env.wait_for(state, sid, run_ended(1))
+        status = await env.sessions.status(sid)
+        spent = await state.manager._budget.check(sid)
+
+    (end,) = payloads(events, CompactionEnd)
+    assert end.in_run and end.usage is not None and end.usage.total_tokens == 15
+    assert status.tokens_used == 3 * 15, "two model steps and the summary"
+    assert spent.total_cost_usd == Decimal("0.03")
+
+
+async def test_a_summarys_spend_between_runs_counts_toward_the_next_run(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    model(window=2_000)  # ~3k tokens carried into the second run: compacted as it opens
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(env, state, memory={"reserve_tokens": 100, "keep_recent_tokens": 50})
+        await env.sessions.submit(sid, Message("c1", "lorem ipsum " * 900))
+        await env.wait_for(state, sid, run_ended(1))
+        await env.sessions.submit(sid, Message("c2", "and now?"))
+        events = await env.wait_for(state, sid, run_ended(2))
+        status = await env.sessions.status(sid)
+
+    (end,) = payloads(events, CompactionEnd)
+    assert not end.in_run and end.usage is not None and end.usage.total_tokens == 15
+    assert status.tokens_used == 3 * 15, "a model step each run, and the summary"
 
 
 async def test_a_step_that_still_overflows_after_compacting_ends_the_run_saying_why(

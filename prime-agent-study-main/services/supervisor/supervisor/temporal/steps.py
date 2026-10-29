@@ -59,7 +59,7 @@ from supervisor.agent.runtimes.githi.prompt import in_pi_order
 from supervisor.agent.runtimes.githi.render import tool_result_failed, tool_result_text
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
-from supervisor.harness import RecoveryAction
+from supervisor.harness import BudgetSpec, RecoveryAction
 from supervisor.harness.core.enums import ToolClass as HarnessToolClass
 from supervisor.journal.partials import PartialOutputs, PartialSink
 from supervisor.journal.reader import JournalReader
@@ -85,6 +85,7 @@ from supervisor.temporal.contracts import (
     ApprovalDecision,
     ApprovalNeeded,
     CaptureConfig,
+    Compacted,
     EndRunRequest,
     GuardSettings,
     LostCall,
@@ -203,9 +204,19 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     return messages + [{"role": "user", "content": [{"type": "text", "text": n}]} for n in notes]
 
 
-def _tokens(assistant: MessageEnd) -> int:
-    """What the journalled reply's model call used (the same on a retried step)."""
-    usage: Any = assistant.usage
+def _past_session_bound(budget: BudgetSpec | None, req: TurnRequest) -> bool:
+    """Whether the session has used more than its budget allows (tokens or time)."""
+    if budget is None:
+        return False
+    tokens, seconds = budget.max_tokens_per_session, budget.max_seconds_per_session
+    return (tokens is not None and req.tokens_used > tokens) or (
+        seconds is not None and req.seconds_used > seconds
+    )
+
+
+def _usage_tokens(usage: Any) -> int:
+    """Input plus output tokens of a journalled usage (a ``Usage``, or its dict as read
+    back), so a retried step reports what the first attempt spent."""
     if usage is None:
         return 0
     if isinstance(usage, dict):
@@ -382,17 +393,16 @@ class GithiSteps:
         )
         await self._memory.checkpoint(session_id, run_id, self._record)
         manifest = await self._manifest(session_id)
-        bound = manifest.budget.max_tokens_per_session if manifest.budget else None
-        if bound is not None and req.tokens_used > bound:
-            # Past the session's bound: the run ends at its first step, so it does no work
-            # first (pi-temporal checks before anything runs).
+        if _past_session_bound(manifest.budget, req):
+            # The run ends at its first step, so it does no work first (pi-temporal checks
+            # before anything runs).
             return self._plan_run(run_id, manifest, capture=None)
         if (project := await read_project_context(self._manager, session_id)) is not None:
             await self._record(
                 session_id, run_id, "project", ProjectContext(project.path, project.text, project.digest)
             )
         # Between turns: compact what this run carries over, per the pinned memory profile.
-        await heartbeating(
+        compaction = await heartbeating(
             self._pinned.compact(
                 session_id,
                 run_id,
@@ -401,9 +411,15 @@ class GithiSteps:
             )
         )
         await self._announce_background(session_id, run_id)
-        return self._plan_run(run_id, manifest, capture=await self._capture_plan(session_id))
+        return self._plan_run(
+            run_id,
+            manifest,
+            capture=await self._capture_plan(session_id),
+            tokens=_usage_tokens(compaction.usage) if compaction else 0,
+        )
 
-    def _plan_run(self, run_id: str, manifest: Any, *, capture: Any) -> RunPlan:
+    def _plan_run(self, run_id: str, manifest: Any, *, capture: Any, tokens: int = 0) -> RunPlan:
+        """``tokens``: what opening the run spent (a compaction's summary)."""
         guards = manifest.guards
         guard = (
             GuardSettings(str(guards.repetition), str(guards.oscillation), guards.stall_iterations)
@@ -420,6 +436,8 @@ class GithiSteps:
             hard_run_s=loop_spec(manifest).hard_run_seconds,
             max_run_tokens=manifest.budget.max_tokens_per_turn if manifest.budget else None,
             max_session_tokens=manifest.budget.max_tokens_per_session if manifest.budget else None,
+            max_session_s=manifest.budget.max_seconds_per_session if manifest.budget else None,
+            tokens=tokens,
         )
 
     async def _announce_background(self, session_id: str, run_id: str) -> None:
@@ -599,7 +617,7 @@ class GithiSteps:
             if sink is not None:
                 await self._clear_partial(sid)
         # Checked on replay too, so a retried step cannot hand out calls past the limit.
-        tokens = _tokens(assistant)
+        tokens = _usage_tokens(assistant.usage)
         if (spent := await self._manager._budget.check(sid, turn_tokens=False)).exceeded:
             return await self._budget_stop(sid, spent.exceeded_reason, tokens=tokens)
         calls = [p for p in assistant.content if p.get("type") == "tool_call"]
@@ -657,15 +675,22 @@ class GithiSteps:
 
     async def compact(self, req: StepRequest) -> bool:
         """Compact the conversation so far, this run included, before ``req.step``'s request."""
+        return (await self.compact_counted(req)).ok
+
+    async def compact_counted(self, req: StepRequest) -> Compacted:
+        """``compact``, with what its summary spent, for the run's and the session's bounds."""
         sid, run_id = req.session_id, req.run_id
         await self._brain(sid)
         run = await self._reader.read_turn(sid, run_id)
         history = conversation(await self._memory.prior_history(sid), run)
-        return await heartbeating(
+        end = await heartbeating(
             self._pinned.compact_run(
                 sid, run_id, req.step, history, await self._reader.read(sid), request=_user_text(run)
             )
         )
+        if end is None:
+            return Compacted(ok=False)
+        return Compacted(ok=end.stop_reason == "ok", tokens=_usage_tokens(end.usage))
 
     def _plan(self, manifest: Any, call: dict[str, Any], *, refused: bool = False) -> PlannedCall:
         name = str(call["name"])

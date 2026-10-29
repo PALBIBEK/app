@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import dataclasses
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -58,6 +58,7 @@ from supervisor.temporal.contracts import (
     CaptureConfig,
     CaptureRequest,
     Carried,
+    Compacted,
     CreateRequest,
     EndRunRequest,
     ForkRequest,
@@ -132,6 +133,8 @@ _BUSY_WAITS = 5
 _ADOPT_ONLY_GONE = "adopt-only-gone"
 # A stall is judged by the rounds before, not by the round's own calls (``_round_verdict``).
 _STALL_BY_ROUND = "stall-by-round"
+# An in-run compaction reports what its summary spent (session.compact_counted).
+_COMPACTION_COUNTED = "compaction-counted"
 # Patch id prefixes for signals added after release (see ``_handled_here``).
 _HELD_MESSAGE = "held-message"
 _STOP_RUN = "stop-run"
@@ -208,28 +211,38 @@ def _deadline_details(plan: RunPlan, step: int) -> dict[str, str]:
     }
 
 
-def _run_bound(
-    plan: RunPlan, step: int, elapsed_s: float, run_tokens: int, session_tokens: int
-) -> tuple[str, str] | None:
-    """The bound a run is past before its next model step, as (error class, detail); None
-    within them all.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Used:
+    """What a run and its session have used so far (the workflow's clock and counts, so a
+    replay decides the same, whichever worker ran each step)."""
 
-    Tokens are counted in the workflow from each model step, so the count is exact
-    whichever worker ran the step, and the session's survives continue-as-new.
-    """
-    if plan.max_run_s is not None and elapsed_s > plan.max_run_s:
+    run_s: float
+    run_tokens: int
+    session_s: float
+    session_tokens: int
+
+
+def _run_bound(plan: RunPlan, step: int, used: _Used) -> tuple[str, str] | None:
+    """The bound a run is past before its next model step, as (error class, detail); None
+    within them all. The session's counts survive continue-as-new."""
+    if plan.max_run_s is not None and used.run_s > plan.max_run_s:
         return "RunTimeLimit", (
             f"the run's time limit ({plan.max_run_s:g} s) was reached after "
             f"{step} model steps; ask the agent to continue"
         )
-    if plan.max_session_tokens is not None and session_tokens > plan.max_session_tokens:
+    if plan.max_session_s is not None and used.session_s > plan.max_session_s:
+        return "SessionTimeLimit", (
+            f"the session's runs have taken {used.session_s:.0f} s, past its limit "
+            f"({plan.max_session_s:g} s); start a new session or raise the limit"
+        )
+    if plan.max_session_tokens is not None and used.session_tokens > plan.max_session_tokens:
         return "SessionTokenLimit", (
-            f"the session has used {session_tokens} tokens, past its limit "
+            f"the session has used {used.session_tokens} tokens, past its limit "
             f"({plan.max_session_tokens}); start a new session or raise the limit"
         )
-    if plan.max_run_tokens is not None and run_tokens > plan.max_run_tokens:
+    if plan.max_run_tokens is not None and used.run_tokens > plan.max_run_tokens:
         return "RunTokenLimit", (
-            f"the run used {run_tokens} tokens, past its limit ({plan.max_run_tokens}); "
+            f"the run used {used.run_tokens} tokens, past its limit ({plan.max_run_tokens}); "
             "ask the agent to continue"
         )
     if step >= plan.max_steps:
@@ -362,10 +375,14 @@ class AgentSessionWorkflow:
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
         try:
-            used = self._state.tokens_used
             plan = await self._session_activity(
                 Activity.BEGIN_RUN,
-                TurnRequest(self._session_id, message, **({"tokens_used": used} if used else {})),
+                TurnRequest(
+                    self._session_id,
+                    message,
+                    tokens_used=self._state.tokens_used,
+                    seconds_used=self._state.seconds_used,
+                ),
                 RunPlan,
             )
             outcome = await (
@@ -474,7 +491,7 @@ class AgentSessionWorkflow:
         st = RunState()
         self._steerable = plan.run_id
         started = workflow.now()
-        run_tokens = 0
+        self._spend(st, plan.tokens)  # opening the run (a compaction between turns)
 
         async def end(stop_reason: str, **details: Any) -> TurnOutcome:
             self._steerable = None  # a message sent from here on runs after this run
@@ -495,9 +512,7 @@ class AgentSessionWorkflow:
                 ):
                     return await halted(**self._unanswered(st))
                 if st.phase is RunPhase.REQUEST:
-                    elapsed = (workflow.now() - started).total_seconds()
-                    bound = _run_bound(plan, st.step, elapsed, run_tokens, self._state.tokens_used)
-                    if bound is not None:
+                    if (bound := _run_bound(plan, st.step, self._used(st, started))) is not None:
                         return await end("error", error_class=bound[0], detail=bound[1])
                     req = StepRequest(
                         self._session_id, plan.run_id, st.step,
@@ -505,8 +520,7 @@ class AgentSessionWorkflow:
                         can_retry=True, attempt=st.attempt,
                     )
                     result = await self._model_step(req)
-                    run_tokens += result.tokens
-                    self._state.tokens_used += result.tokens
+                    self._spend(st, result.tokens)
                     if result.kind == RETRY:
                         # pi's auto-retry, on a durable timer: no worker is held while it
                         # waits, a restart resumes the wait, and an abort ends it.
@@ -524,9 +538,7 @@ class AgentSessionWorkflow:
                     if result.kind == COMPACT:
                         # githi's prepare phase: the request does not fit the window. Compact
                         # the conversation so far, then ask again; at most once per step.
-                        if st.compacted or not await self._session_activity(
-                            Activity.COMPACT, req, bool, track=True
-                        ):
+                        if st.compacted or not await self._compact(req, st):
                             return await end(
                                 "error",
                                 error_class="ContextWindowFull",
@@ -586,6 +598,25 @@ class AgentSessionWorkflow:
         finally:
             if deadline is not None and not deadline.done():
                 deadline.cancel()
+            self._state.seconds_used += (workflow.now() - started).total_seconds()
+
+    def _used(self, st: RunState, started: datetime) -> _Used:
+        run_s = (workflow.now() - started).total_seconds()
+        return _Used(run_s, st.tokens, self._state.seconds_used + run_s, self._state.tokens_used)
+
+    def _spend(self, st: RunState, tokens: int) -> None:
+        """Count what a model call of the run spent, toward the run's and the session's bounds."""
+        st.tokens += tokens
+        self._state.tokens_used += tokens
+
+    async def _compact(self, req: StepRequest, st: RunState) -> bool:
+        """Compact the conversation inside the run; whether it shrank. What the summary
+        spent counts like a model step (histories from before that compact uncounted)."""
+        if not workflow.patched(_COMPACTION_COUNTED):
+            return await self._session_activity(Activity.COMPACT, req, bool, track=True)
+        done = await self._session_activity(Activity.COMPACT_COUNTED, req, Compacted, track=True)
+        self._spend(st, done.tokens)
+        return done.ok
 
     def _unanswered(self, st: RunState) -> dict[str, Any]:
         """What a stop between steps leaves without a result: the round the model just
@@ -963,11 +994,7 @@ class AgentSessionWorkflow:
             return await self._session_activity(
                 Activity.TOOL_CALL,
                 ToolRequest(
-                    self._session_id,
-                    run_id,
-                    call.call_id,
-                    denied=denied,
-                    **({"behind_unknown": True} if behind_unknown else {}),
+                    self._session_id, run_id, call.call_id, denied=denied, behind_unknown=behind_unknown
                 ),
                 bool,
                 retry=_ONCE if once else None,
@@ -1426,6 +1453,8 @@ class AgentSessionWorkflow:
             running_command=self._running.command_id if self._running else None,
             error=err.message if err is not None else None,
             error_kind=err.type if err is not None else None,
+            tokens_used=self._state.tokens_used,
+            seconds_used=self._state.seconds_used,
         )
 
     # --- helpers -------------------------------------------------------------

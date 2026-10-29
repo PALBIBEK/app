@@ -28,6 +28,7 @@ from supervisor.temporal.contracts import (
     ApprovalDecision,
     ApprovalRequest,
     CaptureRequest,
+    Compacted,
     CreateRequest,
     EndRunRequest,
     ForkRequest,
@@ -225,6 +226,11 @@ class SessionActivities:
         with _as_application_error():
             return await self._steps.compact(req)
 
+    @activity.defn(name=Activity.COMPACT_COUNTED)
+    async def compact_counted(self, req: StepRequest) -> Compacted:
+        with _as_application_error():
+            return await self._steps.compact_counted(req)
+
     @activity.defn(name=Activity.CHECKPOINT)
     async def checkpoint(self, session_id: str) -> None:
         with _as_application_error():
@@ -300,6 +306,7 @@ class SessionActivities:
             self.begin_run,
             self.model_step,
             self.compact,
+            self.compact_counted,
             self.checkpoint,
             self.tool_call,
             self.tool_batch,

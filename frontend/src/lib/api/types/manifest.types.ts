@@ -48,6 +48,7 @@ export const ManifestSchema = z.object({
     hard_run_minutes: z.number().default(0),
     /** Tokens the whole session may use; 0: no limit. */
     max_tokens_per_session: z.number().default(0),
+    max_minutes_per_session: z.number().default(0),
     /** Times a model call that may pass (rate limit, overload) is asked again. */
     model_retries: z.number().default(3),
   }),

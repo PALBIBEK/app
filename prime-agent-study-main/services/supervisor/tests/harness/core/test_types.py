@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from supervisor.harness import ManifestValidationError
 from supervisor.harness.core.enums import (
     ApprovalOnTimeout,
     GuardBehavior,
@@ -22,6 +23,7 @@ from supervisor.harness.core.types import (
     ToolSpec,
     default_recovery_policy,
 )
+from supervisor.harness.storage.converters import budget_spec_from_dict
 
 
 class TestToolSpec:
@@ -59,6 +61,18 @@ class TestBudgetSpec:
         spec = BudgetSpec(max_cost_per_session=10.0, max_tokens_per_turn=1000)
         assert spec.max_cost_per_session == 10.0
         assert spec.max_tokens_per_turn == 1000
+
+    def test_the_session_bounds_enter_the_digest_only_when_set(self) -> None:
+        """A manifest published before them keeps its digest, and so its pins."""
+        before = {"max_cost_per_session": 1.0, "max_tokens_per_turn": None}
+        assert BudgetSpec(max_cost_per_session=1.0).body_for_digest() == before
+        timed = BudgetSpec(max_cost_per_session=1.0, max_seconds_per_session=600.0)
+        assert timed.body_for_digest() == {**before, "max_seconds_per_session": 600.0}
+
+    def test_a_session_bound_must_be_positive(self) -> None:
+        assert budget_spec_from_dict({"max_seconds_per_session": 90}).max_seconds_per_session == 90.0
+        with pytest.raises(ManifestValidationError):
+            budget_spec_from_dict({"max_seconds_per_session": 0})
 
 
 class TestGuardSpec:

@@ -287,6 +287,7 @@ def budget_variant(catalog: HarnessCatalog) -> None:
     # Each scripted model call reports 15 tokens: a run past 20, a session past 40.
     githi_variant(catalog, "githi-run-tokens", budget=BudgetSpec(max_tokens_per_turn=20))
     githi_variant(catalog, "githi-session-tokens", budget=BudgetSpec(max_tokens_per_session=40))
+    githi_variant(catalog, "githi-session-time", budget=BudgetSpec(max_seconds_per_session=2.0))
 
 
 def loop_variant(catalog: HarnessCatalog) -> None:

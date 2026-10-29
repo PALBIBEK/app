@@ -23,6 +23,7 @@ const manifest: Manifest = {
     max_run_minutes: 0,
     hard_run_minutes: 0,
     max_tokens_per_session: 0,
+    max_minutes_per_session: 0,
     model_retries: 3,
   },
 };

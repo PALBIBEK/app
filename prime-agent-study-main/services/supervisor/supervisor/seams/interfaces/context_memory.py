@@ -50,6 +50,9 @@ class CompactionResult:
 class CompactionDecision:
     action: Literal["proceed_default", "cancel", "custom"]
     result: CompactionResult | None = None
+    spent: dict[str, Any] | None = None
+    """What deciding cost (a summary's model calls: input and output tokens, and cost),
+    even when the summary came back empty; it counts toward the session's bounds."""
 
 
 @dataclass(frozen=True)

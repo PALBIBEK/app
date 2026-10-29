@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
 
@@ -149,3 +150,47 @@ async def test_a_stop_after_the_model_asked_for_calls_answers_each_as_not_run(
     assert end.result["error"] == NOT_RUN_OUTCOME
     assert [s.not_run for s in payloads(events, ToolStart)] == [True], "nothing ran it"
     assert len(gateway.seen) == 1
+
+
+async def test_a_session_past_its_time_bound_runs_no_step_and_idle_time_is_free(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """pi-temporal's session time bound: the time the session's runs take, idle time not
+    counted. The bound is 2 s and each run's write takes 1.2 s."""
+    gateway = model(WRITE)
+    state = await env.state()
+    with slow_tool("write", 1.2):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state, "githi-session-time")
+            await env.sessions.submit(sid, Message("c1", "write"))
+            await env.wait_for(state, sid, run_ended(1))
+            await _idle(env, sid)
+            await asyncio.sleep(3)  # idle: free
+            await env.sessions.submit(sid, Message("c2", "write again"))  # past it after its write
+            events = await env.wait_for(state, sid, run_ended(2))
+            assert len(payloads(events, ToolEnd)) == 2, "idle time was counted"
+            assert [e.error_class for e in payloads(events, ErrorEvent)] == ["SessionTimeLimit"]
+            await _idle(env, sid)
+            asked = len(gateway.seen)
+            await env.sessions.submit(sid, Message("c3", "once more"))
+            events = await env.wait_for(state, sid, run_ended(3))
+            used = (await env.sessions.status(sid)).seconds_used
+    assert len(gateway.seen) == asked, "a session past its bound asked the model"
+    assert [e.error_class for e in payloads(events, ErrorEvent)] == ["SessionTimeLimit"] * 2
+    assert 2.4 <= used < 5, used
+
+
+async def test_a_model_calls_cost_is_counted_once(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The session's cost (what its cost cap and its tenant's totals read) holds each model
+    call's cost once: it was added by the budget tracker and again as the reply was
+    journalled, so a cap tripped at half the spend it allowed."""
+    gateway = model(LS)  # a run: a call, then an answer
+    gateway.cost_per_call = 0.01
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "list"))
+        await env.wait_for(state, sid, run_ended())
+    assert (await state.manager._budget.check(sid)).total_cost_usd == Decimal("0.02")

@@ -221,6 +221,9 @@ class CompactionEnd:
     # with the ``history`` tool, so a compaction is never the only copy.
     replaced_from_seq: int | None = None
     replaced_to_seq: int | None = None
+    # What the summary's model calls spent; it counts toward the run's and the session's
+    # bounds like a model step's.
+    usage: Usage | None = None
     # Inside a run (before a model step): ``messages`` is the whole conversation so far,
     # this run's messages included, and the run carries on from it.
     in_run: bool = False

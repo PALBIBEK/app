@@ -65,6 +65,8 @@ class Activity(StrEnum):
     PLACE_INPUTS = "session.place_inputs"
     TOOL_BATCH = "session.tool_batch"
     COMPACT = "session.compact"
+    # The same, reporting what its summary spent (newer histories).
+    COMPACT_COUNTED = "session.compact_counted"
     TOOL_CALL = "session.tool_call"
     REQUEST_APPROVAL = "session.request_approval"
     RESOLVE_APPROVAL = "session.resolve_approval"
@@ -208,9 +210,10 @@ class Placement:
 class TurnRequest:
     session_id: str
     message: Message
-    # The session's tokens so far, as the workflow counts them: a run that begins past its
-    # session's token bound does no work before it ends (no compaction, no recall).
+    # What the session has used so far, as the workflow counts it: a run that begins past
+    # one of its session's bounds does no work before it ends (no compaction, no recall).
     tokens_used: int = 0
+    seconds_used: float = 0.0
 
 
 class RetryMode(StrEnum):
@@ -259,6 +262,11 @@ class RunPlan:
     # (budget.max_tokens_per_session), counted by the workflow; None: no bound.
     max_run_tokens: int | None = None
     max_session_tokens: int | None = None
+    # Seconds the session's runs may take in all (budget.max_seconds_per_session; idle
+    # time is free), counted by the workflow; None: no bound.
+    max_session_s: float | None = None
+    # What opening the run spent (the summary of a compaction between turns).
+    tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +325,8 @@ class RunState:
     """This step's conversation was compacted once; it is not compacted twice."""
     attempt: int = 0
     """Retries of this step's model call so far (pi's auto-retry; reset each step)."""
+    tokens: int = 0
+    """What the run's model calls have spent (its steps, and the summaries it compacted with)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +346,14 @@ class StepRequest:
     # RETRY (journalled as ModelRetry) instead of failing. ``attempt``: retries so far.
     can_retry: bool = False
     attempt: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Compacted:
+    """A compaction inside a run: whether it shrank the conversation, and what it spent."""
+
+    ok: bool
+    tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,8 +574,10 @@ class Carried:
     capture_due: float | None = None
     # Steering messages waiting for the running run's next step (bounded by the run).
     steering: list[Message] = field(default_factory=list)
-    # Tokens the session's model steps have used (budget.max_tokens_per_session).
+    # Tokens the session's model calls have used (budget.max_tokens_per_session), and the
+    # seconds its runs have taken (budget.max_seconds_per_session).
     tokens_used: int = 0
+    seconds_used: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -592,6 +612,10 @@ class SessionStatus:
     error: str | None = None
     """Why the session could not be created (``phase`` is FAILED); safe to show the user."""
     error_kind: str | None = None
+    tokens_used: int = 0
+    """What the session has used, as its bounds count it (model calls, summaries included)."""
+    seconds_used: float = 0.0
+    """Time its finished runs took (idle time is free)."""
 
 
 @dataclass(frozen=True, slots=True)

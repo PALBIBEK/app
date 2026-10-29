@@ -169,14 +169,15 @@ def budget_spec_from_dict(data: dict[str, Any]) -> BudgetSpec:
             if data.get("max_tokens_per_turn") is not None
             else None
         ),
-        max_tokens_per_session=_positive_int(data, "max_tokens_per_session"),
+        max_tokens_per_session=_positive(data, "max_tokens_per_session", int),
+        max_seconds_per_session=_positive(data, "max_seconds_per_session", float),
     )
 
 
-def _positive_int(data: dict[str, Any], key: str) -> int | None:
+def _positive[N: (int, float)](data: dict[str, Any], key: str, kind: type[N]) -> N | None:
     if data.get(key) is None:
         return None
-    value = int(data[key])
+    value = kind(data[key])
     if value <= 0:
         raise ManifestValidationError(f"budget.{key}", "must be > 0")
     return value

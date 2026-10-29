@@ -201,7 +201,7 @@ class JournalWriter:
             first = int(last_seq) - n + 1
             now_ms = int(time.time() * 1000)
             index_update: RunEnd | None = None
-            cost_delta = 0.0
+            replied = False
             for i, (event, turn_id, trace_id) in enumerate(events):
                 seq = first + i
                 payload = self._store_payload(event)
@@ -219,16 +219,9 @@ class JournalWriter:
                 )
                 if isinstance(event, RunEnd):
                     index_update = event
-                if isinstance(event, MessageEnd) and event.usage is not None:
-                    cost_delta += float(event.usage.cost_total)
-            if index_update is not None or cost_delta:
-                await self._touch_index(
-                    db,
-                    session_id,
-                    run_end=index_update,
-                    cost_delta=cost_delta,
-                    ts_ms=now_ms,
-                )
+                replied = replied or (isinstance(event, MessageEnd) and event.usage is not None)
+            if index_update is not None or replied:
+                await self._touch_index(db, session_id, run_end=index_update, ts_ms=now_ms)
         return int(last_seq)
 
     async def append_in_session(
@@ -278,16 +271,16 @@ class JournalWriter:
         session_id: str,
         *,
         run_end: RunEnd | None,
-        cost_delta: float,
         ts_ms: int,
     ) -> None:
+        """The session's index after a reply or a run's end. Not its cost: the budget
+        tracker owns ``total_cost`` (it charges each call once, before it is journalled)."""
         idx = await db.get(SessionIndexRow, session_id)
         if idx is None:
             idx = SessionIndexRow(session_id=session_id)
             db.add(idx)
         if run_end is not None:
             idx.message_count = len(run_end.messages)
-        idx.total_cost = float(idx.total_cost or 0) + cost_delta
         idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
     def put_blob(self, data: bytes) -> str | None:

@@ -296,8 +296,9 @@ class HarnessPublisher:
             "budget": {
                 "max_cost_per_session": p.max_cost_per_session,
                 "max_tokens_per_turn": p.max_tokens_per_turn,
-                # Only when set, so a release without it keeps its digest.
+                # Only when set, so a release without them keeps its digest.
                 **({"max_tokens_per_session": p.max_tokens_per_session} if p.max_tokens_per_session else {}),
+                **({"max_seconds_per_session": p.max_minutes_per_session * 60} if p.max_minutes_per_session else {}),
             },
             "guards": {"repetition": p.repetition, "oscillation": p.oscillation, "stall_iterations": p.stall_iterations},
             "approvals": {
