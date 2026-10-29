@@ -10,15 +10,17 @@ the journal, so tool arguments and results never enter workflow history.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import posixpath
+import threading
 import time
 from collections.abc import Awaitable
 from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Final
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -112,16 +114,43 @@ from supervisor.temporal.subagent_tools import (
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
 TOOL_NOT_RUN = "TOOL_NOT_RUN"
 
+WIND_DOWN_S: Final = 7.0
+"""How long a cancelled activity lets its work wind down (a stopped tool kills its command
+and records what it did) before it reports the cancel."""
+
+STOP_GRACE_S: Final = 5.0
+"""How long a stopped tool call waits for its tool to end before leaving it unknown."""
+
+STOP_WAIT_S: Final = 8.0
+"""How long a stopped run's close waits for its running calls to record what they did
+(they hear the stop on their next heartbeat, then kill their command): longer than a
+heartbeat plus ``STOP_GRACE_S``. A call whose worker is gone never records, and is answered
+as unknown once this passes."""
+
+HEARTBEAT_EVERY: Final = timedelta(seconds=2)
+"""How often a running activity heartbeats (at most): a stop reaches it within this."""
+
+
 async def heartbeating[T](work: Awaitable[T]) -> T:
-    """Await ``work`` while heartbeating, so a dead worker is noticed and aborts arrive."""
+    """Await ``work`` while heartbeating, so a dead worker is noticed and aborts arrive.
+
+    A cancel (a stop, or the worker shutting down) cancels ``work`` and lets it wind down
+    for up to ``WIND_DOWN_S`` before reporting, so what it records lands first.
+    """
     task = asyncio.ensure_future(work)
     timeout = activity.info().heartbeat_timeout or timedelta(seconds=30)
     try:
         while True:
-            done, _ = await asyncio.wait({task}, timeout=timeout.total_seconds() / 3)
+            every = min(timeout.total_seconds() / 3, HEARTBEAT_EVERY.total_seconds())
+            done, _ = await asyncio.wait({task}, timeout=every)
             if done:
                 return task.result()
             activity.heartbeat()
+    except asyncio.CancelledError:
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(asyncio.shield(task), WIND_DOWN_S)
+        raise
     finally:
         task.cancel()
 
@@ -459,6 +488,11 @@ class GithiSteps:
 
     async def end_run(self, req: EndRunRequest) -> TurnOutcome:
         sid, run_id = req.session_id, req.run_id
+        if req.stop_reason == "aborted" or req.error_class == "RunDeadline":
+            # Stopped where it was: its running calls kill their commands and record what
+            # they did; give them a moment, so the model reads that rather than "unknown".
+            stopped = [c for c in [req.lost_call_id, *req.open_call_ids] if c is not None]
+            await self._await_ends(sid, run_id, stopped)
         if req.lost_call_id is not None:
             await self.close_lost_call(LostCall(sid, run_id, req.lost_call_id, req.lost_reason))
         for call_id in req.open_call_ids:  # each a no-op once its call ended
@@ -855,13 +889,49 @@ class GithiSteps:
                 row = await self._manager._get_session_row(sid)
                 invocation = {"id": call_id, "name": call["name"], "arguments": args[0]}
                 named = hand.key is not None and hand.key != sid
-                try:
-                    end = await runtime.loop().run_tool(
+                stop = threading.Event()
+                running = asyncio.ensure_future(
+                    runtime.loop().run_tool(
                         invocation,
                         tenant_id=row.tenant_id,
                         env=await self._manager.tool_env(sid),
                         workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
+                        stop=stop,
                     )
+                )
+                try:
+                    end = await asyncio.shield(running)
+                except asyncio.CancelledError:
+                    # The run was stopped (the user, or its hard deadline): kill what the
+                    # tool runs and record what it did (pi-temporal waits for a stopped
+                    # tool to report), so nothing lands after the stop and the model reads
+                    # the real result, not "unknown". A worker shutting down is not a stop:
+                    # the call is left as a crash leaves it, for recovery elsewhere.
+                    if not activity.in_activity() or activity.is_worker_shutdown():
+                        self._manager.call_ended(hand)
+                        raise
+                    stop.set()
+                    try:
+                        end = await asyncio.wait_for(asyncio.shield(running), STOP_GRACE_S)
+                    except BaseException:  # noqa: BLE001 — not ended in time (or cancelled again): left unknown
+                        self._manager.call_ended(hand)
+                        raise asyncio.CancelledError from None
+                    checked = await self._manager.after_call(
+                        sid, hand, call["name"], provider, _as_tool_result(end.result)
+                    )
+                    await self._claim(
+                        sid,
+                        run_id,
+                        f"{call_id}:end",
+                        ToolEnd(
+                            tool_call_id=call_id,
+                            tool_name=call["name"],
+                            result=asdict(checked),
+                            is_error=tool_result_failed(asdict(checked)),
+                            duration_ms=int((time.monotonic() - started) * 1000),
+                        ),
+                    )
+                    raise
                 except BaseException:
                     self._manager.call_ended(hand)
                     raise
@@ -1036,6 +1106,19 @@ class GithiSteps:
                         call = {"name": str(part["name"]), "arguments": dict(part["arguments"])}
                         return call, step, event
         raise LookupError(f"tool call {call_id} not found in run {run_id}")
+
+    async def _await_ends(self, sid: str, run_id: str, call_ids: list[str]) -> None:
+        """Wait up to ``STOP_WAIT_S`` for each started call of ``call_ids`` to record its end."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + STOP_WAIT_S
+        for call_id in call_ids:
+            start = await self._keyed(sid, run_id, f"{call_id}:start")
+            if start is None or getattr(start, "not_run", False):
+                continue  # never started: nothing will record it
+            while await self._keyed(sid, run_id, f"{call_id}:end") is None:
+                if loop.time() >= deadline:
+                    return
+                await asyncio.sleep(0.25)
 
     async def close_lost_call(self, lost: LostCall) -> None:
         """Journal an unknown outcome for a call that started; a no-op once it has ended.

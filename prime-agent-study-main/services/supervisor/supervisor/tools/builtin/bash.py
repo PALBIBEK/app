@@ -45,7 +45,9 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
     ceiling = max(ctx.timeout_s - _GRACE_S, 1.0)
     timeout = min(float(args.timeout), ceiling) if args.timeout else ceiling
 
-    result = await ctx.workspace.run(f"exec 2>&1\n{args.command}", timeout_s=timeout, env=ctx.env)
+    result = await ctx.workspace.run(
+        f"exec 2>&1\n{args.command}", timeout_s=timeout, env=ctx.env, stop=ctx.stop
+    )
     ctx.mutated()  # any command may have changed files
 
     raw = (
@@ -73,6 +75,8 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
             payload["truncation"]["line_bytes"] = len(raw.rstrip("\n").rsplit("\n", 1)[-1].encode("utf-8"))
         if spill := await _spill(ctx, raw.encode("utf-8")):
             payload["full_output"] = spill
+    if result.stopped:
+        payload["stopped"] = True
     if result.timed_out:
         payload["timed_out"] = True
         payload["timeout_s"] = timeout

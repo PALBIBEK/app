@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -65,9 +66,14 @@ class HandWorkspace:
         return await self._in_sandbox(lambda ws: ws.files(path))
 
     async def run(
-        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        env: Mapping[str, str] | None = None,
+        stop: threading.Event | None = None,
     ) -> CommandResult:
-        return await self._in_sandbox(lambda ws: ws.run(command, timeout_s=timeout_s, env=env))
+        return await self._in_sandbox(lambda ws: ws.run(command, timeout_s=timeout_s, env=env, stop=stop))
 
     async def _in_sandbox[T](self, op: Callable[[SandboxWorkspace], Awaitable[T]]) -> T:
         sandbox = self._current()
