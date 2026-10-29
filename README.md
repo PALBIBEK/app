@@ -273,30 +273,30 @@ waiting for a session's worker that is gone (60 s placement limit) is adopted by
 <!-- step-policies:start -->
 | Step | Does | Where | Time limit | Heartbeat | Retries | If its worker dies |
 |---|---|---|---|---|---|---|
-| `session.create` | Set up a new session | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (creating is idempotent) |
-| `session.fork` | Copy a session's journal into a new one | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
-| `session.adopt` | Take over a session whose worker is gone | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
-| `session.worker_beats` | Before adopting a session: does its worker still heartbeat (busy, not gone)? | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker; if it keeps failing, the session is adopted |
-| `session.prepare_turn` | Check budget and recovery before a message runs; start the sandbox (with_run) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
-| `session.begin_run` | Open a run: journal the message, plan the steps | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.create` | Set up a new session | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker (creating is idempotent) |
+| `session.fork` | Copy a session's journal into a new one | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker |
+| `session.adopt` | Take over a session whose worker is gone | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker |
+| `session.worker_beats` | Before adopting a session: does its worker still heartbeat (busy, not gone)? | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker; if it keeps failing, the session is adopted |
+| `session.prepare_turn` | Check budget and recovery before a message runs; start the sandbox (with_run) | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.begin_run` | Open a run: journal the message, plan the steps | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.model_step` | One model call (needs no sandbox, so any worker thinks) | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the model call is retried on another worker |
 | `session.compact` | Summarise the conversation inside a run so the next model step fits | session worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.compact_counted` | Summarise the conversation inside a run so the next model step fits; what it spent | session worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
-| `session.checkpoint` | Save what the last tools changed in the sandbox (beside the model call) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | skipped; a lost checkpoint costs a restore, never the turn |
-| `session.place_inputs` | Place steering messages in the running run before its next step | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (each message is keyed, so it lands once) |
+| `session.checkpoint` | Save what the last tools changed in the sandbox (beside the model call) | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | skipped; a lost checkpoint costs a restore, never the turn |
+| `session.place_inputs` | Place steering messages in the running run before its next step | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker (each message is keyed, so it lands once) |
 | `session.tool_batch` | A round's read-only tool calls, run together in the sandbox | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | re-run on the adopting worker (read-only calls; each one's result is kept) |
 | `session.tool_call` | One tool call in the sandbox; stopped past `TOOL_CALL_TIMEOUT_S` (30 min), the run going on | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for at-most-once tools) | re-run on the adopting worker; an at-most-once tool is not: its call is answered as an unknown outcome and the run goes on (the model checks) |
-| `session.request_approval` | Ask a person (the wait itself is a durable timer, not a step) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
-| `session.resolve_approval` | Record an answer, or the timeout's choice | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
-| `session.end_run` | Close a run: final answer, usage, why it stopped | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | a call left half done is closed first, then the session is adopted |
+| `session.request_approval` | Ask a person (the wait itself is a durable timer, not a step) | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.resolve_approval` | Record an answer, or the timeout's choice | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.end_run` | Close a run: final answer, usage, why it stopped | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | a call left half done is closed first, then the session is adopted |
 | `session.run_turn` | A whole runtime-driven turn (non-stepped harnesses) | session worker | turn limit (24 h) | every 30 s | 3 attempts, 2 s apart | heartbeats stop; retried after adoption, but never resent once tools ran |
-| `session.respond_approval` | Deliver an answer to a runtime-driven turn | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.respond_approval` | Deliver an answer to a runtime-driven turn | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.op` | Tool invoke, memory, subagents, workspace | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for operations with side effects) | an operation with side effects is not re-run: a tool invoke is closed as lost and reported as outcome unknown |
-| `session.close_lost_call` | Close a call whose worker died | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (journal only) |
-| `session.terminate` | End the session: stop its runtime and sandbox | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
+| `session.close_lost_call` | Close a call whose worker died | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker (journal only) |
+| `session.terminate` | End the session: stop its runtime and sandbox | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.capture_memory` | Save durable facts from a burst of turns | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried elsewhere; a burst that keeps failing is dropped (best effort) |
 | `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the job is retried on another worker, never lost |
-| `subagent.end_job` | Record how a background job ended | any worker | 2 min | no | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
+| `subagent.end_job` | Record how a background job ended | any worker | 2 min | every 30 s | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
 <!-- step-policies:end -->
 
 ### Sandboxes: environments, start and idle stop

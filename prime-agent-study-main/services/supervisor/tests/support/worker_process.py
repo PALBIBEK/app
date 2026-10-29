@@ -4,7 +4,8 @@ Usage: python -m tests.support.worker_process <db_url> <blob_dir> <temporal_addr
            <task_queue> <spec_json>
 
 spec: {"echo_delay_s": float, "scripted_calls": [[tool, args], ...], "one_at_a_time": bool,
-       "slow_tool": [tool, s], "slow_subagent": s, "workspace_dir": path (a shared checkpoint store)}
+       "slow_tool": [tool, s], "slow_subagent": s, "workspace_dir": path (a shared checkpoint store),
+       "slow_end_run": s (closing a run waits this long first)}
 Prints ``READY <home_queue>`` once polling.
 """
 
@@ -23,17 +24,25 @@ from supervisor.temporal.client import connect
 from supervisor.temporal.worker import session_worker
 from tests.support.dir_storage import shared_workspace_store
 from tests.support.platform import boot_platform
-from tests.support.scripted import ScriptedGateway, scripted_model, slow_subagent, slow_tool
+from tests.support.scripted import (
+    ScriptedGateway,
+    scripted_model,
+    slow_end_run,
+    slow_subagent,
+    slow_tool,
+)
 
 
 async def main(db_url: str, blob_dir: str, address: str, queue: str, spec: dict) -> None:
     EchoRuntime.tool_delay_s = float(spec.get("echo_delay_s", 0))
     with ExitStack() as patches:
-        if calls := spec.get("scripted_calls"):
+        if (calls := spec.get("scripted_calls")) is not None:
             gateway = ScriptedGateway([tuple(c) for c in calls], one_at_a_time=bool(spec.get("one_at_a_time")))
             patches.enter_context(scripted_model(gateway))
         if slow := spec.get("slow_tool"):
             patches.enter_context(slow_tool(slow[0], float(slow[1])))
+        if (seconds := spec.get("slow_end_run")) is not None:
+            patches.enter_context(slow_end_run(float(seconds)))
         if (seconds := spec.get("slow_subagent")) is not None:
             patches.enter_context(slow_subagent(float(seconds)))
         client = await connect(TemporalSettings(address=address, task_queue=queue))

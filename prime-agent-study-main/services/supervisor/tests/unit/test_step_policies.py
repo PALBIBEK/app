@@ -36,16 +36,17 @@ def test_limits_follow_the_deployments_timing() -> None:
     t = Timing(heartbeat_timeout_s=7, turn_timeout_s=600)
     assert policy(Activity.TOOL_CALL).start_to_close(t).total_seconds() == 600
     assert policy(Activity.TOOL_CALL).heartbeat_timeout(t).total_seconds() == 7  # type: ignore[union-attr]
-    assert policy(Activity.CREATE).heartbeat_timeout(t) is None
+    assert policy(Activity.CREATE).heartbeat_timeout(t).total_seconds() == 7  # type: ignore[union-attr]
     assert policy(Activity.MODEL_STEP).limit is Limit.MODEL_CALL
     assert policy(Activity.END_JOB).retry_policy is RETRIES[Retry.UNTIL_DONE]
     assert RETRIES[Retry.ONCE].maximum_attempts == 1
 
 
-def test_long_steps_heartbeat_so_a_dead_worker_is_seen_quickly() -> None:
-    for activity, p in POLICIES.items():
-        if p.limit is not Limit.SHORT:
-            assert p.heartbeat, f"{activity} may run long without a heartbeat"
+def test_every_step_heartbeats_so_a_dead_worker_is_seen_quickly() -> None:
+    """pi-temporal gives every step a heartbeat timeout; the worker heartbeats every
+    activity (supervisor.temporal.pulse), so a short step on a dead worker is found in
+    seconds, not after its 2-minute limit."""
+    assert all(p.heartbeat for p in POLICIES.values()), [a for a, p in POLICIES.items() if not p.heartbeat]
 
 
 def test_the_readme_shows_the_current_table() -> None:

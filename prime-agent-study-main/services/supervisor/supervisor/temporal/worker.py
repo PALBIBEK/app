@@ -39,6 +39,7 @@ from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
 from supervisor.temporal.fleet import STALE_AFTER_S, Load, WorkerBeat, heartbeat_loop, worker_id
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
+from supervisor.temporal.pulse import Pulse
 from supervisor.temporal.steps import HEARTBEAT_EVERY
 from supervisor.temporal.workflow import AgentSessionWorkflow
 
@@ -111,8 +112,9 @@ async def session_worker(
     }
     if max_concurrent_runs:
         tuning["max_concurrent_activities"] = max_concurrent_runs
-    if load is not None:
-        tuning["interceptors"] = [load.interceptor()]
+    # Every activity heartbeats (supervisor.temporal.pulse), so every step can have a
+    # heartbeat timeout and a worker that dies mid-step is found in seconds.
+    tuning["interceptors"] = [Pulse(), *([load.interceptor()] if load is not None else [])]
     if identity:
         tuning["identity"] = identity
     if deployment is not None:
