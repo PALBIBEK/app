@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest_asyncio
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowHistory
 from temporalio.testing import WorkflowEnvironment
 
 from tests.support.workflow_histories import sealed
@@ -41,12 +42,18 @@ async def temporal_env() -> AsyncIterator[WorkflowEnvironment]:
 
 
 async def record_histories(client: Client, out: Path, *, per_shape: int = 1) -> int:
-    """Save one closed history per distinct shape (workflow type and the steps it ran) for the
-    release replay gate (tests/fixtures/histories). Run the suite with RECORD_HISTORIES=<dir>."""
+    """Save one history per distinct shape for the release replay gate
+    (tests/fixtures/histories). Run the suite with RECORD_HISTORIES=<dir>.
+
+    A shape is the workflow type, the steps it scheduled, the signals it got and the
+    patched paths it took (by patch id: every patch marker has the same name). Sessions
+    still running count too: held messages and stops usually end a test there, and a
+    running history replays as far as it got.
+    """
     out.mkdir(parents=True, exist_ok=True)
     shapes: dict[tuple[str, ...], int] = {}
     saved = 0
-    query = "(WorkflowType = 'AgentSession' or WorkflowType = 'SubagentJob') and ExecutionStatus != 'Running'"
+    query = "WorkflowType = 'AgentSession' or WorkflowType = 'SubagentJob'"
     async for run in client.list_workflows(query):
         history = await client.get_workflow_handle(run.id, run_id=run.run_id).fetch_history()
         if sealed(history) or not any(
@@ -58,12 +65,12 @@ async def record_histories(client: Client, out: Path, *, per_shape: int = 1) -> 
             for e in history.events
             if e.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
         })
-        markers = sorted({
-            e.marker_recorded_event_attributes.marker_name
+        signals = sorted({
+            e.workflow_execution_signaled_event_attributes.signal_name
             for e in history.events
-            if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+            if e.event_type == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED
         })
-        shape = (run.workflow_type, *steps, "|", *markers)
+        shape = (run.workflow_type, *steps, "|", *signals, "|", *sorted(patch_ids(history)))
         if shapes.get(shape, 0) >= per_shape:
             continue
         shapes[shape] = shapes.get(shape, 0) + 1
@@ -71,3 +78,17 @@ async def record_histories(client: Client, out: Path, *, per_shape: int = 1) -> 
         (out / f"{run.workflow_type}-{saved:03d}.json").write_text(json.dumps(doc, separators=(",", ":")))
         saved += 1
     return saved
+
+
+def patch_ids(history: WorkflowHistory) -> set[str]:
+    """The patched paths a history took, as ``workflow.patched`` named them (a signal's
+    per-message ids, ``held-message-2``, read as ``held-message``)."""
+    found: set[str] = set()
+    for e in history.events:
+        if e.event_type != EventType.EVENT_TYPE_MARKER_RECORDED:
+            continue
+        payloads = e.marker_recorded_event_attributes.details.get("patch-data")
+        if payloads is None or not payloads.payloads:
+            continue
+        found.add(re.sub(r"-\d+$", "", json.loads(payloads.payloads[0].data)["id"]))
+    return found

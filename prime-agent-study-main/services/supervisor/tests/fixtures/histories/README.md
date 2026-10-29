@@ -15,3 +15,15 @@ Remove a folder only when no workflow that release started can still be running 
 continue-as-new, so a folder older than your longest session is safe to drop). Before a
 deploy, `python -m supervisor rollout check` replays what is running in production the same
 way.
+
+## Every patched path is recorded
+
+`test_every_patched_path_has_a_recording` lists the patch ids the workflows branch on and
+fails when one has no recorded history that took it. So a PR that adds a
+`workflow.patched("…")` path also records a release once it merges, as above. The recorder
+tells histories apart by the patch ids they took, the steps they scheduled and the signals
+they got, and it keeps sessions that were still running when the suite ended (held messages
+and stops usually end there).
+
+Two kinds of change are beyond any replay check: reordering calls of the same activity type,
+and changing an activity's arguments. Temporal compares only each step's type and sequence.
