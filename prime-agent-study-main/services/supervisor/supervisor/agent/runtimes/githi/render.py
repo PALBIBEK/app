@@ -60,6 +60,9 @@ def _shell(payload: Mapping[str, Any]) -> str:
         else:
             note = f"[Showing lines {cut.get('start')}-{cut.get('end')} of {cut.get('total')} (50.0KB limit). Full output: {where}]"
         text = f"{text}\n\n{note}"
+    if payload.get("stopped"):
+        status = "Command stopped: the run was stopped while it ran, and the command was killed"
+        return f"{text}\n\n{status}" if text else status
     if payload.get("timed_out"):
         status = f"Command timed out after {float(payload.get('timeout_s') or 0):g} seconds"
         return f"{text}\n\n{status}" if text else status
@@ -89,7 +92,9 @@ def _command(payload: Mapping[str, Any]) -> str:
     if payload.get("notice"):
         parts.append(f"[{payload['notice']}]")
     code = payload.get("exit_code")
-    if payload.get("timed_out"):
+    if payload.get("stopped"):
+        parts.append("[the run was stopped while the command ran; it was killed]")
+    elif payload.get("timed_out"):
         parts.append("[the command timed out and was killed]")
     elif code not in (None, 0):
         parts.append(f"[exit code {code}: the command failed]")
@@ -142,7 +147,11 @@ def tool_result_failed(result: Mapping[str, Any] | Any) -> bool:
     return (
         isinstance(payload, Mapping)
         and "output" in payload
-        and (bool(payload.get("timed_out")) or payload.get("exit_code") not in (None, 0))
+        and (
+            bool(payload.get("timed_out"))
+            or bool(payload.get("stopped"))
+            or payload.get("exit_code") not in (None, 0)
+        )
     )
 
 

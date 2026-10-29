@@ -39,6 +39,7 @@ from supervisor.temporal.activities import SessionActivities
 from supervisor.temporal.client import connect
 from supervisor.temporal.fleet import STALE_AFTER_S, Load, WorkerBeat, heartbeat_loop, worker_id
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
+from supervisor.temporal.steps import HEARTBEAT_EVERY
 from supervisor.temporal.workflow import AgentSessionWorkflow
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,12 @@ async def session_worker(
         heartbeats=state.heartbeats,
     )
     state.manager.holds.holder = activities.home_queue
-    tuning: dict[str, Any] = {"graceful_shutdown_timeout": GRACEFUL_SHUTDOWN}
+    tuning: dict[str, Any] = {
+        "graceful_shutdown_timeout": GRACEFUL_SHUTDOWN,
+        # A cancel (a stop) reaches an activity only on a heartbeat's answer; heartbeats
+        # sent at most this often let a stopped tool hear it within seconds, not 24 s.
+        "max_heartbeat_throttle_interval": HEARTBEAT_EVERY,
+    }
     if max_concurrent_runs:
         tuning["max_concurrent_activities"] = max_concurrent_runs
     if load is not None:

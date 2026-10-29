@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -179,11 +180,13 @@ class AgentLoop:
         tenant_id: str | None = None,
         env: dict[str, str] | None = None,
         workspace: Workspace | None = None,
+        stop: threading.Event | None = None,
     ) -> ToolEnd:
         """Run one tool call through the tool seam, in the session's workspace.
 
         ``env`` is what the session grants this turn's commands (see ``ToolContext.env``);
-        ``workspace`` is another of the session's hands to act in instead.
+        ``workspace`` is another of the session's hands to act in instead; ``stop``,
+        set when the run is stopped, kills a command the tool runs (``ToolContext.stop``).
         """
         call_id = str(call.get("id") or uuid4().hex)
         name = str(call.get("name") or "unknown")
@@ -205,6 +208,8 @@ class AgentLoop:
             extra["on_mutate"] = self._on_mutate
         if env:
             extra["env"] = env
+        if stop is not None:
+            extra["stop"] = stop
         try:
             outcome = await asyncio.to_thread(
                 provider.invoke, ToolInvokeContext(trace_id=call_id, extra=extra), name, args

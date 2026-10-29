@@ -19,12 +19,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 import shutil
 import signal
-from collections.abc import Iterator, Mapping
+import threading
+from collections.abc import Awaitable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from supervisor.tools.errors import FileMissing, PathEscape, UnsupportedCapability
 
@@ -76,6 +78,8 @@ class CommandResult:
     stdout: str
     stderr: str
     timed_out: bool = False
+    stopped: bool = False
+    """The run was stopped while the command ran, and the command was killed."""
     truncated: bool = False
     # When the output was cut: all of it, stdout then stderr, for the tool to keep.
     full: bytes | None = None
@@ -102,10 +106,16 @@ class Workspace(Protocol):
         ...
 
     async def run(
-        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        env: Mapping[str, str] | None = None,
+        stop: threading.Event | None = None,
     ) -> CommandResult:
         """Run a shell command in the workspace root, with ``env`` added to its
-        scrubbed environment. Raises ``UnsupportedCapability``."""
+        scrubbed environment. ``stop`` set (the run was stopped) kills the command and
+        everything it started. Raises ``UnsupportedCapability``."""
         ...
 
 
@@ -211,7 +221,12 @@ class HostWorkspace:
                 yield (Path(dirpath) / name).relative_to(self._root).as_posix()
 
     async def run(
-        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        env: Mapping[str, str] | None = None,
+        stop: threading.Event | None = None,
     ) -> CommandResult:
         shell = shutil.which("bash") or "/bin/sh"
         scrubbed = {key: os.environ[key] for key in _SHELL_ENV_KEYS if key in os.environ}
@@ -230,11 +245,9 @@ class HostWorkspace:
         assert proc.stdout is not None and proc.stderr is not None
         # Readers of their own, so output produced before a kill is still returned.
         readers = asyncio.gather(proc.stdout.read(), proc.stderr.read())
-        timed_out = False
-        try:
-            await asyncio.wait_for(proc.wait(), timeout_s)
-        except TimeoutError:
-            timed_out = True
+        ended = await _wait_or_stop(proc.wait(), timeout_s, stop)
+        timed_out, stopped = ended == "timed_out", ended == "stopped"
+        if timed_out or stopped:
             with contextlib.suppress(ProcessLookupError):  # it may have just exited
                 os.killpg(proc.pid, signal.SIGKILL)
             await proc.wait()
@@ -249,9 +262,36 @@ class HostWorkspace:
             stdout=stdout,
             stderr=stderr,
             timed_out=timed_out,
+            stopped=stopped,
             truncated=cut_out or cut_err,
             full=_full(out, err) if cut_out or cut_err else None,
         )
+
+
+_STOP_POLL_S: Final = 0.2
+"""How often a running command looks at its stop flag (set from the activity's thread)."""
+
+
+async def _wait_or_stop(
+    done: Awaitable[Any], timeout_s: float, stop: threading.Event | None
+) -> Literal["done", "timed_out", "stopped"]:
+    """Wait for ``done`` until ``timeout_s`` passes or ``stop`` is set (the run was stopped).
+
+    ``stop`` is a ``threading.Event``: the tool runs on a thread of its own, and the
+    activity that sets it on another. ``done`` is left running when this returns early.
+    """
+    task = asyncio.ensure_future(done)
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while True:
+        left = deadline - asyncio.get_running_loop().time()
+        if left <= 0:
+            return "timed_out"
+        finished, _ = await asyncio.wait({task}, timeout=min(left, _STOP_POLL_S) if stop else left)
+        if finished:
+            task.result()
+            return "done"
+        if stop is not None and stop.is_set():
+            return "stopped"
 
 
 def _full(out: bytes, err: bytes) -> bytes:
@@ -328,12 +368,29 @@ class TreeWorkspace:
         return matched
 
     async def run(
-        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        env: Mapping[str, str] | None = None,
+        stop: threading.Event | None = None,
     ) -> CommandResult:
         raise UnsupportedCapability(
             "this session's workspace is a sandbox file tree; it cannot run commands"
         )
 
+
+_TAG_VAR: Final = "SUPERVISOR_RUN_TAG"
+"""Set on each command a sandbox runs; inherited by everything the command starts."""
+
+# Every process whose environment holds the tag, the command's children included (they
+# inherit it; a process group would not hold across providers). POSIX sh and /proc only.
+_KILL_TAGGED: Final = """for p in /proc/[0-9]*; do
+  [ "${p#/proc/}" = "$$" ] && continue
+  if tr '\\0' '\\n' < "$p/environ" 2>/dev/null | grep -qx "$1"; then kill -9 "${p#/proc/}" 2>/dev/null; fi
+done
+exit 0
+"""
 
 _MISSING: Final = 3
 """Exit status the listing scripts use for "no such path"."""
@@ -401,6 +458,11 @@ class SandboxWorkspace:
         lines = await self._script(_FILES, rel, missing=FileMissing(rel or ".", kind="path"))
         return sorted(line.removeprefix("./") for line in lines if line)
 
+    async def kill_tagged(self, tag: str) -> None:
+        """Kill every process in the sandbox started by the command tagged ``tag``."""
+        with contextlib.suppress(Exception):
+            await self._sandbox.exec(["sh", "-c", _KILL_TAGGED, "sh", f"{_TAG_VAR}={tag}"], timeout=10)
+
     async def _script(self, script: str, rel: str, *, missing: FileMissing) -> list[str]:
         with _sandbox_errors():
             done = await self._sandbox.exec(["sh", "-c", script, "sh", f"./{rel}" if rel else "."])
@@ -409,15 +471,34 @@ class SandboxWorkspace:
         return done.stdout_text.splitlines()
 
     async def run(
-        self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None
+        self,
+        command: str,
+        *,
+        timeout_s: float,
+        env: Mapping[str, str] | None = None,
+        stop: threading.Event | None = None,
     ) -> CommandResult:
         from supervisor.sandbox.base import SandboxTimeout
 
+        # Tagged, so a stop can find the command and everything it started from a second
+        # command in the same sandbox, whatever the provider (``_KILL_TAGGED``).
+        tag = f"run-{secrets.token_hex(8)}"
+        running = asyncio.ensure_future(
+            self._sandbox.exec(
+                ["sh", "-c", command], env={**(env or {}), _TAG_VAR: tag}, timeout=timeout_s
+            )
+        )
         with _sandbox_errors():
             try:
-                done = await self._sandbox.exec(
-                    ["sh", "-c", command], env=dict(env) if env else None, timeout=timeout_s
-                )
+                # The provider enforces the timeout; this only watches for a stop.
+                if stop is not None and await _wait_or_stop(asyncio.shield(running), timeout_s + 30, stop) == "stopped":
+                    await self.kill_tagged(tag)
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(running, _DRAIN_S)
+                    if not running.done():
+                        running.cancel()
+                    return CommandResult(exit_code=-1, stdout="", stderr="", stopped=True)
+                done = await running
             except SandboxTimeout:
                 return CommandResult(exit_code=-1, stdout="", stderr="", timed_out=True)
         stdout, cut_out = _clip(done.stdout)

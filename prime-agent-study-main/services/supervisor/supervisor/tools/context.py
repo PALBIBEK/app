@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -35,6 +36,9 @@ class ToolContext:
     bound_workspace: Workspace | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     """Variables the session grants this call's commands (the browse runner's access)."""
+    stop: threading.Event | None = None
+    """Set when the run is stopped while this call runs (the user, or its hard deadline):
+    a command the tool started is killed, so nothing it does lands after the stop."""
 
     @property
     def workspace(self) -> Workspace:
@@ -74,6 +78,7 @@ class ToolContext:
             on_mutate=extra.get("on_mutate"),
             bound_workspace=_workspace(extra, session_id),
             env=dict(extra.get("env") or {}),
+            stop=extra.get("stop"),
         )
 
 
