@@ -340,7 +340,11 @@ class PinnedContextMemory:
         except Exception:  # noqa: BLE001 — a failed summary leaves the turn uncompacted, not failed
             return CompactionEnd(compaction_id=compaction_id, stop_reason="error")
         if decision.action == "cancel":
-            return CompactionEnd(compaction_id=compaction_id, stop_reason="cancelled")
+            # A provider may decide to cancel after its summary calls ran: they were billed,
+            # so they count (Pi Durable records a compaction's usage whatever it decides).
+            return CompactionEnd(
+                compaction_id=compaction_id, stop_reason="cancelled", usage=_spent(decision.spent)
+            )
         # "proceed_default": the provider defers to the platform, which drops the span
         # behind a plain notice so the conversation still fits.
         summary = (
