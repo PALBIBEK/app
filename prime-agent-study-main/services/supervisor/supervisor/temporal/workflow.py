@@ -94,7 +94,7 @@ from supervisor.temporal.job_workflow import SubagentJobWorkflow
 with workflow.unsafe.imports_passed_through():
     # Pure, deterministic policy code: the loop guard runs inside the workflow.
     from supervisor.policy.guards import GuardAction, GuardConfig, LoopGuard
-    from supervisor.policy.types import is_allow_choice
+    from supervisor.policy.types import GuardDetector, GuardVerdict, is_allow_choice
     from supervisor.temporal.policies import RETRIES, Retry, policy
 
 SEEN_COMMANDS_WINDOW = 1_000
@@ -122,6 +122,16 @@ _PARALLEL_ROUND = "parallel-round"
 # Patch id: a stop (an abort, the hard deadline) that lands while nothing cancellable
 # runs ends the run before its next step. Before it, the next step still ran.
 _STOP_BETWEEN_STEPS = "stop-between-steps"
+# A round's calls run at most this many at once (each is an activity slot on the
+# session's worker); the rest wait their turn, in the model's order.
+ROUND_CONCURRENCY = 8
+_ROUND_LIMIT = "round-limit"
+# A session whose worker misses its placement limit but still beats is waiting behind
+# that worker's own work: it waits again (up to this many times) instead of moving.
+_BUSY_WAITS = 5
+_ADOPT_ONLY_GONE = "adopt-only-gone"
+# A stall is judged by the rounds before, not by the round's own calls (``_round_verdict``).
+_STALL_BY_ROUND = "stall-by-round"
 # Patch id prefixes for signals added after release (see ``_handled_here``).
 _HELD_MESSAGE = "held-message"
 _STOP_RUN = "stop-run"
@@ -227,6 +237,25 @@ def _run_bound(
             f"the step limit ({plan.max_steps} model steps) was reached "
             "without an answer; ask the agent to continue"
         )
+    return None
+
+
+def _round_verdict(guard: LoopGuard | None, calls: list[PlannedCall]) -> GuardVerdict | None:
+    """The loop guard's verdict that stops a round before any of its calls runs, if any.
+
+    The guard sees every call of the round first. A stall (calls that get nowhere) is
+    judged by the rounds before: a round's own calls have not run yet, so none of them can
+    have got anywhere, and a wide round (a dozen files read at once) is not a loop.
+    """
+    if guard is None:
+        return None
+    for i, call in enumerate(calls):
+        verdict = guard.observe("run", call.name, call.args_hash)
+        if not verdict.tripped or verdict.action is not GuardAction.ABORT:
+            continue
+        if i > 0 and verdict.detector is GuardDetector.STALL and workflow.patched(_STALL_BY_ROUND):
+            continue
+        return verdict
     return None
 
 
@@ -619,48 +648,35 @@ class AgentSessionWorkflow:
         denied: set[str] = set()
         unknown: set[str] = set()  # lanes where a change's outcome is unknown
         st.open = [c.call_id for c in st.calls]
-        for call in st.calls:
-            if guard is not None:
-                verdict = guard.observe("run", call.name, call.args_hash)
-                if verdict.tripped and verdict.action is GuardAction.ABORT:
-                    return await end(
-                        "error",
-                        error_class="LoopGuard",
-                        detail=verdict.detail or "loop detected",
-                        open_call_ids=list(st.open),
-                        lost_reason="the loop guard stopped the run",
-                    )
+        if (verdict := _round_verdict(guard, st.calls)) is not None:
+            return await end(
+                "error",
+                error_class="LoopGuard",
+                detail=verdict.detail or "loop detected",
+                open_call_ids=list(st.open),
+                lost_reason="the loop guard stopped the run",
+            )
         for call in st.calls:
             if call.approval is not None and not await self._approve(plan.run_id, call):
                 denied.add(call.call_id)
+        # One session's round takes at most a few of its worker's activity slots, so the
+        # worker's other sessions keep moving (a starved session looks like a lost worker).
+        slots = asyncio.Semaphore(ROUND_CONCURRENCY) if workflow.patched(_ROUND_LIMIT) else None
 
         async def settle(call: PlannedCall, before: list[asyncio.Future[bool]]) -> bool:
             if before:
                 await workflow.wait(before)  # their outcomes, whatever they were
-            if self._abort_requested:
-                raise asyncio.CancelledError  # stopped before it started: END_RUN says so
-            # A change waits for every earlier call in its lane, so this is exactly whether
-            # an earlier change there was lost (or itself not run for that reason).
-            behind = not call.parallel and call.lane is not None and call.lane in unknown
-            try:
-                failed = await self._call_tool(
+            async with slots or contextlib.nullcontext():
+                if self._abort_requested:
+                    raise asyncio.CancelledError  # stopped before it started: END_RUN says so
+                # A change waits for every earlier call in its lane, so this is exactly
+                # whether an earlier change there was lost (or itself not run for that).
+                behind = not call.parallel and call.lane is not None and call.lane in unknown
+                failed, lost = await self._round_call(
                     plan.run_id, call, denied=call.call_id in denied, behind_unknown=behind
                 )
-            except ActivityError as err:
-                if is_cancelled_exception(err) or err.activity_type != Activity.TOOL_CALL:
-                    raise  # a stop, or the session could not be recovered: the run ends
-                # It may or may not have run: never run it again, never guess. The model is
-                # told, and the run goes on (pi-temporal's recovery seal).
-                workflow.logger.warning("tool %s lost: %s", call.call_id, _failure(err)[1])
-                await workflow.execute_activity(
-                    Activity.CLOSE_LOST_CALL,
-                    LostCall(self._session_id, plan.run_id, call.call_id, _failure(err)[1]),
-                    task_queue=workflow.info().task_queue,
-                    **self._options(Activity.CLOSE_LOST_CALL),
-                )
-                failed = True
-                if not call.parallel and call.lane is not None:
-                    unknown.add(call.lane)
+            if lost and not call.parallel and call.lane is not None:
+                unknown.add(call.lane)
             st.open.remove(call.call_id)  # answered (an abort leaves it for END_RUN)
             return failed
 
@@ -677,6 +693,24 @@ class AgentSessionWorkflow:
                 guard.progress("run")  # a stall is calls that get nowhere, not many calls
             st.tried.add(key)
         return None
+
+    async def _round_call(
+        self, run_id: str, call: PlannedCall, *, denied: bool, behind_unknown: bool
+    ) -> tuple[bool, bool]:
+        """One call of a parallel round: (whether it failed, whether it was lost).
+
+        A lost call may or may not have run: it is never run again and never guessed at.
+        It is answered as unknown, and the run goes on (pi-temporal's recovery seal).
+        """
+        try:
+            return await self._call_tool(run_id, call, denied=denied, behind_unknown=behind_unknown), False
+        except ActivityError as err:
+            if is_cancelled_exception(err) or err.activity_type != Activity.TOOL_CALL:
+                raise  # a stop, or the session could not be recovered: the run ends
+            reason = _failure(err)[1]
+            workflow.logger.warning("tool %s lost: %s", call.call_id, reason)
+            await self._close_call(LostCall(self._session_id, run_id, call.call_id, reason))
+            return True, True
 
     async def _tool_round(
         self,
@@ -731,13 +765,8 @@ class AgentSessionWorkflow:
         calls before it did.
         """
         denied: set[str] = set()
-        for call in st.calls:
-            if guard is not None:
-                verdict = guard.observe("run", call.name, call.args_hash)
-                if verdict.tripped and verdict.action is GuardAction.ABORT:
-                    return await end(
-                        "error", error_class="LoopGuard", detail=verdict.detail or "loop detected"
-                    )
+        if (verdict := _round_verdict(guard, st.calls)) is not None:
+            return await end("error", error_class="LoopGuard", detail=verdict.detail or "loop detected")
         for call in st.calls:
             if call.approval is not None and not await self._approve(plan.run_id, call):
                 denied.add(call.call_id)
@@ -1050,6 +1079,7 @@ class AgentSessionWorkflow:
         ``lost`` is the call this activity would leave half done: it is closed in the
         journal first, so the adopting worker's recovery finds no dangling tool.
         """
+        busy_waits = 0
         while True:
             queue = (
                 self._state.placement.task_queue
@@ -1065,6 +1095,12 @@ class AgentSessionWorkflow:
             except ActivityError as err:
                 if not _is_placement_lost(err) or self._state.placement is None:
                     raise
+                if busy_waits < _BUSY_WAITS and await self._still_beats(queue):
+                    busy_waits += 1
+                    workflow.logger.info("session worker %s is busy, not gone: waiting", queue)
+                    if track and self._abort_requested:
+                        raise asyncio.CancelledError from None
+                    continue
                 workflow.logger.warning("session worker %s lost; adopting", queue)
                 one = workflow.patched(_ONE_ADOPTION)
                 if one:
@@ -1089,14 +1125,37 @@ class AgentSessionWorkflow:
             finally:
                 self._tracked.pop(task, None)
 
+    async def _still_beats(self, queue: str) -> bool:
+        """Whether the worker behind ``queue`` still heartbeats (busy, so the session stays
+        there). Not knowing counts as gone: the session is adopted, as before."""
+        if self._state.placement is None or self._state.placement.task_queue != queue:
+            return False  # already adopted, by a step beside this one
+        if not workflow.patched(_ADOPT_ONLY_GONE):
+            return False
+        try:
+            return await workflow.execute_activity(
+                Activity.WORKER_BEATS,
+                queue,
+                result_type=bool,
+                task_queue=workflow.info().task_queue,
+                **self._options(Activity.WORKER_BEATS),
+            )
+        except ActivityError as err:
+            workflow.logger.warning("could not tell whether %s is up: %s", queue, err)
+            return False
+
     async def _close_lost(self, lost: LostCall | None) -> None:
         if lost is not None and workflow.patched(_CLOSE_LOST_BEFORE_ADOPT):
-            await workflow.execute_activity(
-                Activity.CLOSE_LOST_CALL,
-                lost,
-                task_queue=workflow.info().task_queue,
-                **self._options(Activity.CLOSE_LOST_CALL),
-            )
+            await self._close_call(lost)
+
+    async def _close_call(self, lost: LostCall) -> None:
+        """Answer a call that may or may not have run (journal only, so on any worker)."""
+        await workflow.execute_activity(
+            Activity.CLOSE_LOST_CALL,
+            lost,
+            task_queue=workflow.info().task_queue,
+            **self._options(Activity.CLOSE_LOST_CALL),
+        )
 
     async def _adopt(self) -> None:
         self._state.placement = await workflow.execute_activity(
@@ -1206,12 +1265,7 @@ class AgentSessionWorkflow:
         except ActivityError as err:
             if lost is not None and not _is_domain(err):
                 # The worker died (or failed) mid-invoke: say so, and never re-run it.
-                await workflow.execute_activity(
-                    Activity.CLOSE_LOST_CALL,
-                    lost,
-                    task_queue=workflow.info().task_queue,
-                    **self._options(Activity.CLOSE_LOST_CALL),
-                )
+                await self._close_call(lost)
                 raise ApplicationError(
                     f"tool call {op.op_id!r} outcome unknown: {_failure(err)[1]}",
                     type="ToolOutcomeUnknown",

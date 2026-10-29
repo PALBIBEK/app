@@ -50,6 +50,8 @@ class Activity(StrEnum):
     # A new session's workflow whose session is a copy of another's journal.
     FORK = "session.fork"
     ADOPT = "session.adopt"
+    # Whether the worker behind a session's queue still heartbeats (any worker).
+    WORKER_BEATS = "session.worker_beats"
     PREPARE_TURN = "session.prepare_turn"
     RUN_TURN = "session.run_turn"
     RESPOND_APPROVAL = "session.respond_approval"

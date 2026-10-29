@@ -217,6 +217,20 @@ async def test_a_looping_model_trips_the_guard_and_ends_the_run_not_the_session(
     assert third.result["code"] == "TOOL_NOT_RUN" and third.result["error"] == NOT_RUN_OUTCOME
 
 
+async def test_a_wide_round_is_not_a_stall(env: Env, model: Callable[..., ScriptedGateway]) -> None:
+    """A dozen files written in one step: the guard's stall limit (10 calls that get
+    nowhere) counts the rounds before, not the round's own calls, which have not run yet."""
+    model(*(("write", {"file_path": f"f{i}.txt", "content": "x"}) for i in range(12)))
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "write twelve files"))
+        events = await env.wait_for(state, sid, run_ended(), timeout=60)
+    assert not payloads(events, ErrorEvent), "the wide round was taken for a loop"
+    ends = payloads(events, ToolEnd)
+    assert len(ends) == 12 and not any(e.is_error for e in ends)
+
+
 async def test_a_model_that_keeps_working_is_warned_then_made_to_answer_on_the_last_step(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

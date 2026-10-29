@@ -276,6 +276,7 @@ waiting for a session's worker that is gone (60 s placement limit) is adopted by
 | `session.create` | Set up a new session | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker (creating is idempotent) |
 | `session.fork` | Copy a session's journal into a new one | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
 | `session.adopt` | Take over a session whose worker is gone | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker |
+| `session.worker_beats` | Before adopting a session: does its worker still heartbeat (busy, not gone)? | any worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | retried on another worker; if it keeps failing, the session is adopted |
 | `session.prepare_turn` | Check budget and recovery before a message runs; start the sandbox (with_run) | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.begin_run` | Open a run: journal the message, plan the steps | session worker | 2 min | no | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.model_step` | One model call (needs no sandbox, so any worker thinks) | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the model call is retried on another worker |

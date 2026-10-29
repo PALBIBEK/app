@@ -48,6 +48,7 @@ from supervisor.temporal.contracts import (
     TurnRequest,
 )
 from supervisor.temporal.domain import domain_kind, error_details
+from supervisor.temporal.fleet import WorkerHeartbeats
 from supervisor.temporal.jobs import JobSteps
 from supervisor.temporal.steps import GithiSteps, heartbeating
 
@@ -84,10 +85,12 @@ class SessionActivities:
         reader: JournalReader,
         writer: JournalWriter,
         home_queue: str,
+        heartbeats: WorkerHeartbeats | None = None,
     ) -> None:
         self._manager = manager
         self._reader = reader
         self._writer = writer
+        self._heartbeats = heartbeats
         self._home = Placement(home_queue)
         self._steps = GithiSteps(manager, reader)
         self._jobs = JobSteps(manager, reader)
@@ -120,6 +123,11 @@ class SessionActivities:
         with _as_application_error():
             await self._manager.ensure_ready(session_id)
         return self._home
+
+    @activity.defn(name=Activity.WORKER_BEATS)
+    async def worker_beats(self, home_queue: str) -> bool:
+        """Whether the worker owning ``home_queue`` still heartbeats; False without a fleet."""
+        return self._heartbeats is not None and await self._heartbeats.beats(home_queue)
 
     @activity.defn(name=Activity.PREPARE_TURN)
     async def prepare_turn(self, session_id: str) -> None:
@@ -276,6 +284,7 @@ class SessionActivities:
         return [
             self.create,
             self.adopt,
+            self.worker_beats,
             self.fork,
             self.prepare_turn,
             self.run_turn,

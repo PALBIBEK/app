@@ -99,6 +99,7 @@ async def session_worker(
         reader=state.reader,
         writer=state.writer,
         home_queue=home_queue(task_queue),
+        heartbeats=state.heartbeats,
     )
     tuning: dict[str, Any] = {"graceful_shutdown_timeout": GRACEFUL_SHUTDOWN}
     if max_concurrent_runs:
