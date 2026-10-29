@@ -162,7 +162,7 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
         "re-run on the adopting worker; an at-most-once tool is not: its call is answered "
         "as an unknown outcome and the run goes on (the model checks)",
-        "One tool call in the sandbox",
+        "One tool call in the sandbox; stopped past `TOOL_CALL_TIMEOUT_S` (30 min), the run going on",
         retry_note="once for at-most-once tools",
     ),
     Activity.REQUEST_APPROVAL: StepPolicy(

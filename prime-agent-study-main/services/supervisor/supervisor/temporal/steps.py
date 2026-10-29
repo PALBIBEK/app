@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+import os
 import posixpath
 import threading
 import time
@@ -126,6 +127,13 @@ STOP_WAIT_S: Final = 8.0
 (they hear the stop on their next heartbeat, then kill their command): longer than a
 heartbeat plus ``STOP_GRACE_S``. A call whose worker is gone never records, and is answered
 as unknown once this passes."""
+
+TOOL_CALL_LIMIT_S: Final = float(os.environ.get("TOOL_CALL_TIMEOUT_S", "1800"))
+"""How long one tool call may run (``TOOL_CALL_TIMEOUT_S``, 30 minutes by default, as
+pi-temporal's): past it the call is stopped (its command killed) and the model told; the
+run goes on. A tool's own limit (bash's) is usually far shorter."""
+
+TOOL_TIMEOUT: Final = "TOOL_TIMEOUT"
 
 HEARTBEAT_EVERY: Final = timedelta(seconds=2)
 """How often a running activity heartbeats (at most): a stop reaches it within this."""
@@ -886,59 +894,9 @@ class GithiSteps:
                 result = denied_result(hand.unavailable.error or "", hand.unavailable.code or "")
                 is_error = True
             else:
-                row = await self._manager._get_session_row(sid)
-                invocation = {"id": call_id, "name": call["name"], "arguments": args[0]}
-                named = hand.key is not None and hand.key != sid
-                stop = threading.Event()
-                running = asyncio.ensure_future(
-                    runtime.loop().run_tool(
-                        invocation,
-                        tenant_id=row.tenant_id,
-                        env=await self._manager.tool_env(sid),
-                        workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
-                        stop=stop,
-                    )
+                result, is_error = await self._run_in_hand(
+                    sid, run_id, call_id, call, args, hand, runtime, provider, started
                 )
-                try:
-                    end = await asyncio.shield(running)
-                except asyncio.CancelledError:
-                    # The run was stopped (the user, or its hard deadline): kill what the
-                    # tool runs and record what it did (pi-temporal waits for a stopped
-                    # tool to report), so nothing lands after the stop and the model reads
-                    # the real result, not "unknown". A worker shutting down is not a stop:
-                    # the call is left as a crash leaves it, for recovery elsewhere.
-                    if not activity.in_activity() or activity.is_worker_shutdown():
-                        self._manager.call_ended(hand)
-                        raise
-                    stop.set()
-                    try:
-                        end = await asyncio.wait_for(asyncio.shield(running), STOP_GRACE_S)
-                    except BaseException:  # noqa: BLE001 — not ended in time (or cancelled again): left unknown
-                        self._manager.call_ended(hand)
-                        raise asyncio.CancelledError from None
-                    checked = await self._manager.after_call(
-                        sid, hand, call["name"], provider, _as_tool_result(end.result)
-                    )
-                    await self._claim(
-                        sid,
-                        run_id,
-                        f"{call_id}:end",
-                        ToolEnd(
-                            tool_call_id=call_id,
-                            tool_name=call["name"],
-                            result=asdict(checked),
-                            is_error=tool_result_failed(asdict(checked)),
-                            duration_ms=int((time.monotonic() - started) * 1000),
-                        ),
-                    )
-                    raise
-                except BaseException:
-                    self._manager.call_ended(hand)
-                    raise
-                checked = await self._manager.after_call(
-                    sid, hand, call["name"], provider, _as_tool_result(end.result)
-                )
-                result, is_error = asdict(checked), not checked.ok
         await self._still_held(sid)  # a result of a sandbox that no longer serves is refused
         if not await self._claim(
             sid,
@@ -957,6 +915,97 @@ class GithiSteps:
             done = await self._keyed(sid, run_id, f"{call_id}:end")
             return bool(done.is_error) if done is not None else is_error
         return is_error
+
+    async def _run_in_hand(
+        self,
+        sid: str,
+        run_id: str,
+        call_id: str,
+        call: dict[str, Any],
+        args: Any,
+        hand: Any,
+        runtime: Any,
+        provider: Any,
+        started: float,
+    ) -> tuple[dict[str, Any], bool]:
+        """Run a catalog tool in the session's sandbox, as ``tool_call`` asks: stopped with
+        the run (its command killed, what it did recorded) or past its time limit."""
+        row = await self._manager._get_session_row(sid)
+        invocation = {"id": call_id, "name": call["name"], "arguments": args[0]}
+        named = hand.key is not None and hand.key != sid
+        stop = threading.Event()
+        running = asyncio.ensure_future(
+            runtime.loop().run_tool(
+                invocation,
+                tenant_id=row.tenant_id,
+                env=await self._manager.tool_env(sid),
+                workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
+                stop=stop,
+            )
+        )
+        over_limit = False
+        try:
+            try:
+                end = await asyncio.wait_for(asyncio.shield(running), TOOL_CALL_LIMIT_S)
+            except TimeoutError:
+                # Past the per-call limit (pi-temporal's tool timeout): stop it as a
+                # stop would, so a hung tool frees its worker slot, and tell the model;
+                # the run goes on. A tool that ignores the stop is left behind.
+                over_limit = True
+                stop.set()
+                end = await asyncio.wait_for(asyncio.shield(running), STOP_GRACE_S)
+        except TimeoutError:
+            self._manager.call_ended(hand)
+            end = None
+        except asyncio.CancelledError:
+            # The run was stopped (the user, or its hard deadline): kill what the
+            # tool runs and record what it did (pi-temporal waits for a stopped
+            # tool to report), so nothing lands after the stop and the model reads
+            # the real result, not "unknown". A worker shutting down is not a stop:
+            # the call is left as a crash leaves it, for recovery elsewhere.
+            if not activity.in_activity() or activity.is_worker_shutdown():
+                self._manager.call_ended(hand)
+                raise
+            stop.set()
+            try:
+                end = await asyncio.wait_for(asyncio.shield(running), STOP_GRACE_S)
+            except BaseException:  # noqa: BLE001 — not ended in time (or cancelled again): left unknown
+                self._manager.call_ended(hand)
+                raise asyncio.CancelledError from None
+            checked = await self._manager.after_call(
+                sid, hand, call["name"], provider, _as_tool_result(end.result)
+            )
+            await self._claim(
+                sid,
+                run_id,
+                f"{call_id}:end",
+                ToolEnd(
+                    tool_call_id=call_id,
+                    tool_name=call["name"],
+                    result=asdict(checked),
+                    is_error=tool_result_failed(asdict(checked)),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                ),
+            )
+            raise
+        except BaseException:
+            self._manager.call_ended(hand)
+            raise
+        if end is not None:
+            checked = await self._manager.after_call(
+                sid, hand, call["name"], provider, _as_tool_result(end.result)
+            )
+            result, is_error = asdict(checked), not checked.ok
+        if over_limit:
+            result = denied_result(
+                f"The tool call ran past its time limit ({TOOL_CALL_LIMIT_S:g} s) and was "
+                "stopped. Anything it started was killed; check what it changed before "
+                "you run it again.",
+                TOOL_TIMEOUT,
+            )
+            is_error = True
+        return result, is_error
+
 
     # --- approvals -----------------------------------------------------------
 
