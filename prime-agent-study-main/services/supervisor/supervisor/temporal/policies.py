@@ -106,28 +106,28 @@ _ADOPTED = "placement times out; another worker adopts the session and runs it a
 
 POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
     Activity.CREATE: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker (creating is idempotent)", "Set up a new session",
     ),
     Activity.FORK: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker", "Copy a session's journal into a new one",
     ),
     Activity.ADOPT: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker", "Take over a session whose worker is gone",
     ),
     Activity.WORKER_BEATS: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker; if it keeps failing, the session is adopted",
         "Before adopting a session: does its worker still heartbeat (busy, not gone)?",
     ),
     Activity.PREPARE_TURN: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "Check budget and recovery before a message runs; start the sandbox (with_run)",
     ),
     Activity.BEGIN_RUN: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "Open a run: journal the message, plan the steps",
     ),
     Activity.MODEL_STEP: StepPolicy(
@@ -144,12 +144,12 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "Summarise the conversation inside a run so the next model step fits; what it spent",
     ),
     Activity.CHECKPOINT: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "skipped; a lost checkpoint costs a restore, never the turn",
         "Save what the last tools changed in the sandbox (beside the model call)",
     ),
     Activity.PLACE_INPUTS: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker (each message is keyed, so it lands once)",
         "Place steering messages in the running run before its next step",
     ),
@@ -166,15 +166,15 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         retry_note="once for at-most-once tools",
     ),
     Activity.REQUEST_APPROVAL: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "Ask a person (the wait itself is a durable timer, not a step)",
     ),
     Activity.RESOLVE_APPROVAL: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "Record an answer, or the timeout's choice",
     ),
     Activity.END_RUN: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "a call left half done is closed first, then the session is adopted",
         "Close a run: final answer, usage, why it stopped",
     ),
@@ -184,7 +184,7 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "A whole runtime-driven turn (non-stepped harnesses)",
     ),
     Activity.RESPOND_APPROVAL: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "Deliver an answer to a runtime-driven turn",
     ),
     Activity.SESSION_OP: StepPolicy(
@@ -195,11 +195,11 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         retry_note="once for operations with side effects",
     ),
     Activity.CLOSE_LOST_CALL: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, True,
         "retried on another worker (journal only)", "Close a call whose worker died",
     ),
     Activity.TERMINATE: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
         "End the session: stop its runtime and sandbox",
     ),
     Activity.CAPTURE_MEMORY: StepPolicy(
@@ -213,7 +213,7 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "A background subagent job's work",
     ),
     Activity.END_JOB: StepPolicy(
-        Where.ANY_WORKER, Limit.SHORT, Retry.UNTIL_DONE, False,
+        Where.ANY_WORKER, Limit.SHORT, Retry.UNTIL_DONE, True,
         "retried until exactly one end reaches the session's journal",
         "Record how a background job ended",
     ),

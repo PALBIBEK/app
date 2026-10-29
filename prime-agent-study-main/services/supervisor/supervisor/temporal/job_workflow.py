@@ -64,5 +64,6 @@ class SubagentJobWorkflow:
             JobEndRequest(spec, stop_reason, output),
             result_type=JobOutcome,
             start_to_close_timeout=policy(Activity.END_JOB).start_to_close(spec.timing),
+            heartbeat_timeout=policy(Activity.END_JOB).heartbeat_timeout(spec.timing),
             retry_policy=policy(Activity.END_JOB).retry_policy,
         )

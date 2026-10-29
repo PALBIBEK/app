@@ -6,6 +6,7 @@ given, so it behaves the same after an activity retry and on any worker.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import re
@@ -233,6 +234,24 @@ def slow_tool(name: str, seconds: float) -> Iterator[None]:
         yield
     finally:
         RegistryToolProvider.invoke = original  # type: ignore[method-assign]
+
+
+@contextmanager
+def slow_end_run(seconds: float) -> Iterator[None]:
+    """Make closing a run (session.end_run) wait ``seconds`` before it does anything."""
+    from supervisor.temporal.steps import GithiSteps
+
+    original = GithiSteps.end_run
+
+    async def end_run(self: GithiSteps, req: Any) -> Any:
+        await asyncio.sleep(seconds)
+        return await original(self, req)
+
+    GithiSteps.end_run = end_run  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        GithiSteps.end_run = original  # type: ignore[method-assign]
 
 
 @contextmanager
