@@ -43,6 +43,7 @@ from supervisor.temporal.contracts import (
     CLOSED_STATUSES,
     COMPACT,
     JOB_FINISHED_SIGNAL,
+    MAX_MESSAGE_CHARS,
     RETRY,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
@@ -1267,6 +1268,15 @@ class AgentSessionWorkflow:
         self._reject_if_closed()
         if not message.command_id or not message.text:
             raise ValueError("command_id and text are required")
+        # Refused before it is accepted (validators never run on replay): an accepted
+        # update too big for history would terminate the session.
+        if len(message.text) > MAX_MESSAGE_CHARS:
+            raise ApplicationError(
+                f"the message is {len(message.text):,} characters; a session takes at most "
+                f"{MAX_MESSAGE_CHARS:,}",
+                type="MessageTooLong",
+                non_retryable=True,
+            )
 
     @workflow.update
     async def session_op(self, op: SessionOp) -> OpResult:

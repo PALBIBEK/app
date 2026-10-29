@@ -31,6 +31,8 @@ from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
 from supervisor.temporal.contracts import (
+    MAX_COMMAND_BYTES,
+    MAX_MESSAGE_CHARS,
     Accepted,
     ApprovalChoice,
     CreateSession,
@@ -335,6 +337,23 @@ class SessionWorkflows:
             AgentSessionWorkflow.run, workflow_id(session_id)
         )
 
+    async def _fits(self, value: object, what: str) -> None:
+        """Refuse a command too big for the session's workflow before it is sent.
+
+        Temporal stores each command in the session's history, refusing any item over 2 MB,
+        and an accepted update that big terminates the workflow: the session would be lost.
+        So the size is checked here, encoded as the server would get it (codec included).
+        """
+        payloads = await self._client.data_converter.encode([value])
+        size = sum(p.ByteSize() for p in payloads)
+        if size > MAX_COMMAND_BYTES:
+            raise SessionCommandError(
+                "CommandTooLarge",
+                f"{what} is {size // 1024} KB; a session takes at most {MAX_COMMAND_BYTES // 1024} KB "
+                "at once. Attach large content as a file instead.",
+                {"bytes": size, "limit": MAX_COMMAND_BYTES},
+            )
+
     async def create(
         self, session_id: str, spec: CreateSession, *, timing: Timing | None = None
     ) -> SessionStatus:
@@ -342,6 +361,7 @@ class SessionWorkflows:
         return await self._start(SessionInput(session_id, create=spec, timing=timing or Timing()))
 
     async def _start(self, inp: SessionInput) -> SessionStatus:
+        await self._fits(inp, "the session's start")
         start = WithStartWorkflowOperation(
             AgentSessionWorkflow.run,
             inp,
@@ -375,6 +395,14 @@ class SessionWorkflows:
         worker comes (pi-temporal's fallback), so a message is not lost while every worker
         is down. Either way it runs once: the session dedupes by command id.
         """
+        if len(message.text) > MAX_MESSAGE_CHARS:
+            raise SessionCommandError(
+                "MessageTooLong",
+                f"the message is {len(message.text):,} characters; a session takes at most "
+                f"{MAX_MESSAGE_CHARS:,}. Attach long content as a file instead.",
+                {"chars": len(message.text), "limit": MAX_MESSAGE_CHARS},
+            )
+        await self._fits(message, "the message")
         handle = self._handle(session_id)
         waited = False
         async with _commands():
@@ -413,6 +441,7 @@ class SessionWorkflows:
 
     async def op(self, op: SessionOp) -> dict[str, Any] | None:
         """Run a session operation on the session's worker; a re-sent op_id runs once."""
+        await self._fits(op, f"the {op.kind} operation")
         handle = self._handle(op.session_id)
         async with _commands():
             result = await _delivered(

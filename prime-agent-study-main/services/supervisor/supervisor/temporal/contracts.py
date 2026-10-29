@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 WORKFLOW_ID_PREFIX = "session/"
 
@@ -41,6 +41,18 @@ JOB_FINISHED_SIGNAL = "job_finished"
 
 # Sent by a session's own tool step to run a background subagent it just journalled.
 START_JOB_SIGNAL = "start_job"
+
+
+MAX_MESSAGE_CHARS: Final = 64 * 1024
+"""The longest message a session takes (pi-temporal's cap). A message goes into the
+session's workflow history, where Temporal refuses any one item over 2 MB, and an accepted
+update that big terminates the workflow: the session would be lost. Larger content belongs
+in a file the agent reads (an attachment)."""
+
+MAX_COMMAND_BYTES: Final = 256 * 1024
+"""The most any one command (a message, a session operation, a start) may carry to the
+workflow once encoded: well under Temporal's 2 MB per item and its 512 KB warning, and
+small enough that the queue carried across continue-as-new stays far from the limit."""
 
 
 class Activity(StrEnum):

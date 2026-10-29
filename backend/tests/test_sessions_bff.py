@@ -784,3 +784,40 @@ async def test_runs_pass_through_with_202_until_ended_and_cancel(
     assert ended.status_code == 200 and ended.json()["stop_reason"] == "aborted"
     assert missing.status_code == 404
     assert stranger.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_message_longer_than_a_session_takes_is_refused_before_the_supervisor(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    from prime_agent.schemas.session import MAX_MESSAGE_CHARS
+
+    posted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cat = _catalog_ok(request)
+        if cat:
+            return cat
+        if request.method == "POST" and request.url.path.endswith("/v1/sessions"):
+            return httpx.Response(201, json={"session_id": "ai-big-1", "harness_version": "githi-v1",
+                                             "runtime": "githi", "status": "ready"})
+        if request.url.path.endswith("/messages"):
+            posted.append(request.url.path)
+            return httpx.Response(202, json={"turn_id": "t", "command_id": "c", "status": "accepted"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        sid = (await api.post("/api/v1/sessions", json={"harness_id": harness.id})).json()["id"]
+        over = await api.post(f"/api/v1/sessions/{sid}/messages", json={"content": "x" * (MAX_MESSAGE_CHARS + 1)})
+        at = await api.post(f"/api/v1/sessions/{sid}/messages", json={"content": "x" * MAX_MESSAGE_CHARS})
+    assert over.status_code == 422
+    assert at.status_code in (200, 201, 202), at.text
+    assert len(posted) == 1  # only the one within the limit reached the supervisor
