@@ -117,11 +117,10 @@ async def cancel_run(
             if workflows is not None and await workflows.cancel_queued(session_id, view.command_id):
                 await deps.get_commands(request).mark(session_id, view.command_id, "cancelled")
             return _answer(await _view(request, session_id, run_id))
-        # Running (or waiting for an approval): abort the session's current run.
+        # Running (or waiting for an approval): stop this run, by name, so a stop that lands
+        # as it ends cannot stop the next one; no worker is needed to send it.
         if workflows is not None:
-            status = await workflows.status(session_id)
-            if status.running_command == view.command_id:
-                await workflows.abort(session_id)
+            await workflows.stop_run(session_id, view.command_id)
         else:
             await deps.get_manager(request).abort(session_id)
     except (SessionCommandError, TemporalUnavailable) as exc:

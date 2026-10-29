@@ -520,6 +520,9 @@ class EndRunRequest:
 # Session row statuses after which no turn can ever run again.
 CLOSED_STATUSES = frozenset({"failed", "terminated"})
 
+STOP_RUN_SIGNAL = "stop_run"
+"""Stop the run of one message (by command id); a stop for any other run is ignored."""
+
 SUBMIT_SIGNAL = "submit_message_signal"
 """A message sent when no worker took the submit update (pi-temporal's Signal fallback)."""
 

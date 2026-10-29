@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -28,10 +27,8 @@ from supervisor.agent.events import (
 from supervisor.app import SupervisorState
 from supervisor.temporal.contracts import (
     Activity,
-    CreateSession,
     Message,
     Phase,
-    Timing,
 )
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.steps import (
@@ -44,6 +41,7 @@ from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import (
     LS,
+    SLOW_HEARTBEAT,
     WRITE,
     Env,
     event_types,
@@ -359,17 +357,12 @@ async def test_an_abort_while_the_sessions_worker_is_gone_still_closes_the_run(
     waits for the session to be adopted, then runs there, so the run ends aborted."""
     model(WRITE)
     observer = await env.state()
-    name, digest = await env.composition(observer, "githi-v1")
+    await env.composition(observer, "githi-v1")  # before the worker boots: it hydrates it
     worker, _ = await spawn_worker(env, {"scripted_calls": [list(WRITE)], "slow_tool": ["write", 120]})
-    sid = uuid.uuid4().hex
     try:
-        await env.sessions.create(
-            sid,
-            CreateSession("t1", "githi-v1", composition_id=name, composition_digest=digest, principal_id="alice"),
-            # The call outlives the stop (its heartbeat limit is long), so the stop finds
-            # the run working and its close meets the dead worker's queue.
-            timing=Timing(placement_timeout_s=2.0, heartbeat_timeout_s=60.0, turn_timeout_s=120.0),
-        )
+        # The call outlives the stop, so the stop finds the run working and its close meets
+        # the dead worker's queue.
+        sid = await env.create(observer, timing=SLOW_HEARTBEAT)
         await env.sessions.submit(sid, Message("c1", "write a note"))
         await env.wait_for(observer, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
     finally:
