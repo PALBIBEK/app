@@ -182,6 +182,12 @@ class SessionActivities:
                         status = await self._manager.session_status(session_id) or "terminated"
                         return TurnOutcome(message.command_id, str(stop), item.seq, status)
             except asyncio.CancelledError:
+                if activity.is_worker_shutdown():
+                    # A deploy stops this worker; nobody stopped the turn. Leave it as a
+                    # crash leaves it (pi-temporal: "cancelled as a shutdown, not a stop"):
+                    # the turn's retry on another worker recovers it, and never resends a
+                    # turn whose tools ran.
+                    raise
                 # Abort: stop the runtime's turn and let it wind down before reporting.
                 await self._manager.abort(session_id)
                 with contextlib.suppress(Exception):

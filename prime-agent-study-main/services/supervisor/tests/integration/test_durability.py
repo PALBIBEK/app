@@ -12,6 +12,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -258,3 +259,31 @@ async def test_a_loop_guard_trip_ends_the_turn_and_keeps_the_session(
 async def _aiter(items: list) -> AsyncIterator:
     for item in items:
         yield item
+
+
+async def test_a_deploy_stopping_the_worker_mid_turn_is_a_crash_not_a_stop(
+    cluster: Cluster, slow_tools: Callable[[float], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker shut down mid-turn (a deploy) has its activities cancelled once the grace
+    passes. That is not the user's stop: the turn must not be recorded as aborted, but
+    recovered on another worker as after a crash (pi-temporal's shutdown-check)."""
+    from supervisor.temporal import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "GRACEFUL_SHUTDOWN", timedelta(seconds=1))
+    observer = await cluster.state()
+    sid = uuid.uuid4().hex
+    slow_tools(120)
+    async with session_worker(cluster.client, await cluster.state(), task_queue=cluster.queue):
+        await cluster.sessions.create(sid, KG, timing=FAST)
+        await cluster.sessions.submit(sid, Message("c1", "slow work"))
+        await cluster.wait_for(observer, sid, _count("ToolStart"))
+    # The worker has shut down: its turn was cancelled as a shutdown.
+    slow_tools(0)
+    async with session_worker(cluster.client, await cluster.state(), task_queue=cluster.queue):
+        events = await cluster.wait_for(observer, sid, _error("TurnInterrupted"), timeout=60)
+        assert not [
+            e for e in events if isinstance(e.payload, TurnEnd) and e.payload.stop_reason == "aborted"
+        ], "the deploy was recorded as the user stopping the turn"
+        await cluster.sessions.submit(sid, Message("c2", "after the deploy"))
+        await cluster.wait_for(observer, sid, _count("RunEnd"))
+        await cluster.sessions.terminate(sid)
