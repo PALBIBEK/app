@@ -55,6 +55,8 @@ class SessionRow(Base):
     owner_principal_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_pin: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The worker queue that holds the session's runtime and sandbox (supervisor.session.holds).
+    holder: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

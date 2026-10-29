@@ -106,6 +106,7 @@ class SessionActivities:
                 await self._manager.create(session_id=req.session_id, **asdict(req.spec))
             else:  # a retry after the row was written: attach instead of creating twice
                 await self._manager.ensure_ready(req.session_id)
+            await self._manager.holds.take(req.session_id)
         return self._home
 
     @activity.defn(name=Activity.FORK)
@@ -115,12 +116,18 @@ class SessionActivities:
             await self._manager.fork(
                 req.spec.source_id, at_seq=req.spec.at_seq, new_id=req.session_id
             )
+            await self._manager.holds.take(req.session_id)
         return self._home
 
     @activity.defn(name=Activity.ADOPT)
     async def adopt(self, session_id: str) -> Placement:
-        """Take over a session whose worker is gone: cold-resume it here from the journal."""
+        """Take over a session whose worker is gone: cold-resume it here from the journal.
+
+        The hold comes first: from then on the old worker's writes are refused, so the
+        checkpoint this worker restores from is the last one the old worker saved.
+        """
         with _as_application_error():
+            await self._manager.holds.take(session_id)
             await self._manager.ensure_ready(session_id)
         return self._home
 

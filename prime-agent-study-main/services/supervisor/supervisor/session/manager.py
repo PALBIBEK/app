@@ -87,6 +87,7 @@ from supervisor.session.errors import (  # noqa: F401
     MemoryNotConfigured,
     SessionAwaitingApproval,
     SessionError,
+    SessionMoved,
     SessionNotFound,
     SessionTerminated,
     SubagentNotConfigured,
