@@ -96,10 +96,16 @@ class SessionListResponse(BaseModel):
     page_size: int
 
 
+MAX_MESSAGE_CHARS = 64 * 1024
+"""The longest message a session takes (the supervisor's limit: a message goes into the
+session's workflow history, which refuses anything much bigger). Longer content is attached
+as a file instead."""
+
+
 class SessionMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, max_length=MAX_MESSAGE_CHARS)
     command_id: str | None = Field(default=None, min_length=1)
     # Sent while a run works: join it at its next step (steering) instead of queueing.
     steer: bool = False

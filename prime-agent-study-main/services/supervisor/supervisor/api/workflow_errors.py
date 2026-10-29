@@ -58,6 +58,9 @@ _STATUS: Final[dict[str, int]] = {
     "WorkspaceUnavailable": 409,
     "ToolOutcomeUnknown": 503,
     "DepthExceeded": 400,
+    # Too big for the session's workflow history (supervisor.temporal.contracts).
+    "MessageTooLong": 413,
+    "CommandTooLarge": 413,
     "BadArgs": 400,
     "UnsupportedCapability": 400,
     "ProviderConflict": 409,

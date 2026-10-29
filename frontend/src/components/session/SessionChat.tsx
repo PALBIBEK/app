@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { Card, StatusPill, type StatusKind } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import type { Session } from '@/lib/api/types/session.types';
+import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { useAuthStore } from '@/lib/store/authStore';
@@ -125,6 +126,11 @@ export function SessionChat({
     e?.preventDefault();
     const text = input.trim();
     if (!text || blocked || sending) return;
+    const tooLong = messageTooLong(text);
+    if (tooLong) {
+      toast.error(tooLong); // kept in the box, so nothing is lost
+      return;
+    }
     setSending(true);
     addLocalMessage(text);
     setInput('');
