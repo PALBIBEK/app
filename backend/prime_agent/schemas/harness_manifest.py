@@ -90,6 +90,8 @@ class PolicySpec(BaseModel):
     """A deadline for one run that stops it where it is, mid-call; 0: none."""
     max_tokens_per_session: int = Field(default=0, ge=0, le=1_000_000_000)
     """Tokens the whole session may use; 0: no limit (later messages end at once past it)."""
+    max_minutes_per_session: int = Field(default=0, ge=0, le=525_600)
+    """Time the session's runs may take in all (idle time is free); 0: no limit."""
     model_retries: int = Field(default=3, ge=0, le=10)
     """Times a model call that may pass (rate limit, overload) is asked again."""
 

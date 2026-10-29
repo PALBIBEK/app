@@ -62,7 +62,7 @@ class BasicCompactionProvider:
         )
         if summary == COMPACTION_NOTICE and preparation.previous_summary is None:
             # Gateway failed or returned empty — let harness built-in try.
-            return CompactionDecision(action="proceed_default")
+            return CompactionDecision(action="proceed_default", spent=dict(summarizer.spent))
 
         summary_message = {"role": "user", "content": summary}
         tokens_after = self.estimate_tokens([summary_message])
@@ -74,6 +74,7 @@ class BasicCompactionProvider:
                 tokens_before=preparation.tokens_before,
                 tokens_after=tokens_after,
             ),
+            spent=dict(summarizer.spent),
         )
 
     def recall_for_turn(

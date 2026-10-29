@@ -235,8 +235,8 @@ def _construct_event[T: AgentEvent](event_cls: type[T], payload: dict[str, Any])
         payload = {k: v for k, v in payload.items() if k in known}
         logger.debug("ignoring %s fields unknown to this build: %s", event_cls.__name__, sorted(unknown))
 
-    # Handle MessageEnd.usage specially (nested dataclass)
-    if event_cls is MessageEnd:
+    # A reply's or a compaction's usage is a nested dataclass.
+    if event_cls in (MessageEnd, CompactionEnd):
         usage_data = payload.get("usage")
         if usage_data is not None and isinstance(usage_data, dict):
             payload = dict(payload)

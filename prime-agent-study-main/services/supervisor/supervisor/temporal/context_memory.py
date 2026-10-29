@@ -25,6 +25,7 @@ import dataclasses
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from supervisor.agent.events import (
@@ -35,6 +36,7 @@ from supervisor.agent.events import (
     MessageEnd,
     ToolEnd,
     ToolStart,
+    Usage,
 )
 from supervisor.memory.binding import long_term_agent
 from supervisor.memory.history import message_text
@@ -175,28 +177,29 @@ class PinnedContextMemory:
         run_id: str,
         prior: list[dict[str, Any]],
         events: Sequence[Envelope] = (),
-    ) -> None:
-        """Compact the conversation carried into this run, if the profile's limit is passed.
+    ) -> CompactionEnd | None:
+        """Compact the conversation carried into this run, if the profile's limit is passed;
+        the compaction, or None when there was nothing to compact.
 
         ``events``: the journal the audience may see. The summary names the entries
         it replaced, so the model can reopen any of them verbatim with ``history``.
         """
-        if await self._keyed(session_id, run_id, "compaction:end") is not None:
-            return
+        if (done := await self._keyed(session_id, run_id, "compaction:end")) is not None:
+            return done
         binding = await self._binding(session_id)
         if binding is None or not binding.profile.compaction_enabled:
-            return
+            return None
         # The estimate sees only the conversation; the model also gets the system
         # prompt, the tool schemas and recalled memory. The provider's own count of
         # the last call includes all of it, so the larger of the two decides.
         tokens = max(binding.memory.estimate_tokens(prior), _reported_tokens(events, binding.memory))
         window = await binding.context_window()
         if tokens <= binding.limit(window):
-            return
+            return None
         tail = _recent(prior, binding.keep_recent(window), binding.memory)
         head = prior[: len(prior) - len(tail)]
         if not head:
-            return
+            return None
 
         compaction_id = f"cmp-{run_id[:12]}"
         await self._record(
@@ -220,7 +223,9 @@ class PinnedContextMemory:
         )
         replaced = _replaced_range([e for e in events if e.turn_id != run_id], tail)
         end = await self._summarise(compaction_id, binding, preparation, tail, replaced)
+        await self._charge(session_id, end)
         await self._record(session_id, run_id, "compaction:end", end)
+        return end
 
     # --- inside a run (githi's prepare phase) ------------------------------------------
 
@@ -249,7 +254,7 @@ class PinnedContextMemory:
         *,
         request: str = "",
         reason: str = "threshold",
-    ) -> bool:
+    ) -> CompactionEnd | None:
         """Summarise all but the recent part of the conversation so far, this run included.
 
         ``request`` is the message this run answers. When the cut falls after it, it is
@@ -258,14 +263,13 @@ class PinnedContextMemory:
 
         Journalled as an in-run ``CompactionEnd`` whose ``messages`` the run carries on
         from (``steps.conversation``). Keyed by step, so a retried activity reuses it.
-        False when there is nothing to compact or the summary failed.
+        None when there is nothing to compact.
         """
-        done = await self._keyed(session_id, run_id, f"{step}:compaction:end")
-        if done is not None:
-            return bool(done.stop_reason == "ok")
+        if (done := await self._keyed(session_id, run_id, f"{step}:compaction:end")) is not None:
+            return done
         binding = await self._binding(session_id)
         if binding is None or not binding.profile.compaction_enabled:
-            return False
+            return None
         window = await binding.context_window()
         # pi's keepRecentTokens, widened to the whole latest round when that is larger
         # and fits: compacting right after a round must not hide its results.
@@ -274,7 +278,7 @@ class PinnedContextMemory:
         tail = round_ if len(round_) > len(recent) else recent
         head = conversation[: len(conversation) - len(tail)]
         if not head:
-            return False
+            return None
         tokens = binding.memory.estimate_tokens(conversation)
         compaction_id = f"cmp-{run_id[:12]}-{step}"
         await self._record(
@@ -306,8 +310,18 @@ class PinnedContextMemory:
             request=_clipped(request.strip(), binding.keep_recent(window), binding.memory) if kept else "",
         )
         end = dataclasses.replace(end, in_run=True)
+        await self._charge(session_id, end)
         await self._record(session_id, run_id, f"{step}:compaction:end", end)
-        return end.stop_reason == "ok"
+        return end
+
+    async def _charge(self, session_id: str, end: CompactionEnd) -> None:
+        """A summary's model calls count toward the session's cost cap like a model step's.
+        Charged before the end is journalled: a crash between re-runs a billed summary, so
+        both are counted; the reverse order could drop one."""
+        if end.usage is not None:
+            await self._manager._budget.record(
+                session_id, Decimal(str(end.usage.cost_total)), end.usage.total_tokens
+            )
 
     @staticmethod
     async def _summarise(
@@ -326,7 +340,11 @@ class PinnedContextMemory:
         except Exception:  # noqa: BLE001 — a failed summary leaves the turn uncompacted, not failed
             return CompactionEnd(compaction_id=compaction_id, stop_reason="error")
         if decision.action == "cancel":
-            return CompactionEnd(compaction_id=compaction_id, stop_reason="cancelled")
+            # A provider may decide to cancel after its summary calls ran: they were billed,
+            # so they count (Pi Durable records a compaction's usage whatever it decides).
+            return CompactionEnd(
+                compaction_id=compaction_id, stop_reason="cancelled", usage=_spent(decision.spent)
+            )
         # "proceed_default": the provider defers to the platform, which drops the span
         # behind a plain notice so the conversation still fits.
         summary = (
@@ -342,6 +360,7 @@ class PinnedContextMemory:
         return CompactionEnd(
             compaction_id=compaction_id,
             stop_reason="ok",
+            usage=_spent(decision.spent),
             tokens_after=binding.memory.estimate_tokens(compacted),
             summary_digest=hashlib.sha256(summary.encode()).hexdigest()[:32],
             messages=compacted,
@@ -383,6 +402,17 @@ class PinnedContextMemory:
 
 
 REQUEST_HEADING: Final = "The request this run is working on, verbatim:"
+
+
+def _spent(spent: Mapping[str, Any] | None) -> Usage | None:
+    """What the provider says its summary cost, if it says."""
+    if not spent:
+        return None
+    return Usage(
+        int(spent.get("input_tokens") or 0),
+        int(spent.get("output_tokens") or 0),
+        cost_total=float(spent.get("cost") or 0.0),
+    )
 
 
 def _clipped(text: str, tokens: int, memory: ContextMemoryProvider) -> str:
