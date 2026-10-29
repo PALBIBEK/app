@@ -115,6 +115,20 @@ class WorkerHeartbeats:
         async with self._sf() as db, db.begin():
             await db.execute(delete(WorkerHeartbeatRow).where(WorkerHeartbeatRow.worker_id == worker))
 
+    async def beats(self, home_queue: str, *, now_ms: int | None = None) -> bool:
+        """Whether the worker owning ``home_queue`` beat within ``STALE_AFTER_S``."""
+        now = now_ms if now_ms is not None else int(time.time() * 1000)
+        async with self._sf() as db:
+            row = (
+                await db.execute(
+                    select(WorkerHeartbeatRow.worker_id)
+                    .where(WorkerHeartbeatRow.home_queue == home_queue)
+                    .where(WorkerHeartbeatRow.last_seen_ms >= now - int(STALE_AFTER_S * 1000))
+                    .limit(1)
+                )
+            ).first()
+        return row is not None
+
     async def live(self, task_queue: str, *, now_ms: int | None = None) -> list[WorkerBeat]:
         """Workers on ``task_queue`` that beat recently; rows long gone stale are cleared."""
         now = now_ms if now_ms is not None else int(time.time() * 1000)

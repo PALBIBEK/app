@@ -117,6 +117,11 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
         "retried on another worker", "Take over a session whose worker is gone",
     ),
+    Activity.WORKER_BEATS: StepPolicy(
+        Where.ANY_WORKER, Limit.SHORT, Retry.STANDARD, False,
+        "retried on another worker; if it keeps failing, the session is adopted",
+        "Before adopting a session: does its worker still heartbeat (busy, not gone)?",
+    ),
     Activity.PREPARE_TURN: StepPolicy(
         Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, False, _ADOPTED,
         "Check budget and recovery before a message runs; start the sandbox (with_run)",
