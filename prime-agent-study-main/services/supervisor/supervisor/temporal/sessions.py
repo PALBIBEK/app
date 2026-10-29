@@ -436,8 +436,15 @@ class SessionWorkflows:
             )
 
     async def abort(self, session_id: str) -> None:
+        """Stop whatever run is going."""
         async with _commands():
             await self._handle(session_id).signal(AgentSessionWorkflow.abort)
+
+    async def stop_run(self, session_id: str, command_id: str) -> None:
+        """Stop the run of message ``command_id``, and no other. A signal: it needs no worker
+        to answer, and the server keeps it until one comes."""
+        async with _commands():
+            await self._handle(session_id).signal(AgentSessionWorkflow.stop_run, command_id)
 
     async def cancel_queued(self, session_id: str, command_id: str) -> bool:
         """Remove a queued message before it runs; False if it is not waiting in the queue."""

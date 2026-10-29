@@ -33,6 +33,8 @@ from tests.support.platform import boot_platform
 from tests.support.scripted import ScriptedGateway, scripted_model
 
 FAST = Timing(placement_timeout_s=2.0, heartbeat_timeout_s=2.0, turn_timeout_s=120.0)
+SLOW_HEARTBEAT = Timing(placement_timeout_s=2.0, heartbeat_timeout_s=60.0, turn_timeout_s=120.0)
+"""A dead worker's running call goes unnoticed for a minute: a test can act while it "runs"."""
 WRITE = ("write", {"file_path": "notes.txt", "content": "hello"})
 LS = ("ls", {"path": "."})
 
@@ -78,6 +80,7 @@ class Env:
         *,
         principal: str = "alice",
         memory: dict[str, Any] | None = None,
+        timing: Timing = FAST,
     ) -> str:
         """A githi session from the shipped composition, re-pinned to ``harness``."""
         name, digest = await self.composition(state, harness)
@@ -92,7 +95,7 @@ class Env:
                 principal_id=principal,
                 memory=memory,
             ),
-            timing=FAST,
+            timing=timing,
         )
         return sid
 

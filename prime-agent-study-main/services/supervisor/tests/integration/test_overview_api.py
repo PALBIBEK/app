@@ -9,23 +9,15 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
 from supervisor.agent.events import ApprovalRequired
-from supervisor.main import create_app
 from supervisor.temporal.worker import session_worker
+from tests.support.api import supervisor_api
 from tests.support.githi_env import WRITE, Env, run_ended
 from tests.support.scripted import ScriptedGateway
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-
-def _api(state, *, tenant: str = "t1", principal: str = "alice") -> AsyncClient:
-    return AsyncClient(
-        transport=ASGITransport(app=create_app(state=state)),
-        base_url="http://supervisor",
-        headers={"X-Tenant-Id": tenant, "X-Principal-Id": principal},
-    )
 
 
 async def test_the_inbox_lists_waiting_approvals_for_their_owner_only(
@@ -36,9 +28,9 @@ async def test_the_inbox_lists_waiting_approvals_for_their_owner_only(
     state.workflows = env.sessions
     async with (
         session_worker(env.client, state, task_queue=env.queue),
-        _api(state) as alice,
-        _api(state, principal="bob") as bob,
-        _api(state, tenant="t2") as other,
+        supervisor_api(state) as alice,
+        supervisor_api(state, principal="bob") as bob,
+        supervisor_api(state, tenant="t2") as other,
     ):
         sid = await env.create(state, "githi-approve-allow")
         r = await alice.post(f"/v1/sessions/{sid}/messages", json={"command_id": "c1", "text": "write a note"})
@@ -65,8 +57,8 @@ async def test_sandboxes_and_usage_come_from_the_journal(env: Env, model: Callab
     state.workflows = env.sessions
     async with (
         session_worker(env.client, state, task_queue=env.queue),
-        _api(state) as alice,
-        _api(state, tenant="t2") as other,
+        supervisor_api(state) as alice,
+        supervisor_api(state, tenant="t2") as other,
     ):
         sid = await env.create(state)
         r = await alice.post(f"/v1/sessions/{sid}/messages", json={"command_id": "c1", "text": "write a note"})

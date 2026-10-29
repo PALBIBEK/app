@@ -6,23 +6,16 @@ import asyncio
 from collections.abc import Callable
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from supervisor.agent.events import ApprovalRequired, RunStart
-from supervisor.main import create_app
 from supervisor.temporal.worker import session_worker
+from tests.support.api import supervisor_api
 from tests.support.githi_env import WRITE, Env, run_ended
 from tests.support.scripted import ScriptedGateway
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-
-def _api(state) -> AsyncClient:
-    return AsyncClient(
-        transport=ASGITransport(app=create_app(state=state)),
-        base_url="http://supervisor",
-        headers={"X-Tenant-Id": "t1", "X-Principal-Id": "alice"},
-    )
 
 
 async def _send(api: AsyncClient, sid: str, command_id: str, text: str) -> dict:
@@ -46,7 +39,7 @@ async def test_a_run_is_fetched_by_the_id_its_message_got(env: Env, model: Calla
     model()  # the model answers without tools
     state = await env.state()
     state.workflows = env.sessions  # the API drives sessions through their workflows
-    async with session_worker(env.client, state, task_queue=env.queue), _api(state) as api:
+    async with session_worker(env.client, state, task_queue=env.queue), supervisor_api(state) as api:
         sid = await env.create(state)
         sent = await _send(api, sid, "c1", "hello")
         done = await _run(api, sid, sent["turn_id"], until={"completed", "failed"})
@@ -64,7 +57,7 @@ async def test_queued_and_running_runs_can_be_cancelled_and_cancel_is_idempotent
     model(WRITE)
     state = await env.state()
     state.workflows = env.sessions  # the API drives sessions through their workflows
-    async with session_worker(env.client, state, task_queue=env.queue), _api(state) as api:
+    async with session_worker(env.client, state, task_queue=env.queue), supervisor_api(state) as api:
         sid = await env.create(state, "githi-approve-allow")
         first = await _send(api, sid, "c1", "write a note")
         await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, ApprovalRequired) for e in evs))

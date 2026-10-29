@@ -46,6 +46,7 @@ from supervisor.temporal.contracts import (
     RETRY,
     RETRYABLE_OPS,
     START_JOB_SIGNAL,
+    STOP_RUN_SIGNAL,
     SUBMIT_SIGNAL,
     Accepted,
     Activity,
@@ -121,9 +122,9 @@ _PARALLEL_ROUND = "parallel-round"
 # Patch id: a stop (an abort, the hard deadline) that lands while nothing cancellable
 # runs ends the run before its next step. Before it, the next step still ran.
 _STOP_BETWEEN_STEPS = "stop-between-steps"
-# Patch id prefix: each message sent as a signal (``submit_message_signal``) is read only
-# by a build that has the handler; ``-<n>`` numbers the run's signals.
+# Patch id prefixes for signals added after release (see ``_handled_here``).
 _HELD_MESSAGE = "held-message"
+_STOP_RUN = "stop-run"
 # Steps that find the session's worker gone together adopt it once (a parallel round's
 # calls, or a checkpoint beside a model step); histories before it adopted per step.
 _ONE_ADOPTION = "one-adoption"
@@ -270,7 +271,7 @@ class AgentSessionWorkflow:
         self._deadline_hit = False
         self._creation_error: ApplicationError | None = None
         self._submit_lock = asyncio.Lock()
-        self._signalled = 0  # messages sent as signals to this run (each its own patch)
+        self._signals_seen: dict[str, int] = {}  # per kind, for ``_handled_here``
         # Approvals this workflow is waiting on (stepped turns), and their decisions.
         self._awaiting: dict[str, ApprovalNeeded] = {}
         self._decisions: dict[str, str] = {}
@@ -1154,17 +1155,8 @@ class AgentSessionWorkflow:
         would refuse (empty, for a closed or failed session, already seen) is logged and
         dropped, and one for an idle session is queued without the update's prepare
         (its run's first step meets what the prepare would have).
-
-        Each such message takes its own ``workflow.patched`` id: a signal that reached a
-        build without this handler was left unread there, so its replay leaves it unread
-        too (rather than starting a run the history never had). Its own id, not one for
-        all: a patch answers the same for the whole run, and a later signal, handled by
-        a build with the handler, must still be read.
         """
-        self._signalled += 1
-        if not workflow.patched(f"{_HELD_MESSAGE}-{self._signalled}"):
-            # Only in replay: an older build took this signal and left it unread, so the
-            # message was lost there (deploy workers before API servers to avoid it).
+        if not self._handled_here(_HELD_MESSAGE):
             return
         if not message.command_id or not message.text:
             workflow.logger.warning("dropped a message sent as a signal: no id or text")
@@ -1321,9 +1313,30 @@ class AgentSessionWorkflow:
 
     @workflow.signal(name="abort")
     def abort(self) -> None:
+        """Stop whatever run is going (a stop that names no run)."""
         if self._running is None:
             return
         self._stop_run()
+
+    @workflow.signal(name=STOP_RUN_SIGNAL)
+    def stop_run(self, command_id: str) -> None:
+        """Stop the run of message ``command_id`` and no other (pi-temporal's ``interrupt``
+        names its prompt), so a stop that lands as that run ends cannot stop the next."""
+        if not self._handled_here(_STOP_RUN):
+            return
+        if self._running is not None and self._running.command_id == command_id:
+            self._stop_run()
+
+    def _handled_here(self, kind: str) -> bool:
+        """Whether this signal of ``kind`` (one added after release) is acted on.
+
+        A build without its handler left such a signal unread, so replay must leave it
+        unread too. Each signal takes its own patch id (``kind-<n>``): a patch answers the
+        same for the whole run, and a later signal, handled by a build that has the
+        handler, must still be acted on. Call it before the handler's first ``await``.
+        """
+        seen = self._signals_seen[kind] = self._signals_seen.get(kind, 0) + 1
+        return workflow.patched(f"{kind}-{seen}")
 
     def _stop_run(self) -> None:
         """Stop the running run where it is: every running step is cancelled."""
