@@ -76,6 +76,7 @@ from supervisor.session.errors import (
     SessionTerminated,
 )
 from supervisor.session.files import SessionFiles
+from supervisor.session.holds import SessionHolds
 from supervisor.session.live import LiveHub, LiveSubscription
 from supervisor.session.modes import SessionMode
 from supervisor.session.recovery import Recovery, ResumeState
@@ -178,9 +179,14 @@ class SessionManagerBase:
         # When sandboxes start and stop, where a profile does not say (supervisor.hands.lifecycle).
         self.sandbox_lifecycle = SandboxLifecycle.from_env()
         self._leases = HandLeases(session_factory)  # who else holds a hand, if anyone
+        self.holds = SessionHolds(session_factory)  # which worker may save each session
         # Change-aware checkpoints of each sandbox, where there is a store to keep them.
         self._checkpoints = (
-            Checkpointer(workspace_store, record=self._journal_checkpoint)
+            Checkpointer(
+                workspace_store,
+                record=self._journal_checkpoint,
+                may_write=lambda key: self.holds.held(split_key(key)[0]),
+            )
             if workspace_store is not None
             else None
         )
@@ -483,7 +489,8 @@ class SessionManagerBase:
             self._workspace_svc.mark_dirty(ws)
         if isinstance(payload, RunEnd):
             self._run_traces.pop(session_id, None)
-            sbx = self._hands.sandbox(session_id)
+            # A worker that lost the session must not save its old sandbox over the new one's.
+            sbx = self._hands.sandbox(session_id) if await self.holds.held(session_id) else None
             if self.files is not None and sbx is not None and turn_id:
                 try:
                     await self.files.collect(session_id, turn_id, sbx)

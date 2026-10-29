@@ -101,6 +101,7 @@ async def session_worker(
         home_queue=home_queue(task_queue),
         heartbeats=state.heartbeats,
     )
+    state.manager.holds.holder = activities.home_queue
     tuning: dict[str, Any] = {"graceful_shutdown_timeout": GRACEFUL_SHUTDOWN}
     if max_concurrent_runs:
         tuning["max_concurrent_activities"] = max_concurrent_runs

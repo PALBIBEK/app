@@ -74,7 +74,7 @@ from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
 from supervisor.seams.interfaces.tool_provider import needs_workspace
-from supervisor.session import SessionManager
+from supervisor.session import SessionManager, SessionMoved
 from supervisor.session.project_context import read_project_context
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
@@ -777,6 +777,7 @@ class GithiSteps:
         call, step, assistant = await self._located(sid, run_id, call_id)
         if activity.in_activity() and activity.is_cancelled():
             raise asyncio.CancelledError  # stopped before it started: the stop answers it
+        await self._still_held(sid)
         # The start is the claim (pi-temporal's dispatch claim): taken atomically, so a
         # call closed unrun never starts late, and a retried attempt of a call that did
         # start runs again only as its recovery class allows (Temporal retries it or not).
@@ -843,6 +844,7 @@ class GithiSteps:
                     sid, hand, call["name"], provider, _as_tool_result(end.result)
                 )
                 result, is_error = asdict(checked), not checked.ok
+        await self._still_held(sid)  # a result of a sandbox that no longer serves is refused
         if not await self._claim(
             sid,
             run_id,
@@ -972,6 +974,11 @@ class GithiSteps:
         return await self._manager._record(
             session_id, event, turn_id=run_id, trace_id=trace_id, event_key=f"{run_id}:{key}"
         )
+
+    async def _still_held(self, session_id: str) -> None:
+        """Raise SessionMoved once another worker holds the session (supervisor.session.holds)."""
+        if not await self._manager.holds.held(session_id):
+            raise SessionMoved(f"session {session_id} is held by another worker now")
 
     async def _claim(self, session_id: str, run_id: str, key: str, event: Any) -> bool:
         """Journal ``event`` under ``key`` if no event holds it yet; whether this one won."""

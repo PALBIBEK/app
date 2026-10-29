@@ -39,6 +39,13 @@ MAX_FILE_BYTES: Final = 32 * 1024 * 1024
 type Recorded = Callable[[str, "Sandbox", Changes, frozenset[str]], Awaitable[None]]
 """Journals a checkpoint: (session id, sandbox, what changed, processes running)."""
 
+type MayWrite = Callable[[str], Awaitable[bool]]
+"""Whether this worker still holds a hand's session (supervisor.session.holds)."""
+
+
+async def _always(_key: str) -> bool:
+    return True
+
 
 _SCOPES: Final = uuid.UUID("6f1c2b8e-4d0a-5b7e-9c3f-2a1d8e5b7c40")
 
@@ -59,11 +66,12 @@ class Checkpointer:
     again, which is correct, only slower.
     """
 
-    __slots__ = ("_hand", "_locks", "_record", "_saved", "_seen", "_skipped", "_store")
+    __slots__ = ("_hand", "_locks", "_may_write", "_record", "_saved", "_seen", "_skipped", "_store")
 
-    def __init__(self, store: WorkspaceStore, *, record: Recorded) -> None:
+    def __init__(self, store: WorkspaceStore, *, record: Recorded, may_write: MayWrite = _always) -> None:
         self._store = store
         self._record = record
+        self._may_write = may_write
         self._seen: dict[str, Fingerprint] = {}
         self._saved: dict[str, Fingerprint] = {}
         self._hand: dict[str, str] = {}
@@ -97,6 +105,8 @@ class Checkpointer:
             saved = dict(seen.files)
             too_large: list[str] = []
             for path in changes.written:
+                if not await self._may_write(session_id):
+                    return None  # the session moved: its checkpoints are its new worker's
                 try:
                     data = await sandbox.read_file(f"{root}/{path}")
                 except FileNotFoundError:
@@ -108,6 +118,8 @@ class Checkpointer:
                     continue
                 await self._store.commit_blob(scope, path, data)
             for path in changes.removed:
+                if not await self._may_write(session_id):
+                    return None
                 await self._store.soft_delete(scope, path)
             self._saved[session_id] = Fingerprint(files=saved, processes=seen.processes)
             self._skipped[session_id] = tuple(too_large)

@@ -13,6 +13,7 @@ __all__ = [
     "RecoveryBlocked",
     "SessionAwaitingApproval",
     "SessionError",
+    "SessionMoved",
     "SessionNotFound",
     "SessionTerminated",
     "SubagentNotConfigured",
@@ -31,6 +32,12 @@ class SessionNotFound(SessionError):
 
 class SessionTerminated(SessionError):
     pass
+
+
+class SessionMoved(SessionError):
+    """Another worker holds the session now: this one's sandbox no longer serves it."""
+
+    retryable = False
 
 
 class SessionAwaitingApproval(SessionError):
