@@ -23,6 +23,7 @@ from supervisor.db.models import (
     ScopeMembershipRow,
     ScopeRow,
     SessionRow,
+    TenantSpendRow,
     VaultSecretRow,
     WorkspaceFileRow,
     WorkspaceFileVersionRow,
@@ -116,6 +117,9 @@ async def world(platform: dict[str, Any]) -> dict[str, Any]:
     await _scope(p, "carols", CAROL, ALICE)  # someone else's, she belongs to
     await _secret(p, ALICE, "mcp:https://tools.example.com")
     await _secret(p, BOB, "mcp:https://tools.example.com")
+    async with p["factory"]() as db:
+        db.add_all([TenantSpendRow(tenant_id=t, month="2026-10", cost_usd=1) for t in (ALICE, BOB)])
+        await db.commit()
     return p
 
 
@@ -135,6 +139,7 @@ async def test_erasing_takes_her_sessions_and_her_workspace(world: dict[str, Any
     for key in alone_objects:
         assert not await p["objects"].exists(key)
     assert await _count(p, VaultSecretRow, VaultSecretRow.owner_id == ALICE) == 0
+    assert await _count(p, TenantSpendRow, TenantSpendRow.tenant_id == ALICE) == 0
     assert p["forgotten"] == [(ALICE, "mcp:https://tools.example.com")]
 
 
@@ -160,6 +165,7 @@ async def test_no_one_elses_data_goes(world: dict[str, Any]) -> None:
     assert await _count(p, SessionRow, SessionRow.id.in_(["a-daves", "b-mine"])) == 2
     assert await _count(p, EventRow, EventRow.session_id == "b-mine") == 1
     assert await _count(p, VaultSecretRow, VaultSecretRow.owner_id == BOB) == 1
+    assert await _count(p, TenantSpendRow, TenantSpendRow.tenant_id == BOB) == 1
     assert await _count(p, WorkspaceFileRow, WorkspaceFileRow.scope_id == "carols") == 1
 
 

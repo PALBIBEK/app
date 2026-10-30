@@ -203,7 +203,11 @@ class SessionManagerBase:
         self._long_term: dict[str, tuple[str, str]] = {}
         self._workspace: dict[str, SessionWorkspaceState] = {}
         self._fallback_seams = build_runtime_seams()
-        self._budget = budget or BudgetTracker(session_factory)
+        # The tenant's monthly limit holds in every session, on every worker (it was only
+        # checked when a session was created).
+        self._budget = budget or BudgetTracker(
+            session_factory, tenant_limit=quotas.limits.max_cost_per_tenant if quotas is not None else None
+        )
         self._guards = guards or LoopGuard()
         self._approvals = approvals or ApprovalBroker(session_factory)
         self._sandbox_policy = sandbox_policy or SandboxPolicy()

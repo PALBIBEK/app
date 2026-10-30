@@ -95,6 +95,19 @@ class SessionIndexRow(Base):
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class TenantSpendRow(Base):
+    """What a tenant's model calls cost in one calendar month (UTC), counted as it is spent
+    (``supervisor.policy.budget``). Kept apart from the sessions, so erasing one does not
+    give its spend back."""
+
+    __tablename__ = "tenant_spend"
+
+    tenant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    """``YYYY-MM``."""
+    cost_usd: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False, default=0)
+
+
 class CommandRow(Base):
     """HTTP command_id dedup — survives process restart. API response only."""
 
