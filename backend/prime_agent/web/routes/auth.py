@@ -15,6 +15,7 @@ from prime_agent.schemas.user import (
     UserCreate,
     UserLogin,
 )
+from prime_agent.security import throttle
 from prime_agent.services.auth_service import AuthService
 from prime_agent.web.dependencies import CurrentUser, DbSession, RequireCSRF
 from prime_agent.web.dependencies.csrf import (
@@ -37,6 +38,22 @@ async def require_trusted_origin(request: Request) -> None:
 
 
 TrustedOrigin = Annotated[None, Depends(require_trusted_origin)]
+
+
+def _address(request: Request) -> str:
+    """The caller's address (behind a proxy, uvicorn's ``--proxy-headers`` sets it)."""
+    return request.client.host if request.client else "unknown"
+
+
+async def _refuse_if_throttled(db: DbSession, attempt: throttle.Throttle) -> None:
+    if (wait := await throttle.blocked_for(db, attempt)) is None:
+        return
+    minutes = max(1, -(-int(wait.total_seconds()) // 60))
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Too many attempts; try again in {minutes} minute{'s' if minutes > 1 else ''}",
+        headers={"Retry-After": str(max(1, int(wait.total_seconds())))},
+    )
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -83,11 +100,15 @@ def _apply_session(response: Response, tokens: dict[str, str]) -> dict[str, str]
 )
 async def register(
     user_data: UserCreate,
+    request: Request,
     db: DbSession,
     response: Response,
     _trusted_origin: TrustedOrigin,
 ):
     """Register a new user and issue cookie-backed refresh plus CSRF tokens."""
+    attempt = throttle.registration_throttle(_address(request))
+    await _refuse_if_throttled(db, attempt)
+    await throttle.count(db, attempt)  # every registration counts, made or refused
     user = await AuthService.register_user(
         email=user_data.email,
         password=user_data.password,
@@ -106,16 +127,29 @@ async def register(
 )
 async def login(
     credentials: UserLogin,
+    request: Request,
     db: DbSession,
     response: Response,
     _trusted_origin: TrustedOrigin,
 ):
-    """Authenticate and issue a rotating refresh cookie plus CSRF token."""
-    user = await AuthService.authenticate_user(
-        email=credentials.email,
-        password=credentials.password,
-        db=db
-    )
+    """Authenticate and issue a rotating refresh cookie plus CSRF token.
+
+    Throttled (``security.throttle``): checked before the password is hashed, so a
+    throttled caller costs no hashing either.
+    """
+    attempt = throttle.login_throttle(credentials.email, _address(request))
+    await _refuse_if_throttled(db, attempt)
+    try:
+        user = await AuthService.authenticate_user(
+            email=credentials.email,
+            password=credentials.password,
+            db=db
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            await throttle.count(db, attempt)
+        raise
+    await throttle.clear(db, attempt.only(throttle.ACCOUNT_FROM_ADDRESS, throttle.ACCOUNT))
     tokens = await AuthService.issue_tokens(user, db)
     return {"user": user, **_apply_session(response, tokens)}
 

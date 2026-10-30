@@ -5,8 +5,13 @@ Matching frontend TypeScript types from:
 - frontend/src/lib/api/types/auth.types.ts
 """
 from datetime import datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+PASSWORD_MAX_LENGTH: Final = 256
+"""Long enough for any passphrase or manager (NIST asks for at least 64), short enough
+that hashing one stays cheap: a sign-in hashes whatever it is sent."""
 
 
 class UserBase(BaseModel):
@@ -26,7 +31,9 @@ class UserCreate(BaseModel):
     email: EmailStr = Field(..., description="User email (unique)")
     name: str = Field(..., min_length=2, max_length=255, description="Full name")
     avatar: str | None = Field(None, max_length=512, description="Avatar URL")
-    password: str = Field(..., min_length=12, description="Password (min 12 characters)")
+    password: str = Field(
+        ..., min_length=12, max_length=PASSWORD_MAX_LENGTH, description="Password (12 to 256 characters)"
+    )
 
 
 class UserUpdate(BaseModel):
@@ -44,8 +51,8 @@ class ChangePasswordRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    current_password: str = Field(..., min_length=12)
-    new_password: str = Field(..., min_length=12)
+    current_password: str = Field(..., min_length=12, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(..., min_length=12, max_length=PASSWORD_MAX_LENGTH)
 
 
 class UserResponse(UserBase):
@@ -63,7 +70,7 @@ class UserLogin(BaseModel):
     """Schema for login request."""
 
     email: EmailStr
-    password: str = Field(..., min_length=12)
+    password: str = Field(..., min_length=12, max_length=PASSWORD_MAX_LENGTH)
 
 
 class RefreshTokenRequest(BaseModel):

@@ -5,6 +5,7 @@ Import all models here for Alembic auto-generation to work.
 """
 from prime_agent.db import Base
 
+from .auth_throttle import AuthThrottle
 from .environment import Environment
 from .evaluation import Dataset, DatasetItem, Experiment, ExperimentRun, Proposal
 from .harness import Harness
@@ -15,6 +16,7 @@ from .tool import Tool
 from .user import User
 
 __all__ = [
+    "AuthThrottle",
     "Base",
     "Dataset",
     "DatasetItem",
