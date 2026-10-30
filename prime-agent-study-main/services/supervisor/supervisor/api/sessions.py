@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -138,14 +138,20 @@ async def create_session(
     )
 
 
+LIST_IDS_MAX = 200
+"""The most sessions one list may name (``?ids=``): a page of the product's list."""
+
+
 @router.get("", response_model=list[SessionSummary])
 async def list_sessions(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
+    ids: list[str] | None = Query(default=None, max_length=LIST_IDS_MAX, description="Only these sessions"),
 ) -> list[SessionSummary]:
+    """The caller's sessions, newest first; with ``ids``, only those the caller may see."""
     manager = deps.get_manager(request)
     rows = await manager.list_sessions(
-        tenant_id=tenant_id, principal_id=deps.request_principal_id(request, tenant_id)
+        tenant_id=tenant_id, principal_id=deps.request_principal_id(request, tenant_id), ids=ids
     )
     return [
         SessionSummary(
@@ -157,6 +163,7 @@ async def list_sessions(
             title=r.title,
             message_count=r.message_count,
             total_cost=r.total_cost,
+            is_busy=r.is_busy,
         )
         for r in rows
     ]

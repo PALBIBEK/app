@@ -9,6 +9,7 @@ from uuid import uuid4
 import httpx
 import jwt
 import pytest
+from sqlalchemy import select
 
 from prime_agent.config import Settings, get_settings
 from prime_agent.db.models.session_link import SessionLink
@@ -629,39 +630,29 @@ async def test_pause_resume_return_501(db_session, owner, session_settings):
 
 
 @pytest.mark.asyncio
-async def test_list_includes_cost_from_detail_projection(
+async def test_list_refreshes_the_page_in_one_supervisor_call(
     db_session, owner, harness, session_settings, monkeypatch
 ):
-    link = SessionLink(
-        id=str(uuid4()),
-        user_id=owner.id,
-        harness_id=harness.id,
-        ai_session_id="ai-cost",
-        tenant_id=owner.id,
-        harness_version="githi-v1",
-        runtime="githi",
-        status="active",
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    db_session.add(link)
+    """It asked for each session on the page one by one (up to a hundred calls)."""
+    for ai_id in ("ai-cost", "ai-busy", "ai-gone"):
+        db_session.add(SessionLink(
+            id=str(uuid4()), user_id=owner.id, harness_id=harness.id, ai_session_id=ai_id,
+            tenant_id=owner.id, harness_version="githi-v1", runtime="githi", status="active",
+            created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        ))
     await db_session.flush()
+    calls: list[httpx.Request] = []
+
+    def summary(ai_id: str, **over: object) -> dict[str, object]:
+        return {"session_id": ai_id, "status": "active", "harness_version": "githi-v1", "runtime": "githi",
+                "last_seq": 4, "message_count": 2, "total_cost": 0.0, "is_busy": False, **over}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/ai-cost"):
-            return httpx.Response(
-                200,
-                json={
-                    "session_id": "ai-cost",
-                    "status": "active",
-                    "harness_version": "githi-v1",
-                    "runtime": "githi",
-                    "last_seq": 4,
-                    "message_count": 2,
-                    "total_cost": 1.25,
-                },
-            )
-        return httpx.Response(404)
+        calls.append(request)
+        assert request.url.path == "/v1/sessions"
+        assert sorted(request.url.params.get_list("ids")) == ["ai-busy", "ai-cost", "ai-gone"]
+        # "ai-gone" is not answered for: it is shown as stored.
+        return httpx.Response(200, json=[summary("ai-cost", total_cost=1.25), summary("ai-busy", is_busy=True)])
 
     _patch_session(monkeypatch, session_settings, handler)
     app = create_app()
@@ -675,7 +666,36 @@ async def test_list_includes_cost_from_detail_projection(
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as api:
         r = await api.get("/api/v1/sessions")
     assert r.status_code == 200
-    assert r.json()["data"][0]["total_cost"] == 1.25
+    assert len(calls) == 1
+    by_ai = {link.ai_session_id: link for link in (await db_session.scalars(select(SessionLink))).all()}
+    shown = {item["id"]: item for item in r.json()["data"]}
+    assert shown[by_ai["ai-cost"].id]["total_cost"] == 1.25
+    assert shown[by_ai["ai-busy"].id]["is_busy"] is True
+    assert shown[by_ai["ai-gone"].id]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_list_shows_the_page_as_stored_when_the_supervisor_cannot_answer(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    db_session.add(SessionLink(
+        id=str(uuid4()), user_id=owner.id, harness_id=harness.id, ai_session_id="ai-1",
+        tenant_id=owner.id, harness_version="githi-v1", runtime="githi", status="active",
+        total_cost=0.5, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    ))
+    await db_session.flush()
+    _patch_session(monkeypatch, session_settings, lambda _request: httpx.Response(503))
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        r = await api.get("/api/v1/sessions")
+    assert r.status_code == 200
+    assert r.json()["data"][0]["total_cost"] == 0.5
 
 
 @pytest.mark.asyncio

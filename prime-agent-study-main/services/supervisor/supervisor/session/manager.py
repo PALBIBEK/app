@@ -8,12 +8,12 @@ import functools
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -114,6 +114,26 @@ async def _run_open(db: Any, session_id: str) -> bool:
         .limit(1)
     )
     return last == start
+
+
+async def _runs_open(db: Any, session_ids: Sequence[str]) -> set[str]:
+    """Which of ``session_ids`` have a run open (``_run_open`` for many, in one query)."""
+    if not session_ids:
+        return set()
+    start, end = type_name_of(RunStart), type_name_of(RunEnd)
+    boundary = EventRow.type.in_((start, end))
+    last = (
+        select(EventRow.session_id, func.max(EventRow.seq).label("seq"))
+        .where(EventRow.session_id.in_(session_ids), boundary)
+        .group_by(EventRow.session_id)
+        .subquery()
+    )
+    open_runs = await db.scalars(
+        select(EventRow.session_id)
+        .join(last, (EventRow.session_id == last.c.session_id) & (EventRow.seq == last.c.seq))
+        .where(EventRow.type == start)
+    )
+    return set(open_runs)
 
 
 class SessionManager(UpkeepOps):
@@ -652,37 +672,41 @@ class SessionManager(UpkeepOps):
             )
 
     async def list_sessions(
-        self, *, tenant_id: str, principal_id: str | None = None
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str | None = None,
+        ids: Sequence[str] | None = None,
     ) -> list[SessionInfo]:
+        """The caller's sessions, newest first (``ids``: only those), each with whether a
+        run is open, in two queries however many there are."""
+        query = (
+            select(SessionRow, SessionIndexRow)
+            .outerjoin(SessionIndexRow, SessionIndexRow.session_id == SessionRow.id)
+            .where(SessionRow.tenant_id == tenant_id)
+            .where(session_visibility(tenant_id, principal_id))
+            .order_by(SessionRow.created_at.desc())
+        )
+        if ids is not None:
+            query = query.where(SessionRow.id.in_(ids))
         async with self._db() as db:
-            rows = (
-                await db.execute(
-                    select(SessionRow, SessionIndexRow)
-                    .outerjoin(
-                        SessionIndexRow,
-                        SessionIndexRow.session_id == SessionRow.id,
-                    )
-                    .where(SessionRow.tenant_id == tenant_id)
-                    .where(session_visibility(tenant_id, principal_id))
-                    .order_by(SessionRow.created_at.desc())
-                )
-            ).all()
-        out: list[SessionInfo] = []
-        for row, idx in rows:
-            out.append(
-                SessionInfo(
-                    session_id=row.id,
-                    tenant_id=row.tenant_id,
-                    status=row.status,
-                    harness_version=row.harness_version,
-                    runtime=row.runtime,
-                    last_seq=int(row.last_seq),
-                    title=idx.title if idx else None,
-                    message_count=int(idx.message_count) if idx else 0,
-                    total_cost=float(idx.total_cost) if idx else 0.0,
-                )
+            rows = (await db.execute(query)).all()
+            busy = await _runs_open(db, [row.id for row, _ in rows])
+        return [
+            SessionInfo(
+                session_id=row.id,
+                tenant_id=row.tenant_id,
+                status=row.status,
+                harness_version=row.harness_version,
+                runtime=row.runtime,
+                last_seq=int(row.last_seq),
+                title=idx.title if idx else None,
+                message_count=int(idx.message_count) if idx else 0,
+                is_busy=row.id in busy,
+                total_cost=float(idx.total_cost) if idx else 0.0,
             )
-        return out
+            for row, idx in rows
+        ]
 
     async def ensure_ready(self, session_id: str) -> None:
         """Resume if cold; raise RecoveryBlocked / SessionTerminated before accepting work."""

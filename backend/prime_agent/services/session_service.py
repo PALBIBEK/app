@@ -175,14 +175,8 @@ class SessionService:
             .limit(page_size)
         )
         rows = list((await db.execute(stmt)).scalars().all())
-        # Refresh cost/status from supervisor when possible
-        refreshed: list[SessionResponse] = []
-        for link in rows:
-            refreshed.append(
-                await self._maybe_refresh(link, identity=identity, db=db)
-            )
         return SessionListResponse(
-            data=refreshed,
+            data=await self._refresh_page(rows, identity=identity, db=db),
             total=total,
             page=page,
             page_size=page_size,
@@ -705,6 +699,46 @@ class SessionService:
             raise SessionNotFoundError()
         return link
 
+    async def _refresh_page(
+        self, links: list[SessionLink], *, identity: TenantPrincipal, db: AsyncSession
+    ) -> list[SessionResponse]:
+        """A page of sessions with their status, cost and counts from the supervisor, asked
+        for in one call (it was one per session); as stored when it cannot answer."""
+        if not links:
+            return []
+        try:
+            listed = await self._client.list_sessions(identity, ids=[link.ai_session_id for link in links])
+        except AiUpstreamError:
+            return [self._to_response(link) for link in links]
+        by_id = {str(item.get("session_id")): item for item in listed if isinstance(item, dict)}
+        busy: dict[str, bool | None] = {}
+        changed = False
+        for link in links:
+            if (detail := by_id.get(link.ai_session_id)) is None:
+                continue
+            changed = self._apply(link, detail) or changed
+            busy[link.id] = detail.get("is_busy") if isinstance(detail.get("is_busy"), bool) else None
+        if changed:
+            await db.commit()
+        return [self._to_response(link, is_busy=busy.get(link.id)) for link in links]
+
+    @staticmethod
+    def _apply(link: SessionLink, detail: dict[str, Any]) -> bool:
+        """Copy the supervisor's view of the session onto its link; whether anything changed."""
+        fresh = {
+            "status": str(detail["status"]) if "status" in detail else link.status,
+            "message_count": int(detail.get("message_count") or 0) if "message_count" in detail else link.message_count,
+            "total_cost": float(detail.get("total_cost") or 0.0) if "total_cost" in detail else link.total_cost,
+            "last_seq": int(detail.get("last_seq") or 0) if "last_seq" in detail else link.last_seq,
+            "title": str(detail["title"]) if detail.get("title") is not None else link.title,
+        }
+        if all(getattr(link, name) == value for name, value in fresh.items()):
+            return False
+        for name, value in fresh.items():
+            setattr(link, name, value)
+        link.updated_at = datetime.now(UTC)
+        return True
+
     async def _maybe_refresh(
         self,
         link: SessionLink,
@@ -716,26 +750,12 @@ class SessionService:
             detail = await self._client.get_session(identity, link.ai_session_id)
         except AiUpstreamError:
             return self._to_response(link)
-        if isinstance(detail, dict):
-            if "status" in detail:
-                link.status = str(detail["status"])
-            if "message_count" in detail:
-                link.message_count = int(detail["message_count"] or 0)
-            if "total_cost" in detail:
-                link.total_cost = float(detail["total_cost"] or 0.0)
-            if "last_seq" in detail:
-                link.last_seq = int(detail["last_seq"] or 0)
-            if detail.get("title") is not None:
-                link.title = str(detail["title"])
-            link.updated_at = datetime.now(UTC)
+        if not isinstance(detail, dict):
+            return self._to_response(link)
+        if self._apply(link, detail):
             await db.commit()
-            return self._to_response(
-                link,
-                is_busy=detail.get("is_busy")
-                if isinstance(detail.get("is_busy"), bool)
-                else None,
-            )
-        return self._to_response(link)
+        is_busy = detail.get("is_busy")
+        return self._to_response(link, is_busy=is_busy if isinstance(is_busy, bool) else None)
 
     def _to_response(
         self, link: SessionLink, *, is_busy: bool | None = None
