@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 __all__ = ["GATEWAY_KEY", "RENEW_BEFORE_S", "SessionKeys"]
 
 GATEWAY_KEY: Final = "gateway_key"
-RENEW_BEFORE_S: Final = 600.0
-"""Renew a key with less than this left, so no model call starts on a dying key."""
+RENEW_BEFORE_S: Final = 300.0
+"""Renew a key with less than this left (keys live 15 minutes), so no model call starts on a
+dying key: a call runs well within it."""
 
 
 class SessionKeys:

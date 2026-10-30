@@ -41,7 +41,12 @@ from supervisor.gateway.providers.base import (
     Wire,
 )
 from supervisor.gateway.routes import Route, RouteConfigError, RouteTable, route_view
-from supervisor.gateway.virtual_keys import MintRequest, SignedVirtualKeyStore, VirtualKeyStore
+from supervisor.gateway.virtual_keys import (
+    KEY_TTL_S,
+    MintRequest,
+    SignedVirtualKeyStore,
+    VirtualKeyStore,
+)
 from supervisor.gateway.wire_codec import TokenUsage, UsageTap, response_usage
 
 
@@ -80,7 +85,7 @@ class MintVirtualKeyRequest(BaseModel):
     session_id: str
     principal_id: str
     allowed_models: list[str] = Field(default_factory=list)
-    ttl_s: int = 3600
+    ttl_s: int = KEY_TTL_S
     max_budget_usd: float = 5.0
     scope_id: str | None = None
 

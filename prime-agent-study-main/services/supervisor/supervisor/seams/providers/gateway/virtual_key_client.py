@@ -9,6 +9,10 @@ import httpx
 
 from supervisor.seams.services.virtual_keys import MintedVirtualKey, VirtualKeyClient
 
+SESSION_KEY_TTL_S = 900
+"""A session key lives 15 minutes (``supervisor.gateway.virtual_keys.KEY_TTL_S``): a gateway
+restart forgets revocations and per-key spend, and short keys bound how long that matters."""
+
 
 class HttpVirtualKeyClient:
     """HTTP client for model-gateway ``/v1/virtual-keys`` (service auth)."""
@@ -41,7 +45,7 @@ class HttpVirtualKeyClient:
         session_id: str,
         principal_id: str,
         allowed_models: list[str] | None = None,
-        ttl_s: int = 3600,
+        ttl_s: int = SESSION_KEY_TTL_S,
         max_budget_usd: float = 5.0,
         scope_id: str | None = None,
     ) -> MintedVirtualKey:

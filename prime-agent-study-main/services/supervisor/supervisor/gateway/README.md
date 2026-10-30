@@ -100,7 +100,8 @@ toward their budget; an exhausted budget is **429**
 A virtual key carries its claims (tenant, session, models, budget, expiry), signed
 with the virtual key secret, so a restart or another replica takes the keys sessions
 hold. Revocations and per-key spend are kept in the process: after a restart a revoked
-key works again until it expires (an hour by default; a terminated session's key is
+key works again until it expires (15 minutes at most; the supervisor renews a key in its
+last five, so sessions never notice; a terminated session's key is
 held only by the supervisor, which forgets it), and the session's cost cap, which the
 supervisor enforces, is the bound that holds across restarts. Changing the secret makes
 every key unknown (**401** `AUTH_INVALID`): the supervisor then mints a new key and asks
