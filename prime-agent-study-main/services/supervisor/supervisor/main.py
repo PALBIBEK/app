@@ -43,6 +43,7 @@ from supervisor.api import (
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
+from supervisor.obs.responses import CountResponses, ResponseCounts
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,9 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     if state is not None:
         app.state.supervisor = state
     app.middleware("http")(_reject_nul_in_url)
+    # Outermost: every response counts, the ones refused above too (GET /v1/ops/metrics).
+    app.state.responses = ResponseCounts()
+    app.add_middleware(CountResponses, counts=app.state.responses)
     app.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]
     app.include_router(health.router)
     app.include_router(metrics.router)

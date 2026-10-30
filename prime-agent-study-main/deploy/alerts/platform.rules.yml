@@ -1,0 +1,79 @@
+# Prometheus alert rules for the platform's health. Scrape:
+#   - every supervisor API replica's GET /v1/ops/metrics (yal_api_responses_total, yal_dependency_up)
+#   - every model gateway replica's GET /v1/metrics (yal_gateway_responses_total, yal_gateway_spend_usd_total)
+# Counters are per process: rate() and increase() handle restarts. Counts only, no tenant.
+# The worker fleet has its own rules (workers.rules.yml).
+groups:
+  - name: yal-platform
+    rules:
+      - alert: YalDatabaseUnreachable
+        expr: min(yal_dependency_up{dependency="database"}) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: A supervisor cannot reach its database
+          description: Sessions cannot start, run or be read. Check Postgres (DATABASE_URL) and its connections.
+      - alert: YalTemporalUnreachable
+        expr: min(yal_dependency_up{dependency="temporal"}) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: A supervisor cannot reach Temporal
+          description: Every session runs as a Temporal workflow, so none can start or take a message. Check TEMPORAL_ADDRESS and the Temporal server.
+      - alert: YalModelGatewayNotReady
+        expr: min(yal_dependency_up{dependency="model_gateway"}) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: The model gateway is down or not ready
+          description: Agents cannot call a model. GET /v1/readyz on the gateway says why (routes, provider, credentials or auth).
+      - alert: YalMemoryServiceNotReady
+        expr: min(yal_dependency_up{dependency="memory"}) == 0
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: The memory service is down or not ready
+          description: Sessions run without long-term memory meanwhile, and erasing a person waits for it.
+      - alert: YalSandboxProviderUnavailable
+        expr: min(yal_dependency_up{dependency="sandbox"}) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: The sandbox provider does not answer
+          description: Agents that run tools cannot get a sandbox. Check SANDBOX_PROVIDER (Docker, or the cluster).
+      - alert: YalApiErrors
+        expr: |
+          sum(rate(yal_api_responses_total{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(yal_api_responses_total[5m])), 1e-9) > 0.05
+          and sum(rate(yal_api_responses_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: Over 5% of supervisor API responses are server errors
+          description: Look at the API's logs for the failing routes; yal_dependency_up says whether a dependency is the cause.
+      - alert: YalModelCallsFailing
+        expr: |
+          sum(rate(yal_gateway_responses_total{code=~"5.."}[10m]))
+            / clamp_min(sum(rate(yal_gateway_responses_total[10m])), 1e-9) > 0.2
+          and sum(rate(yal_gateway_responses_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: Over 20% of model calls fail at the gateway
+          description: An upstream provider is failing or refusing (502 UPSTREAM_ERROR). Check the provider's status and the gateway's routes and fallbacks.
+      - alert: YalModelSpendHigh
+        # Set the threshold to what an hour of normal use costs you, with headroom.
+        expr: sum(increase(yal_gateway_spend_usd_total[1h])) > 25
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: Model spend passed $25 in the last hour
+          description: Sessions' own budgets still apply; look for a runaway session or tenant in the traces (cost by session).

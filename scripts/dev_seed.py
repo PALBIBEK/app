@@ -19,12 +19,12 @@ HARNESS = "Demo coding agent"
 def main() -> int:
     email, password = os.environ["DEMO_EMAIL"], os.environ["DEMO_PASSWORD"]
     with httpx.Client(base_url=API, headers={"Origin": ORIGIN}, timeout=30) as http:
-        r = http.post("/auth/register", json={"email": email, "password": password, "name": "Demo"})
-        if r.status_code not in (201, 400, 409):
-            r.raise_for_status()
-        if r.status_code != 201:
-            r = http.post("/auth/login", json={"email": email, "password": password})
-            r.raise_for_status()
+        # Sign in first: registering on every start would spend the address's registrations
+        # (10 an hour), and a restart loop would lock the seed out.
+        r = http.post("/auth/login", json={"email": email, "password": password})
+        if r.status_code == 401:
+            r = http.post("/auth/register", json={"email": email, "password": password, "name": "Demo"})
+        r.raise_for_status()
         http.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
         listed = http.get("/harnesses", params={"page_size": 100})

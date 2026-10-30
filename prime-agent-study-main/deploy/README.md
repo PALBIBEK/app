@@ -87,6 +87,51 @@ wait in Temporal and nothing is lost.
 - Autoscaling on queue backlog and busy slots rather than CPU: `k8s/worker-autoscaling.yaml`
   (KEDA). A worker waiting on a model uses little CPU even when its slots are full.
 
+### Alerts
+
+Scrape these, then load `alerts/*.rules.yml` into Prometheus (CI checks the rules with
+`promtool check rules` and runs `promtool test rules alerts/platform.rules.test.yml`):
+
+| Scrape | Serves | Rules |
+|---|---|---|
+| each API replica, `GET /v1/ops/workers/metrics` | the worker fleet | `workers.rules.yml` |
+| each API replica, `GET /v1/ops/metrics` | `yal_api_responses_total{code}`; `yal_dependency_up{dependency}` for the database, Temporal, the sandbox provider, the model gateway and the memory service (probed on each scrape, 3 s each) | `platform.rules.yml` |
+| each gateway replica, `GET /v1/metrics` | `yal_gateway_responses_total{code}` (model calls only) and `yal_gateway_spend_usd_total` | `platform.rules.yml` |
+
+They page when the database, Temporal, the gateway or the sandbox provider stops answering, and
+warn on over 5% of API responses failing, over 20% of model calls failing, the memory service
+down, and model spend over $25 in an hour (set that threshold to your own usage). All three
+endpoints carry counts only (no tenant, session or key), like the fleet's. Counters are per
+process, so a restart starts them at zero; `rate()` and `increase()` allow for that.
+
+### Backups and restore
+
+What holds state, and how to keep it:
+
+| Store | What it holds | How to back it up |
+|---|---|---|
+| Postgres `supervisor` (`DATABASE_URL`) | every session's journal (the source of truth), runs, traces, artifacts' and workspace files' metadata, scopes and grants, sealed secrets, the catalog | Continuous archiving (WAL + base backups, e.g. pgBackRest or your provider's point-in-time recovery). |
+| Postgres `memory` (`MEMORY_DATABASE_URL`) | long-term memory: notebooks, facts, their history | The same, with the same schedule. |
+| The product's Postgres (backend `DATABASE_URL`) | accounts, harnesses, tools, environments, session links, datasets | The same. |
+| Postgres `temporal`, `temporal_visibility` | running workflows and their histories | The same; see below for what losing it costs. |
+| Object storage (`OBJECT_STORAGE`, `OBJECT_STORAGE_BUCKET`) | the bytes of artifacts, workspace files (each version) and checkpoints | Bucket versioning plus replication to a second bucket or region. |
+| `BLOB_DIR` | journal payloads too large to keep in a row, and lost sandboxes' logs | A persistent volume every API replica and worker mounts; snapshot it. |
+| `VAULT_KEYS` | the keys that seal secrets in the database | Keep in your secret manager, outside the database's backups. Without them the sealed secrets cannot be read. |
+
+The database holds the references and the stores hold the bytes, and bytes are only ever added
+under new keys. So take each database's backup **before** the object-storage and `BLOB_DIR`
+snapshots of the same moment: every reference the restored database holds then finds its bytes.
+
+**Restoring.** Stop the workers and API replicas. Restore the databases to the same point in
+time. Restore the bucket and `BLOB_DIR` to that point or later, then start the API and the
+workers. If Temporal's databases are restored to an earlier point than the supervisor's, or
+lost, sessions whose workflows no longer exist cannot take new messages. Their conversations
+are still in the journal and can be read, and forking one starts a new session that carries the
+conversation on.
+
+**Drill it.** Once a quarter, restore into a staging stack and check that sessions list, a
+transcript opens, an artifact downloads and a fork can be sent a message.
+
 ### Safe deploys
 
 Workers register as versions of the `yal-supervisor` worker deployment, with the image tag as

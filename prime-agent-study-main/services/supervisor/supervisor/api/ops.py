@@ -3,7 +3,9 @@
 ``GET /v1/ops/workers`` says whether anyone serves the session queue, how many runs the fleet
 can carry and carries now, what is waiting, and plain alerts (``no_workers``, ``backlog``,
 ``at_capacity``). ``GET /v1/ops/workers/metrics`` is the same as Prometheus text, for alerting
-(``deploy/alerts/workers.rules.yml``). Neither names a tenant, a session or a secret.
+(``deploy/alerts/workers.rules.yml``). ``GET /v1/ops/metrics`` is this API's responses by
+status code and whether each dependency answers (``deploy/alerts/platform.rules.yml``).
+None names a tenant, a session or a secret.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from supervisor.api import deps
+from supervisor.obs import dependencies
+from supervisor.obs.responses import ResponseCounts, counter_lines
 from supervisor.temporal.fleet import FleetStatus, assess, prometheus
 from supervisor.temporal.sessions import TemporalUnavailable
 
@@ -70,3 +74,20 @@ async def rollout_status(request: Request, _tenant: str = Depends(deps.current_t
 async def workers_metrics(request: Request) -> PlainTextResponse:
     """The fleet as Prometheus gauges (counts only, like ``/metrics``)."""
     return PlainTextResponse(prometheus(await fleet_status(request)), media_type="text/plain; version=0.0.4")
+
+
+@router.get("/metrics", response_class=PlainTextResponse)
+async def platform_metrics(request: Request) -> PlainTextResponse:
+    """This API's responses by status code since it started, and whether each dependency
+    answers now, as Prometheus text (counts only)."""
+    responses: ResponseCounts | None = getattr(request.app.state, "responses", None)
+    lines = list(
+        counter_lines(
+            "yal_api_responses_total",
+            "Responses this supervisor API sent, by status code.",
+            responses.snapshot() if responses is not None else {},
+        )
+    )
+    state = getattr(request.app.state, "supervisor", None)
+    lines += dependencies.prometheus(await dependencies.dependencies_up(state) if state is not None else {})
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
