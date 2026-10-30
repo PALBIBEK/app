@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from prime_agent.db import Base
-
 
 class DatabaseSession:
     """Lazy-initialized async engine + session factory."""
@@ -35,14 +33,13 @@ class DatabaseSession:
             autoflush=False,
         )
 
-    async def create_tables(self) -> None:
+    async def migrate(self) -> None:
+        """Bring the schema to the current version (``prime_agent.db.migrate``)."""
         if self._engine is None:
             raise RuntimeError("DatabaseSession not initialized")
-        # Import models so metadata is populated
-        from prime_agent.db import models  # noqa: F401
+        from prime_agent.db.migrate import migrate
 
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await migrate(self._engine)
 
     async def dispose(self) -> None:
         if self._engine is not None:
