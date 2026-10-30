@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from supervisor.seams.compaction import (
-    COMPACTION_NOTICE,
+    SummaryFailed,
     build_gateway_summarizer,
     summarize_span,
 )
@@ -55,14 +55,17 @@ class BasicCompactionProvider:
             self._gateway,
             model=self._summarizer_model,
         )
-        summary = summarize_span(
-            preparation.messages_to_summarize,
-            previous_summary=preparation.previous_summary,
-            summarizer=summarizer,
-        )
-        if summary == COMPACTION_NOTICE and preparation.previous_summary is None:
-            # Gateway failed or returned empty — let harness built-in try.
-            return CompactionDecision(action="proceed_default", spent=dict(summarizer.spent))
+        try:
+            summary = summarize_span(
+                preparation.messages_to_summarize,
+                previous_summary=preparation.previous_summary,
+                summarizer=summarizer,
+            )
+        except Exception as exc:  # noqa: BLE001 — raised on as SummaryFailed, from its cause
+            # The caller asks again or keeps the conversation whole (never a notice in
+            # place of history); what the calls before the failure cost goes with it.
+            cause = exc.__cause__ if isinstance(exc, SummaryFailed) else exc
+            raise SummaryFailed(str(exc), spent=summarizer.spent) from cause
 
         summary_message = {"role": "user", "content": summary}
         tokens_after = self.estimate_tokens([summary_message])

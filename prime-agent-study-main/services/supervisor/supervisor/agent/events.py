@@ -227,6 +227,8 @@ class CompactionEnd:
     # Inside a run (before a model step): ``messages`` is the whole conversation so far,
     # this run's messages included, and the run carries on from it.
     in_run: bool = False
+    # Why it failed (``stop_reason="error"``): the conversation went on whole.
+    error: str | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 

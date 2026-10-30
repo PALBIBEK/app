@@ -346,6 +346,79 @@ async def test_a_run_that_outgrows_the_window_compacts_and_still_answers(
     assert any(is_summary(str(m.content)) or "summary" in str(m.content).lower() for m in after)
 
 
+BIG = "".join(f"row {n}: the quick brown fox jumps over the lazy dog {n * 7919 % 1000}\n" for n in range(120))
+
+
+async def test_a_summary_the_provider_rate_limits_is_asked_again(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Pi Durable's compaction retry: a summary call that may pass (a 429) is asked again
+    after a wait, and the compaction completes as if nothing had happened."""
+    gateway = model(("write", {"path": "big.txt", "content": BIG}), ("read", {"path": "big.txt"}))
+    gateway.summary_errors = [RuntimeError("model gateway error 429: rate limited")]
+    calls = recording(gateway)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(
+            env, state, memory={"context_window": 2_000, "reserve_tokens": 100, "keep_recent_tokens": 50}
+        )
+        await env.sessions.submit(sid, Message("c1", "save this table and read it back"))
+        events = await env.wait_for(state, sid, run_ended(1))
+
+    assert gateway.summary_errors == []  # the 429 was met ...
+    (end,) = payloads(events, CompactionEnd)
+    assert end.in_run and end.stop_reason == "ok" and end.error is None  # ... and asked again
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    assert not any(BIG in str(m.content) for m in calls[-1].messages)
+
+
+async def test_a_summary_that_fails_keeps_the_conversation_whole(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """A summary that will fail the same way (a refused key) fails the compaction, saying
+    why; nothing the model did is dropped behind a notice, and the run goes on."""
+    gateway = model(("write", {"path": "big.txt", "content": BIG}), ("read", {"path": "big.txt"}))
+    gateway.summary_errors = [RuntimeError("model gateway error 401: invalid api key")]
+    calls = recording(gateway)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(
+            env, state, memory={"context_window": 2_000, "reserve_tokens": 100, "keep_recent_tokens": 50}
+        )
+        await env.sessions.submit(sid, Message("c1", "save this table and read it back"))
+        events = await env.wait_for(state, sid, run_ended(1))
+
+    (end,) = payloads(events, CompactionEnd)
+    assert end.in_run and end.stop_reason == "error" and end.messages is None
+    assert end.error is not None and "invalid api key" in end.error
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    after = calls[-1].messages  # the request after the failed compaction: all of it
+    assert any(BIG in str(m.content) for m in after)
+    assert not any(is_summary(str(m.content)) for m in after)
+    assert _run_errors(events) == []
+
+
+async def test_a_summary_that_fails_between_runs_carries_the_whole_conversation(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(window=2_000)
+    gateway.summary_errors = [RuntimeError("model gateway error 400: bad request")]
+    calls = recording(gateway)
+    long = "lorem ipsum " * 900
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_pinned(env, state, memory={"reserve_tokens": 100, "keep_recent_tokens": 50})
+        await env.sessions.submit(sid, Message("c1", long))
+        await env.wait_for(state, sid, run_ended(1))
+        await env.sessions.submit(sid, Message("c2", "and now?"))
+        events = await env.wait_for(state, sid, run_ended(2))
+
+    (end,) = payloads(events, CompactionEnd)
+    assert not end.in_run and end.stop_reason == "error" and end.messages is None
+    assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
+    assert any(long.strip() in str(m.content) for m in calls[-1].messages)
+
+
 async def test_a_provider_overflow_is_compacted_once_and_the_step_asked_again(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

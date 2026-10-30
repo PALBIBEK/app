@@ -50,6 +50,8 @@ class ScriptedGateway:
     fail_first: int = 0
     # Raised by the agent's first calls, in order (a provider's 429, 503, 401 ...).
     errors_first: list[Exception] = dataclasses.field(default_factory=list)
+    # Raised by the first summary calls of compactions, in order.
+    summary_errors: list[Exception] = dataclasses.field(default_factory=list)
     vary_args: bool = False
     repeat: bool = False
     # The first step's reply is cut off by the output limit (finish_reason "length"),
@@ -114,6 +116,14 @@ class ScriptedGateway:
             summarizing = bool(messages) and messages[0].content.startswith("You are a context summarization")
             if self.errors_first and not summarizing:
                 raise self.errors_first.pop(0)
+            if self.summary_errors and summarizing:
+                raise self.summary_errors.pop(0)
+            if summarizing:  # a summarizer writes a summary (never asks for tools)
+                return Completion(
+                    ChatMessage("assistant", "## Goal\nCarry on with the user's request (scripted summary)."),
+                    model="scripted",
+                    usage={"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call},
+                )
             if self.fail_first > 0:
                 self.fail_first -= 1
                 raise ConnectionError("model gateway unavailable (scripted)")

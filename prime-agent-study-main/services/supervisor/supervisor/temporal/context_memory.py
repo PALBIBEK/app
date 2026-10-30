@@ -23,10 +23,16 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import logging
+import math
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from temporalio import activity
 
 from supervisor.agent.events import (
     CompactionEnd,
@@ -38,12 +44,24 @@ from supervisor.agent.events import (
     ToolStart,
     Usage,
 )
+from supervisor.agent.runtimes.githi.classify import (
+    DEFAULT_RETRY,
+    RetrySpec,
+    is_retryable,
+    retry_delay,
+)
 from supervisor.memory.binding import long_term_agent
 from supervisor.memory.history import message_text
 from supervisor.models.messages import fits_with_reply
-from supervisor.seams import CompactionPreparation, MemoryInvokeContext, ModelCatalog
+from supervisor.seams import (
+    CompactionDecision,
+    CompactionPreparation,
+    MemoryInvokeContext,
+    ModelCatalog,
+)
 from supervisor.seams.compaction import (
     COMPACTION_NOTICE,
+    SummaryFailed,
     extract_previous_summary,
     whole_exchanges,
 )
@@ -55,6 +73,8 @@ if TYPE_CHECKING:
     from supervisor.session import SessionManager
 
 __all__ = ["DEFAULT_CONTEXT_WINDOW", "PinnedContextMemory"]
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT_WINDOW: Final = 200_000
 """Last resort: neither the memory profile nor the gateway says how much the model holds."""
@@ -177,6 +197,8 @@ class PinnedContextMemory:
         run_id: str,
         prior: list[dict[str, Any]],
         events: Sequence[Envelope] = (),
+        *,
+        retries: RetrySpec = DEFAULT_RETRY,
     ) -> CompactionEnd | None:
         """Compact the conversation carried into this run, if the profile's limit is passed;
         the compaction, or None when there was nothing to compact.
@@ -222,7 +244,9 @@ class PinnedContextMemory:
             reserve_tokens=binding.reserve(window),
         )
         replaced = _replaced_range([e for e in events if e.turn_id != run_id], tail)
-        end = await self._summarise(compaction_id, binding, preparation, tail, replaced)
+        end = await self._summarise(
+            compaction_id, binding, preparation, tail, replaced, retries=retries, deadline=_step_deadline()
+        )
         await self._charge(session_id, end)
         await self._record(session_id, run_id, "compaction:end", end)
         return end
@@ -254,12 +278,14 @@ class PinnedContextMemory:
         *,
         request: str = "",
         reason: str = "threshold",
+        retries: RetrySpec = DEFAULT_RETRY,
     ) -> CompactionEnd | None:
         """Summarise all but the recent part of the conversation so far, this run included.
 
         ``request`` is the message this run answers. When the cut falls after it, it is
-        kept verbatim beside the summary: a summary may lose detail (or fail, leaving
-        only a notice), and the run must still know what it was asked to do.
+        kept verbatim beside the summary: a summary may lose detail (or, where the
+        pinned provider has no summarizer, be only a notice), and the run must still
+        know what it was asked to do.
 
         Journalled as an in-run ``CompactionEnd`` whose ``messages`` the run carries on
         from (``steps.conversation``). Keyed by step, so a retried activity reuses it.
@@ -308,6 +334,8 @@ class PinnedContextMemory:
             tail,
             _replaced_range(list(events), tail),
             request=_clipped(request.strip(), binding.keep_recent(window), binding.memory) if kept else "",
+            retries=retries,
+            deadline=_step_deadline(),
         )
         end = dataclasses.replace(end, in_run=True)
         await self._charge(session_id, end)
@@ -332,13 +360,23 @@ class PinnedContextMemory:
         replaced: tuple[int, int] | None = None,
         *,
         request: str = "",
+        retries: RetrySpec = DEFAULT_RETRY,
+        deadline: float = math.inf,
     ) -> CompactionEnd:
-        try:
-            decision = await asyncio.to_thread(
-                binding.memory.before_compact, binding.context, preparation, reason="threshold"
+        """Ask the pinned provider for the summary; ``CompactionEnd`` says how it went.
+
+        A summary that could not be written fails the compaction (``stop_reason="error"``,
+        with the reason and no ``messages``), so the conversation goes on whole: never a
+        notice in place of what could not be summarised (see ``_decide``).
+        """
+        decision = await _decide(compaction_id, binding, preparation, retries=retries, deadline=deadline)
+        if isinstance(decision, _Failed):
+            return CompactionEnd(
+                compaction_id=compaction_id,
+                stop_reason="error",
+                usage=_spent(decision.spent),
+                error=decision.reason,
             )
-        except Exception:  # noqa: BLE001 — a failed summary leaves the turn uncompacted, not failed
-            return CompactionEnd(compaction_id=compaction_id, stop_reason="error")
         if decision.action == "cancel":
             # A provider may decide to cancel after its summary calls ran: they were billed,
             # so they count (Pi Durable records a compaction's usage whatever it decides).
@@ -402,6 +440,82 @@ class PinnedContextMemory:
 
 
 REQUEST_HEADING: Final = "The request this run is working on, verbatim:"
+
+
+_SUMMARY_ROOM_S: Final = 30.0
+"""Kept for the summary call itself: a wait that would leave less than this before the
+step's time limit is not taken (the compaction fails, the conversation kept whole)."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Failed:
+    """No summary: why, and what the attempts spent (billed, so counted)."""
+
+    reason: str
+    spent: dict[str, Any]
+
+
+async def _decide(
+    compaction_id: str,
+    binding: _Binding,
+    preparation: CompactionPreparation,
+    *,
+    retries: RetrySpec,
+    deadline: float,
+) -> CompactionDecision | _Failed:
+    """The provider's decision, carrying what every attempt spent.
+
+    A summary call that failed but may pass (a rate limit, a busy or unreachable
+    provider) is asked again after a wait, on the run's model retry settings (Pi
+    Durable's compaction retry). One that will fail the same way, one out of retries,
+    or one whose wait would outlast the step (``deadline``, ``time.monotonic``) fails.
+    """
+    spent: dict[str, Any] = {}
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            decision = await asyncio.to_thread(
+                binding.memory.before_compact, binding.context, preparation, reason="threshold"
+            )
+        except Exception as exc:  # a failed summary fails the compaction, never the run
+            if isinstance(exc, SummaryFailed):
+                _add_spent(spent, exc.spent)
+            cause = exc.__cause__ if isinstance(exc, SummaryFailed) and exc.__cause__ else exc
+            delay = retry_delay(retries, attempt, cause) if is_retryable(cause) else None
+            if delay is None or time.monotonic() + delay + _SUMMARY_ROOM_S > deadline:
+                logger.warning(
+                    "compaction %s failed after %d attempt(s); the conversation is kept whole",
+                    compaction_id, attempt, exc_info=True,
+                )
+                return _Failed(_failure_text(cause, attempt), spent)
+            logger.info("compaction %s: %s; asking again in %.1f s", compaction_id, cause, delay)
+            await asyncio.sleep(delay)
+            continue
+        _add_spent(spent, decision.spent)
+        return dataclasses.replace(decision, spent=spent)
+
+
+def _step_deadline() -> float:
+    """When the step running this compaction reaches its time limit (``time.monotonic``)."""
+    if not activity.in_activity():
+        return math.inf
+    info = activity.info()
+    if info.start_to_close_timeout is None:
+        return math.inf
+    elapsed = (datetime.now(UTC) - info.started_time).total_seconds()
+    return time.monotonic() + info.start_to_close_timeout.total_seconds() - elapsed
+
+
+def _add_spent(total: dict[str, Any], spent: Mapping[str, Any] | None) -> None:
+    for key, value in (spent or {}).items():
+        if isinstance(value, (int, float)):
+            total[key] = total.get(key, 0) + value
+
+
+def _failure_text(cause: BaseException, attempts: int) -> str:
+    tries = f" after {attempts} attempts" if attempts > 1 else ""
+    return f"the summary failed{tries} ({type(cause).__name__}: {str(cause)[:300]}); the conversation is kept whole"
 
 
 def _spent(spent: Mapping[str, Any] | None) -> Usage | None:

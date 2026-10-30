@@ -445,6 +445,7 @@ class GithiSteps:
                 run_id,
                 await self._memory.prior_history(session_id),
                 await self._memory.bounded(session_id),
+                retries=retry_spec(manifest),
             )
         )
         await self._announce_background(session_id, run_id)
@@ -727,12 +728,21 @@ class GithiSteps:
         history = conversation(await self._memory.prior_history(sid), run)
         end = await heartbeating(
             self._pinned.compact_run(
-                sid, run_id, req.step, history, await self._reader.read(sid), request=_user_text(run)
+                sid,
+                run_id,
+                req.step,
+                history,
+                await self._reader.read(sid),
+                request=_user_text(run),
+                retries=retry_spec(await self._manifest(sid)),
             )
         )
         if end is None:
             return Compacted(ok=False)
-        return Compacted(ok=end.stop_reason == "ok", tokens=_usage_tokens(end.usage))
+        # A failed summary keeps the conversation whole and the run asks again: past
+        # the compaction threshold it still fits the window; if the provider says it
+        # does not, that step ends the run (it compacted once already).
+        return Compacted(ok=end.stop_reason in ("ok", "error"), tokens=_usage_tokens(end.usage))
 
     def _plan(self, manifest: Any, call: dict[str, Any], *, refused: bool = False) -> PlannedCall:
         name = str(call["name"])
