@@ -89,8 +89,10 @@ Boot = Callable[[], Awaitable[Pipeline]]
 
 
 @pytest.fixture
-async def boot(tmp_path: Path) -> AsyncIterator[Boot]:
+async def boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Boot]:
     """Start a supervisor process the way bootstrap_supervisor does; call again to restart."""
+    # The user's composition binds its own gateway and ACP service: hosts an operator trusts.
+    monkeypatch.setenv("PLUG_ALLOWED_HOSTS", "gateway,acp")
     async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'pipeline.db'}") as (_, factory):
 
         async def start() -> Pipeline:

@@ -15,14 +15,19 @@ memory profile with ``summarization_model`` at the top level instead of under
   sandbox profile's own name, or a named hand on a composition with no default;
 - an artifact schema (``protocol_version``) this supervisor does not run;
 - a prompt pack with a section marked unfinished (``complete: false``): it would
-  reach the model as written.
+  reach the model as written;
+- a service URL (a composition's gateway, MCP or ACP binding, a memory profile's
+  recall server) on a host the platform does not trust: workers call these, so an
+  untrusted one would have them call anything they can reach (``allowed_plug_hosts``).
 """
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Final
+from urllib.parse import urlsplit
 
 from supervisor.catalog.core.errors import InvalidArtifact
 from supervisor.catalog.core.types import (
@@ -34,7 +39,7 @@ from supervisor.catalog.core.types import (
 from supervisor.catalog.storage import artifact_to_dict
 from supervisor.hands.keys import DEFAULT_HAND
 
-__all__ = ["check_publishable"]
+__all__ = ["PLUG_HOSTS_ENV", "allowed_plug_hosts", "check_publishable"]
 
 _IGNORED = frozenset({"digest", "metadata"})  # derived (recomputed) or assigned by the catalog
 _HAND_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
@@ -64,6 +69,60 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
         _check_lifecycle(name, artifact)
     for field, model in _models_named(kind, artifact):
         _check_served(kind, name, field, model)
+    for field, url in _service_urls(kind, artifact):
+        _check_endpoint(kind, name, field, url)
+
+
+PLUG_HOSTS_ENV: Final = "PLUG_ALLOWED_HOSTS"
+"""More hosts a published service URL may name (comma-separated), e.g. a team's MCP
+server; ``*`` trusts any (a deployment that serves one trusted tenant)."""
+
+SHIPPED_GATEWAY_HOST: Final = "model-gateway"
+"""The model gateway's host in the shipped compositions (harness/compositions/*.json) and
+in what the product's backend publishes."""
+
+_PLATFORM_URL_ENVS: Final = ("GATEWAY_BASE_URL", "MODEL_GATEWAY_URL", "MCP_SERVER_URL", "ACP_BASE_URL")
+
+
+def allowed_plug_hosts() -> frozenset[str] | None:
+    """Hosts a published service URL may name; None when any may (``*``).
+
+    The platform's own services (the shipped gateway binding, and every service URL this
+    process is configured with), plus ``PLUG_ALLOWED_HOSTS``.
+    """
+    extra = {h.strip().lower() for h in os.environ.get(PLUG_HOSTS_ENV, "").split(",") if h.strip()}
+    if "*" in extra:
+        return None
+    configured = {
+        host
+        for env in _PLATFORM_URL_ENVS
+        if (host := (urlsplit(os.environ.get(env, "")).hostname or "").lower())
+    }
+    return frozenset({SHIPPED_GATEWAY_HOST, *configured, *extra})
+
+
+def _service_urls(kind: str, artifact: Any) -> Iterator[tuple[str, str]]:
+    plugs = getattr(artifact, "plug_bindings", None) if kind == "composition" else None
+    if plugs is not None:
+        for field in ("gateway_base_url", "mcp_server_url", "acp_base_url"):
+            if url := getattr(plugs, field):
+                yield f"plug_bindings.{field}", url
+    if kind == "memory_profile" and (url := getattr(artifact, "recall_mcp_server_url", None)):
+        yield "recall.mcp_server_url", url
+
+
+def _check_endpoint(kind: str, name: str, field: str, url: str) -> None:
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise InvalidArtifact(kind, name, f"{field} must be an http(s) URL, got {url!r}")
+    allowed = allowed_plug_hosts()
+    if allowed is not None and parts.hostname.lower() not in allowed:
+        raise InvalidArtifact(
+            kind,
+            name,
+            f"{field} names host {parts.hostname!r}, which this platform does not trust; an "
+            f"operator can add it to {PLUG_HOSTS_ENV}",
+        )
 
 
 SANDBOX_STARTS = ("with_run", "on_first_tool")

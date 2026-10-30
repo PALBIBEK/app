@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import tarfile
 from typing import Any
 
@@ -51,6 +52,30 @@ _DOCKER_MEM_LIMIT = "512m"
 _DOCKER_NANO_CPUS = 1_000_000_000
 _DOCKER_CAP_DROP = ["ALL"]
 _DOCKER_NETWORK_MODE = "none"
+_DOCKER_PIDS_LIMIT = 512
+"""Processes one sandbox may run at once: Docker sets no limit, so a fork bomb in one
+sandbox would take every PID on the host."""
+_DOCKER_SECURITY_OPT = ["no-new-privileges:true"]
+"""A setuid binary in the image cannot raise a process's privileges."""
+DISK_LIMIT_ENV = "SANDBOX_DOCKER_DISK_LIMIT"
+"""A sandbox's writable layer, e.g. ``10G``. Unset: none (Docker enforces it only on
+overlay2 over XFS with project quotas, so it cannot be on by default)."""
+
+
+def container_limits() -> dict[str, Any]:
+    """What every local_docker sandbox runs with: memory, CPU, processes, no network, no
+    capabilities, no privilege gain, and a disk cap where the host supports one."""
+    limits: dict[str, Any] = {
+        "mem_limit": _DOCKER_MEM_LIMIT,
+        "nano_cpus": _DOCKER_NANO_CPUS,
+        "pids_limit": _DOCKER_PIDS_LIMIT,
+        "cap_drop": list(_DOCKER_CAP_DROP),
+        "security_opt": list(_DOCKER_SECURITY_OPT),
+        "network_mode": _DOCKER_NETWORK_MODE,
+    }
+    if disk := os.environ.get(DISK_LIMIT_ENV, "").strip():
+        limits["storage_opt"] = {"size": disk}
+    return limits
 
 
 # ---------------------------------------------------------------------------
@@ -641,10 +666,7 @@ class LocalDockerProvider(SandboxProvider):
                 environment=cleaned,
                 labels=lbl,
                 auto_remove=False,
-                mem_limit=_DOCKER_MEM_LIMIT,
-                nano_cpus=_DOCKER_NANO_CPUS,
-                cap_drop=list(_DOCKER_CAP_DROP),
-                network_mode=_DOCKER_NETWORK_MODE,
+                **container_limits(),
             )
 
         container = await loop.run_in_executor(None, _run)

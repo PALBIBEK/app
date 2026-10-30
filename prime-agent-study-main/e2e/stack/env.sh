@@ -29,6 +29,8 @@ export PROFILE=dev ENV=development
 export SERVICE_JWT_SECRET='dev-local-service-jwt-secret-32b!!' AI_SERVICE_JWT_SECRET='dev-local-service-jwt-secret-32b!!'
 export GATEWAY_BASE_URL=http://model-gateway:8090 GATEWAY_TOKEN=dev-local-gateway-token
 export MODEL_GATEWAY_URL=http://model-gateway:8090 MODEL_GATEWAY_API_KEY=dev-local-gateway-token MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key
+# The stages publish compositions that bind the stand-in ACP server and the gateway by address.
+export PLUG_ALLOWED_HOSTS=acp,127.0.0.1
 export SUPERVISOR_PUBLIC_URL=http://127.0.0.1:8080 CAPABILITY_SECRET='dev-local-capability-secret-32bytes!'
 export OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace \
   OBJECT_STORAGE_ACCESS_KEY=any OBJECT_STORAGE_SECRET_KEY=any OBJECT_STORAGE_REGION=us-east-1
