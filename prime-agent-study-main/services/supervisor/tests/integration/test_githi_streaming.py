@@ -55,3 +55,24 @@ async def test_the_reply_streams_while_it_is_written_and_is_gone_once_journalled
     assert all(not f.startswith("id:") for f in frames if '"partial_output"' in f)  # never replayed
     assert payloads(events, MessageEnd)[-1].content[0]["text"] == "The answer is 42."
     assert await partials.get(sid) is None, "the partial is removed once the reply is journalled"
+
+
+async def test_a_reply_cut_off_as_it_streamed_is_not_left_behind(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The call fails part way through its reply and the run ends: what streamed is no
+    reply, so it is not shown to a client that connects later (it used to stay until the
+    session's next reply)."""
+    model(
+        stream_chunks=["Half an ", "answer"],
+        stream_pause=0.4,  # long enough for what streamed to be written
+        stream_error=RuntimeError("model gateway error 401: invalid api key"),
+    )
+    state = await env.state()
+    partials = PartialOutputs(state.reader.session_factory)
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "what is it?"))
+        await env.wait_for(state, sid, run_ended())
+
+    assert await partials.get(sid) is None

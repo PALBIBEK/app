@@ -502,6 +502,8 @@ class GithiSteps:
             # they did; give them a moment, so the model reads that rather than "unknown".
             stopped = [c for c in [req.lost_call_id, *req.open_call_ids] if c is not None]
             await self._await_ends(sid, run_id, stopped)
+        # A reply cut off as it streamed (a stop, a failed or lost step) is not shown again.
+        await self._clear_partial(sid)
         if req.lost_call_id is not None:
             await self.close_lost_call(LostCall(sid, run_id, req.lost_call_id, req.lost_reason))
         for call_id in req.open_call_ids:  # each a no-op once its call ended
@@ -633,6 +635,8 @@ class GithiSteps:
                     if flushing is not None:
                         flushing.cancel()
             except Exception as exc:
+                if sink is not None:  # what streamed is no reply: the step asks again or ends
+                    await self._clear_partial(sid)
                 # The provider (or the model layer) says the request does not fit: nothing
                 # was answered. The workflow compacts and asks again, once; a step that
                 # still overflows after that ends the run saying so. Not the first step:

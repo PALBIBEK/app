@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 from supervisor.agent.events import (
@@ -34,8 +35,30 @@ from supervisor.session.errors import (
 from supervisor.session.manager_approvals import ApprovalOps
 from supervisor.session.manager_base import ToolInvokeOutcome
 from supervisor.tools import WorkspaceReset
+from supervisor.tools.truncate import cut_middle
 
 logger = logging.getLogger(__name__)
+
+MAX_KEPT_RESULT_CHARS: Final = 128 * 1024
+"""What a session keeps of one tool result (its journal, a direct call's answer). Well
+past what the model reads of it (``render.MAX_RESULT_CHARS``), and far within what one
+item of a workflow's history may hold (2 MB): a direct call's answer goes through it."""
+
+
+def kept(result: ToolResult) -> ToolResult:
+    """``result`` within ``MAX_KEPT_RESULT_CHARS``: a larger payload (a tool that does not
+    bound its own output, an MCP server's) is kept as its text's head and tail, and so
+    is a larger error."""
+    payload, error = result.payload, result.error
+    if payload is not None:
+        text = payload if isinstance(payload, str) else json.dumps(payload, default=str, ensure_ascii=False)
+        if len(text) > MAX_KEPT_RESULT_CHARS:
+            payload = cut_middle(text, MAX_KEPT_RESULT_CHARS)
+    if error is not None:
+        error = cut_middle(error, MAX_KEPT_RESULT_CHARS)
+    if payload is result.payload and error == result.error:
+        return result
+    return replace(result, payload=payload, error=error)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,11 +166,13 @@ class ToolOps(ApprovalOps):
         provider: ToolProvider | None,
         result: ToolResult,
     ) -> ToolResult:
-        """After a tool ran in a sandbox: note what it changed, or let a dead sandbox go.
+        """After a tool ran: keep its result within bounds (``kept``); in a sandbox, note
+        what it changed, or let a dead sandbox go.
 
         A reset result is rewritten to say what the model gets back (the last
         checkpoint) and what it must redo (processes, rebuilt folders).
         """
+        result = kept(result)
         if hand.hand_id is None:
             return result
         key = hand.key or session_id

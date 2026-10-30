@@ -33,6 +33,8 @@ export interface SessionViewState {
   awaitingApproval: boolean;
   /** A run is open (between run_start and run_end). */
   running: boolean;
+  /** The open (or last) run's id, from its run_start. */
+  runId: string | null;
   /** Model steps taken in the current (or last) run. */
   runSteps: number;
   /** Tokens and cost over every turn seen. */
@@ -71,6 +73,7 @@ export function createSessionViewState(): SessionViewState {
     error: null,
     awaitingApproval: false,
     running: false,
+    runId: null,
     runSteps: 0,
     usage: { input_tokens: 0, output_tokens: 0, cost: 0 },
     sandbox: null,
@@ -109,7 +112,8 @@ export function displaySubagentProvider(provider: string): {
 export function applyWireEvent(state: SessionViewState, event: WireEvent): SessionViewState {
   if (event.type === 'partial_output') {
     // Not a journal event (its seq is the last one journalled): never a replay, never kept.
-    if (!state.running) return state;
+    // Only the open run's: a reply left over from an earlier run is never shown as this one's.
+    if (!state.running || (state.runId !== null && event.turn_id !== state.runId)) return state;
     return {
       ...state,
       partial: {
@@ -274,9 +278,14 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
     }
     case 'run_start': {
       next.running = true;
+      next.runId = event.turn_id ?? null;
       next.runSteps = 0;
       next.settled = false;
       next.error = null;
+      break;
+    }
+    case 'model_retry': {
+      next.partial = null; // the reply it was writing failed; the next attempt starts afresh
       break;
     }
     case 'settled':

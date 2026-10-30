@@ -121,4 +121,19 @@ describe('applyWireEvent partial_output', () => {
     const state = applyWireEvent(createSessionViewState(), partial('stale', 0));
     expect(state.partial).toBeNull();
   });
+
+  it('ignores a partial left over from an earlier run', () => {
+    let state = applyWireEvent(createSessionViewState(), { ...ev('run_start', {}), turn_id: 'r2' } as WireEvent);
+    state = applyWireEvent(state, partial('from run r1', state.lastSeq));
+    expect(state.partial).toBeNull();
+    state = applyWireEvent(state, { ...partial('from run r2', state.lastSeq), turn_id: 'r2' } as WireEvent);
+    expect(state.partial?.text).toBe('from run r2');
+  });
+
+  it('drops what streamed when the step failed and is asked again', () => {
+    let state = applyWireEvent(createSessionViewState(), ev('run_start', {}));
+    state = applyWireEvent(state, partial('half a rep', state.lastSeq));
+    state = applyWireEvent(state, ev('model_retry', { step: 0, attempt: 1, delay_s: 2 }));
+    expect(state.partial).toBeNull();
+  });
 });
