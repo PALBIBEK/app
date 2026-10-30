@@ -295,7 +295,7 @@ waiting for a session's worker that is gone (60 s placement limit) is adopted by
 | `session.close_lost_call` | Close a call whose worker died | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker (journal only) |
 | `session.terminate` | End the session: stop its runtime and sandbox | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.capture_memory` | Save durable facts from a burst of turns | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried elsewhere; a burst that keeps failing is dropped (best effort) |
-| `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; the job is retried on another worker, never lost |
+| `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; retried on another worker, never lost; a job in a lent hand goes on from the calls it journalled |
 | `subagent.end_job` | Record how a background job ended | any worker | 2 min | every 30 s | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
 <!-- step-policies:end -->
 

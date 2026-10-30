@@ -72,6 +72,10 @@ class ScriptedGateway:
     child_calls: list[tuple[str, dict[str, Any]]] = dataclasses.field(default_factory=list)
     child_answer: str = "the job is done"
     child_gate: threading.Event | None = None
+    # The job's model call after this many tool results fails once (its worker is lost:
+    # the job is retried); every request the job made, in order.
+    child_fail_after: int | None = None
+    child_seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     tool_choices: list[str | None] = dataclasses.field(default_factory=list)
     # Ask for ``calls`` one per step, in order, then answer (a multi-step run).
@@ -191,6 +195,11 @@ class ScriptedGateway:
         if self.child_gate is not None and not self.child_gate.wait(timeout=60):
             raise TimeoutError("the child's gate was never opened")
         done = sum(1 for m in messages if m.role == "tool")
+        with self._lock:
+            self.child_seen.append(list(messages))
+            if self.child_fail_after == done:
+                self.child_fail_after = None
+                raise ConnectionError("the job's worker was lost (scripted)")
         if done < len(self.child_calls):
             name, args = self.child_calls[done]
             calls = [{"id": f"child-{done}", "type": "function",
