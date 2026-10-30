@@ -171,3 +171,39 @@ describe('sessionsAPI', () => {
     });
   });
 });
+
+describe('sessionsAPI.openEventStream', () => {
+  const frame = (seq: number) =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, event_id: `e${seq}`, type: 'message_end', ts_ms: 1, data: {} })}\n\n`;
+
+  function serve(body: string): void {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 200, ok: true, body: stream })));
+  }
+
+  it('yields events, skips pings, and says when the session has ended', async () => {
+    serve(`${frame(0)}: ping\n\n${frame(1)}event: end\ndata: {}\n\n${frame(2)}`);
+    const onEnded = vi.fn();
+    const seen: number[] = [];
+    for await (const event of sessionsAPI.openEventStream('s1', { onEnded })) seen.push(event.seq);
+    expect(seen).toEqual([0, 1]); // nothing after the end is read
+    expect(onEnded).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not take a stream that merely closed for an ended session', async () => {
+    serve(frame(0));
+    const onEnded = vi.fn();
+    for await (const _event of sessionsAPI.openEventStream('s1', { onEnded })) {
+      // drain
+    }
+    expect(onEnded).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+

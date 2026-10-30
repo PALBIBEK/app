@@ -2,6 +2,10 @@
 
 Subscribe to live *before* journal replay; filter seq <= cursor so the
 handover race yields neither gaps nor duplicates.
+
+A session that has ended (or was erased) has nothing more to say: once every event of it
+was sent, the stream sends ``event: end`` and closes, and a client stops reconnecting on
+it. It used to poll the finished session's journal for as long as the page stayed open.
 """
 
 from __future__ import annotations
@@ -9,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -19,12 +23,18 @@ from supervisor.api.wire import envelope_to_wire
 from supervisor.journal.partials import Partial, PartialOutputs
 from supervisor.journal.reader import JournalReader
 from supervisor.session import Dropped, LiveSubscription, SessionManager
+from supervisor.temporal.contracts import CLOSED_STATUSES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
 
 _HEARTBEAT_SECS = 20.0
 _JOURNAL_POLL_SECS = 0.25
+_ENDED_CHECK_SECS = 2.0
+"""How often a quiet stream asks whether its session has ended."""
+
+SSE_END = "event: end\ndata: {}\n\n"
+"""The last frame of the stream of a session that has ended: nothing will follow."""
 
 
 def _sse_data(wire_json: str, *, event_id: int) -> str:
@@ -123,9 +133,11 @@ async def iter_journal_sse(
     session_id: str,
     cursor: int,
     reader: JournalReader,
-    is_disconnected: Callable[[], bool] | None = None,
+    is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    has_ended: Callable[[], Awaitable[bool]] | None = None,
     heartbeat_secs: float | None = None,
     poll_secs: float = _JOURNAL_POLL_SECS,
+    ended_check_secs: float = _ENDED_CHECK_SECS,
     max_events: int | None = None,
     partials: PartialOutputs | None = None,
 ) -> AsyncIterator[str]:
@@ -136,12 +148,18 @@ async def iter_journal_sse(
     ``partial_output`` event with no ``id`` (it is not in the journal, so a reconnect
     resumes after the last journalled event and never replays one).
 
+    With ``has_ended``, a quiet stream asks every ``ended_check_secs`` whether the session
+    has ended; once it has, the journal is read once more (what was written before it
+    ended is sent first), then ``SSE_END``, and the stream stops. With
+    ``is_disconnected``, a client that went away stops the polling within a poll.
+
     shortcut: polls the journal; switch to Postgres LISTEN/NOTIFY if poll load shows up.
     """
     hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
-    emitted, idle = 0, 0.0
+    emitted, idle, unchecked = 0, 0.0, ended_check_secs  # asks on the first quiet poll
+    ending = False
     shown: tuple[str, int, int] | None = None  # the partial last sent: run, step, updated
-    while is_disconnected is None or not is_disconnected():
+    while is_disconnected is None or not await is_disconnected():
         batch = await reader.read(session_id, since=cursor)
         for env in batch:
             yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
@@ -151,6 +169,13 @@ async def iter_journal_sse(
         if batch:
             idle = 0.0
             continue
+        if ending:
+            yield SSE_END
+            return
+        if has_ended is not None and unchecked >= ended_check_secs:
+            unchecked = 0.0
+            if ending := await has_ended():
+                continue
         if partials is not None and (partial := await _partial(partials, session_id)) is not None:
             key = (partial.run_id, partial.step, partial.updated_ms)
             if key != shown:
@@ -162,6 +187,7 @@ async def iter_journal_sse(
             idle = 0.0
         await asyncio.sleep(poll_secs)
         idle += poll_secs
+        unchecked += poll_secs
 
 
 def stream_cursor(last_event_id: str | None, since: int | None) -> int:
@@ -198,12 +224,18 @@ async def stream_events(
     reader = deps.get_reader(request)
     cursor = stream_cursor(last_event_id, since)
 
+    async def has_ended() -> bool:
+        status = await manager.session_status(session_id)
+        return status is None or status in CLOSED_STATUSES  # None: erased
+
     async def gen() -> AsyncIterator[str]:
         body = (
             iter_journal_sse(
                 session_id=session_id,
                 cursor=cursor,
                 reader=reader,
+                is_disconnected=request.is_disconnected,
+                has_ended=has_ended,
                 partials=PartialOutputs(reader.session_factory),
             )
             if deps.get_workflows(request) is not None

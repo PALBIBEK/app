@@ -33,6 +33,7 @@ const CONNECTION_LABEL: Record<Connection, string> = {
   live: 'Live',
   reconnecting: 'Reconnecting…',
   closed: 'Closed',
+  ended: 'Ended',
 };
 
 export interface SessionHeading {
@@ -85,6 +86,15 @@ export function SessionChat({
   const [status, setStatus] = useState(session.status);
   const ended = ENDED.has(status);
   const { state, connection, addLocalMessage } = useSessionStream(session.id);
+
+  // The stream says when the session ended elsewhere (another tab, a failure): show how.
+  useEffect(() => {
+    if (connection !== 'ended' || ended) return;
+    sessionsAPI
+      .getById(session.id)
+      .then((latest) => setStatus(latest.status))
+      .catch(() => setStatus('terminated'));
+  }, [connection, ended, session.id]);
   const [input, setInput] = useState('');
   /** Queued messages by text: the run id each got, and whether that run was cancelled. */
   const [queuedRuns, setQueuedRuns] = useState<Map<string, { runId: string; cancelled: boolean }>>(new Map());
@@ -246,7 +256,7 @@ export function SessionChat({
                   aria-hidden="true"
                   className={cn(
                     'h-1.5 w-1.5 rounded-full',
-                    ended || connection === 'closed' ? 'bg-ink-3' : connection === 'live' ? 'bg-good' : 'animate-pulse bg-warn',
+                    ended || connection === 'closed' || connection === 'ended' ? 'bg-ink-3' : connection === 'live' ? 'bg-good' : 'animate-pulse bg-warn',
                   )}
                 />
                 <span data-testid="connection">{ended ? 'Ended' : CONNECTION_LABEL[connection]}</span>

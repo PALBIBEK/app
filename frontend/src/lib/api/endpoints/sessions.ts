@@ -229,7 +229,7 @@ export const sessionsAPI = {
    */
   openEventStream: async function* (
     sessionId: string,
-    options?: { lastEventId?: string; signal?: AbortSignal; onOpen?: () => void }
+    options?: { lastEventId?: string; signal?: AbortSignal; onOpen?: () => void; onEnded?: () => void }
   ): AsyncGenerator<WireEvent, void, unknown> {
     const accessToken = useAuthStore.getState().accessToken;
     if (!accessToken) {
@@ -272,12 +272,20 @@ export const sessionsAPI = {
         const lines = part.split('\n');
         let data = '';
         let id = lastId;
+        let kind = '';
         for (const line of lines) {
           if (line.startsWith('id:')) {
             id = line.slice(3).trim();
           } else if (line.startsWith('data:')) {
             data += line.slice(5).trim();
+          } else if (line.startsWith('event:')) {
+            kind = line.slice(6).trim();
           }
+        }
+        if (kind === 'end') {
+          // The session has ended and every event of it was sent: nothing will follow.
+          options?.onEnded?.();
+          return;
         }
         if (!data) continue;
         try {

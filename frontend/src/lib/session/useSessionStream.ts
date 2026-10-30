@@ -3,7 +3,8 @@
 /**
  * A session's journal, live: the event stream reduced into chat state, reconnecting
  * when the connection drops and resuming after the last event seen (Last-Event-ID is
- * the event's seq), so nothing is lost or shown twice.
+ * the event's seq), so nothing is lost or shown twice. The stream of a session that has
+ * ended says so after its last event, and is not reopened.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,7 +13,8 @@ import { sessionsAPI, StreamUnauthorized } from '@/lib/api/endpoints/sessions';
 
 import { applyWireEvent, createSessionViewState, type SessionViewState } from './wireEventReducer';
 
-export type Connection = 'connecting' | 'live' | 'reconnecting' | 'closed';
+/** ``ended``: the session has ended and its stream sent every event; it is not reopened. */
+export type Connection = 'connecting' | 'live' | 'reconnecting' | 'closed' | 'ended';
 
 const MAX_BACKOFF_MS = 10_000;
 
@@ -38,6 +40,10 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
     }
     const ac = new AbortController();
     let attempt = 0;
+    let ended = false;
+    const onEnded = () => {
+      ended = true;
+    };
 
     void (async () => {
       while (!ac.signal.aborted) {
@@ -48,7 +54,8 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
             setConnection('live');
             attempt = 0;
           };
-          for await (const event of sessionsAPI.openEventStream(sessionId, { signal: ac.signal, lastEventId: resume, onOpen })) {
+          const stream = sessionsAPI.openEventStream(sessionId, { signal: ac.signal, lastEventId: resume, onOpen, onEnded });
+          for await (const event of stream) {
             lastSeq.current = Math.max(lastSeq.current, event.seq);
             setState((prev) => applyWireEvent(prev, event));
           }
@@ -60,6 +67,10 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
           }
         }
         if (ac.signal.aborted) return;
+        if (ended) {
+          setConnection('ended');
+          return;
+        }
         // The stream ended or failed: try again after a pause, from where it stopped.
         setConnection('reconnecting');
         await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
