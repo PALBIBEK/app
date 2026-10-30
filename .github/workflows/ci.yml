@@ -59,7 +59,7 @@ jobs:
           set -o pipefail
           mypy | tee mypy.out || {
             grep -E '^supervisor/.+:[0-9]+: error:' mypy.out | head -40 \
-              | sed -E 's#^([^:]+):([0-9]+): error: (.*)$#::error file=${{ env.PROJECT }}/services/supervisor/\1,line=\2::\3#'
+              | sed -E 's#^([^:]+):([0-9]+): error: (.*)$#::error file=${{ env.PROJECT }}/services/supervisor/\1,line=\2::\3#' || true
             exit 1
           }
 
@@ -92,7 +92,7 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest -q -rfE tests | tee pytest.out || {
-            grep -E '^(FAILED|ERROR) ' pytest.out | head -20 | sed -E 's#^(FAILED|ERROR) (.*)$#::error title=backend test::\1 \2#'
+            grep -E '^(FAILED|ERROR) ' pytest.out | head -20 | sed -E 's#^(FAILED|ERROR) (.*)$#::error title=backend test::\1 \2#' || true
             exit 1
           }
 
@@ -159,11 +159,12 @@ jobs:
           timeout --signal=INT --kill-after=60 30m pytest -q -rfE 2>&1 | tee pytest.out || {
             status=$?
             esc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
-            grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/'
+            # The shell stops at the first failing command (-e, pipefail): a grep finding nothing is one.
+            grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/' || true
             # A hung test's stack (pytest-timeout) as one annotation: job logs are not always at hand.
             if grep -q 'Timeout (>' pytest.out; then
               stack=$(awk '/^[+][+][+][+][+].* Timeout .*[+][+][+][+][+]$/{on=1} on{print}' pytest.out | tail -c 6000)
-              [ -n "$stack" ] || stack=$(grep -B60 'Timeout (>' pytest.out | head -c 6000)
+              [ -n "$stack" ] || stack=$(grep -B60 'Timeout (>' pytest.out | head -c 6000 || true)
               echo "::error title=hung test stack::$(printf '%s\n' "$stack" | esc)"
             fi
             if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
