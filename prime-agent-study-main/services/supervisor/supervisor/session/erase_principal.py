@@ -10,7 +10,7 @@ is their own tenant, the tenant's secrets.
   files, their versions and their stored bytes;
 - the caller's memberships and grants on every other scope;
 - when the caller is their own tenant (the product's one-person tenants), the tenant's
-  secrets (``supervisor.vault``), which only they could have set.
+  secrets (``supervisor.vault``), which only they could have set, and its monthly spend.
 
 A scope the caller owns with other members is shared work: it is handed to the member
 who joined it first, with an owner's grants, and kept. Long-term memory is the memory
@@ -35,6 +35,7 @@ from supervisor.db.models import (
     ScopeMembershipRow,
     ScopeRow,
     SessionRow,
+    TenantSpendRow,
     VaultSecretRow,
     WorkspaceFileRow,
     WorkspaceFileVersionRow,
@@ -101,7 +102,10 @@ class PrincipalEraser:
                 await self._hand_on(db, scope_id, heir)
             await db.execute(delete(ScopeGrantRow).where(ScopeGrantRow.principal_id == principal_id))
             await db.execute(delete(ScopeMembershipRow).where(ScopeMembershipRow.principal_id == principal_id))
-            secrets = await self._delete_tenant_secrets(db, tenant_id) if principal_id == tenant_id else []
+            secrets: list[str] = []
+            if principal_id == tenant_id:
+                secrets = await self._delete_tenant_secrets(db, tenant_id)
+                await db.execute(delete(TenantSpendRow).where(TenantSpendRow.tenant_id == tenant_id))
         for name in secrets:
             if self._forget_secret is not None:
                 self._forget_secret(tenant_id, name)

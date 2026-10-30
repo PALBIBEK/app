@@ -17,7 +17,8 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.db.models import SessionIndexRow, SessionRow
+from supervisor.db.models import SessionRow
+from supervisor.policy.budget.tracker import current_month, tenant_spend
 from supervisor.policy.errors import (
     CostQuotaExceeded,
     SandboxQuotaExceeded,
@@ -69,6 +70,10 @@ class QuotaEnforcer:
     ) -> None:
         self._db = session_factory
         self._limits = limits or DEFAULT_QUOTA_LIMITS
+
+    @property
+    def limits(self) -> QuotaLimits:
+        return self._limits
 
     async def check_create(
         self,
@@ -133,7 +138,7 @@ class QuotaEnforcer:
         # Check cost limit
         if (
             limits.max_cost_per_tenant is not None
-            and state.total_cost_usd > limits.max_cost_per_tenant
+            and state.total_cost_usd >= limits.max_cost_per_tenant
         ):
             raise CostQuotaExceeded(
                 tenant_id=tenant_id,
@@ -180,7 +185,7 @@ class QuotaEnforcer:
         if limits.max_sessions_per_tenant and session_count >= limits.max_sessions_per_tenant:
             exceeded = True
             reason = f"max_sessions_per_tenant exceeded: {session_count}>={limits.max_sessions_per_tenant}"
-        elif limits.max_cost_per_tenant and total_cost > limits.max_cost_per_tenant:
+        elif limits.max_cost_per_tenant and total_cost >= limits.max_cost_per_tenant:
             exceeded = True
             reason = f"max_cost_per_tenant exceeded: {total_cost}>{limits.max_cost_per_tenant}"
 
@@ -227,16 +232,9 @@ class QuotaEnforcer:
         db: AsyncSession,
         tenant_id: str,
     ) -> Decimal:
-        """Get total cost for tenant."""
-        query = (
-            select(func.coalesce(func.sum(SessionIndexRow.total_cost), 0))
-            .select_from(SessionIndexRow)
-            .join(SessionRow, SessionRow.id == SessionIndexRow.session_id)
-            .where(SessionRow.tenant_id == tenant_id)
-        )
-        result = await db.execute(query)
-        total = result.scalar_one()
-        return Decimal(str(total or 0))
+        """The tenant's spend this calendar month (counted as spent: erasing a session
+        does not give it back; ``supervisor.policy.budget``)."""
+        return await tenant_spend(db, tenant_id, current_month())
 
     async def count_live_sandboxes(
         self,

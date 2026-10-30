@@ -4,10 +4,19 @@ The session's running cost lives in ``session_index.total_cost`` and is only
 changed by an atomic ``total_cost + :cost`` update, so it stays correct when a
 session moves between workers or two of them record at once. Money is Decimal.
 Tokens per turn are counted in the recording worker's memory.
+
+Each charge also counts toward its tenant's spend this calendar month (UTC), in
+``tenant_spend``, in the same transaction. With ``tenant_limit`` set
+(``TENANT_MAX_COST_PER_TENANT``), a tenant past it is over budget in every session:
+the checks before and after each model call stop the run, until the month turns or
+the limit is raised. The tenant's spend is kept apart from its sessions, so erasing
+one does not give its spend back.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -15,7 +24,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.db.models import SessionIndexRow
+from supervisor.db.models import SessionIndexRow, SessionRow, TenantSpendRow
 from supervisor.harness.core.types import BudgetSpec
 from supervisor.policy.types import BudgetState
 
@@ -23,7 +32,20 @@ if TYPE_CHECKING:
     from supervisor.policy.protocols import AuditLoggerProtocol
 
 
-__all__ = ["BudgetTracker"]
+__all__ = ["BudgetTracker", "current_month", "tenant_spend"]
+
+
+def current_month() -> str:
+    """This calendar month in UTC, as ``tenant_spend`` keys it (``YYYY-MM``)."""
+    return datetime.now(UTC).strftime("%Y-%m")
+
+
+async def tenant_spend(db: AsyncSession, tenant_id: str, month: str) -> Decimal:
+    """What ``tenant_id`` has spent in ``month``."""
+    spent = await db.scalar(
+        select(TenantSpendRow.cost_usd).where(TenantSpendRow.tenant_id == tenant_id, TenantSpendRow.month == month)
+    )
+    return Decimal(str(spent or 0))
 
 
 class BudgetTracker:
@@ -61,7 +83,9 @@ class BudgetTracker:
     __slots__ = (
         "_audit",
         "_db",
+        "_month",
         "_session_limits",
+        "_tenant_limit",
         "_tokens_this_turn",
     )
 
@@ -70,9 +94,14 @@ class BudgetTracker:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         audit: AuditLoggerProtocol | None = None,
+        tenant_limit: Decimal | None = None,
+        month: Callable[[], str] = current_month,
     ) -> None:
+        """``tenant_limit``: the most a tenant may spend in a calendar month (None: no limit)."""
         self._db = session_factory
         self._audit = audit
+        self._tenant_limit = tenant_limit
+        self._month = month
         # Per-session configuration
         self._session_limits: dict[str, BudgetSpec | None] = {}
         # Per-turn token counter
@@ -109,9 +138,9 @@ class BudgetTracker:
         Returns:
             Current budget state (``exceeded`` set; the caller decides to refuse)
         """
-        cost = await self._load_cost(session_id)
+        cost, tenant = await self._load_cost(session_id)
         tokens = self._tokens_this_turn.get(session_id, 0) if turn_tokens else 0
-        return self._evaluate(session_id, cost=cost, tokens=tokens)
+        return self._evaluate(session_id, cost=cost, tenant=tenant, tokens=tokens)
 
     async def record(
         self,
@@ -131,14 +160,14 @@ class BudgetTracker:
         """
         # The database holds the session total, never a worker's memory: a session
         # moves between workers, and two may record for it at once.
-        cost = (
+        cost, tenant = (
             await self._add_cost(session_id, cost_usd)
             if cost_usd
             else await self._load_cost(session_id)
         )
         new_tokens = self._tokens_this_turn.get(session_id, 0) + tokens
         self._tokens_this_turn[session_id] = new_tokens
-        return self._evaluate(session_id, cost=cost, tokens=new_tokens)
+        return self._evaluate(session_id, cost=cost, tenant=tenant, tokens=new_tokens)
 
     def clear(self, session_id: str) -> None:
         """Clear tracking state for session.
@@ -157,8 +186,9 @@ class BudgetTracker:
         *,
         cost: Decimal,
         tokens: int,
+        tenant: Decimal = Decimal(0),
     ) -> BudgetState:
-        """Evaluate budget state against limits."""
+        """Evaluate budget state against limits (``tenant``: the tenant's spend this month)."""
         spec = self._session_limits.get(session_id)
         # The manifest states USD as a float; money is compared as Decimal.
         max_cost = (
@@ -181,6 +211,14 @@ class BudgetTracker:
             exceeded = True
             reason = f"max_tokens_per_turn exceeded: tokens={tokens} limit={max_tokens}"
 
+        # The tenant's spend this month, across all its sessions
+        elif self._tenant_limit is not None and tenant >= self._tenant_limit:
+            exceeded = True
+            reason = (
+                f"the tenant's model spend this month reached its limit: "
+                f"spent={tenant} limit={self._tenant_limit} (it resets when the month turns)"
+            )
+
         return BudgetState(
             session_id=session_id,
             total_cost_usd=cost,
@@ -191,15 +229,18 @@ class BudgetTracker:
             exceeded_reason=reason,
         )
 
-    async def _load_cost(self, session_id: str) -> Decimal:
+    async def _load_cost(self, session_id: str) -> tuple[Decimal, Decimal]:
+        """The session's cost, and its tenant's spend this month (0 when none is limited)."""
         async with self._db() as db:
             total = await db.scalar(
                 select(SessionIndexRow.total_cost).where(SessionIndexRow.session_id == session_id)
             )
-        return Decimal(str(total or 0))
+            tenant = await self._tenant_spend(db, session_id) if self._tenant_limit is not None else Decimal(0)
+        return Decimal(str(total or 0)), tenant
 
-    async def _add_cost(self, session_id: str, cost: Decimal) -> Decimal:
-        """Add ``cost`` to the session total in one statement; returns the new total."""
+    async def _add_cost(self, session_id: str, cost: Decimal) -> tuple[Decimal, Decimal]:
+        """Add ``cost`` to the session's total and its tenant's month, in one transaction;
+        returns both new totals."""
         add = (
             update(SessionIndexRow)
             .where(SessionIndexRow.session_id == session_id)
@@ -211,11 +252,34 @@ class BudgetTracker:
             if total is None:
                 # No index row yet; a concurrent first insert loses and adds instead.
                 try:
-                    db.add(SessionIndexRow(session_id=session_id, total_cost=cost))
-                    await db.commit()
-                    return cost
+                    async with db.begin_nested():
+                        db.add(SessionIndexRow(session_id=session_id, total_cost=cost))
                 except IntegrityError:
-                    await db.rollback()
                     total = await db.scalar(add)
+            tenant = await self._add_tenant_cost(db, session_id, cost)
             await db.commit()
-        return Decimal(str(total))
+        return (cost if total is None else Decimal(str(total))), tenant
+
+    async def _add_tenant_cost(self, db: AsyncSession, session_id: str, cost: Decimal) -> Decimal:
+        tenant_id = await db.scalar(select(SessionRow.tenant_id).where(SessionRow.id == session_id))
+        if tenant_id is None:
+            return Decimal(0)
+        month = self._month()
+        add = (
+            update(TenantSpendRow)
+            .where(TenantSpendRow.tenant_id == tenant_id, TenantSpendRow.month == month)
+            .values(cost_usd=TenantSpendRow.cost_usd + cost)
+            .returning(TenantSpendRow.cost_usd)
+        )
+        spent = await db.scalar(add)
+        if spent is None:
+            try:
+                async with db.begin_nested():
+                    db.add(TenantSpendRow(tenant_id=tenant_id, month=month, cost_usd=cost))
+            except IntegrityError:  # another worker counted the month's first charge at once
+                spent = await db.scalar(add)
+        return cost if spent is None else Decimal(str(spent))
+
+    async def _tenant_spend(self, db: AsyncSession, session_id: str) -> Decimal:
+        tenant_id = await db.scalar(select(SessionRow.tenant_id).where(SessionRow.id == session_id))
+        return Decimal(0) if tenant_id is None else await tenant_spend(db, tenant_id, self._month())
