@@ -22,8 +22,13 @@ class JWTManager:
     def create_access_token(
         user_id: str,
         expires_delta: timedelta | None = None,
+        *,
+        family_id: str | None = None,
     ) -> str:
-        """Encode an access token with pinned issuer, audience, and type."""
+        """Encode an access token with pinned issuer, audience, and type.
+
+        ``family_id``: the sign-in (refresh-token family) it belongs to, as ``fid``: signing
+        out, or changing the password, revokes the family, and its access tokens with it."""
         settings = get_settings()
         if expires_delta is None:
             expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
@@ -38,6 +43,8 @@ class JWTManager:
             "aud": settings.jwt_audience,
             "type": "access",
         }
+        if family_id is not None:
+            payload["fid"] = family_id
         return jwt.encode(
             payload,
             settings.secret_key,
