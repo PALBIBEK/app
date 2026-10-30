@@ -50,6 +50,9 @@ packages = ["supervisor"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 300  # a hung test fails instead of stalling the run
+# Every thread's stack, printed by a watchdog thread when a test runs this long: the timeout
+# above needs the main thread to come back to Python, which a call stuck in native code never does.
+faulthandler_timeout = 290
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [

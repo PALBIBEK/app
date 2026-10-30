@@ -123,6 +123,7 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:  # the supervisor's migration tests run against it
         image: postgres:16
@@ -153,14 +154,21 @@ jobs:
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
           set -o pipefail
-          pytest -q -rfE 2>&1 | tee pytest.out || {
+          # The run takes about 15 minutes; one still going after 30 is stuck (in a test, or after
+          # the last one): stop it and say where, instead of holding the job for six hours.
+          timeout --signal=INT --kill-after=60 30m pytest -q -rfE 2>&1 | tee pytest.out || {
+            status=$?
+            esc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
             grep -E '^(FAILED|ERROR) ' pytest.out | head -40 | sed 's/^/::error::/'
             # A hung test's stack (pytest-timeout) as one annotation: job logs are not always at hand.
             if grep -q 'Timeout (>' pytest.out; then
               stack=$(awk '/^[+][+][+][+][+].* Timeout .*[+][+][+][+][+]$/{on=1} on{print}' pytest.out | tail -c 6000)
               [ -n "$stack" ] || stack=$(grep -B60 'Timeout (>' pytest.out | head -c 6000)
-              stack=${stack//'%'/'%25'}; stack=${stack//$'\n'/'%0A'}
-              echo "::error title=hung test stack::$stack"
+              echo "::error title=hung test stack::$(printf '%s\n' "$stack" | esc)"
+            fi
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              # The watchdog's stacks (faulthandler_timeout) and the last lines, wherever it stopped.
+              echo "::error title=test run stuck (stopped after 30 minutes)::$(tail -c 6000 pytest.out | esc)"
             fi
             exit 1
           }
