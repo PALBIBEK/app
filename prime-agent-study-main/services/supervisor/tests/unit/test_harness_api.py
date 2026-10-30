@@ -188,6 +188,60 @@ async def test_publish_refuses_a_model_the_gateway_does_not_serve(boot: Callable
         reset_model_router()
 
 
+def _shipped_composition(name: str) -> dict[str, Any]:
+    comp = json.loads((default_catalog_dir() / "compositions" / "githi-v1.json").read_text())
+    return {k: v for k, v in comp.items() if k != "digest"} | {"name": name}
+
+
+@pytest.mark.parametrize(
+    ("url", "refusal"),
+    [
+        ("http://169.254.169.254/latest/meta-data", "does not trust"),  # cloud metadata
+        ("http://localhost:5432", "does not trust"),
+        ("file:///etc/passwd", "must be an http(s) URL"),
+    ],
+)
+async def test_publish_refuses_a_service_url_on_a_host_the_platform_does_not_trust(
+    boot: Callable[[], Any], monkeypatch: pytest.MonkeyPatch, url: str, refusal: str
+) -> None:
+    """Workers call a composition's service URLs: an untrusted one would have them call
+    anything they can reach, and an MCP server's error body comes back to the caller."""
+    monkeypatch.delenv("PLUG_ALLOWED_HOSTS", raising=False)
+    client = await boot()
+    for field in ("gateway_base_url", "mcp_server_url", "acp_base_url"):
+        comp = _shipped_composition(f"t1-{field.replace('_', '-')}")
+        comp["plug_bindings"] = dict(comp["plug_bindings"], **{field: url})
+        r = await client.post("/v1/catalog/composition/publish", json=comp, headers=T1)
+        assert r.status_code == 422 and refusal in r.text and f"plug_bindings.{field}" in r.text, r.text
+
+
+async def test_publish_refuses_a_recall_server_on_an_untrusted_host(
+    boot: Callable[[], Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PLUG_ALLOWED_HOSTS", raising=False)
+    client = await boot()
+    profile = json.loads((default_catalog_dir() / "memory_profiles" / "default.json").read_text())
+    profile = {k: v for k, v in profile.items() if k not in ("digest", "status")} | {"name": "t1-recall"}
+    profile["recall"] = {"enabled": True, "backend": "mcp", "mcp_server_url": "http://10.0.0.5:8080"}
+    r = await client.post("/v1/catalog/memory_profile/publish", json=profile, headers=T1)
+    assert r.status_code == 422 and "recall.mcp_server_url" in r.text and "does not trust" in r.text, r.text
+
+
+async def test_the_shipped_binding_is_trusted_and_an_operator_can_trust_more(
+    boot: Callable[[], Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PLUG_ALLOWED_HOSTS", raising=False)
+    client = await boot()
+    shipped = _shipped_composition("t1-shipped-binding")
+    assert (await client.post("/v1/catalog/composition/publish", json=shipped, headers=T1)).status_code == 200
+
+    team = _shipped_composition("t1-team-mcp")
+    team["plug_bindings"] = dict(team["plug_bindings"], mcp_server_url="https://mcp.team.example/rpc")
+    assert (await client.post("/v1/catalog/composition/publish", json=team, headers=T1)).status_code == 422
+    monkeypatch.setenv("PLUG_ALLOWED_HOSTS", "mcp.team.example")
+    assert (await client.post("/v1/catalog/composition/publish", json=team, headers=T1)).status_code == 200
+
+
 async def test_a_user_lists_the_tools_a_tool_set_can_name(boot: Callable[[], Any]) -> None:
     client = await boot()
     tools = {t["name"]: t for t in (await client.get("/v1/tools", headers=T1)).json()}

@@ -69,8 +69,10 @@ Kubernetes: template keys live in `k8s/external-secret-gateway.yaml` (ESO →
 | `GLOBAL_MAX_SESSIONS` | Fleet-wide active session cap |
 | `TENANT_MAX_COST_PER_TENANT` | Aggregate cost cap (session_index sum) |
 | `TENANT_RATE_LIMIT_PER_MINUTE` | Per-tenant HTTP rate limit |
+| `PLUG_ALLOWED_HOSTS` | More hosts a published service URL (gateway, MCP, ACP, recall server) may name, comma-separated; `*` trusts any. Workers call these URLs, so the default is only the platform's own services |
+| `SANDBOX_DOCKER_DISK_LIMIT` | A `local_docker` sandbox's disk cap (e.g. `10G`); needs overlay2 on XFS with project quotas. Processes (512), memory, CPU, network and privileges are always limited |
 
-Metrics snapshot: `GET /metrics` on each supervisor replica.
+Metrics snapshot: `GET /metrics` on each supervisor replica (a verified caller; its own tenant's counters).
 
 ### Session workers
 
