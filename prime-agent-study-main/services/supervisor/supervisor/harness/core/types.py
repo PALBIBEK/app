@@ -59,9 +59,11 @@ class BudgetSpec:
     """Resource budget constraints for session execution.
 
     Attributes:
-        max_cost_per_session: Maximum cost in USD per session
-        max_tokens_per_turn: Tokens (input and output, every model call) one run may use;
-            past it the run ends at its next step, saying so, and the session goes on
+        max_cost_per_session: Maximum cost in USD per session: every model call the
+            session pays for (its steps, summaries, subagents, memory's extraction)
+        max_tokens_per_turn: Tokens (input and output, the agent's model calls and its
+            summaries) one run may use; past it the run ends at its next step, saying so,
+            and the session goes on
         max_tokens_per_session: Tokens the whole session may use; past it the run ends,
             and each later message ends at once without asking the model (pi-temporal's
             session bound)

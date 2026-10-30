@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from supervisor.agent.events import JobEnd, JobStart, SubagentEnd, SubagentStart
@@ -24,6 +25,9 @@ from supervisor.session.tree import SessionTree, build_session_tree
 
 # Default when harness YAML omits subagents.max_depth.
 DEFAULT_MAX_DEPTH = 3
+
+type Charge = Callable[[float], Awaitable[None]]
+"""Counts a cost (USD) toward the parent session's cost cap."""
 
 
 async def journal_background_end(
@@ -62,11 +66,26 @@ class SubagentOps:
         transport: SubagentTransport,
         writer: JournalWriter,
         max_depth: int = DEFAULT_MAX_DEPTH,
+        charge: Charge | None = None,
     ) -> None:
         self._parent = parent_session_id
         self._transport = transport
         self._writer = writer
         self._max_depth = max_depth if max_depth > 0 else DEFAULT_MAX_DEPTH
+        self._charge = charge
+
+    async def _run(
+        self,
+        start: Callable[[str, SubagentRequest], SubagentRunResult],
+        provider_name: str,
+        request: SubagentRequest,
+    ) -> SubagentRunResult:
+        """Run a child to its end (off the loop: it blocks on a model, and heartbeats go on)
+        and count what it spent through the session's gateway toward its cost cap."""
+        result = await asyncio.to_thread(start, provider_name, request)
+        if self._charge is not None and (cost := result.spent.get("cost")):
+            await self._charge(float(cost))
+        return result
 
     def _run_id(self) -> str:
         return f"run-{uuid.uuid4().hex[:12]}"
@@ -119,8 +138,7 @@ class SubagentOps:
             trace_id=trace_id,
         )
         try:
-            # The provider runs a model to completion: off the loop, so heartbeats go on.
-            result = await asyncio.to_thread(self._transport.start_one_shot, provider_name, request)
+            result = await self._run(self._transport.start_one_shot, provider_name, request)
         except Exception:
             await self._writer.append(
                 self._parent,
@@ -166,7 +184,7 @@ class SubagentOps:
             trace_id=trace_id,
         )
         try:
-            result = await asyncio.to_thread(self._transport.start_fork, provider_name, request)
+            result = await self._run(self._transport.start_fork, provider_name, request)
         except Exception:
             await self._writer.append(
                 self._parent,
@@ -228,9 +246,9 @@ class SubagentOps:
         )
         return JobHandle(job_id=job_id)
 
-    def run_background(self, provider_name: str, request: SubagentRequest) -> SubagentRunResult:
-        """The job's work: the provider's run of the request. Blocking; call in a thread."""
-        return self._transport.start_one_shot(provider_name, request)
+    async def run_background(self, provider_name: str, request: SubagentRequest) -> SubagentRunResult:
+        """The job's work: the provider's run of the request."""
+        return await self._run(self._transport.start_one_shot, provider_name, request)
 
     async def finish_background(
         self, *, job_id: str, run_id: str, stop_reason: str, output: str | None
@@ -289,4 +307,6 @@ def _as_journaled(result: SubagentRunResult, child_id: str) -> SubagentRunResult
     meta = dict(result.meta)
     if result.child_id and result.child_id != child_id:
         meta["provider_child_id"] = result.child_id
-    return SubagentRunResult(text=result.text, child_id=child_id, status=result.status, meta=meta)
+    return SubagentRunResult(
+        text=result.text, child_id=child_id, status=result.status, meta=meta, spent=result.spent
+    )

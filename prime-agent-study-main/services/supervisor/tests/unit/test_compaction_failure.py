@@ -16,6 +16,7 @@ import pytest
 from supervisor.agent.events import CompactionEnd, MessageEnd
 from supervisor.agent.runtimes.githi.classify import RetrySpec, is_retryable
 from supervisor.seams.compaction import SummaryFailed
+from supervisor.seams.core.types import ChatMessage, Completion
 from supervisor.seams.interfaces.context_memory import (
     CompactionDecision,
     CompactionPreparation,
@@ -143,8 +144,8 @@ def test_the_basic_provider_raises_rather_than_replace_history_with_a_notice(pre
 
 def test_an_empty_summary_is_a_failure_that_is_not_asked_again() -> None:
     class _Silent(FakeModelGatewayClient):
-        def complete(self, *args: Any, **kwargs: Any) -> Any:
-            return SimpleNamespace(message=SimpleNamespace(content=""), usage={})
+        def complete(self, *args: Any, **kwargs: Any) -> Completion:
+            return Completion(ChatMessage("assistant", ""))
 
     with pytest.raises(SummaryFailed) as raised:
         BasicCompactionProvider(_Silent()).before_compact(None, _preparation(None), reason="threshold")  # type: ignore[arg-type]

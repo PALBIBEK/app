@@ -50,7 +50,8 @@ class NestedSessionSubagentProvider:
             return request.child_id
         return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
-    def _complete(self, request: SubagentRequest) -> str:
+    def _complete(self, request: SubagentRequest) -> tuple[str, dict[str, Any]]:
+        """The child's answer, and what its model call cost (``SubagentRunResult.spent``)."""
         messages = [
             ChatMessage(
                 role="system",
@@ -64,12 +65,12 @@ class NestedSessionSubagentProvider:
         completion = self._gateway.complete(messages, tools=[])
         msg = getattr(completion, "message", None)
         text = getattr(msg, "content", None) if msg is not None else None
-        return str(text or "")
+        return str(text or ""), completion.spent
 
     def start_one_shot(self, request: SubagentRequest) -> SubagentRunResult:
         self.started = True
         cid = self._child_id(request, "nested")
-        text = self._complete(request)
+        text, spent = self._complete(request)
         self._children[cid] = ChildInfo(
             id=cid, status="done", description=request.description
         )
@@ -78,12 +79,13 @@ class NestedSessionSubagentProvider:
             child_id=cid,
             status="ok",
             meta={"transport": NESTED_SESSION_PROVIDER},
+            spent=spent,
         )
 
     def start_fork(self, request: SubagentRequest) -> SubagentRunResult:
         self.started = True
         cid = self._child_id(request, "nested-fork")
-        text = self._complete(request)
+        text, spent = self._complete(request)
         self._children[cid] = ChildInfo(
             id=cid, status="done", description=request.description
         )
@@ -92,13 +94,14 @@ class NestedSessionSubagentProvider:
             child_id=cid,
             status="ok",
             meta={"transport": NESTED_SESSION_PROVIDER, "mode": "fork"},
+            spent=spent,
         )
 
     def start_background(self, request: SubagentRequest) -> JobHandle:
         self.started = True
         cid = self._child_id(request, "nested")
         jid = f"job-{uuid.uuid4().hex[:10]}"
-        self._complete(request)
+        self._complete(request)  # in-process only: durable jobs run start_one_shot
         self._children[cid] = ChildInfo(
             id=cid, status="done", description=request.description
         )

@@ -273,6 +273,7 @@ class ChildOps(ToolOps):
             transport=transport,
             writer=self._writer,
             max_depth=getattr(manifest, "max_subagent_depth", 3),
+            charge=lambda cost: self.charge_cost(session_id, cost),
         )
 
     async def resolve_subagent_provider(self, session_id: str, requested: str | None) -> str:

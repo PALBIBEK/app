@@ -13,7 +13,10 @@ import hashlib
 import threading
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
+
+import pytest
 
 from supervisor.agent.events import HandCheckpointed, HandProvisioned, JobEnd, ToolEnd, ToolStart
 from supervisor.app import SupervisorState
@@ -22,6 +25,7 @@ from supervisor.catalog.repository import persist_offer
 from supervisor.hands.keys import hand_key
 from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
 from supervisor.seams.providers.workspace.memory_workspace_store import MemoryWorkspaceStore
+from supervisor.temporal import subagent_tools
 from supervisor.temporal.contracts import CreateSession, Message
 from supervisor.temporal.worker import session_worker
 from tests.support.githi_env import FAST, Env, payloads, run_ended
@@ -185,3 +189,50 @@ async def test_a_background_job_retried_on_another_worker_resumes_from_the_journ
     # call and its result; then the answer.
     tools_shown = [[m.tool_call_id for m in seen if m.role == "tool"] for seen in gateway.child_seen]
     assert tools_shown == [[], [starts[0].tool_call_id], [starts[0].tool_call_id], [e.tool_call_id for e in starts]]
+
+
+async def test_a_session_runs_at_most_so_many_background_jobs_at_once(
+    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each background job spends on the session's model until it ends: one past the
+    limit is refused, and the model reads why."""
+    monkeypatch.setattr(subagent_tools, "MAX_BACKGROUND_JOBS", 1)
+    gate = threading.Event()  # the first job runs until the test lets it end
+    model(
+        ("subagent", {"prompt": "build it", "background": True, "hand": "build"}),
+        ("subagent", {"prompt": "and this too", "background": True}),
+        child_gate=gate,
+    )
+    state = await env.state(workspace_store=MemoryWorkspaceStore(objects=MemoryObjectStorage()))
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_with_hands(env, state, "build")
+        await env.sessions.submit(sid, Message("c1", "start two jobs"))
+        first = await env.wait_for(state, sid, run_ended(1))
+        gate.set()
+        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
+
+    started, refused = [e for e in payloads(first, ToolEnd) if e.tool_name == "subagent"]
+    assert started.result["payload"]["status"] == "started"
+    assert refused.is_error and refused.result["code"] == "TOO_MANY_JOBS"
+    assert "wait for one to end" in refused.result["error"]
+
+
+async def test_a_background_jobs_model_calls_count_toward_the_sessions_cost(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """The job thinks with the session's model: two steps of the run that started it and
+    two of the job's own (a call, then its answer), $0.01 each."""
+    model(
+        ("subagent", {"prompt": "build it", "background": True, "hand": "build"}),
+        child_calls=[("write", {"path": "built.txt", "content": "made by the job"})],
+        cost_per_call=0.01,
+    )
+    state = await env.state(workspace_store=MemoryWorkspaceStore(objects=MemoryObjectStorage()))
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_with_hands(env, state, "build")
+        await env.sessions.submit(sid, Message("c1", "have a job build"))
+        await env.wait_for(state, sid, run_ended(1))
+        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
+        spent = await state.manager._budget.check(sid)
+
+    assert spent.total_cost_usd == Decimal("0.04")
