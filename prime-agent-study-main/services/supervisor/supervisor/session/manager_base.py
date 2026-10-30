@@ -68,6 +68,7 @@ from supervisor.seams.services import (
     SessionWorkspaceState,
     VirtualKeyClient,
     WorkspaceConflictError,
+    WorkspaceFullError,
     WorkspaceStore,
 )
 from supervisor.seams.services.virtual_keys import MintedVirtualKey
@@ -527,6 +528,20 @@ class SessionManagerBase:
                     await self._workspace_conflict(
                         session_id, ws, sbx, conflict, turn_id=turn_id, trace_id=trace_id,
                         event_key=f"{event_key}:workspace-conflict" if event_key else None,
+                    )
+                except WorkspaceFullError as full:
+                    await self._record(
+                        session_id,
+                        ErrorEvent(
+                            error_class="WorkspaceFull",
+                            retryable=True,
+                            detail=f"not saved, the workspace's storage is full: {', '.join(full.paths)}; "
+                            "they are saved after a later run once it has room",
+                            error_code="WORKSPACE_FULL",
+                        ),
+                        turn_id=turn_id,
+                        trace_id=trace_id,
+                        event_key=f"{event_key}:workspace-full" if event_key else None,
                     )
                 except Exception:
                     logger.exception("workspace sync after run failed session=%s", session_id)

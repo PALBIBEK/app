@@ -393,6 +393,11 @@ The key contains neither the file's name nor its content hash; names, folders an
 in PostgreSQL. Identical bytes are stored once **per workspace**. No answer depends on what
 another workspace holds, so uploading a file never reveals that someone else has the same one.
 
+A workspace stores at most `WORKSPACE_MAX_SCOPE_BYTES` (10 GiB by default), counting every
+version once per distinct content. An upload that would not fit is refused before any bytes are
+sent. Files an agent changed that do not fit are reported in the chat as not saved; they are
+saved after a later run once there is room.
+
 ### Conversations, runs and artifacts
 
 Each part has one job:

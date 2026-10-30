@@ -30,6 +30,7 @@ from supervisor.seams.services.workspace_store import (
     CasConflict,
     WorkspaceBase,
     WorkspaceFileRecord,
+    WorkspaceQuotaExceeded,
     WorkspaceStore,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
@@ -62,6 +63,7 @@ async def three_way_sync(
     written: list[str] = []
     removed: list[str] = []
     conflicts: list[str] = []
+    refused: list[str] = []  # did not fit the workspace's storage limit
     bytes_n = 0
     tree_paths = set(await tree.list_paths())
 
@@ -84,6 +86,9 @@ async def three_way_sync(
             )
         except CasConflict:
             conflicts.append(path)
+            continue
+        except WorkspaceQuotaExceeded:
+            refused.append(path)  # the rest may still fit
             continue
         seen[path] = (committed.version, digest)
         written.append(path)
@@ -111,6 +116,7 @@ async def three_way_sync(
         written=tuple(written),
         removed=tuple(removed),
         conflicts=tuple(conflicts),
+        refused=tuple(refused),
         bytes_transferred=bytes_n,
         base=seen,
     )

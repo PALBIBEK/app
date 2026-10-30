@@ -17,6 +17,7 @@ from supervisor.seams.services import (
     Principal,
     UnauthorizedError,
     WorkspacePathEscape,
+    WorkspaceQuotaExceeded,
 )
 from supervisor.seams.services.session_workspace import is_reserved
 from supervisor.session.files import (
@@ -230,6 +231,8 @@ async def save_artifact(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CasConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkspaceQuotaExceeded as exc:
+        raise HTTPException(status_code=413, detail={"error_code": exc.code, "message": str(exc)}) from exc
     return SavedOut(artifact=_artifact_out(artifact), path=record.path, version=record.version, scope_id=scope)
 
 

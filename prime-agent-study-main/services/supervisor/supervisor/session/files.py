@@ -352,6 +352,8 @@ class SessionFiles:
         path = normalize_workspace_path(path)
         key = await self._store.find_object(scope_id, found.content_sha256, found.size_bytes)
         if key is None:
+            if (check_room := getattr(self._store, "check_room", None)) is not None:
+                await check_room(scope_id, None, found.size_bytes)  # before the bytes are copied
             key = new_object_key(scope_id)
             await self._objects.copy(found.object_key, key, content_sha256=found.content_sha256)
         record = await self._store.commit_object(

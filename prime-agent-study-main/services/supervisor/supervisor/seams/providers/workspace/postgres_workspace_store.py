@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import ScopeRow, WorkspaceFileRow, WorkspaceFileVersionRow
@@ -20,6 +20,7 @@ from supervisor.seams.services.workspace_store import (
     HydrateIncomplete,
     WorkspaceFileRecord,
     WorkspaceFileVersion,
+    WorkspaceQuotaExceeded,
     WorkspaceSyncReport,
     WorkspaceTreeIO,
     new_object_key,
@@ -71,9 +72,13 @@ class PostgresWorkspaceStore:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         objects: ObjectStorage,
+        *,
+        max_scope_bytes: int | None = None,
     ) -> None:
+        """``max_scope_bytes``: the most one workspace may store (None: no limit)."""
         self._db = session_factory
         self.objects = objects
+        self.max_scope_bytes = max_scope_bytes
         # Chaos hook parity with MemoryWorkspaceStore (optional).
         self.before_sync_cas: object | None = None
 
@@ -89,6 +94,41 @@ class PostgresWorkspaceStore:
                 )
             )
             await db.flush()
+
+    async def stored_bytes(self, scope_id: str, db: AsyncSession | None = None) -> int:
+        """What the workspace stores: each distinct object of any version, counted once
+        (an upload of bytes it already holds adds nothing)."""
+        distinct = (
+            select(WorkspaceFileVersionRow.object_key, func.max(WorkspaceFileVersionRow.size_bytes).label("size"))
+            .where(WorkspaceFileVersionRow.scope_id == scope_id)
+            .group_by(WorkspaceFileVersionRow.object_key)
+            .subquery()
+        )
+        total = select(func.coalesce(func.sum(distinct.c.size), 0))
+        if db is not None:
+            return int(await db.scalar(total) or 0)
+        async with self._db() as fresh:
+            return int(await fresh.scalar(total) or 0)
+
+    async def check_room(self, scope_id: str, object_key: str | None, size_bytes: int, db: AsyncSession | None = None) -> None:
+        """Raise ``WorkspaceQuotaExceeded`` when ``size_bytes`` new bytes (under ``object_key``,
+        or not stored yet) would take the workspace past its limit."""
+        if self.max_scope_bytes is None:
+            return
+        if object_key is not None and await self._holds(scope_id, object_key, db):
+            return  # bytes it already stores
+        stored = await self.stored_bytes(scope_id, db)
+        if stored + size_bytes > self.max_scope_bytes:
+            raise WorkspaceQuotaExceeded(scope_id, stored, size_bytes, self.max_scope_bytes)
+
+    async def _holds(self, scope_id: str, object_key: str, db: AsyncSession | None) -> bool:
+        query = select(WorkspaceFileVersionRow.id).where(
+            WorkspaceFileVersionRow.scope_id == scope_id, WorkspaceFileVersionRow.object_key == object_key
+        ).limit(1)
+        if db is not None:
+            return await db.scalar(query) is not None
+        async with self._db() as fresh:
+            return await fresh.scalar(query) is not None
 
     async def list_files(self, scope_id: str) -> list[WorkspaceFileRecord]:
         async with self._db() as db:
@@ -129,7 +169,8 @@ class PostgresWorkspaceStore:
     ) -> WorkspaceFileRecord:
         digest = _sha256(data)
         key = await self.find_object(scope_id, digest, len(data))
-        if key is None:  # new bytes for this workspace: a key of their own
+        if key is None:  # new bytes for this workspace: a key of their own, if they fit
+            await self.check_room(scope_id, None, len(data))
             key = new_object_key(scope_id)
             await self.objects.put(key, data, content_sha256=digest)
         return await self.commit_object(
@@ -197,6 +238,7 @@ class PostgresWorkspaceStore:
         path = normalize_workspace_path(path)
         async with self._db() as db:
             await self._ensure_scope(db, scope_id)
+            await self.check_room(scope_id, object_key, size_bytes, db)
             live = await db.scalar(
                 select(WorkspaceFileRow).where(
                     WorkspaceFileRow.scope_id == scope_id,
