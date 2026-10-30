@@ -7,7 +7,6 @@ HTTP API returns, so every path shares one conversion.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any, Final
@@ -106,7 +105,7 @@ async def run_job_inline(m: SessionManager, op: SessionOp) -> None:
     provider = await m.resolve_subagent_provider(op.session_id, args["provider"])
     ops = await m.subagent_job_ops(op.session_id, request)
     try:
-        result = await asyncio.to_thread(ops.run_background, provider, request)
+        result = await ops.run_background(provider, request)
         stop_reason, output = result.status or "ok", result.text or None
     except Exception as exc:  # noqa: BLE001 - any provider failure is the job's end
         stop_reason, output = "error", str(exc)

@@ -28,10 +28,8 @@ class GatewaySummarizer:
             for m in request
         ]
         completion = self._gateway.complete(chat, tools=[], model=self._model)
-        usage = completion.usage or {}
-        self.spent["input_tokens"] += int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-        self.spent["output_tokens"] += int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
-        self.spent["cost"] += float(usage.get("cost_total") or usage.get("cost") or 0.0)
+        for key, value in completion.spent.items():
+            self.spent[key] += value
         return completion.message.content or ""
 
 

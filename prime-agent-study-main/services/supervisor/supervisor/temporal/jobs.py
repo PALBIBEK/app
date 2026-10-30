@@ -7,8 +7,6 @@ journalling and returning all leave exactly one JobEnd: the first one written.
 
 from __future__ import annotations
 
-import asyncio
-
 from temporalio import activity
 
 from supervisor.agent.events import JobEnd
@@ -45,7 +43,7 @@ class JobSteps:
             )
             return await self.end(JobEndRequest(spec, done.stop_reason, done.text or None))
         ops = await self._manager.subagent_job_ops(spec.session_id, request)
-        result = await heartbeating(asyncio.to_thread(ops.run_background, spec.provider, request))
+        result = await heartbeating(ops.run_background(spec.provider, request))
         return await self.end(JobEndRequest(spec, result.status or "ok", result.text or None))
 
     async def end(self, req: JobEndRequest) -> JobOutcome:

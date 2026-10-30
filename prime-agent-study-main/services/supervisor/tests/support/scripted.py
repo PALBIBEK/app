@@ -205,13 +205,14 @@ class ScriptedGateway:
             if self.child_fail_after == done:
                 self.child_fail_after = None
                 raise ConnectionError("the job's worker was lost (scripted)")
+        usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
         if done < len(self.child_calls):
             name, args = self.child_calls[done]
             calls = [{"id": f"child-{done}", "type": "function",
                       "function": {"name": name, "arguments": json.dumps(args)}}]
             return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted",
-                              usage={}, tool_calls=calls)
-        return Completion(ChatMessage("assistant", self.child_answer), model="scripted", usage={})
+                              usage=usage, tool_calls=calls)
+        return Completion(ChatMessage("assistant", self.child_answer), model="scripted", usage=usage)
 
     def _one_shot(self, messages: list[ChatMessage]) -> str | None:
         system = messages[0].content if messages and messages[0].role == "system" else ""

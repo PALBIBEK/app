@@ -403,12 +403,17 @@ class GithiSteps:
         return self._memory
 
     async def one_shot_for(self, session_id: str) -> OneShot:
-        """One-shot calls (classification, extraction) with the session's own model."""
+        """One-shot calls (classification, extraction) with the session's own model, paid
+        for by the session (its cost cap); the platform's gateway when it has none."""
         row = await self._manager._get_session_row(session_id)
         seams = self._manager._seams_for_session(session_id, row)
         if seams is None or seams.model_gateway is None:
             return self._manager.memory.one_shot
-        return gateway_one_shot(seams.model_gateway, model=self._manager.session_model(row))
+        return gateway_one_shot(
+            seams.model_gateway,
+            model=self._manager.session_model(row),
+            charge=lambda cost: self._manager.charge_cost(session_id, cost),
+        )
 
     # --- run lifecycle ---------------------------------------------------------
 

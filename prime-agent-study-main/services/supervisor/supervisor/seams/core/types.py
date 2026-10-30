@@ -84,6 +84,9 @@ class SubagentRunResult:
     child_id: str | None = None
     status: str = "ok"
     meta: dict[str, Any] = field(default_factory=dict)
+    spent: dict[str, Any] = field(default_factory=dict)
+    """What its model calls through the session's gateway cost (``input_tokens``,
+    ``output_tokens``, ``cost``); empty when the child pays its own way (ACP)."""
 
 
 @dataclass
@@ -188,6 +191,16 @@ class Completion:
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
     tool_calls: list[dict[str, Any]] | None = None
+
+    @property
+    def spent(self) -> dict[str, Any]:
+        """What the call cost: ``input_tokens``, ``output_tokens`` and ``cost`` (USD)."""
+        usage = self.usage or {}
+        return {
+            "input_tokens": int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
+            "output_tokens": int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
+            "cost": float(usage.get("cost_total") or usage.get("cost") or 0.0),
+        }
 
 
 @dataclass

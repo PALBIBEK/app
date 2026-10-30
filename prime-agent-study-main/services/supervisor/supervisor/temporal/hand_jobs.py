@@ -140,9 +140,13 @@ async def run_hand_job(
         if step < len(made):  # resumed: what an earlier attempt asked for
             text, calls = "", made[step]
         else:
+            # Its model calls are the session's to pay for: none past the session's cost cap.
+            if (spent := await manager.cost_cap_reached(spec.session_id)) is not None:
+                return HandJobResult("error", f"the session may spend no more ({spent})")
             completion = await heartbeating(
                 asyncio.to_thread(seams.model_gateway.complete, messages, schemas, model=brain.model)
             )
+            await manager.charge_cost(spec.session_id, completion.spent["cost"])
             text = str(completion.message.content or "")
             asked = AgentLoop.extract_tool_calls(completion)
             if not asked:

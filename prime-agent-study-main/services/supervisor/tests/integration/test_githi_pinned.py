@@ -589,6 +589,40 @@ async def test_a_background_subagent_runs_as_a_durable_job(
     )
 
 
+async def test_a_subagents_model_call_counts_toward_the_sessions_cost(
+    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child runs on the session's gateway, so the session pays for it: two model
+    steps and the child's call, $0.01 each (it used to cost the session nothing)."""
+    monkeypatch.setenv("ALLOW_LAB_ECHO", "0")  # production wiring: nested-session subagents
+    model(("subagent", {"prompt": "summarise the repo"}), cost_per_call=0.01)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "delegate it"))
+        events = await env.wait_for(state, sid, run_ended())
+        spent = await state.manager._budget.check(sid)
+
+    assert payloads(events, SubagentStart)[0].provider == "nested_session"
+    assert spent.total_cost_usd == Decimal("0.03")
+
+
+async def test_a_background_subagents_model_call_counts_toward_the_sessions_cost(
+    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALLOW_LAB_ECHO", "0")
+    model(("subagent", {"prompt": "long task", "background": True}), cost_per_call=0.01)
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start it"))
+        await env.wait_for(state, sid, run_ended())
+        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
+        spent = await state.manager._budget.check(sid)
+
+    assert spent.total_cost_usd == Decimal("0.03"), "two model steps and the job's call"
+
+
 async def test_a_finished_background_subagent_is_announced_once(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

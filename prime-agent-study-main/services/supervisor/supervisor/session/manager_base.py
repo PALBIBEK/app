@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -344,6 +345,21 @@ class SessionManagerBase:
         if row.manifest:
             return manifest_from_dict(dict(row.manifest))
         return self._catalog.resolve_sync(row.harness_version, for_create=False)
+
+    async def charge_cost(self, session_id: str, cost_usd: float) -> None:
+        """Count a model call made for the session beside its runs' own steps (a subagent,
+        memory's extraction) toward ``max_cost_per_session``.
+
+        Its tokens count toward no bound: the token bounds are the agent's own model
+        calls and summaries. The cost cap is every call the session pays for.
+        """
+        if cost_usd:
+            await self._budget.record(session_id, Decimal(str(cost_usd)), 0)
+
+    async def cost_cap_reached(self, session_id: str) -> str | None:
+        """Why the session may spend no more (``max_cost_per_session``), or None."""
+        state = await self._budget.check(session_id, turn_tokens=False)
+        return state.exceeded_reason if state.exceeded else None
 
     def _configure_policy(
         self,

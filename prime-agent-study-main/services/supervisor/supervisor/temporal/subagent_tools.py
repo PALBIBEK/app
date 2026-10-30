@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from supervisor.session import SessionManager
 
 __all__ = [
+    "MAX_BACKGROUND_JOBS",
     "SUBAGENT",
     "SUBAGENT_RESULT",
     "SUBAGENT_TOOLS",
@@ -55,6 +56,11 @@ __all__ = [
 SUBAGENT: Final = "subagent"
 SUBAGENT_RESULT: Final = "subagent_result"
 SUBAGENT_TOOLS: Final = frozenset({SUBAGENT, SUBAGENT_RESULT})
+
+MAX_BACKGROUND_JOBS: Final = 8
+"""Background subagents a session may have running at once. Each spends on the session's
+model until it ends, so the model cannot fan out without bound; one more is refused, and
+the model reads why."""
 
 
 class SubagentArgs(ToolArgs):
@@ -73,6 +79,10 @@ class SubagentArgs(ToolArgs):
 
 class HandLent(ToolError):
     code = "HAND_LENT"
+
+
+class TooManyJobs(ToolError):
+    code = "TOO_MANY_JOBS"
 
 
 class SubagentResultArgs(ToolArgs):
@@ -167,6 +177,13 @@ class SubagentTools:
 
         op_id = f"{run_id}:{call_id}"
         job_id, job_run = job_ids(op_id)
+        running = await self._running_jobs(session_id)
+        # A re-sent call (a retried step) is the job already running, not one more.
+        if job_id not in running and len(running) >= MAX_BACKGROUND_JOBS:
+            raise TooManyJobs(
+                f"{len(running)} background subagents are running, the most a session may have; "
+                "wait for one to end (subagent_result) before starting another"
+            )
         job_args: dict[str, Any] = {
             "prompt": args.prompt,
             "description": args.description,
@@ -206,6 +223,17 @@ class SubagentTools:
             {"job_id": job_id, "status": "started"}
             | ({"hand": args.hand, "lent_until": "the job ends"} if args.hand else {})
         )
+
+    async def _running_jobs(self, session_id: str) -> set[str]:
+        """The session's background subagents that started and have not ended."""
+        events = await self._reader.read_types([session_id], [JobStart.__name__, JobEnd.__name__])
+        started = {
+            e.payload.job_id
+            for e in events
+            if isinstance(e.payload, JobStart) and e.payload.kind == "subagent"
+        }
+        ended = {e.payload.job_id for e in events if isinstance(e.payload, JobEnd)}
+        return started - ended
 
     async def _lend(self, session_id: str, hand: str, job_id: str) -> Borrower:
         """Lend ``hand`` to the job (a re-sent call renews the same lease)."""

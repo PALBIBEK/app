@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
 from sqlalchemy import select
@@ -34,8 +34,16 @@ from supervisor.seams.core.types import ChatMessage
 logger = logging.getLogger(__name__)
 
 
-def gateway_one_shot(gateway: object, *, model: str | None = None) -> OneShot:
-    """A OneShot over a ModelGatewayClient (blocking ``complete`` runs in a thread)."""
+def gateway_one_shot(
+    gateway: object,
+    *,
+    model: str | None = None,
+    charge: Callable[[float], Awaitable[None]] | None = None,
+) -> OneShot:
+    """A OneShot over a ModelGatewayClient (blocking ``complete`` runs in a thread).
+
+    ``charge``: counts each call's cost toward whoever pays for it (a session's cost cap).
+    """
 
     async def call(system: str, content: str) -> str:
         completion = await asyncio.to_thread(
@@ -44,8 +52,9 @@ def gateway_one_shot(gateway: object, *, model: str | None = None) -> OneShot:
             [],
             model=model,
         )
-        message = getattr(completion, "message", None)
-        return str(getattr(message, "content", "") or "")
+        if charge is not None and (cost := completion.spent["cost"]):
+            await charge(cost)
+        return str(completion.message.content or "")
 
     return call
 
