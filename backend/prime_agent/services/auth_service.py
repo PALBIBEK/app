@@ -78,9 +78,12 @@ class AuthService:
             return False
 
     @staticmethod
-    def create_access_token(user_id: str, expires_delta: timedelta | None = None) -> str:
-        """Create a short-lived access JWT via the claim-policy manager."""
-        return JWTManager.create_access_token(user_id, expires_delta)
+    def create_access_token(
+        user_id: str, expires_delta: timedelta | None = None, *, family_id: str | None = None
+    ) -> str:
+        """Create a short-lived access JWT via the claim-policy manager (``family_id``: the
+        sign-in it belongs to, so revoking that sign-in revokes it too)."""
+        return JWTManager.create_access_token(user_id, expires_delta, family_id=family_id)
 
     @staticmethod
     def generate_refresh_token() -> str:
@@ -213,9 +216,10 @@ class AuthService:
         """Issue an access JWT and persist a hashed opaque refresh token."""
         settings = get_settings()
         raw_refresh_token = cls.generate_refresh_token()
+        family_id = family_id or str(uuid4())
         refresh_record = RefreshToken(
             user_id=user.id,
-            family_id=family_id or str(uuid4()),
+            family_id=family_id,
             token_hash=cls.hash_refresh_token(raw_refresh_token),
             expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
         )
@@ -223,7 +227,7 @@ class AuthService:
         await db.commit()
 
         return {
-            "access_token": cls.create_access_token(user.id),
+            "access_token": cls.create_access_token(user.id, family_id=family_id),
             "refresh_token": raw_refresh_token,
             "token_type": "bearer",
         }
@@ -367,4 +371,23 @@ class AuthService:
                 detail="User account is inactive",
             )
 
+        # Signed out, or the password changed since: the sign-in is revoked, and with it
+        # every access token it issued (they used to live on until they expired).
+        family_id = payload.get("fid")
+        if isinstance(family_id, str) and await cls._family_revoked(family_id, user.id, db):
+            raise credentials_exception
+
         return user
+
+    @staticmethod
+    async def _family_revoked(family_id: str, user_id: str, db: AsyncSession) -> bool:
+        revoked = await db.scalar(
+            select(RefreshToken.id)
+            .where(
+                RefreshToken.family_id == family_id,
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_not(None),
+            )
+            .limit(1)
+        )
+        return revoked is not None
