@@ -9,7 +9,7 @@ Reference: catalog/storage/converters.py pattern.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Final
 
 import yaml
 
@@ -38,12 +38,15 @@ from supervisor.harness.core.types import (
 )
 
 __all__ = [
+    "MAX_LOOP_STEPS",
     # From dict
     "approval_spec_from_dict",
     # To dict
     "approval_spec_to_dict",
     "budget_spec_from_dict",
     "budget_spec_to_dict",
+    # Registering
+    "check_new_version",
     "guard_spec_from_dict",
     "guard_spec_to_dict",
     # Parsing
@@ -313,6 +316,35 @@ def _parse_action(raw: Any, *, where: str) -> RecoveryAction:
         return RECOVERY_ACTION_ALIASES[str(raw)]
     except KeyError as exc:
         raise ManifestValidationError(where, f"unknown action {raw!r}") from exc
+
+
+MAX_LOOP_STEPS: Final = 500
+"""The most model steps one run may take. A run's steps all live in one workflow history
+(Temporal's hard limit is 51,200 events): 500 steps that each run a full round of 8 calls
+come to about 35,000. Also the publish form's limit."""
+
+
+def check_new_version(manifest: HarnessManifest) -> None:
+    """Checks a version must pass to be registered, beyond what makes it readable.
+
+    Not run on a stored version (``manifest_from_dict``): a session pinned to one keeps
+    working, while a new version is held to what the platform now knows.
+    """
+    loop, approvals = manifest.loop, manifest.approvals
+    if loop is not None and loop.max_steps > MAX_LOOP_STEPS:
+        raise ManifestValidationError("loop.max_steps", f"must be at most {MAX_LOOP_STEPS}")
+    if (
+        loop is not None
+        and loop.hard_run_seconds is not None
+        and approvals is not None
+        and (approvals.required or approvals.require_approval)
+        and approvals.timeout_s >= loop.hard_run_seconds
+    ):
+        raise ManifestValidationError(
+            "approvals.timeout_s",
+            f"must be shorter than loop.hard_run_seconds ({loop.hard_run_seconds:g}): the run's "
+            "hard limit counts the wait for an answer",
+        )
 
 
 def manifest_from_dict(data: dict[str, Any]) -> HarnessManifest:

@@ -202,6 +202,25 @@ async def test_a_tool_the_supervisor_cannot_run_is_refused_before_anything_is_pu
     assert supervisor.calls == []
 
 
+async def test_an_approval_that_cannot_be_answered_within_the_hard_limit_is_refused(db_session, owner, monkeypatch):
+    """The run's hard limit counts the wait for an approval: a wait as long as the limit
+    would stop every run that asks before its answer could come."""
+    harness = await _harness(db_session, owner)
+    supervisor = FakeSupervisor()
+    async with _api(db_session, owner, supervisor, monkeypatch) as api:
+        manifest = (await api.get(f"/api/v1/harnesses/{harness.id}/manifest")).json()["manifest"]
+        assert manifest["policy"]["require_approval"] == ["bash"]
+        manifest["policy"] |= {"approval_timeout_s": 300, "hard_run_minutes": 5}
+        await api.put(f"/api/v1/harnesses/{harness.id}/manifest", json=manifest)
+        checked = await api.post(f"/api/v1/harnesses/{harness.id}/check")
+        r = await api.post(f"/api/v1/harnesses/{harness.id}/publish")
+    failed = {(c["section"], c["code"]) for c in checked.json()["checks"] if not c["ok"]}
+    assert failed == {("policy", "APPROVAL_PAST_DEADLINE")}
+    assert r.status_code == 422 and r.json()["detail"]["section"] == "policy"
+    assert "must be shorter than hard_run_minutes" in r.json()["detail"]["message"]
+    assert not [k for k, _ in supervisor.calls if not k.startswith("check:")], "nothing published"
+
+
 async def test_another_users_harness_is_not_found(db_session, owner, make_user, monkeypatch):
     harness = await _harness(db_session, owner)
     other = await make_user(email="other-builder@example.com", name="Other")

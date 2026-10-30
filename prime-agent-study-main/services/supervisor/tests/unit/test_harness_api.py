@@ -96,6 +96,36 @@ async def test_a_registered_harness_runs_sessions_in_any_process_and_only_for_it
     assert refused.status_code in (404, 422), refused.text
 
 
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [
+        ({"loop": {"max_steps": 501}}, "loop.max_steps"),
+        (
+            {
+                "loop": {"max_steps": 30, "hard_run_seconds": 300},
+                "approvals": {"timeout_s": 300, "on_timeout": "deny", "require_approval": ["echo"]},
+            },
+            "approvals.timeout_s",
+        ),
+    ],
+    ids=["more-steps-than-one-history-holds", "approval-wait-outlasts-the-hard-limit"],
+)
+async def test_a_new_version_is_refused_what_cannot_work(
+    boot: Callable[[], Any], changes: dict[str, Any], field: str
+) -> None:
+    api = await boot()
+    r = await api.post("/v1/harness_versions", json=_kg("t1-bad", **changes), headers=T1)
+    assert r.status_code == 422 and field in r.text, r.text
+
+
+def test_a_stored_version_past_those_checks_still_reads() -> None:
+    """A session pinned to a version registered before the checks keeps working."""
+    from supervisor.harness.storage.converters import manifest_from_dict
+
+    stored = manifest_from_dict(_kg("t1-old", loop={"max_steps": 900}))
+    assert stored.loop is not None and stored.loop.max_steps == 900
+
+
 async def test_shipped_versions_cannot_be_overwritten_or_deprecated(boot: Callable[[], Any]) -> None:
     client = await boot()
     assert (await client.post("/v1/harness_versions", json=_kg("kg-v1"), headers=T1)).status_code == 409

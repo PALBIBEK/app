@@ -79,8 +79,14 @@ async def test_the_server_keeps_only_ciphertext_and_the_key_replays_it(
     assert stored, "the history holds payloads"
     plain = sorted({path for path, encoding in stored if encoding != ENCODING})
     # Only the memo (tenant, principal) is plain, on purpose: it outlives a key's rotation;
-    # and with tracing on, the trace context header (span ids, nothing the user wrote).
-    assert all(".memo.fields." in path or path.endswith(".header.fields._tracer-data") for path in plain), plain
+    # with tracing on, the trace context header (span ids, nothing the user wrote); and
+    # Temporal's own record of the patches the workflow took (patch ids: code, not data).
+    assert all(
+        ".memo.fields." in path
+        or ".patch-data." in path
+        or path.endswith((".header.fields._tracer-data", ".TemporalChangeVersion"))
+        for path in plain
+    ), plain
 
     # A process that never had the key reads who owns the session all the same.
     unkeyed = SessionWorkflows(env.client, task_queue=queue)
