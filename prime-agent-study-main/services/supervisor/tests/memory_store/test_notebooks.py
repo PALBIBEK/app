@@ -181,3 +181,15 @@ async def test_erasing_a_user_takes_their_notebooks_and_history(svc: MemoryServi
     with pytest.raises(NotebookNotFound):
         await notebooks.get(nb.id)
     assert (await notebooks.get(keep.id)).owner == "bob"
+
+
+async def test_the_supervisor_erases_an_owner_through_its_client(svc: MemoryServiceHandle) -> None:
+    notebooks = svc.client()
+    nb = await notebooks.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await notebooks.capture(nb.id, ["Prefers tea"], context=TRACKED)
+    keep = await notebooks.ensure(tenant_id="t1", owner="bob", agent_pin=PIN, name="default")
+    assert await notebooks.erase_owner(tenant_id="t1", owner="alice", actor="alice", reason="left") == 1
+    with pytest.raises(NotebookNotFound):
+        await notebooks.get(nb.id)
+    assert (await notebooks.get(keep.id)).owner == "bob"
+    assert await notebooks.erase_owner(tenant_id="t1", owner="alice", actor="alice", reason="left") == 0

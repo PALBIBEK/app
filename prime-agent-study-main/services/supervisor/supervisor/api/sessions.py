@@ -448,21 +448,27 @@ async def erase_session(
     """End the session (if it runs) and erase what the supervisor keeps of it, for good
     (``supervisor.session.erase``). Afterwards the session is not found."""
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    if (workflows := deps.get_workflows(request)) is not None:
-        jobs = await deps.get_reader(request).unfinished_jobs(session_id)
-        try:
-            await workflows.close(session_id, jobs=jobs)
-        except (SessionCommandError, TemporalUnavailable) as exc:
-            raise to_http(exc) from exc
-        except TimeoutError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="the session or one of its background jobs is still stopping; erase it again shortly",
-            ) from exc
-    else:
-        await manager.terminate(session_id)
-    await manager.erase(session_id)
+    await stop_for_erasure(request, session_id)
+    await deps.get_manager(request).erase(session_id)
+
+
+async def stop_for_erasure(request: Request, session_id: str) -> None:
+    """End the session and its unfinished background jobs, and wait until they have: nothing
+    may write what erasing removes. 503 when one is still stopping (erasing again retries)."""
+    workflows = deps.get_workflows(request)
+    if workflows is None:  # in-process mode
+        await deps.get_manager(request).terminate(session_id)
+        return
+    jobs = await deps.get_reader(request).unfinished_jobs(session_id)
+    try:
+        await workflows.close(session_id, jobs=jobs)
+    except (SessionCommandError, TemporalUnavailable) as exc:
+        raise to_http(exc) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="a session or one of its background jobs is still stopping; erase it again shortly",
+        ) from exc
 
 
 @router.get("/{session_id}/startup", response_model=StartupOut)

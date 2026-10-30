@@ -48,6 +48,11 @@ def personal_source(principal_id: str) -> str:
     return f"personal:{principal_id}"
 
 
+def subject_of(owner: str) -> str:
+    """The bank subject of an owner's facts (as ``remember`` and durable recall scope them)."""
+    return f"user:{owner}"
+
+
 def scope_source(scope_id: str) -> str:
     return f"scope:{scope_id}"
 

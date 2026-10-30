@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 
 import { AuthGuard } from '@/components/auth/AuthGuard';
+import { DeleteAccount } from '@/components/settings/DeleteAccount';
 import { cn } from '@/lib/utils';
 import { AppShell } from '@/components/layout/AppShell';
 
@@ -65,6 +66,9 @@ export default function SettingsPage(): JSX.Element {
                   <p className="text-sm text-ink-2">
                     Profile and org defaults are managed via the authenticated user API.
                   </p>
+                  <div className="mt-6">
+                    <DeleteAccount />
+                  </div>
                 </motion.div>
               )}
               {activeTab === 'api-keys' && (

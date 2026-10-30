@@ -66,6 +66,9 @@ if TYPE_CHECKING:
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
+ERASE_TIMEOUT_S = 300.0
+"""How long erasing a principal may take: each running session is ended and waited for."""
+
 SAFE_READY_REASONS = frozenset(
     {
         "not_configured",
@@ -177,6 +180,11 @@ class AiClient:
     @classmethod
     def from_settings(cls, settings: Settings) -> AiClient:
         return cls(settings)
+
+    @property
+    def configured(self) -> bool:
+        """Whether a supervisor is configured (without one, it keeps nothing of anyone)."""
+        return bool((self._settings.ai_supervisor_base_url or "").strip())
 
     def _require_base_url(self) -> str:
         base = (self._settings.ai_supervisor_base_url or "").rstrip("/")
@@ -506,6 +514,16 @@ class AiClient:
             identity,
             expected=(204,),
             allow_empty=True,
+        )
+
+    async def erase_principal(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """Erase everything the supervisor keeps of the caller: their sessions (ended
+        first), long-term memory, workspaces and secrets. Safe to repeat."""
+        return await self._json_request(
+            "DELETE",
+            "/v1/principals/me/data",
+            identity,
+            timeout=max(self._settings.ai_http_timeout_seconds, ERASE_TIMEOUT_S),
         )
 
     async def fork_session(

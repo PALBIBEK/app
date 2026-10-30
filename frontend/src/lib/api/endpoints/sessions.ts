@@ -214,8 +214,14 @@ export const sessionsAPI = {
     });
   },
 
+  /** End the session; its conversation is kept. */
   delete: async (sessionId: string): Promise<void> => {
     await apiClient.delete(`/sessions/${sessionId}`);
+  },
+
+  /** End the session and erase its conversation, files and history for good. */
+  erase: async (sessionId: string): Promise<void> => {
+    await apiClient.delete(`/sessions/${sessionId}/data`);
   },
 
   /**

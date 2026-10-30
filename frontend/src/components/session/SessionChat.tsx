@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
-import { CircleNotch, ClockCounterClockwise, GitBranch, Stop, TerminalWindow, XCircle } from '@phosphor-icons/react';
+import { CircleNotch, ClockCounterClockwise, GitBranch, Stop, TerminalWindow, Trash, XCircle } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
 import { Card, StatusPill, type StatusKind } from '@/components/ui';
@@ -192,6 +192,20 @@ export function SessionChat({
     }
   }
 
+  async function erase(): Promise<void> {
+    const sure = window.confirm(
+      'Erase this session? Its messages, files and history are deleted for good, and it cannot be recovered.',
+    );
+    if (!sure) return;
+    try {
+      await sessionsAPI.erase(session.id);
+      toast.success('Session erased');
+      router.push('/sessions');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to erase the session');
+    }
+  }
+
   // A queued message stops being queued once the journal confirms it (its run started), or
   // once its run is cancelled (it then never runs).
   const confirmed = new Set(state.messages.filter((m) => !m.id.startsWith('local-')).map((m) => m.content));
@@ -275,6 +289,9 @@ export function SessionChat({
                 <XCircle size={14} /> End
               </button>
             ) : null}
+            <button type="button" onClick={() => void erase()} className={cn(ctl, 'text-bad')} data-testid="erase">
+              <Trash size={14} /> Erase
+            </button>
           </div>
         </Card>
 

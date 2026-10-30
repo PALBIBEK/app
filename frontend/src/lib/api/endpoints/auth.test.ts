@@ -195,4 +195,12 @@ describe('authAPI', () => {
       });
     });
   });
+
+  describe('deleteAccount', () => {
+    it('sends the password with DELETE /users/me', async () => {
+      (apiClient.delete as Mock).mockResolvedValue(undefined);
+      await authAPI.deleteAccount('my long password');
+      expect(apiClient.delete).toHaveBeenCalledWith('/users/me', { data: { password: 'my long password' } });
+    });
+  });
 });
