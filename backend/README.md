@@ -19,3 +19,10 @@ DATABASE_URL=postgresql://yal:yal@127.0.0.1:5433/prime_agent .venv/bin/alembic r
 ```
 
 Review the generated file, then run `tests/test_migrations.py` against a Postgres.
+
+## Limits
+
+- A request body may be at most 2 MiB (`prime_agent.web.body_limit`); the one upload proxied
+  through the API, a workspace file, may be as large as the workspace's file limit.
+- A person may hold at most `MAX_STREAMS_PER_USER` (20) live session streams at once per API
+  process (`prime_agent.web.stream_slots`); the next is refused with 429 until one closes.
