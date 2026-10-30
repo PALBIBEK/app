@@ -62,7 +62,8 @@ class SessionRow(Base):
     # it is (the top is 0), how it was started (spawn | fork) and the label it was given.
     parent_session_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     root_session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    subagent_depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A server default only: rows written by code that predates the column still insert.
+    subagent_depth: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     subagent_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     subagent_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

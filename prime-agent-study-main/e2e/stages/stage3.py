@@ -19,7 +19,7 @@ HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
 COMMON = {"semver": "1.0.0", "protocol_version": 1, "status": "offered"}
 GITHI_TOOLS = {"echo", "grep", "ls", "read", "remember", "write"}
-PLATFORM = {"memory", "history", "subagent", "subagent_result"}
+PLATFORM = {"memory", "history", "subagent", "subagent_fork", "subagent_result"}
 results: list[tuple[str, bool, str]] = []
 u = User("t1", "alice")
 
@@ -207,15 +207,16 @@ run, _, calls = turn(sid, '/tool ls {"path": "."}', 1)
 check("[different gateway URL] still answers (chat-completions client)", "run_end" in types(run) and bool(calls), (types(run), [c["path"] for c in calls]))
 
 # --- E. subagents -----------------------------------------------------------------
-print("\n## E. Subagents through the pinned transport")
+print("\n## E. Subagents: child sessions, and background jobs on the pinned transport")
 sid = session("s-nested", composition("s-nested"))
 mark = relay_mark()
 run, _, calls = turn(sid, '/tool subagent {"prompt": "summarise the repo", "description": "summary"}', 1)
 start, end = (payloads(run, "SubagentStart") or [{}])[0], (payloads(run, "SubagentEnd") or [{}])[0]
-check("[nested] subagent runs on the pinned default provider", start.get("provider") == "nested_session", start)
-check("[nested] the child's model call went through the gateway",
-      any("summarise the repo" in json.dumps(c["body"]) and "subagent" not in tool_names(c["body"]) for c in calls), len(calls))
-check("[nested] the child's answer comes back to the parent", bool(end.get("output")), end)
+check("[child] subagent runs as a child session", start.get("provider") == "session" and start.get("child_session_id"), start)
+check("[child] the child's model call went through the gateway, as a subagent",
+      any("summarise the repo" in json.dumps(c["body"]) and "You are a subagent" in json.dumps(c["body"]) for c in calls),
+      len(calls))
+check("[child] the child's answer comes back to the parent", bool(end.get("output")), end)
 
 run, allev, _ = turn(sid, '/tool subagent {"prompt": "long background task", "background": true}', 2)
 started = ((payloads(run, "ToolEnd") or [{}])[0].get("result") or {}).get("payload") or {}
@@ -224,15 +225,6 @@ u.wait(sid, lambda evs: any(e["type"] == "job_end" for e in evs), timeout=60)
 run, _, calls = turn(sid, "anything new?", 3)
 announced = [c for c in calls if "Background subagents you started have finished" in json.dumps(c["body"])]
 check("[background] its result is announced to the model on the next turn", bool(announced), len(calls))
-
-acp_log = Path(os.environ["ACP_LOG"])
-acp_before = len(acp_log.read_text().splitlines()) if acp_log.exists() else 0
-sid = session("s-acp", composition("s-acp", acp="http://acp:9000"))
-run, _, _ = turn(sid, '/tool subagent {"prompt": "delegate to acp", "description": "acp"}', 1)
-start = (payloads(run, "SubagentStart") or [{}])[0]
-acp_calls = [json.loads(line) for line in acp_log.read_text().splitlines()[acp_before:]]
-check("[acp] subagent goes to the pinned ACP server", start.get("provider") == "acp" and any(c["path"] == "/v1/run" for c in acp_calls),
-      (start, [c["path"] for c in acp_calls]))
 
 # --- F. long-term memory tool (memory service) ---------------------------------------
 print("\n## F. remember → memory service")
