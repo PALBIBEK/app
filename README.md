@@ -189,6 +189,39 @@ chat, **Stop** cancels the run going now by its id (pressing it twice, or after 
 does nothing), a queued message has its own **Cancel**, and **Runs** lists each run with its
 status, duration, steps, tokens and cost.
 
+### Inside a run
+
+A githi run is a sequence of durable steps that the session's workflow drives (pi-temporal's
+stepped mode): a **model step** (one model call, on any worker), then a **round** that answers
+each tool call the model asked for (at most 8 at once, read-only calls together), then the next
+model step, until the model answers. The workflow's history holds only references. The journal
+holds every message, call and result: clients read it, and a retried step reads it back.
+
+- **Talking to a running run.** A message sent while a run works joins it before its next step
+  (steering); otherwise it waits behind the run. When no worker takes a message within 10 s,
+  Temporal holds it as a signal and it runs once a worker is back.
+- **Stopping.** Stop ends the run where it is: its running steps are cancelled, a running
+  command is killed, and what the tool did so far is recorded. A call that cannot report in time
+  is answered as an unknown outcome.
+- **Limits.** A message: 64 K characters. A tool call: 30 min (`TOOL_CALL_TIMEOUT_S`), then it is
+  stopped and the run goes on. A run: a step limit (at most 500), a time limit checked between
+  steps (`loop.max_run_seconds`), and a hard deadline that stops it mid-call
+  (`loop.hard_run_seconds`; waiting for an approval counts toward it). A session: tokens and
+  time (`budget.max_tokens_per_session`, `max_seconds_per_session`), and cost
+  (`max_cost_per_session`, which counts every model call the session pays for: its steps,
+  summaries, subagents and memory's extraction). At most 8 background subagents run at once.
+- **When something fails.** A model call that may pass (a rate limit, an overload) is asked
+  again on a durable timer. A dead worker is noticed within the heartbeat timeout (30 s; every
+  step heartbeats), and its session moves to another worker. A call that may already have run is
+  never run twice: it is answered as an unknown outcome, and the model checks. A background
+  subagent retried on another worker goes on from the calls it journalled.
+- **Long conversations.** Once the conversation outgrows the model's window it is summarised,
+  as a run opens or between steps. A summary that fails is retried; if it keeps failing, the
+  conversation is kept whole. The summary names the journal entries it replaced, and the model
+  can reopen any of them with the `history` tool. A session starts a fresh workflow history
+  (continue-as-new) between runs and while idle, so a long-lived session never reaches
+  Temporal's history limit.
+
 ### Scaling and watching the workers
 
 **One image, two roles.** The supervisor image runs as `python -m supervisor api` (the

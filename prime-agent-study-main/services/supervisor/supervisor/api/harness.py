@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from supervisor.api import deps
 from supervisor.db.models import HarnessVersionRow
+from supervisor.harness import ManifestError
 from supervisor.harness.repository import (
     HarnessVersionConflict,
     deprecate_harness_version,
@@ -29,7 +30,11 @@ from supervisor.harness.repository import (
     visible_to,
 )
 from supervisor.harness.services.resolver import HarnessCatalog, HarnessStatus
-from supervisor.harness.storage.converters import manifest_to_dict, validate_and_freeze
+from supervisor.harness.storage.converters import (
+    check_new_version,
+    manifest_to_dict,
+    validate_and_freeze,
+)
 from supervisor.tools import default_registry
 
 router = APIRouter(tags=["harness"])
@@ -90,7 +95,8 @@ async def register_harness_version(
 ) -> Any:
     try:
         manifest = validate_and_freeze(body)
-    except (KeyError, TypeError, ValueError) as exc:  # the validators' errors are ValueErrors
+        check_new_version(manifest)
+    except (KeyError, TypeError, ValueError, ManifestError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     stored = manifest_to_dict(manifest)
     try:

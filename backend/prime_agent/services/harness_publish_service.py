@@ -22,7 +22,13 @@ from prime_agent.config import get_settings
 from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.harness_release import HarnessDraft, HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
-from prime_agent.schemas.harness_manifest import HarnessManifest, SandboxSpec, default_manifest, manifest_body
+from prime_agent.schemas.harness_manifest import (
+    HarnessManifest,
+    PolicySpec,
+    SandboxSpec,
+    default_manifest,
+    manifest_body,
+)
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.environment_service import EnvironmentService
 from prime_agent.services.tool_publish_service import _canonical_digest
@@ -57,6 +63,21 @@ class PublishError(Exception):
 class Published:
     release: HarnessRelease
     created: bool
+
+
+def approval_outlasts_deadline(policy: PolicySpec) -> str | None:
+    """Why the draft's approvals could never be answered in time, or None.
+
+    The run's hard limit counts the wait for an approval: a wait as long as the limit
+    stops the run before the answer (or the timeout's choice) can come.
+    """
+    hard_s = policy.hard_run_minutes * 60
+    if not (policy.require_approval and hard_s) or policy.approval_timeout_s < hard_s:
+        return None
+    return (
+        f"approval_timeout_s ({policy.approval_timeout_s:g} s) must be shorter than hard_run_minutes "
+        f"({policy.hard_run_minutes} min): the run's hard limit counts the wait for an answer"
+    )
 
 
 def model_route(model_id: str) -> str:
@@ -216,6 +237,13 @@ class HarnessPublisher:
             m = m.model_copy(update={"tools": [t for t in m.tools if t in registry]})
         elif self._checks is not None:
             self._checks.append(DraftCheck("tools", "Every tool can run", True))
+        if (clash := approval_outlasts_deadline(m.policy)) is not None:
+            if self._checks is None:
+                raise PublishError("policy", clash)
+            self._checks.append(
+                DraftCheck("policy", "An approval can be answered within the run's hard limit", False, clash,
+                           "APPROVAL_PAST_DEADLINE")
+            )
 
         prompt = await self._publish(identity, "prompt_pack", {
             "name": f"{prefix}-prompt",

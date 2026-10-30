@@ -20,7 +20,14 @@ from supervisor.agent.events import MessageEnd, ToolEnd
 from supervisor.app import SupervisorState
 from supervisor.main import create_app
 from supervisor.session.manager_tools import MAX_KEPT_RESULT_CHARS
-from supervisor.temporal.contracts import Activity, CreateSession, Message, Op, SessionOp
+from supervisor.temporal.contracts import (
+    Activity,
+    CreateSession,
+    Message,
+    Op,
+    SessionOp,
+    workflow_id,
+)
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
@@ -191,6 +198,35 @@ async def test_worker_killed_mid_invoke_reports_unknown_and_never_reruns(
     assert event_types(events).count("ToolStart") == 1
     (end,) = [e for e in payloads(events, ToolEnd) if e.tool_call_id == "slow-1"]
     assert end.result["code"] == "TOOL_OUTCOME_UNKNOWN"
+
+
+async def test_a_session_busy_only_with_operations_starts_a_fresh_history(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Continue-as-new used to come only after a message, so a session answering only
+    operations grew its history toward Temporal's hard limit (the dev server here
+    suggests a fresh one after 60 events)."""
+    model()
+    worker = await env.state()
+    async with session_worker(env.client, worker, task_queue=env.queue):
+        sid = await env.create(worker)
+        handle = env.client.get_workflow_handle(workflow_id(sid))
+        first_run = (await handle.describe()).run_id
+        for n in range(12):
+            body = await env.sessions.op(_invoke(sid, f"op-{n}", path="."))
+            assert body is not None and body["ok"]
+        async with asyncio.timeout(30):
+            while (await handle.describe()).run_id == first_run:
+                await asyncio.sleep(0.2)
+        # The fresh history carries the session: a message runs, a re-sent op runs once.
+        again = await env.sessions.op(_invoke(sid, "op-0", path="."))
+        await env.sessions.submit(sid, Message("c1", "hello"))
+        events = await env.wait_for(worker, sid, run_ended())
+        status = await env.sessions.status(sid)
+
+    assert again is not None and again["ok"]
+    assert [e.tool_call_id for e in payloads(events, ToolEnd)].count("op-0") == 1
+    assert status.turns_completed == 1
 
 
 async def test_a_fork_is_a_session_with_its_own_workflow(

@@ -142,6 +142,9 @@ _STOP_RUN = "stop-run"
 # Steps that find the session's worker gone together adopt it once (a parallel round's
 # calls, or a checkpoint beside a model step); histories before it adopted per step.
 _ONE_ADOPTION = "one-adoption"
+# A session busy only with operations (tool invokes, memory, background jobs) starts a
+# fresh history while idle, as it does after a message; before it, only after a message.
+_IDLE_FRESH_HISTORY = "idle-fresh-history"
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -324,13 +327,15 @@ class AgentSessionWorkflow:
     @workflow.run
     async def run(self, inp: SessionInput) -> SessionResult:
         try:
+            fresh_when_idle = workflow.patched(_IDLE_FRESH_HISTORY)
             if self._state.phase is Phase.CREATING:
                 await self._create(inp)
             while self._state.phase is not Phase.FAILED:
-                await self._wait_for_work()
+                await self._wait_for_work(fresh_when_idle=fresh_when_idle)
                 if self._terminate_requested:
                     break
-                await self._run_turn(self._state.pending.pop(0))
+                if self._state.pending:  # else it woke to start a fresh history
+                    await self._run_turn(self._state.pending.pop(0))
                 if workflow.info().is_continue_as_new_suggested():
                     await workflow.wait_condition(workflow.all_handlers_finished)
                     if not self._terminate_requested:
@@ -421,8 +426,12 @@ class AgentSessionWorkflow:
 
     # --- automatic memory capture (QM per-turn bursts, on durable timers) --------
 
-    async def _wait_for_work(self) -> None:
-        """Wait for a message or terminate; flush a capture burst when its quiet ends."""
+    async def _wait_for_work(self, *, fresh_when_idle: bool = False) -> None:
+        """Wait for a message or terminate; flush a capture burst when its quiet ends.
+
+        ``fresh_when_idle``: also wake when Temporal suggests a fresh history, so a session
+        that only answers operations does not grow its history toward the hard limit.
+        """
         while True:
             due = self._state.capture_due
             timeout = (
@@ -432,7 +441,9 @@ class AgentSessionWorkflow:
             )
             try:
                 await workflow.wait_condition(
-                    lambda: bool(self._state.pending) or self._terminate_requested,
+                    lambda: bool(self._state.pending)
+                    or self._terminate_requested
+                    or (fresh_when_idle and workflow.info().is_continue_as_new_suggested()),
                     timeout=timeout,
                 )
                 return
