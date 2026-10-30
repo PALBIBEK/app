@@ -362,7 +362,8 @@ class StepRequest:
 
 @dataclass(frozen=True, slots=True)
 class Compacted:
-    """A compaction inside a run: whether it shrank the conversation, and what it spent."""
+    """A compaction inside a run: whether the run asks the model again (the conversation
+    shrank, or its summary failed and it goes on whole), and what it spent."""
 
     ok: bool
     tokens: int = 0

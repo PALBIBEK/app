@@ -530,7 +530,7 @@ class _Builder:
             span.preview = f"{span.attrs.get('tokens_before')} → {p.tokens_after} tokens"
         failed = p.stop_reason == "error"
         if failed:
-            span.error = {"class": "CompactionFailed", "message": "compaction did not complete"}
+            span.error = {"class": "CompactionFailed", "message": p.error or "compaction did not complete"}
         self._close(span, env, SpanStatus.ERROR if failed else SpanStatus.OK)
 
     def _on_SubagentStart(self, env: Envelope, p: SubagentStart) -> None:

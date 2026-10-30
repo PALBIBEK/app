@@ -127,8 +127,8 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "Check budget and recovery before a message runs; start the sandbox (with_run)",
     ),
     Activity.BEGIN_RUN: StepPolicy(
-        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True, _ADOPTED,
-        "Open a run: journal the message, plan the steps",
+        Where.SESSION_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True, _ADOPTED,
+        "Open a run: journal the message, plan the steps, summarise earlier turns if due",
     ),
     Activity.MODEL_STEP: StepPolicy(
         Where.ANY_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True,

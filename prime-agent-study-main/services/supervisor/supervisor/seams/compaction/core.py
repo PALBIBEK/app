@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 logger = logging.getLogger(__name__)
@@ -397,26 +397,41 @@ def compact(
     return out
 
 
+class SummaryFailed(Exception):
+    """No summary could be written.
+
+    Raised from the summarizer's own error (``__cause__``), which says whether asking
+    again may help; an empty summary has no cause, and asking again will not.
+    ``spent``: what its model calls cost before it failed (they were billed).
+    """
+
+    retryable = False  # itself, never (``classify.is_retryable``); its cause may be
+
+    def __init__(self, reason: str, *, spent: Mapping[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.spent: dict[str, Any] = dict(spent or {})
+
+
 def summarize_span(
     messages: list[dict[str, Any]],
     *,
     previous_summary: str | None = None,
     summarizer: Summarizer | None = None,
 ) -> str:
-    """Summarize a dropped span; degrades to plain notice on failure."""
+    """Summarize a dropped span.
+
+    A failed summarizer call raises, as the provider raised it, and so does a summary
+    that came back empty (``SummaryFailed``): the caller decides whether to ask again
+    or to keep the conversation as it is (Pi Durable fails the compaction rather than
+    drop what it could not summarise). Without a summarizer, the plain notice.
+    """
     if not messages:
         return COMPACTION_NOTICE
     if summarizer is None:
         return COMPACTION_NOTICE
-    try:
-        summary = _fitting(summarizer, messages, previous_summary)
-    except Exception:
-        # The run goes on, but the dropped span is lost rather than summarised, so say why.
-        logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
-        return COMPACTION_NOTICE
+    summary = _fitting(summarizer, messages, previous_summary)
     if not summary or not summary.strip():
-        logger.warning("compaction summarizer returned nothing; dropping the span behind a notice")
-        return COMPACTION_NOTICE
+        raise SummaryFailed("the summarizer returned nothing")
     read, modified = file_operations(messages, previous_summary)
     return framed_summary(without_file_operations(summary) + format_file_operations(read, modified))
 
@@ -461,11 +476,17 @@ def _checkpoint(
     full: list[dict[str, Any]],
     summarizer: Summarizer | None,
 ) -> dict[str, Any]:
-    text = summarize_span(
-        dropped,
-        previous_summary=extract_previous_summary(full),
-        summarizer=summarizer,
-    )
+    try:
+        text = summarize_span(
+            dropped,
+            previous_summary=extract_previous_summary(full),
+            summarizer=summarizer,
+        )
+    except Exception:
+        # This in-process trim must make the request fit now; it has nowhere to wait and
+        # ask again, so the span goes behind the notice (the journal keeps every entry).
+        logger.warning("compaction summary failed; dropping the span behind a notice", exc_info=True)
+        text = COMPACTION_NOTICE
     return {"role": "user", "content": text}
 
 
