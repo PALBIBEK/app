@@ -25,6 +25,7 @@ from supervisor.seams.services import (
     Principal,
     UnauthorizedError,
     WorkspacePathEscape,
+    WorkspaceQuotaExceeded,
     WorkspaceStore,
     new_object_key,
     normalize_workspace_path,
@@ -106,6 +107,24 @@ def _too_large(size: int, limit: int) -> HTTPException:
         status_code=413,
         detail=f"file is {size} bytes; this workspace takes files up to {limit} bytes",
     )
+
+
+def _full(exc: WorkspaceQuotaExceeded) -> HTTPException:
+    return HTTPException(
+        status_code=413,
+        detail={"error_code": exc.code, "message": str(exc), "stored": exc.stored, "limit": exc.limit},
+    )
+
+
+async def _check_room(store: WorkspaceStore, scope_id: str, object_key: str | None, size_bytes: int) -> None:
+    """413 now when new bytes would not fit the workspace (a store without a limit: room)."""
+    check = getattr(store, "check_room", None)
+    if check is None:
+        return
+    try:
+        await check(scope_id, object_key, size_bytes)
+    except WorkspaceQuotaExceeded as exc:
+        raise _full(exc) from exc
 
 
 def _workspace_store(request: Request) -> WorkspaceStore:
@@ -256,6 +275,8 @@ async def put_workspace_file(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CasConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkspaceQuotaExceeded as exc:
+        raise _full(exc) from exc
     return WorkspaceFileOut(
         path=row.path,
         content_sha256=row.content_sha256,
@@ -386,8 +407,11 @@ async def start_workspace_upload(
             )
         except CasConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceQuotaExceeded as exc:
+            raise _full(exc) from exc
         return UploadStartOut(status="committed", max_bytes=limit, file=_file_out(row))
 
+    await _check_room(store, scope_id, None, body.size_bytes)  # before any bytes are sent
     ttl = uploads.url_ttl_s()
     ticket = uploads.new_ticket(
         scope_id=scope_id, path=path, content_sha256=sha, size_bytes=body.size_bytes,
@@ -459,6 +483,11 @@ async def complete_workspace_upload(
     # Promote to the version's own private key (or reuse this workspace's copy of the bytes).
     final = await store.find_object(scope_id, ticket.content_sha256, ticket.size_bytes)
     if final is None:
+        try:  # the workspace may have filled up since the upload began
+            await _check_room(store, scope_id, None, ticket.size_bytes)
+        except HTTPException:
+            await objects.delete(staged)
+            raise
         final = new_object_key(scope_id)
         await objects.copy(staged, final, content_sha256=ticket.content_sha256)
     await objects.delete(staged)
@@ -475,6 +504,8 @@ async def complete_workspace_upload(
         )
     except CasConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkspaceQuotaExceeded as exc:
+        raise _full(exc) from exc
     except WorkspacePathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _file_out(row)
@@ -599,4 +630,6 @@ async def restore_file_version(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CasConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkspaceQuotaExceeded as exc:
+        raise _full(exc) from exc
     return _file_out(row)

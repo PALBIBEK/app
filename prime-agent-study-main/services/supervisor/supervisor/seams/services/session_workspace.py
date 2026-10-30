@@ -45,6 +45,16 @@ class WorkspaceConflictError(RuntimeError):
         )
 
 
+class WorkspaceFullError(RuntimeError):
+    """Files the session changed were not saved: they do not fit the workspace's storage limit.
+    The session stays dirty, so the next sync tries them again."""
+
+    def __init__(self, scope_id: str, paths: tuple[str, ...]) -> None:
+        self.scope_id = scope_id
+        self.paths = paths
+        super().__init__(f"workspace full scope={scope_id!r} paths={list(paths)}")
+
+
 class WorkspaceNotReadyError(RuntimeError):
     """Tools refused until hydrate succeeds (R8)."""
 
@@ -201,6 +211,8 @@ class SessionWorkspaceService:
         if report.conflicts:
             state.conflicts = report.conflicts
             raise WorkspaceConflictError(state.scope_id, report.conflicts)
+        if report.refused:
+            raise WorkspaceFullError(state.scope_id, report.refused)
         state.dirty = False
         return report
 

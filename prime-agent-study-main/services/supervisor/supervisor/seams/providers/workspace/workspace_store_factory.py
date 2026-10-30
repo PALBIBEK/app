@@ -16,6 +16,17 @@ from supervisor.seams.services.workspace_hydrator import (
 )
 from supervisor.seams.services.workspace_store import WorkspaceStore
 
+DEFAULT_MAX_SCOPE_BYTES = 10 * 1024 * 1024 * 1024
+
+
+def max_scope_bytes() -> int | None:
+    """Most a workspace may store (``WORKSPACE_MAX_SCOPE_BYTES``, default 10 GiB; 0: no limit)."""
+    raw = os.environ.get("WORKSPACE_MAX_SCOPE_BYTES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_SCOPE_BYTES
+    limit = int(raw)
+    return None if limit <= 0 else limit
+
 
 def _env_is_staging() -> bool:
     return (os.environ.get("ENV") or "").strip().lower() in ("staging", "production", "prod")
@@ -48,7 +59,7 @@ def create_workspace_store(
             PostgresWorkspaceStore,
         )
 
-        return PostgresWorkspaceStore(session_factory, objs)
+        return PostgresWorkspaceStore(session_factory, objs, max_scope_bytes=max_scope_bytes())
     raise ValueError(f"unknown WORKSPACE_STORE={chosen!r}")
 
 

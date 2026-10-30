@@ -17,6 +17,7 @@ __all__ = [
     "WorkspaceBase",
     "WorkspaceFileRecord",
     "WorkspacePathEscape",
+    "WorkspaceQuotaExceeded",
     "WorkspaceStore",
     "WorkspaceStoreError",
     "WorkspaceSyncReport",
@@ -38,6 +39,18 @@ class CasConflict(WorkspaceStoreError):
         self.path = path
         self.expected = expected
         self.actual = actual
+
+
+class WorkspaceQuotaExceeded(WorkspaceStoreError):
+    """New bytes would take the workspace past its storage limit (``WORKSPACE_MAX_SCOPE_BYTES``)."""
+
+    def __init__(self, scope_id: str, stored: int, adding: int, limit: int) -> None:
+        super().__init__(
+            f"this workspace stores {stored} of its {limit} bytes (every version of its files "
+            f"included); {adding} more do not fit",
+            "WORKSPACE_QUOTA_EXCEEDED",
+        )
+        self.scope_id, self.stored, self.adding, self.limit = scope_id, stored, adding, limit
 
 
 class WorkspacePathEscape(WorkspaceStoreError):
@@ -135,6 +148,8 @@ class WorkspaceSyncReport:
     bytes_transferred: int
     base: Mapping[str, tuple[int, str]] = field(default_factory=dict)
     """The tree's base after this hydrate or sync: pass it to the next sync."""
+    refused: tuple[str, ...] = ()
+    """Paths not saved because the workspace is full (``WorkspaceQuotaExceeded``)."""
 
 
 @runtime_checkable
