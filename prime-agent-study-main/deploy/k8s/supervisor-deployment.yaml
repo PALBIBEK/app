@@ -23,6 +23,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: ENV  # production rules: auth required, vault and history keys required
+              value: production
             - name: SERVE_MODEL_GATEWAY  # its own Deployment (gateway-memory-deployment.yaml)
               value: "0"
             - name: SERVE_MEMORY_SERVICE
@@ -37,7 +39,7 @@ spec:
               value: "60"
           envFrom:
             - secretRef:
-                name: yal-gateway-credentials
+                name: yal-supervisor-secrets
           startupProbe:
             httpGet:
               path: /readyz
