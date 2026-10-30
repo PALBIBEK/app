@@ -77,6 +77,8 @@ class ScriptedGateway:
     # The answer streamed to ``on_delta`` first, a chunk every ``stream_pause`` seconds.
     stream_chunks: list[str] = dataclasses.field(default_factory=list)
     stream_pause: float = 0.0
+    # Raised once the chunks have streamed: the call fails part way through its reply.
+    stream_error: Exception | None = None
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def complete(
@@ -93,6 +95,9 @@ class ScriptedGateway:
             for chunk in self.stream_chunks:
                 on_delta("text", chunk)
                 time.sleep(self.stream_pause)
+            if self.stream_error is not None:
+                error, self.stream_error = self.stream_error, None
+                raise error
             return Completion(ChatMessage("assistant", "".join(self.stream_chunks)), model="scripted", usage={})
         if tool_choice == "none":  # the model is told to answer: it does
             with self._lock:
@@ -328,3 +333,23 @@ def all_variants(catalog: HarnessCatalog) -> HarnessCatalog:
     budget_variant(catalog)
     loop_variant(catalog)
     return catalog
+
+
+@contextmanager
+def huge_result(name: str, chars: int) -> Iterator[None]:
+    """Make one catalog tool answer ``chars`` characters, as a tool that does not bound
+    its own output (an MCP server's) may."""
+    from supervisor.seams.core.types import ToolResult
+
+    original = RegistryToolProvider.invoke
+
+    def invoke(self: RegistryToolProvider, ctx: Any, tool: str, args: dict[str, Any]) -> Any:
+        if tool == name:
+            return ToolResult(ok=True, payload="head " + "x" * chars + " tail")
+        return original(self, ctx, tool, args)
+
+    RegistryToolProvider.invoke = invoke  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        RegistryToolProvider.invoke = original  # type: ignore[method-assign]

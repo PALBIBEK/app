@@ -19,6 +19,7 @@ from temporalio.worker import Replayer
 from supervisor.agent.events import MessageEnd, ToolEnd
 from supervisor.app import SupervisorState
 from supervisor.main import create_app
+from supervisor.session.manager_tools import MAX_KEPT_RESULT_CHARS
 from supervisor.temporal.contracts import Activity, CreateSession, Message, Op, SessionOp
 from supervisor.temporal.sessions import SessionCommandError
 from supervisor.temporal.worker import session_worker
@@ -33,7 +34,7 @@ from tests.support.githi_env import (
     run_ended,
     spawn_worker,
 )
-from tests.support.scripted import ScriptedGateway
+from tests.support.scripted import ScriptedGateway, huge_result
 from tests.support.workflow_histories import replayable_histories
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -82,6 +83,33 @@ async def test_tool_invoke_runs_on_the_session_worker_not_the_api(
         assert worker.manager._registry.get(sid) is not None, "live on the worker"
         assert front.manager._registry.get(sid) is None, "never resumed in the API process"
     assert Activity.SESSION_OP in await env.activity_types(sid)
+
+
+async def test_a_huge_tool_result_is_kept_within_bounds_and_answered(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """A 3 MB result used to be too big for the operation's answer (Temporal takes 2 MB in
+    one item): the call ran, and was reported as an unknown outcome. The session keeps
+    its head and tail, so it answers, and the journal holds the same."""
+    model()
+    worker = await env.state()
+    with huge_result("ls", 3_000_000):
+        async with session_worker(env.client, worker, task_queue=env.queue), api(env) as (http, _):
+            sid = await env.create(worker)
+            resp = await http.post(
+                f"/v1/sessions/{sid}/tools/invoke",
+                json={"name": "ls", "arguments": {"path": "."}, "tool_call_id": "call-big"},
+                headers=HEADERS,
+            )
+            events = await worker.reader.read(sid)
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()["payload"]
+    assert resp.json()["ok"] is True and resp.json()["code"] is None
+    assert payload.startswith("head ") and payload.endswith(" tail")
+    assert "characters cut" in payload and len(payload) < MAX_KEPT_RESULT_CHARS + 100
+    (end,) = payloads(events, ToolEnd)
+    assert end.result["payload"] == payload
 
 
 async def test_domain_errors_keep_their_http_status(

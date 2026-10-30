@@ -17,6 +17,8 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
+from supervisor.tools.truncate import cut_middle
+
 __all__ = ["MAX_RESULT_CHARS", "MAX_RESULT_LINES", "bound", "tool_result_failed", "tool_result_text"]
 
 MAX_RESULT_CHARS: Final = 50 * 1024 + 1024
@@ -33,11 +35,7 @@ def bound(text: str, *, chars: int = MAX_RESULT_CHARS, lines: int = MAX_RESULT_L
         half = lines // 2
         cut = len(rows) - 2 * half
         text = "\n".join([*rows[:half], f"[... {cut} lines cut ...]", *rows[-half:]])
-    if len(text) > chars:
-        half = chars // 2
-        cut = len(text) - 2 * half
-        text = f"{text[:half]}\n[... {cut} characters cut ...]\n{text[-half:]}"
-    return text
+    return cut_middle(text, chars)
 
 
 def _size(size: int) -> str:

@@ -14,6 +14,7 @@ __all__ = [
     "DEFAULT_MAX_LINES",
     "GREP_MAX_LINE_LENGTH",
     "Truncation",
+    "cut_middle",
     "format_size",
     "truncate_head",
     "truncate_line",
@@ -34,6 +35,15 @@ class Truncation:
     output_lines: int
     output_bytes: int
     last_line_partial: bool = False
+
+
+def cut_middle(text: str, max_chars: int) -> str:
+    """``text`` within about ``max_chars``: its head and tail, saying how much was cut."""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    cut = len(text) - 2 * half
+    return f"{text[:half]}\n[... {cut} characters cut ...]\n{text[-half:]}"
 
 
 def format_size(size: int) -> str:
