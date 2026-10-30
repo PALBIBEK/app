@@ -40,7 +40,7 @@ from supervisor.gateway.providers.base import (
     Wire,
 )
 from supervisor.gateway.routes import Route, RouteConfigError, RouteTable, route_view
-from supervisor.gateway.virtual_keys import MemoryVirtualKeyStore, MintRequest, VirtualKeyStore
+from supervisor.gateway.virtual_keys import MintRequest, SignedVirtualKeyStore, VirtualKeyStore
 from supervisor.gateway.wire_codec import TokenUsage, UsageTap, response_usage
 
 
@@ -49,7 +49,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
     app.state.registry = build_provider_registry(settings)
-    app.state.virtual_keys = MemoryVirtualKeyStore()
+    # Signed keys: a restart (a deploy) or another replica takes the keys sessions hold.
+    app.state.virtual_keys = SignedVirtualKeyStore(settings.virtual_key_secret())
     setup_tracing()
     yield
 

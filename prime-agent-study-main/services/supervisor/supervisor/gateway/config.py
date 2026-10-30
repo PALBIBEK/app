@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+import secrets
 from functools import cached_property
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from supervisor.gateway.routes import DEFAULT_ROUTES, VENDOR_ROUTES, RouteTable
+from supervisor.gateway.virtual_keys import derive_virtual_key_secret
 
 _HEADER_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
@@ -17,6 +19,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
     model_gateway_token: str = Field(default="", alias="MODEL_GATEWAY_TOKEN")
+    model_gateway_virtual_key_secret: str = Field(default="", alias="MODEL_GATEWAY_VIRTUAL_KEY_SECRET")
+    """Signs session virtual keys (at least 32 characters); derived from the service token
+    when unset. Every gateway process needs the same one, so keys outlive a restart."""
     model_gateway_api_key_header: str = Field(
         default="Authorization", alias="MODEL_GATEWAY_API_KEY_HEADER"
     )
@@ -42,6 +47,15 @@ class Settings(BaseSettings):
         if not _HEADER_TOKEN.fullmatch(value):
             raise ValueError("MODEL_GATEWAY_API_KEY_HEADER must be an HTTP header name")
         return value
+
+    def virtual_key_secret(self) -> bytes:
+        """The secret virtual keys are signed with: the configured one, else derived from the
+        service token, else (no token: nothing can mint) one for this process alone."""
+        if self.model_gateway_virtual_key_secret:
+            return self.model_gateway_virtual_key_secret.encode()
+        if self.model_gateway_token:
+            return derive_virtual_key_secret(self.model_gateway_token)
+        return secrets.token_bytes(32)
 
     def auth_must_be_configured(self) -> bool:
         """Fail closed in production/staging or when AUTH_REQUIRED is set."""

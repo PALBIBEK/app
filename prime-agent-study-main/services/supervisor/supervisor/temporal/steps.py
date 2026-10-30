@@ -49,6 +49,7 @@ from supervisor.agent.runtimes.githi.classify import (
     FINAL_STEP_NOTICE,
     is_context_overflow,
     is_final_step,
+    is_refused_key,
     is_retryable,
     loop_spec,
     refusal,
@@ -650,7 +651,12 @@ class GithiSteps:
                 if req.step > 0 and req.can_compact and is_context_overflow(exc):
                     return StepResult(calls=[], final=False, kind=COMPACT)
                 if req.can_retry:
-                    return await self._retry_or_fail(req, exc)
+                    # The gateway refused the session's key, not the request: with the key
+                    # replaced, the step is asked again as after a busy provider.
+                    renewed = is_refused_key(exc) and await self._manager.renew_gateway_key(
+                        sid, refused=getattr(gateway, "token", None)
+                    )
+                    return await self._retry_or_fail(req, exc, renewed=renewed)
                 raise
             usage = AgentLoop.usage_from_completion(completion)
             assistant = MessageEnd(
@@ -683,18 +689,19 @@ class GithiSteps:
         ]
         return StepResult(calls=plans, final=False, lanes=True, tokens=tokens)
 
-    async def _retry_or_fail(self, req: StepRequest, exc: Exception) -> StepResult:
+    async def _retry_or_fail(self, req: StepRequest, exc: Exception, *, renewed: bool = False) -> StepResult:
         """pi's auto-retry: a call that may pass is asked again after a durable wait.
 
         Journals ``ModelRetry`` (keyed by step and attempt, so a re-run activity does not
         announce it twice) and answers RETRY with the wait; the workflow sleeps on a
         timer, then runs the step again. A call that will fail the same way, or one out
         of retries, fails the step at once: no activity retries (Temporal's are for a
-        lost worker, not a provider's answer).
+        lost worker, not a provider's answer). ``renewed``: the session's key was just
+        replaced after the gateway refused it, so the same call may now pass.
         """
         spec = retry_spec(await self._manifest(req.session_id))
         attempt = req.attempt + 1
-        retryable = is_retryable(exc)
+        retryable = renewed or is_retryable(exc)
         delay = retry_delay(spec, attempt, exc) if retryable else None
         if delay is None:
             if not retryable:

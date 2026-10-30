@@ -35,13 +35,23 @@ class SessionKeys:
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def current(
-        self, session_id: str, mint: Callable[[], MintedVirtualKey]
+        self,
+        session_id: str,
+        mint: Callable[[], MintedVirtualKey],
+        *,
+        replacing: str | None = None,
     ) -> tuple[str, bool]:
-        """The session's key, and whether it was minted just now (a renewal or the first)."""
+        """The session's key, and whether it was minted just now (a renewal or the first).
+
+        ``replacing``: a key the gateway refused (it no longer knows it). Minted again
+        only while it is still the stored one: the first worker to meet the refusal
+        replaces it, and every other worker takes that replacement.
+        """
         owner = Owner.session(session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             stored = await self._vault.get(owner, GATEWAY_KEY)
-            if stored is not None and not stored.expires_within(RENEW_BEFORE_S):
+            refused = stored is not None and replacing is not None and stored.value == replacing
+            if stored is not None and not refused and not stored.expires_within(RENEW_BEFORE_S):
                 return stored.value, False
             # Minting is a blocking HTTP call; keep it off the event loop.
             minted = await asyncio.to_thread(mint)
