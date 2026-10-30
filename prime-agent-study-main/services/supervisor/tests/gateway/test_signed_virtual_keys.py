@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from supervisor.gateway.app import app
 from supervisor.gateway.config import Settings
 from supervisor.gateway.virtual_keys import (
+    KEY_TTL_S,
     MintRequest,
     SignedVirtualKeyStore,
     derive_virtual_key_secret,
@@ -38,7 +39,7 @@ def test_a_key_carries_its_claims_and_any_store_with_the_secret_takes_it() -> No
     assert claims is not None and claims.token == token
     assert (claims.tenant_id, claims.session_id, claims.principal_id) == ("t1", "s1", "alice")
     assert claims.allowed_models == ("echo",) and claims.scope_id == "scope-1"
-    assert claims.expires_at - time.time() == pytest.approx(3600, abs=5)
+    assert claims.expires_at - time.time() == pytest.approx(KEY_TTL_S, abs=5) == pytest.approx(900, abs=5)
     assert verify_virtual_key(SignedVirtualKeyStore(SECRET), token, route_id="echo") is not None
 
 
@@ -114,3 +115,21 @@ def test_a_key_minted_before_a_gateway_restart_works_after_it(service_token: Non
     with TestClient(app) as after:  # a deploy: a new process, nothing kept in memory
         assert _chat(after, token) == 200
         assert _chat(after, token[:-4] + "AAAA") == 401
+
+
+def test_a_restart_forgets_revocations_so_keys_are_short_lived() -> None:
+    """Revocations live in the gateway process: after a restart a revoked key works again,
+    until it expires. Keys live 15 minutes (they lived an hour), and the supervisor renews
+    each in its last five, so that window stays short and no session notices."""
+    from supervisor.seams.providers.gateway.virtual_key_client import SESSION_KEY_TTL_S
+    from supervisor.vault.session_keys import RENEW_BEFORE_S
+
+    before = SignedVirtualKeyStore(SECRET)
+    token = _mint(before)
+    before.revoke_session("s1")
+    restarted = SignedVirtualKeyStore(SECRET)  # a new process: nothing kept in memory
+    claims = restarted.get(token)
+    assert claims is not None and not claims.revoked
+    assert claims.expires_at - time.time() <= KEY_TTL_S + 5
+    assert SESSION_KEY_TTL_S == KEY_TTL_S == 900
+    assert 0 < RENEW_BEFORE_S < SESSION_KEY_TTL_S / 2  # a key is renewed well before it dies

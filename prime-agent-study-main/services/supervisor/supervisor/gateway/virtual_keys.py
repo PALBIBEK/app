@@ -24,6 +24,12 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Final, Protocol, runtime_checkable
 
+KEY_TTL_S: Final = 900
+"""How long a session key lives (15 minutes). Revoking a key, or a session's keys, lasts only
+as long as the gateway process that was told: a restart forgets it, and the key works again
+until it expires. Short keys bound that window, and a key's per-key spend, which a restart
+resets too; the supervisor renews each in its last few minutes, so no session notices."""
+
 
 @dataclass(frozen=True)
 class VirtualKeyClaims:
@@ -46,7 +52,7 @@ class MintRequest:
     session_id: str
     principal_id: str
     allowed_models: tuple[str, ...] = ()
-    ttl_s: int = 3600
+    ttl_s: int = KEY_TTL_S
     max_budget_usd: float = 5.0
     scope_id: str | None = None
 
