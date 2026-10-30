@@ -115,8 +115,21 @@ class SessionEraser:
         self._objects = objects
 
     async def erase(self, session_id: str) -> Erased:
-        """Erase ``session_id``'s data. The caller ends the session first: a running one
-        would go on writing what this removes."""
+        """Erase ``session_id``'s data, and its subagents' (``supervisor.session.children``:
+        sessions it started, which end with it). The caller ends the session first: a
+        running one would go on writing what this removes."""
+        async with self._db() as db:
+            children = list(await db.scalars(select(SessionRow.id).where(SessionRow.parent_session_id == session_id)))
+        erased = [await self.erase(child) for child in children]
+        own = await self._erase_one(session_id)
+        return Erased(
+            events=own.events + sum(e.events for e in erased),
+            artifacts=own.artifacts + sum(e.artifacts for e in erased),
+            checkpoint_files=own.checkpoint_files + sum(e.checkpoint_files for e in erased),
+            payloads=own.payloads + sum(e.payloads for e in erased),
+        )
+
+    async def _erase_one(self, session_id: str) -> Erased:
         async with self._db() as db, db.begin():
             refs = await self._payload_refs(db, session_id)
             scopes = [checkpoint_scope(key) for key in await self._hand_keys(db, session_id)]

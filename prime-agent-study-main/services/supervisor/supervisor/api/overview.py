@@ -31,6 +31,9 @@ class InboxItemOut(BaseModel):
     options: list[str]
     created_at_ms: int | None = None
     expires_at_ms: int | None = None
+    root_session_id: str | None = None
+    """Set when a subagent's call waits: the session at the top of its tree."""
+    subagent_label: str | None = None
 
 
 class SandboxOut(BaseModel):

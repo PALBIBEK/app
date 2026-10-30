@@ -1,19 +1,21 @@
-"""Subagent tools: githi delegates through its session's pinned subagent transport.
+"""Subagent tools, as githi offers them (``githi/src/githi/tools``).
 
-Offered only when the session's harness pins a ``subagents`` block and its
-composition binds a subagent transport (ACP, nested session, …):
+Offered when the session's harness pins a ``subagents`` block and the session is shallower
+than its ``max_depth`` (a child is one level deeper than the session that started it):
 
-* ``subagent`` runs a child on the transport's pinned default provider and
-  answers with its result; with ``background`` (when the manifest allows it)
-  the child runs as the session's durable ``SubagentJob`` workflow instead.
-* ``subagent_result`` reads a background child's outcome from the journal.
+* ``subagent`` starts a fresh child session with the task and waits for its answer;
+* ``subagent_fork`` does the same with a child that carries this conversation's completed
+  turns. Both are run by the session's workflow, not here: the call's plan says so
+  (``PlannedCall.delegate``) and ``supervisor.session.children`` says how.
 
-A background child that finishes is also announced without being asked: the
-next run starts with a ``BackgroundResults`` event listing every finished job
-the model has not yet seen, shown ahead of that run's user message.
+With ``background`` (when the manifest allows it) ``subagent`` instead runs the task as the
+session's durable ``SubagentJob`` workflow on its pinned subagent transport, and
+``subagent_result`` reads such a job's outcome from the journal. A background job that
+finishes is announced without being asked: the next run starts with a ``BackgroundResults``
+event listing every finished job the model has not yet seen.
 
-Depth, background permission and provider all come from what the session
-pinned; nothing here is chosen by the model beyond the task itself.
+Depth, background permission and provider all come from what the session pinned; nothing
+here is chosen by the model beyond the task itself.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from supervisor.hands.keys import hand_key
 from supervisor.hands.leases import Borrower
 from supervisor.seams import SubagentRequest
 from supervisor.temporal.contracts import (
+    MAX_MESSAGE_CHARS,
     START_JOB_SIGNAL,
     Op,
     SessionOp,
@@ -46,16 +49,37 @@ if TYPE_CHECKING:
 __all__ = [
     "MAX_BACKGROUND_JOBS",
     "SUBAGENT",
+    "SUBAGENT_FORK",
     "SUBAGENT_RESULT",
     "SUBAGENT_TOOLS",
     "SubagentTools",
+    "Task",
     "announcement",
+    "foreground",
     "render",
+    "task",
 ]
 
 SUBAGENT: Final = "subagent"
+SUBAGENT_FORK: Final = "subagent_fork"
 SUBAGENT_RESULT: Final = "subagent_result"
-SUBAGENT_TOOLS: Final = frozenset({SUBAGENT, SUBAGENT_RESULT})
+SUBAGENT_TOOLS: Final = frozenset({SUBAGENT, SUBAGENT_FORK, SUBAGENT_RESULT})
+SPAWN_MODES: Final = {SUBAGENT: "spawn", SUBAGENT_FORK: "fork"}
+"""The tools that start a child session, and how each starts it."""
+
+SUBAGENT_DESCRIPTION: Final = (
+    "Delegate a self-contained task to a fresh subagent with its own conversation and your "
+    "tools, working in your files. The child does not see this conversation: put every file "
+    "path, constraint and acceptance criterion in `prompt`. Waits for the child and returns "
+    "only its final answer. Prefer this for isolated research or implementation work you can "
+    "summarize; a decision only the user can make stays with you."
+)
+FORK_DESCRIPTION: Final = (
+    "Delegate a follow-up task to a subagent that already sees this conversation's completed "
+    "turns (not the current one). Use it when the child needs that context; put only the new "
+    "instructions in `prompt`. For a fully isolated task use `subagent` instead. Waits for the "
+    "child and returns only its final answer."
+)
 
 MAX_BACKGROUND_JOBS: Final = 8
 """Background subagents a session may have running at once. Each spends on the session's
@@ -68,7 +92,7 @@ class SubagentArgs(ToolArgs):
     """The task for the subagent, with everything it needs: it does not see this conversation"""
 
     description: str = ""
-    """A few words naming the task"""
+    """A few words naming the task (for status and logs, not the child's prompt)"""
 
     background: bool = False
     """Start it and return at once with a job_id; read its outcome later with subagent_result"""
@@ -85,9 +109,25 @@ class TooManyJobs(ToolError):
     code = "TOO_MANY_JOBS"
 
 
+class Replanned(ToolError):
+    code = "ASK_AGAIN"
+
+
+class ForkArgs(ToolArgs):
+    prompt: str
+    """Additional instructions for the child; this conversation's completed turns are already in its context"""
+
+    description: str = ""
+    """A few words naming the task (for status and logs, not the child's prompt)"""
+
+
 class SubagentResultArgs(ToolArgs):
     job_id: str
     """The job_id a background subagent call returned"""
+
+
+class DepthExceeded(ToolError):
+    code = "DEPTH_EXCEEDED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,31 +136,71 @@ class Outcome:
     is_error: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class Task:
+    """A child session's task, as a ``subagent``/``subagent_fork`` call asked for it."""
+
+    mode: str  # spawn | fork
+    prompt: str
+    label: str | None
+
+
+def foreground(name: str, raw: dict[str, Any]) -> str | None:
+    """How a call starts a child session the workflow runs ("spawn" or "fork"), or None when
+    it is no such call (a background ``subagent`` runs as a job, through ``call``)."""
+    mode = SPAWN_MODES.get(name)
+    if mode == "spawn" and raw.get("background") in (True, "true", "True"):
+        return None
+    return mode
+
+
+def task(name: str, raw: dict[str, Any], *, depth: int, max_depth: int) -> Task:
+    """The task a foreground subagent call asks for; ``ToolError`` the model reads when the
+    call cannot start one (its arguments, or a child past the harness's depth)."""
+    args: SubagentArgs | ForkArgs = _parse(ForkArgs, raw) if name == SUBAGENT_FORK else _parse(SubagentArgs, raw)
+    prompt = args.prompt.strip()
+    if not prompt:
+        raise InvalidArguments(f"{name} requires a non-empty `prompt`")
+    if len(prompt) > MAX_MESSAGE_CHARS:
+        raise InvalidArguments(
+            f"the prompt is {len(prompt):,} characters; a subagent's task may be at most "
+            f"{MAX_MESSAGE_CHARS:,}: put long material in a file and name it in the prompt"
+        )
+    if depth + 1 > max_depth:
+        raise DepthExceeded(
+            f"delegation depth cap exceeded: the child would be at depth {depth + 1} but "
+            f"max_depth is {max_depth}"
+        )
+    return Task(SPAWN_MODES[name], prompt, args.description.strip() or None)
+
+
 class SubagentTools:
     def __init__(self, manager: SessionManager, reader: JournalReader) -> None:
         self._manager = manager
         self._reader = reader
 
     async def schemas(self, session_id: str) -> list[dict[str, Any]]:
-        """The subagent tools this session may use (none unless it pinned subagents)."""
+        """The subagent tools this session may use: none unless it pinned subagents and is
+        shallower than their ``max_depth`` (githi's child offers them while it may spawn)."""
         row = await self._manager._get_session_row(session_id)
         spec = self._manager._pinned_manifest(row).subagents
-        if spec is None or spec.max_depth <= 0 or not self._has_transport(session_id, row):
+        if spec is None or spec.max_depth <= row.subagent_depth:
             return []
-        task = json_schema(SubagentArgs)
-        if not spec.allow_background:
-            del task["properties"]["background"]
+        spawn = json_schema(SubagentArgs)
+        # Background jobs run on the pinned transport, as the session itself (not a child).
+        background = spec.allow_background and row.root_session_id is None and self._has_transport(session_id, row)
+        if not background:
+            del spawn["properties"]["background"]
         hands = self._manager.hand_names(session_id)
-        if not spec.allow_background or len(hands) <= 1:
-            del task["properties"]["hand"]
+        if not background or len(hands) <= 1:
+            del spawn["properties"]["hand"]
         else:
-            task["properties"]["hand"]["enum"] = hands
+            spawn["properties"]["hand"]["enum"] = hands
         tools = [
-            _function(
-                SUBAGENT, "Delegate a self-contained task to a subagent and get its answer.", task
-            )
+            _function(SUBAGENT, SUBAGENT_DESCRIPTION, spawn),
+            _function(SUBAGENT_FORK, FORK_DESCRIPTION, json_schema(ForkArgs)),
         ]
-        if spec.allow_background:
+        if background:
             tools.append(
                 _function(
                     SUBAGENT_RESULT,
@@ -143,6 +223,10 @@ class SubagentTools:
         try:
             if name == SUBAGENT_RESULT:
                 return await self._result(session_id, _parse(SubagentResultArgs, raw))
+            if foreground(name, raw) is not None:
+                # Planned by a worker from before subagents were sessions: its workflow ran
+                # it as a tool. The model asks again and the new plan starts a child.
+                raise Replanned(f"the platform was upgraded while this call waited; call {name} again")
             return await self._delegate(session_id, run_id, call_id, _parse(SubagentArgs, raw))
         except ToolError as exc:
             return Outcome({"error": str(exc), "code": exc.code}, is_error=True)
@@ -155,26 +239,12 @@ class SubagentTools:
     async def _delegate(
         self, session_id: str, run_id: str, call_id: str, args: SubagentArgs
     ) -> Outcome:
+        """A background subagent: a durable job on the session's pinned transport."""
         row = await self._manager._get_session_row(session_id)
         spec = self._manager._pinned_manifest(row).subagents
-        if args.background and not (spec is not None and spec.allow_background):
+        if not (spec is not None and spec.allow_background):
             raise InvalidArguments("this agent may not start background subagents")
-        request = SubagentRequest(
-            prompt=args.prompt,
-            description=args.description,
-            mode="background" if args.background else "spawn",
-        )
-        if args.hand and not args.background:
-            raise InvalidArguments("only a background subagent can borrow a hand")
-        if not args.background:
-            result = await self._manager.spawn_child(
-                session_id, tenant_id=row.tenant_id, provider=None, request=request, turn_id=run_id
-            )
-            return Outcome(
-                {"child_session_id": result.child_id, "status": result.status, "text": result.text},
-                is_error=result.status not in ("ok", "stop", None),
-            )
-
+        request = SubagentRequest(prompt=args.prompt, description=args.description, mode="background")
         op_id = f"{run_id}:{call_id}"
         job_id, job_run = job_ids(op_id)
         running = await self._reader.unfinished_jobs(session_id)

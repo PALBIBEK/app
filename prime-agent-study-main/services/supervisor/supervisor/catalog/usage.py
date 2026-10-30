@@ -57,6 +57,7 @@ async def artifact_usage(
         SessionRow.tenant_id == tenant_id,
         session_visibility(tenant_id, principal_id),
         SessionRow.composition_pins.is_not(None),
+        SessionRow.parent_session_id.is_(None),  # a subagent is part of its session
     )
     if (field := _ID_FIELD.get(kind)) is not None:
         query = query.where(SessionRow.composition_pins[field].as_string() == artifact_id)

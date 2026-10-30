@@ -30,7 +30,8 @@ class MetricsRegistry:
                 func.coalesce(func.sum(SessionIndexRow.total_cost), 0),
             )
             .outerjoin(SessionIndexRow, SessionIndexRow.session_id == SessionRow.id)
-            .where(SessionRow.status.in_(_ACTIVE))
+            # A subagent is part of its session, whose total already holds its spend.
+            .where(SessionRow.status.in_(_ACTIVE), SessionRow.parent_session_id.is_(None))
             .group_by(SessionRow.tenant_id)
         )
         if tenant_id is not None:

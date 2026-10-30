@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from supervisor.agent.events import (
@@ -57,7 +57,15 @@ from supervisor.traces.model import (
     TimeSplit,
 )
 
-__all__ = ["DETAIL_LIMIT", "EXCERPT_LIMIT", "PREVIEW_LIMIT", "build_run_trace", "span_id", "trace_id"]
+__all__ = [
+    "DETAIL_LIMIT",
+    "EXCERPT_LIMIT",
+    "PREVIEW_LIMIT",
+    "build_run_trace",
+    "span_id",
+    "subagent_runs",
+    "trace_id",
+]
 
 PREVIEW_LIMIT = 160
 """Characters in a one-line preview."""
@@ -281,6 +289,8 @@ class _Builder:
         self.error_targets: set[str] = set()
         """Spans an ErrorEvent marked (already counted in ``errors``)."""
         self.output: str | None = None
+        self.nested = 0
+        """Subagents whose own runs were put in this run's tree."""
 
     # spans
 
@@ -534,7 +544,13 @@ class _Builder:
         self._close(span, env, SpanStatus.ERROR if failed else SpanStatus.OK)
 
     def _on_SubagentStart(self, env: Envelope, p: SubagentStart) -> None:
-        span = self._open(f"subagent:{p.run_id}", SpanKind.AGENT, p.label or p.provider, env, self._parent())
+        call = self.tools.get(p.call_id) if p.call_id else None
+        if call is not None:
+            # The call waits on the child's run: that time is the child's (its own model and
+            # tool spans nest below), not a tool's.
+            call.attrs.pop("exec_start_ms", None)
+        name = p.label or ("subagent" if p.provider == "session" else p.provider)
+        span = self._open(f"subagent:{p.run_id}", SpanKind.AGENT, name, env, call or self._parent())
         span.attrs.update(mode=p.mode, provider=p.provider, child_session_id=p.child_session_id,
                           subagent_run_id=p.run_id)
         span.preview = f"{p.mode.replace('_', ' ')} subagent"
@@ -593,6 +609,25 @@ class _Builder:
         self.approvals.clear()
         self.opened.clear()
         self.step = None
+
+    def nest(self, subagents: Mapping[str, RunTrace]) -> None:
+        """Put each subagent's own run (its trace, by its run id) in place of the span that
+        stands for it: the child's root takes that span's place and name, so the tree reads
+        the parent's call, then the child's steps. Each nested span names its session."""
+        for stand_in in [s for s in self.spans if s.kind is SpanKind.AGENT and s is not self.root]:
+            child = subagents.get(str(stand_in.attrs.get("subagent_run_id") or ""))
+            if child is None:
+                continue
+            child_root = next(s for s in child.spans if s.parent_id is None)
+            child_root.parent_id, child_root.name = stand_in.parent_id, stand_in.name
+            child_root.attrs = {**child_root.attrs, **stand_in.attrs}
+            child_root.preview = stand_in.preview if stand_in.end_ms is not None else child_root.preview
+            if stand_in.status is SpanStatus.ERROR:
+                child_root.status, child_root.error = SpanStatus.ERROR, child_root.error or stand_in.error
+            for span in child.spans:
+                span.attrs.setdefault("session_id", child.session_id)
+            self.spans = [s for s in self.spans if s is not stand_in] + child.spans
+            self.nested += 1
 
     def finish(self, *, session_running: bool) -> RunTrace:
         root = self.root
@@ -682,6 +717,7 @@ class _Builder:
                 1 for s in self.spans
                 if s.status is SpanStatus.ERROR and s is not root and s.id not in self.error_targets
             ),
+            subagents=sum(1 for s in self.spans if s.kind is SpanKind.AGENT and s.attrs.get("child_session_id")),
             models=sorted({str(s.attrs["model"]) for s in llm if s.attrs.get("model")}),
             tools=names,
             slowest_span_id=slowest.id if slowest else None,
@@ -707,11 +743,15 @@ def build_run_trace(
     *,
     agent: str | None = None,
     session_running: bool = True,
+    subagents: Mapping[str, RunTrace] | None = None,
 ) -> RunTrace | None:
     """The trace of run ``run_id`` from its journal events (in seq order); None if it has none.
 
     ``session_running`` says whether the session could still be working on the run: when
     it cannot, a run with no end is ``interrupted`` and its open spans ``unfinished``.
+    ``subagents``: the traces of the runs of subagents it started, by their run id
+    (``subagent_runs``); each is nested where the run started it, and counts in its rollup
+    (a run's cost is what it and its subagents spent).
     """
     builder = _Builder(session_id, run_id, agent)
     seen = False
@@ -720,4 +760,16 @@ def build_run_trace(
             continue  # another run's event; session events (no run) inside its range belong to it
         builder.add(env)
         seen = True
-    return builder.finish(session_running=session_running) if seen else None
+    if not seen:
+        return None
+    builder.nest(subagents or {})
+    return builder.finish(session_running=session_running)
+
+
+def subagent_runs(run_id: str, events: Iterable[Envelope]) -> list[tuple[str, str]]:
+    """(child session, its run) of each subagent session run ``run_id`` started."""
+    return [
+        (e.payload.child_session_id, e.payload.run_id)
+        for e in events
+        if isinstance(e.payload, SubagentStart) and e.payload.provider == "session" and e.turn_id == run_id
+    ]

@@ -25,12 +25,16 @@ class ApprovalChoice(BaseModel):
 class ApprovalOut(BaseModel):
     approval_id: str
     session_id: str
+    """The session whose call waits: this one, or one of its subagents."""
     prompt: str
     options: list[str]
     status: str
     choice: str | None = None
     timeout_s: float
     responded_by: str | None = None
+    subagent_label: str | None = None
+    """Set when a subagent's call waits: the label its task was given (may be empty)."""
+    subagent: bool = False
 
 
 @router.get("/v1/sessions/{session_id}/approvals", response_model=list[ApprovalOut])
@@ -39,21 +43,28 @@ async def list_approvals(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> list[ApprovalOut]:
+    """Pending approvals of the session and of its subagents (their calls wait on a person
+    too, and the person answers them from the session that started them)."""
     await deps.require_session_access(tenant_id, session_id, request)
-    pending = await deps.get_manager(request).pending_approvals(session_id)
-    return [
-        ApprovalOut(
-            approval_id=a.approval_id,
-            session_id=a.session_id,
-            prompt=a.prompt,
-            options=a.options,
-            status=a.status,
-            choice=a.choice,
-            timeout_s=a.timeout_s,
-            responded_by=a.responded_by,
-        )
-        for a in pending
-    ]
+    manager = deps.get_manager(request)
+    out: list[ApprovalOut] = []
+    for sid, label in await manager.session_tree(session_id):
+        for a in await manager.pending_approvals(sid):
+            out.append(
+                ApprovalOut(
+                    approval_id=a.approval_id,
+                    session_id=a.session_id,
+                    prompt=a.prompt,
+                    options=a.options,
+                    status=a.status,
+                    choice=a.choice,
+                    timeout_s=a.timeout_s,
+                    responded_by=a.responded_by,
+                    subagent=sid != session_id,
+                    subagent_label=label if sid != session_id else None,
+                )
+            )
+    return out
 
 
 @router.post("/v1/approvals/{approval_id}", response_model=ApprovalOut)

@@ -40,6 +40,11 @@ from temporalio.exceptions import TimeoutError as ActivityTimeout
 from temporalio.workflow import ParentClosePolicy
 
 from supervisor.temporal.contracts import (
+    CANCEL_CHILD_CALL_SIGNAL,
+    CHILD_CALL_DONE_SIGNAL,
+    CHILD_CALL_SIGNAL,
+    CHILD_SETTLED_SIGNAL,
+    CLOSE_SIGNAL,
     CLOSED_STATUSES,
     COMPACT,
     JOB_FINISHED_SIGNAL,
@@ -59,6 +64,10 @@ from supervisor.temporal.contracts import (
     CaptureConfig,
     CaptureRequest,
     Carried,
+    ChildCall,
+    ChildCallDone,
+    ChildInput,
+    ChildSettled,
     Compacted,
     CreateRequest,
     EndRunRequest,
@@ -84,12 +93,17 @@ from supervisor.temporal.contracts import (
     StartJob,
     StepRequest,
     StepResult,
+    SubagentBegun,
+    SubagentEndRequest,
     ToolBatch,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
     job_ids,
     job_workflow_id,
+    run_id_for,
+    subagent_task_id,
+    workflow_id,
 )
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 
@@ -145,6 +159,9 @@ _ONE_ADOPTION = "one-adoption"
 # A session busy only with operations (tool invokes, memory, background jobs) starts a
 # fresh history while idle, as it does after a message; before it, only after a message.
 _IDLE_FRESH_HISTORY = "idle-fresh-history"
+CHILD_STOP_WAIT_S = 15.0
+"""How long a stopped parent waits for the subagent it was waiting on to stop too, so the
+call is answered with what the child did (githi's foreground child shares the interrupt)."""
 
 
 def _is_placement_lost(err: BaseException) -> bool:
@@ -321,6 +338,14 @@ class AgentSessionWorkflow:
         # Approvals this workflow is waiting on (stepped turns), and their decisions.
         self._awaiting: dict[str, ApprovalNeeded] = {}
         self._decisions: dict[str, str] = {}
+        # Subagents (supervisor.session.children): the children a call waits on and how
+        # each settled; a subagent's sandbox calls its root runs, and their answers.
+        self._waiting_for: set[str] = set()
+        self._settled: dict[str, ChildSettled] = {}
+        self._calls_done: dict[str, ChildCallDone] = {}
+        self._child_calls: dict[str, asyncio.Future[ChildCallDone]] = {}
+        if inp.child is not None:
+            self._state.parent_id, self._state.root_id = inp.child.parent_id, inp.child.root_id
 
     # --- main loop -----------------------------------------------------------
 
@@ -336,6 +361,8 @@ class AgentSessionWorkflow:
                     break
                 if self._state.pending:  # else it woke to start a fresh history
                     await self._run_turn(self._state.pending.pop(0))
+                    if self._state.parent_id is not None and not self._state.pending:
+                        await self._tell_parent()  # a subagent settles: nothing more to run
                 if workflow.info().is_continue_as_new_suggested():
                     await workflow.wait_condition(workflow.all_handlers_finished)
                     if not self._terminate_requested:
@@ -349,8 +376,12 @@ class AgentSessionWorkflow:
         if self._state.phase is not Phase.FAILED:
             await self._flush_capture()  # a pending burst is not lost with the session
             await self._terminate()
+        elif self._creation_error is not None and self._state.parent_id is not None:
+            await self._tell_parent(self._creation_error.message)  # it could not start
         for job_id in list(self._state.jobs):  # a closed session's jobs stop with it
             await self._cancel_job(job_id)
+        for child in list(self._state.children):  # and so do its subagents
+            await self._close_child(child)
         await workflow.wait_condition(workflow.all_handlers_finished)
         err = self._creation_error
         return SessionResult(
@@ -360,6 +391,9 @@ class AgentSessionWorkflow:
         )
 
     async def _create(self, inp: SessionInput) -> None:
+        if inp.child is not None:
+            await self._open_child(inp.child)
+            return
         arg: CreateRequest | ForkRequest
         if inp.fork is not None:
             activity, arg = Activity.FORK, ForkRequest(self._session_id, inp.fork)
@@ -378,8 +412,25 @@ class AgentSessionWorkflow:
             self._creation_error = _domain_error(err)
             self._state.phase = Phase.FAILED
 
+    async def _open_child(self, child: ChildInput) -> None:
+        """A subagent: its session was made by its parent's call; take it up here (as an
+        adoption does) and queue its task as its first message."""
+        self._state.last_run_id = run_id_for(self._session_id, child.first.command_id)
+        try:
+            self._state.placement = await workflow.execute_activity(
+                Activity.ADOPT, self._session_id, result_type=Placement, **self._options(Activity.ADOPT)
+            )
+        except ActivityError as err:
+            self._creation_error = _domain_error(err)
+            self._state.phase = Phase.FAILED
+            return
+        self._state.phase = Phase.IDLE
+        self._remember(child.first.command_id)
+        self._state.pending.append(child.first)
+
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
+        self._state.last_run_id = run_id_for(self._session_id, message.command_id)
         try:
             plan = await self._session_activity(
                 Activity.BEGIN_RUN,
@@ -744,7 +795,14 @@ class AgentSessionWorkflow:
 
         A lost call may or may not have run: it is never run again and never guessed at.
         It is answered as unknown, and the run goes on (pi-temporal's recovery seal).
+
+        A subagent call runs as a child session (``_delegate``); a subagent's own sandbox
+        call runs in its root's sandbox (``_in_root``).
         """
+        if call.delegate is not None:
+            return await self._delegate(run_id, call, denied=denied), False
+        if call.in_root and self._state.root_id is not None:
+            return await self._in_root(run_id, call, denied=denied, behind_unknown=behind_unknown)
         try:
             return await self._call_tool(run_id, call, denied=denied, behind_unknown=behind_unknown), False
         except ActivityError as err:
@@ -1371,6 +1429,223 @@ class AgentSessionWorkflow:
         with contextlib.suppress(ValueError):
             self._state.jobs.remove(job_id)
 
+    # --- subagents: child sessions (supervisor.session.children) -------------------
+
+    async def _delegate(self, run_id: str, call: PlannedCall, *, denied: bool) -> bool:
+        """Answer a ``subagent``/``subagent_fork`` call with a child session's outcome;
+        whether it failed. The child runs as its own workflow; this waits for it to settle
+        (its run ended, nothing more queued), answers the call, and ends the child."""
+        try:
+            begun = await self._session_activity(
+                Activity.SUBAGENT_BEGIN,
+                ToolRequest(self._session_id, run_id, call.call_id, denied=denied),
+                SubagentBegun,
+                track=True,
+            )
+        except ActivityError as err:
+            if is_cancelled_exception(err):
+                raise
+            await self._close_call(LostCall(self._session_id, run_id, call.call_id, _failure(err)[1]))
+            return True
+        if (child := begun.child_id) is None:
+            return True  # answered without a child (its arguments, the depth cap, a denial)
+        self._waiting_for.add(child)
+        try:
+            await self._start_child(begun, call.call_id)
+            await workflow.wait_condition(lambda: child in self._settled or self._abort_requested)
+            if child not in self._settled:
+                # Stopped: the stop reached the child too (``_stop_run``). Its outcome, what it
+                # did before it stopped, answers the call if it comes in time (githi's child
+                # shares its parent's interrupt); otherwise the stop answers it.
+                with contextlib.suppress(TimeoutError):
+                    await workflow.wait_condition(
+                        lambda: child in self._settled, timeout=timedelta(seconds=CHILD_STOP_WAIT_S)
+                    )
+            settled = self._settled.pop(child, None)
+        finally:
+            self._waiting_for.discard(child)
+        if settled is None:
+            raise asyncio.CancelledError  # it settles later, and is recorded then (``child_settled``)
+        try:
+            failed = await self._session_activity(
+                Activity.SUBAGENT_END,
+                SubagentEndRequest(
+                    self._session_id, child, settled.run_id, settled.error, run_id=run_id, call_id=call.call_id
+                ),
+                bool,
+            )
+        except ActivityError as err:
+            await self._close_call(LostCall(self._session_id, run_id, call.call_id, _failure(err)[1]))
+            failed = True
+        await self._close_child(child)  # one task, one run: its session ends with it
+        if self._abort_requested:
+            raise asyncio.CancelledError
+        return failed
+
+    async def _start_child(self, begun: SubagentBegun, call_id: str) -> None:
+        child = begun.child_id
+        assert child is not None
+        inp = SessionInput(
+            child,
+            child=ChildInput(
+                self._session_id,
+                begun.root_id or self._session_id,
+                # In the parent run's trace, so a tracing backend shows the two together.
+                Message(
+                    subagent_task_id(call_id),
+                    begun.prompt,
+                    trace_id=self._running.trace_id if self._running is not None else None,
+                ),
+            ),
+            timing=self._timing,
+        )
+        try:
+            await workflow.start_child_workflow(
+                "AgentSession",
+                inp,
+                id=workflow_id(child),
+                task_queue=workflow.info().task_queue,
+                # Outlives this run's continue-as-new; the session ends it explicitly.
+                parent_close_policy=ParentClosePolicy.ABANDON,
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            )
+        except WorkflowAlreadyStartedError:
+            pass  # this call's child, started before
+        if child not in self._state.children:
+            self._state.children.append(child)
+
+    async def _close_child(self, child: str) -> None:
+        with contextlib.suppress(ValueError):
+            self._state.children.remove(child)
+        await self._signal(child, CLOSE_SIGNAL)
+
+    async def _signal(self, session_id: str, signal: str, arg: object | None = None) -> bool:
+        """Signal another session's workflow; False when it has ended (nothing to tell)."""
+        handle = workflow.get_external_workflow_handle(workflow_id(session_id))
+        try:
+            await (handle.signal(signal) if arg is None else handle.signal(signal, arg))
+        except Exception as err:  # noqa: BLE001 — closed or never started: the same to us
+            workflow.logger.info("session %s did not take %s: %s", session_id, signal, err)
+            return False
+        return True
+
+    async def _tell_parent(self, error: str | None = None) -> None:
+        """A subagent settled (or could not start): its parent answers whatever waits on it."""
+        assert self._state.parent_id is not None
+        await self._signal(
+            self._state.parent_id,
+            CHILD_SETTLED_SIGNAL,
+            ChildSettled(self._session_id, self._state.last_run_id, error),
+        )
+
+    @workflow.signal(name=CHILD_SETTLED_SIGNAL)
+    async def child_settled(self, settled: ChildSettled) -> None:
+        if settled.child_id in self._waiting_for:
+            self._settled[settled.child_id] = settled  # a call waits for it: it answers
+            return
+        if settled.child_id not in self._state.children:
+            return  # ended already
+        # Nothing waits (its call was stopped): record how it ended, then end it.
+        try:
+            await self._session_activity(
+                Activity.SUBAGENT_END,
+                SubagentEndRequest(self._session_id, settled.child_id, settled.run_id, settled.error),
+                bool,
+            )
+        except ActivityError as err:
+            workflow.logger.warning("could not record how subagent %s ended: %s", settled.child_id, err)
+        await self._close_child(settled.child_id)
+
+    @workflow.signal(name=CLOSE_SIGNAL)
+    def close(self) -> None:
+        """End this session (its parent ended it, or ended): a run going is stopped first."""
+        self._terminate_requested = True
+        if self._running is not None:
+            self._stop_run()
+
+    async def _in_root(
+        self, run_id: str, call: PlannedCall, *, denied: bool, behind_unknown: bool
+    ) -> tuple[bool, bool]:
+        """A subagent's sandbox call, run by its root in the root's sandbox (githi's child
+        works in its parent's directory); (whether it failed, whether it was lost)."""
+        root = self._state.root_id
+        assert root is not None
+        ask = ChildCall(
+            self._session_id,
+            run_id,
+            call.call_id,
+            once=call.retry is RetryMode.ONCE and not denied and not behind_unknown,
+            denied=denied,
+            behind_unknown=behind_unknown,
+        )
+        if not await self._signal(root, CHILD_CALL_SIGNAL, ask):
+            reason = "the session whose sandbox this subagent works in has ended"
+            await self._close_call(LostCall(self._session_id, run_id, call.call_id, reason))
+            return True, True
+        await workflow.wait_condition(lambda: call.call_id in self._calls_done or self._abort_requested)
+        if call.call_id not in self._calls_done:
+            await self._signal(root, CANCEL_CHILD_CALL_SIGNAL, ask)  # its command is killed
+            raise asyncio.CancelledError
+        done = self._calls_done.pop(call.call_id)
+        return done.failed, done.lost
+
+    @workflow.signal(name=CHILD_CALL_DONE_SIGNAL)
+    def child_call_done(self, done: ChildCallDone) -> None:
+        self._calls_done[done.call_id] = done
+
+    @workflow.signal(name=CHILD_CALL_SIGNAL)
+    async def child_call(self, ask: ChildCall) -> None:
+        """Run a subagent's sandbox call here, in this session's sandbox, journalled in the
+        subagent's session; tell the subagent when it is done."""
+        key = f"{ask.child_id}:{ask.call_id}"
+        if key in self._child_calls:
+            return  # the same call, asked again
+        task = asyncio.ensure_future(self._run_child_call(ask))
+        self._child_calls[key] = task
+        try:
+            done = await task
+        except asyncio.CancelledError:
+            done = ChildCallDone(ask.call_id, failed=True)  # the subagent stopped it
+        finally:
+            self._child_calls.pop(key, None)
+        await self._signal(ask.child_id, CHILD_CALL_DONE_SIGNAL, done)
+
+    async def _run_child_call(self, ask: ChildCall) -> ChildCallDone:
+        lost = LostCall(ask.child_id, ask.run_id, ask.call_id) if ask.once else None
+        if self._terminate_requested or self._state.phase in (Phase.TERMINATED, Phase.FAILED):
+            reason = "the session whose sandbox this subagent works in has ended"
+            await self._close_call(LostCall(ask.child_id, ask.run_id, ask.call_id, reason))
+            return ChildCallDone(ask.call_id, failed=True, lost=True)
+        try:
+            failed = await self._session_activity(
+                Activity.TOOL_CALL,
+                ToolRequest(
+                    ask.child_id,
+                    ask.run_id,
+                    ask.call_id,
+                    denied=ask.denied,
+                    behind_unknown=ask.behind_unknown,
+                    hand_of=self._session_id,
+                ),
+                bool,
+                retry=_ONCE if ask.once else None,
+                rerun_after_adopt=not ask.once,
+                lost=lost,
+            )
+        except ActivityError as err:
+            if is_cancelled_exception(err):
+                return ChildCallDone(ask.call_id, failed=True)
+            # It may or may not have run: answered as unknown, never run again.
+            await self._close_call(LostCall(ask.child_id, ask.run_id, ask.call_id, _failure(err)[1]))
+            return ChildCallDone(ask.call_id, failed=True, lost=True)
+        return ChildCallDone(ask.call_id, failed=failed)
+
+    @workflow.signal(name=CANCEL_CHILD_CALL_SIGNAL)
+    def cancel_child_call(self, ask: ChildCall) -> None:
+        task = self._child_calls.get(f"{ask.child_id}:{ask.call_id}")
+        if task is not None and not task.done():
+            task.cancel()
+
     @session_op.validator
     def _validate_session_op(self, op: SessionOp) -> None:
         self._reject_if_closed()
@@ -1441,12 +1716,15 @@ class AgentSessionWorkflow:
         return workflow.patched(f"{kind}-{seen}")
 
     def _stop_run(self) -> None:
-        """Stop the running run where it is: every running step is cancelled."""
+        """Stop the running run where it is: every running step is cancelled, and every
+        subagent's run with it (githi: a stop interrupts the agent's children too)."""
         self._abort_requested = True  # also wakes a turn waiting on an approval
         tasks = [self._turn, *(t for t in self._tracked if t is not self._turn)]
         for task in tasks:
             if task is not None and not task.done():
                 task.cancel()
+        for child in self._state.children:
+            asyncio.ensure_future(self._signal(child, "abort"))
 
     @workflow.update
     async def cancel_queued(self, command_id: str) -> bool:

@@ -24,6 +24,7 @@ from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion, ModelGatewayError
 from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
 from supervisor.seams.providers.tools import RegistryToolProvider
+from supervisor.session.children import SUBAGENT_BRIEF
 
 
 def _compacted(text: str) -> bool:
@@ -76,6 +77,13 @@ class ScriptedGateway:
     # the job is retried); every request the job made, in order.
     child_fail_after: int | None = None
     child_seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
+    # A subagent session (its system prompt carries SUBAGENT_BRIEF): what it asks for, one
+    # call per step, then its answer; an event each of its model calls waits on; and every
+    # request a subagent made, in order.
+    subagent_calls: list[tuple[str, dict[str, Any]]] = dataclasses.field(default_factory=list)
+    subagent_answer: str = "the subagent's answer"
+    subagent_gate: threading.Event | None = None
+    subagent_seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     one_shots: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     tool_choices: list[str | None] = dataclasses.field(default_factory=list)
     # Ask for ``calls`` one per step, in order, then answer (a multi-step run).
@@ -128,6 +136,8 @@ class ScriptedGateway:
             return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
         if messages and messages[0].content.startswith("You are a background subagent"):
             return self._child(messages)
+        if any(m.role == "system" and m.content == SUBAGENT_BRIEF for m in messages):
+            return self._subagent(messages)
         with self._lock:
             self.seen.append(list(messages))
             self.tools_seen.append(list(tools))
@@ -204,6 +214,22 @@ class ScriptedGateway:
         calls = [{"id": f"step-{done}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
         return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted", usage=usage,
                           tool_calls=calls, finish_reason="tool_calls")
+
+    def _subagent(self, messages: list[ChatMessage]) -> Completion:
+        if self.subagent_gate is not None and not self.subagent_gate.wait(timeout=60):
+            raise TimeoutError("the subagent's gate was never opened")
+        with self._lock:
+            self.subagent_seen.append(list(messages))
+        usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
+        last_user = max((i for i, m in enumerate(messages) if m.role == "user"), default=-1)
+        done = sum(1 for m in messages[last_user + 1 :] if m.role == "tool")
+        if done < len(self.subagent_calls):
+            name, args = self.subagent_calls[done]
+            calls = [{"id": f"sub-{done}", "type": "function",
+                      "function": {"name": name, "arguments": json.dumps(args)}}]
+            return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted",
+                              usage=usage, tool_calls=calls, finish_reason="tool_calls")
+        return Completion(ChatMessage("assistant", self.subagent_answer), model="scripted", usage=usage)
 
     def _child(self, messages: list[ChatMessage]) -> Completion:
         if self.child_gate is not None and not self.child_gate.wait(timeout=60):
@@ -349,6 +375,10 @@ def loop_variant(catalog: HarnessCatalog) -> None:
     base = catalog.resolve_sync("githi-v1").loop or LoopSpec()
     githi_variant(catalog, "githi-loop", loop=dataclasses.replace(base, max_run_seconds=1.0))
     githi_variant(catalog, "githi-deadline", loop=dataclasses.replace(base, hard_run_seconds=2.0))
+    # Two steps a run and no forced answer on the last: a run that asks twice hits the limit.
+    githi_variant(
+        catalog, "githi-short", loop=dataclasses.replace(base, max_steps=2, force_answer_on_final_step=False)
+    )
     githi_variant(
         catalog,
         "githi-retry",

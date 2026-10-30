@@ -42,6 +42,26 @@ JOB_FINISHED_SIGNAL = "job_finished"
 # Sent by a session's own tool step to run a background subagent it just journalled.
 START_JOB_SIGNAL = "start_job"
 
+# Subagents are sessions (supervisor.session.children). A child tells its parent when it
+# settles (its run ended and nothing waits to run), asks the session at the top of its tree
+# to run a call in that session's sandbox, and hears back when the call is done.
+CHILD_SETTLED_SIGNAL = "child_settled"
+CHILD_CALL_SIGNAL = "child_call"
+CHILD_CALL_DONE_SIGNAL = "child_call_done"
+CANCEL_CHILD_CALL_SIGNAL = "cancel_child_call"
+# Sent by a parent to end a subagent's session (its run, if one is going, is stopped first).
+CLOSE_SIGNAL = "close"
+
+
+def child_session_id(parent_id: str, call_id: str) -> str:
+    """The subagent a parent's tool call starts: the same call, the same child."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"yal-subagent:{parent_id}:{call_id}").hex
+
+
+def subagent_task_id(call_id: str) -> str:
+    """The command id of the task a parent's call gives its child (its first message)."""
+    return f"subagent-task:{call_id}"
+
 
 MAX_MESSAGE_CHARS: Final = 64 * 1024
 """The longest message a session takes (pi-temporal's cap). A message goes into the
@@ -92,6 +112,10 @@ class Activity(StrEnum):
     END_JOB = "subagent.end_job"
     # Extract and save durable facts from a burst of a session's turns (any worker).
     CAPTURE_MEMORY = "session.capture_memory"
+    # A subagent tool call: journal it and make its child session; then, once the child
+    # has settled, answer the call with the child's outcome (supervisor.session.children).
+    SUBAGENT_BEGIN = "subagent.begin"
+    SUBAGENT_END = "subagent.end"
 
 
 class Phase(StrEnum):
@@ -304,6 +328,11 @@ class PlannedCall:
     # Calls with the same lane run in the order made (pi's file mutation queue): the file a
     # file tool names, or "platform" for the memory and subagent tools. None: no order.
     lane: str | None = None
+    # A subagent call the workflow runs as a child session ("spawn" or "fork"); None: a tool.
+    delegate: str | None = None
+    # A subagent's sandbox call: it runs in the sandbox of the session at the top of its
+    # tree (``ChildInput.root_id``), on that session's worker.
+    in_root: bool = False
 
 
 class RunPhase(StrEnum):
@@ -403,6 +432,71 @@ class ToolRequest:
     # Not run: an earlier change in its lane (the same file, or the platform tools) has an
     # unknown outcome, and this change was made assuming it took effect.
     behind_unknown: bool = False
+    # A subagent's call run in this session's sandbox: ``session_id`` is the subagent's
+    # (its journal), ``hand_of`` the session whose hands it acts in.
+    hand_of: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentBegun:
+    """A subagent call journalled: the child session to run, or None when the call was
+    refused (bad arguments, too deep) and already answered."""
+
+    child_id: str | None
+    root_id: str | None = None
+    prompt: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ChildSettled:
+    """A subagent's run ended and nothing waits to run (``run_id``: that run, None when the
+    child never ran), or it could not start at all (``error`` says why)."""
+
+    child_id: str
+    run_id: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentEndRequest:
+    """Journal how a child settled and answer the call that waits for it, if one does
+    (``run_id`` and ``call_id`` name it; None: no call waits)."""
+
+    session_id: str
+    child_id: str
+    child_run_id: str | None = None
+    error: str | None = None
+    run_id: str | None = None
+    call_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChildInput:
+    """A subagent's session: who started it, whose sandbox it works in, and its task."""
+
+    parent_id: str
+    root_id: str
+    first: Message
+
+
+@dataclass(frozen=True, slots=True)
+class ChildCall:
+    """A subagent's sandbox call, for the session at the top of its tree to run."""
+
+    child_id: str
+    run_id: str
+    call_id: str
+    once: bool
+    denied: bool = False
+    behind_unknown: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ChildCallDone:
+    call_id: str
+    failed: bool
+    # The call may or may not have run (its worker was lost): it was answered as unknown.
+    lost: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -591,6 +685,13 @@ class Carried:
     # seconds its runs have taken (budget.max_seconds_per_session).
     tokens_used: int = 0
     seconds_used: float = 0.0
+    # Subagent sessions this one started that are still open (stopped and ended with it).
+    children: list[str] = field(default_factory=list)
+    # A subagent: the session that started it, the one whose sandbox it works in, and its
+    # latest run (what it reports when it settles).
+    parent_id: str | None = None
+    root_id: str | None = None
+    last_run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,6 +715,8 @@ class SessionInput:
     timing: Timing = field(default_factory=Timing)
     # Instead of ``create``: the new session is a fork of another.
     fork: ForkSpec | None = None
+    # Instead of ``create``: a subagent, whose session its parent's call already made.
+    child: ChildInput | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -26,6 +26,9 @@ from supervisor.session.workspaces import session_workspace
 
 logger = logging.getLogger(__name__)
 
+MAX_TREE = 500
+"""Subagents of one session read at most (a tree that large is a runaway)."""
+
 
 class ChildOps(ToolOps):
     """Child sessions, background subagents, and memory operations."""
@@ -216,6 +219,24 @@ class ChildOps(ToolOps):
             raise SessionNotFound(f"unknown session_id={session_id!r}")
         tree = await self._reader.session_tree(session_id)
         return tree.list_children(scope=scope)
+
+    async def session_tree(self, session_id: str) -> list[tuple[str, str | None]]:
+        """The session and every subagent below it (``supervisor.session.children``), the
+        session first, then each level in turn, with the label each subagent's task got."""
+        tree: list[tuple[str, str | None]] = [(session_id, None)]
+        level = [session_id]
+        async with self._db() as db:
+            while level and len(tree) <= MAX_TREE:
+                rows = (
+                    await db.execute(
+                        select(SessionRow.id, SessionRow.subagent_label)
+                        .where(SessionRow.parent_session_id.in_(level))
+                        .order_by(SessionRow.created_at)
+                    )
+                ).all()
+                tree += [(sid, label) for sid, label in rows]
+                level = [sid for sid, _ in rows]
+        return tree[: MAX_TREE + 1]
 
     def _memory_ops(self, session_id: str, row: SessionRow) -> MemoryOps:
         seams = self._seams_for_session(session_id, row) or self._fallback_seams

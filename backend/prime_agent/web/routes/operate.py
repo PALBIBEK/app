@@ -87,6 +87,9 @@ class InboxItem(BaseModel):
     options: list[str]
     created_at_ms: int | None = None
     expires_at_ms: int | None = None
+    subagent: bool = False
+    """A call of one of the session's subagents waits (answered from the session)."""
+    subagent_label: str | None = None
 
 
 @router.get("/approvals", response_model=list[InboxItem])
@@ -99,7 +102,9 @@ async def approval_inbox(db: DbSession, current_user: CurrentUser) -> list[Inbox
     links = await _links(db, current_user.id)
     out: list[InboxItem] = []
     for row in rows:
-        link = links.get(str(row.get("session_id")))
+        # A subagent's call is answered from the session at the top of its tree.
+        root = row.get("root_session_id")
+        link = links.get(str(root or row.get("session_id")))
         if link is None:
             continue
         out.append(
@@ -113,6 +118,8 @@ async def approval_inbox(db: DbSession, current_user: CurrentUser) -> list[Inbox
                 options=[str(o) for o in row.get("options") or []],
                 created_at_ms=row.get("created_at_ms"),
                 expires_at_ms=row.get("expires_at_ms"),
+                subagent=root is not None,
+                subagent_label=row.get("subagent_label") or None,
             )
         )
     return out

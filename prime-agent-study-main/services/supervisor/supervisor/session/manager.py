@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 
 from supervisor.agent.events import (
     ApprovalRequired,
+    Envelope,
     ErrorEvent,
     MessageEnd,
     RunEnd,
@@ -679,7 +680,8 @@ class SessionManager(UpkeepOps):
         ids: Sequence[str] | None = None,
     ) -> list[SessionInfo]:
         """The caller's sessions, newest first (``ids``: only those), each with whether a
-        run is open, in two queries however many there are."""
+        run is open, in two queries however many there are. Subagents are part of the
+        session that started them: listed only when asked for by id."""
         query = (
             select(SessionRow, SessionIndexRow)
             .outerjoin(SessionIndexRow, SessionIndexRow.session_id == SessionRow.id)
@@ -689,6 +691,8 @@ class SessionManager(UpkeepOps):
         )
         if ids is not None:
             query = query.where(SessionRow.id.in_(ids))
+        else:
+            query = query.where(SessionRow.parent_session_id.is_(None))
         async with self._db() as db:
             rows = (await db.execute(query)).all()
             busy = await _runs_open(db, [row.id for row, _ in rows])
@@ -817,7 +821,8 @@ class SessionManager(UpkeepOps):
             scope_id=row.scope_id,
             principal=principal if row.scope_id else None,
         )
-        if session_id not in self._hands:
+        # A subagent has no sandbox of its own: it works in its root's (supervisor.session.children).
+        if session_id not in self._hands and row.root_session_id is None:
             self._register_hands(
                 session_id,
                 harness,
@@ -894,8 +899,49 @@ class SessionManager(UpkeepOps):
         events = await self._reader.read(session_id, since=-1)
         if at_seq is not None:
             events = [e for e in events if e.seq <= at_seq]
-
         new_id = new_id or uuid4().hex
+        # A fork is the same person's same agent, with the same notebooks.
+        await self._copy_session(row, new_id, events, memory=row.memory)
+        return new_id
+
+    async def create_child(
+        self,
+        parent_id: str,
+        child_id: str,
+        *,
+        mode: str,
+        label: str | None,
+        seed_until: int | None = None,
+    ) -> None:
+        """Make ``child_id``, a subagent of ``parent_id`` (``supervisor.session.children``):
+        its parent's pins, owner and workspace, one level deeper, working in its root's
+        sandbox, without long-term memory of its own (githi's child has none). ``seed_until``:
+        it starts with its parent's journal up to that seq (a fork); None: empty. Safe to
+        retry with the same id."""
+        parent = await self._get_session_row(parent_id)
+        events = (
+            []
+            if seed_until is None
+            else [e for e in await self._reader.read(parent_id, since=-1) if e.seq <= seed_until]
+        )
+        await self._copy_session(
+            parent,
+            child_id,
+            events,
+            memory=None,
+            parent_session_id=parent.id,
+            root_session_id=parent.root_session_id or parent.id,
+            subagent_depth=parent.subagent_depth + 1,
+            subagent_mode=mode,
+            subagent_label=label,
+        )
+
+    async def _copy_session(
+        self, row: SessionRow, new_id: str, events: list[Envelope], **values: Any
+    ) -> None:
+        """``new_id`` as a session of ``row``'s agent (its pins, owner and workspace), its
+        journal ``events`` copied from ``row``'s, with ``values`` set on its row. Each copied
+        event is keyed by its source event, so a retry carries on instead of duplicating."""
         await self._writer.ensure_session(
             new_id,
             runtime=row.runtime,
@@ -910,14 +956,13 @@ class SessionManager(UpkeepOps):
             nrow.manifest = row.manifest
             nrow.composition_pins = row.composition_pins
             nrow.tenant_id = row.tenant_id
-            # A fork is the same person's same agent, with the same notebooks.
             nrow.owner_principal_id = row.owner_principal_id
             nrow.agent_pin = row.agent_pin
-            nrow.memory = row.memory
             nrow.scope_id = row.scope_id
             nrow.status = "active"
+            for name, value in values.items():
+                setattr(nrow, name, value)
             await db.commit()
-
         for env in events:
             await self._writer.append(
                 new_id,
@@ -926,7 +971,6 @@ class SessionManager(UpkeepOps):
                 trace_id=env.trace_id,
                 event_key=f"fork:{env.event_id}",
             )
-        return new_id
 
     def _register_hands(
         self,

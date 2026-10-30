@@ -234,6 +234,18 @@ holds every message, call and result: clients read it, and a retried step reads 
   time (`budget.max_tokens_per_session`, `max_seconds_per_session`), and cost
   (`max_cost_per_session`, which counts every model call the session pays for: its steps,
   summaries, subagents and memory's extraction). At most 8 background subagents run at once.
+- **Subagents.** `subagent` and `subagent_fork` (as githi has them) start a child session: its
+  own conversation and steps on the parent's harness, tools and model, working in the parent's
+  files (the sandbox of the session at the top of its tree, whose worker runs its sandbox calls).
+  A fork starts with the parent's completed turns. The parent waits for the child's answer; a
+  child that stops, fails or runs out of steps is a failed call carrying its partial answer. A
+  round's subagents work at once, children may start their own while shallower than
+  `subagents.max_depth`, a child's spend counts toward its parent's cost cap, and stopping or
+  ending the parent stops its children. Each child's journal can be read like any session's.
+  A child is part of its session everywhere else: its run is nested in the trace of the run that
+  started it (and its spend in that run's cost), its approvals are listed and answered with its
+  parent's, its usage is its parent's, it is not listed as a session of its own, it counts
+  toward no session quota, and erasing the parent erases it.
 - **When something fails.** A model call that may pass (a rate limit, an overload) is asked
   again on a durable timer. A dead worker is noticed within the heartbeat timeout (30 s; every
   step heartbeats), and its session moves to another worker. A call that may already have run is
@@ -354,6 +366,8 @@ waiting for a session's worker that is gone (60 s placement limit) is adopted by
 | `session.capture_memory` | Save durable facts from a burst of turns | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried elsewhere; a burst that keeps failing is dropped (best effort) |
 | `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; retried on another worker, never lost; a job in a lent hand goes on from the calls it journalled |
 | `subagent.end_job` | Record how a background job ended | any worker | 2 min | every 30 s | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
+| `subagent.begin` | Start a subagent call: journal it and make its child session | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again (keyed by the call, so it makes one child) |
+| `subagent.end` | A subagent settled: record its outcome and answer the call waiting for it | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again (keyed, so the outcome lands once) |
 <!-- step-policies:end -->
 
 ### Sandboxes: environments, start and idle stop

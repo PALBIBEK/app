@@ -205,7 +205,7 @@ class QuotaEnforcer:
             query = (
                 select(func.count())
                 .select_from(SessionRow)
-                .where(SessionRow.status.in_(ACTIVE_STATUSES))
+                .where(SessionRow.status.in_(ACTIVE_STATUSES), SessionRow.parent_session_id.is_(None))
             )
             result = await db.execute(query)
             return int(result.scalar_one())
@@ -215,13 +215,15 @@ class QuotaEnforcer:
         db: AsyncSession,
         tenant_id: str,
     ) -> int:
-        """Count active sessions for tenant."""
+        """Count active sessions for tenant (a subagent is part of the session that started
+        it, not one more: its spend counts toward the tenant's limit all the same)."""
         query = (
             select(func.count())
             .select_from(SessionRow)
             .where(
                 SessionRow.tenant_id == tenant_id,
                 SessionRow.status.in_(ACTIVE_STATUSES),
+                SessionRow.parent_session_id.is_(None),
             )
         )
         result = await db.execute(query)

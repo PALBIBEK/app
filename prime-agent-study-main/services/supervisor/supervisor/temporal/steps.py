@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import inspect
 import logging
 import os
@@ -39,6 +40,8 @@ from supervisor.agent.events import (
     ProjectContext,
     RunEnd,
     RunStart,
+    SubagentEnd,
+    SubagentStart,
     ToolEnd,
     ToolStart,
     TurnEnd,
@@ -79,6 +82,13 @@ from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager, SessionMoved
+from supervisor.session.children import (
+    PARENT_ONLY_TOOLS,
+    SUBAGENT_BRIEF,
+    ChildOutcome,
+    graded,
+    last_outcome,
+)
 from supervisor.session.project_context import read_project_context
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
@@ -99,21 +109,39 @@ from supervisor.temporal.contracts import (
     RunPlan,
     StepRequest,
     StepResult,
+    SubagentBegun,
+    SubagentEndRequest,
     ToolBatch,
     ToolRequest,
     TurnOutcome,
     TurnRequest,
+    child_session_id,
     run_id_for,
+    subagent_task_id,
 )
 from supervisor.temporal.subagent_tools import (
+    SPAWN_MODES,
     SUBAGENT_RESULT,
     SUBAGENT_TOOLS,
+    Outcome,
     SubagentTools,
     announcement,
+    foreground,
     render,
+    task,
 )
+from supervisor.tools import ToolError
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
+
+
+class _Refused(Exception):
+    """A subagent call answered without starting a child (a denial)."""
+
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
 TOOL_NOT_RUN = "TOOL_NOT_RUN"
 
 WIND_DOWN_S: Final = 7.0
@@ -268,7 +296,10 @@ FILE_TOOLS = frozenset({"read", "write", "edit"})
 def call_lane(name: str, args: dict[str, Any]) -> str | None:
     """The calls a call must not overtake (pi's file mutation queue): the file a file tool
     names, normalised so ``./a``, ``a`` and ``/workspace/a`` are one; the memory and
-    subagent tools keep their order among themselves. None: it runs whenever it can."""
+    subagent tools keep their order among themselves, except the subagents themselves: each is
+    a session of its own, so a round's subagents work at once. None: it runs whenever it can."""
+    if name in SPAWN_MODES and foreground(name, args) is not None:
+        return None
     if name in PLATFORM_TOOLS or name in SUBAGENT_TOOLS or name == SUBAGENT_RESULT:
         return "platform"
     path = (args.get("path") or args.get("file_path")) if name in FILE_TOOLS else None
@@ -440,7 +471,8 @@ class GithiSteps:
             # The run ends at its first step, so it does no work first (pi-temporal checks
             # before anything runs).
             return self._plan_run(run_id, manifest, capture=None)
-        if (project := await read_project_context(self._manager, session_id)) is not None:
+        hands_of = (await self._manager._get_session_row(session_id)).root_session_id
+        if (project := await read_project_context(self._manager, session_id, hands_of=hands_of)) is not None:
             await self._record(
                 session_id, run_id, "project", ProjectContext(project.path, project.text, project.digest)
             )
@@ -605,11 +637,26 @@ class GithiSteps:
                 return StepResult(calls=[], final=False, kind=COMPACT)
             chat = loop.messages_for_model(history, schemas, project=_project(run))
             files = self._manager.files
-            if files is not None and self._manager._hands.recipe(sid) is not None and (note := await files.context_note(sid)):
+            row = await self._manager._get_session_row(sid)
+            # A subagent works in its root's sandbox: its root's attachments and outputs.
+            in_sandbox = (
+                self._manager._hands.recipe(sid) is not None
+                if row.root_session_id is None
+                else (await self._manifest(sid)).requires_sandbox
+            )
+            if (
+                files is not None
+                and in_sandbox
+                and (note := await files.context_note(row.root_session_id or sid))
+            ):
                 # Where this session's attachments are and where outputs go, after the pinned
                 # prompt (which stays as published) and before the conversation.
                 at = 1 if chat and chat[0].role == "system" else 0
                 chat.insert(at, ChatMessage(role="system", content=note))
+            if row.parent_session_id is not None:
+                # A subagent hears what it is right after its pinned prompt.
+                at = 1 if chat and chat[0].role == "system" else 0
+                chat.insert(at, ChatMessage(role="system", content=SUBAGENT_BRIEF))
             spec = loop_spec(await self._manifest(sid))
             left = spec.max_steps - req.step
             final = is_final_step(spec, req.step)
@@ -684,10 +731,31 @@ class GithiSteps:
         manifest = await self._manifest(sid)
         spec = loop_spec(manifest)
         plans = [
-            self._plan(manifest, call, refused=refusal(spec, req.step, assistant, call) is not None)
+            await self._placed(
+                sid,
+                call,
+                self._plan(manifest, call, refused=(refused := refusal(spec, req.step, assistant, call) is not None)),
+                refused=refused,
+            )
             for call in calls
         ]
         return StepResult(calls=plans, final=False, lanes=True, tokens=tokens)
+
+    async def _placed(self, sid: str, call: dict[str, Any], plan: PlannedCall, *, refused: bool) -> PlannedCall:
+        """Where a call runs: a subagent call as a child session the workflow runs
+        (``delegate``); a subagent's own sandbox call in its root's sandbox (``in_root``)."""
+        if refused:
+            return plan  # answered without running, here
+        name, args = str(call["name"]), dict(call.get("arguments") or {})
+        child = (await self._manager._get_session_row(sid)).root_session_id is not None
+        if name not in SUBAGENT_TOOLS and not child:
+            return plan
+        # A model step runs on any worker: what the session offers comes from its brain.
+        catalog = (await self._brain(sid)).loop().offers(name)
+        if not catalog and (mode := foreground(name, args)) is not None:
+            return dataclasses.replace(plan, delegate=mode)
+        platform = not catalog and (name in SUBAGENT_TOOLS or (await self._memory.tools(sid)).handles(name))
+        return dataclasses.replace(plan, in_root=True) if child and not platform else plan
 
     async def _retry_or_fail(self, req: StepRequest, exc: Exception, *, renewed: bool = False) -> StepResult:
         """pi's auto-retry: a call that may pass is asked again after a durable wait.
@@ -863,14 +931,18 @@ class GithiSteps:
         )
 
     async def tool_call(self, req: ToolRequest) -> bool:
-        """Run one tool call; returns whether it errored. Safe to repeat (keyed events)."""
+        """Run one tool call; returns whether it errored. Safe to repeat (keyed events).
+
+        ``req.hand_of``: a subagent's sandbox call, journalled in the subagent's session and
+        run in the hands of ``hand_of`` (its root, whose worker this is)."""
         sid, run_id, call_id = req.session_id, req.run_id, req.call_id
+        hands = req.hand_of or sid
         if (done := await self._keyed(sid, run_id, f"{call_id}:end")) is not None:
             return bool(done.is_error)
         call, step, assistant = await self._located(sid, run_id, call_id)
         if activity.in_activity() and activity.is_cancelled():
             raise asyncio.CancelledError  # stopped before it started: the stop answers it
-        await self._still_held(sid)
+        await self._still_held(hands)
         # The start is the claim (pi-temporal's dispatch claim): taken atomically, so a
         # call closed unrun never starts late, and a retried attempt of a call that did
         # start runs again only as its recovery class allows (Temporal retries it or not).
@@ -896,25 +968,25 @@ class GithiSteps:
             is_error = True
         elif req.behind_unknown:
             result, is_error = denied_result(BEHIND_UNKNOWN, TOOL_NOT_RUN), True
-        elif tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
+        elif req.hand_of is None and tools.handles(call["name"]) and not await self._catalog_has(sid, call["name"]):
             output = await tools.call(call["name"], call["arguments"])
             result, is_error = _platform_result(output.text, output.is_error), output.is_error
-        elif call["name"] in SUBAGENT_TOOLS and not await self._catalog_has(sid, call["name"]):
+        elif req.hand_of is None and call["name"] in SUBAGENT_TOOLS and not await self._catalog_has(sid, call["name"]):
             outcome = await self._subagents.call(
                 sid, run_id, call_id, call["name"], call["arguments"]
             )
             result, is_error = render(outcome), outcome.is_error
         else:
-            runtime = await self._runtime(sid)
+            runtime = await self._runtime(hands)
             provider = runtime.seams.tool_provider if runtime.seams else None
-            if (denial := self._manager.tool_denial(sid, call["name"], provider)) is not None:
+            if (denial := self._manager.tool_denial(hands, call["name"], provider)) is not None:
                 result, is_error = denied_result(denial, "FILE_EFFECTS_DENIED"), True
             elif (
                 hand := await self._manager.hand_for_call(
-                    sid,
+                    hands,
                     call["name"],
                     provider,
-                    (args := take_hand(dict(call["arguments"]), self._manager.hand_names(sid)))[1],
+                    (args := take_hand(dict(call["arguments"]), self._manager.hand_names(hands)))[1],
                 )
             ).unavailable:
                 result = denied_result(hand.unavailable.error or "", hand.unavailable.code or "")
@@ -923,7 +995,7 @@ class GithiSteps:
                 result, is_error = await self._run_in_hand(
                     sid, run_id, call_id, call, args, hand, runtime, provider, started
                 )
-        await self._still_held(sid)  # a result of a sandbox that no longer serves is refused
+        await self._still_held(hands)  # a result of a sandbox that no longer serves is refused
         if not await self._claim(
             sid,
             run_id,
@@ -941,6 +1013,95 @@ class GithiSteps:
             done = await self._keyed(sid, run_id, f"{call_id}:end")
             return bool(done.is_error) if done is not None else is_error
         return is_error
+
+    # --- subagents (supervisor.session.children) --------------------------------
+
+    async def subagent_begin(self, req: ToolRequest) -> SubagentBegun:
+        """Start answering a ``subagent``/``subagent_fork`` call: journal its start and make
+        its child session (the workflow then runs it). A call that cannot start a child (its
+        arguments, the depth cap, a denial) is answered here, and no child is made. Safe to
+        repeat: the call's id names the child, and every event is keyed."""
+        sid, run_id, call_id = req.session_id, req.run_id, req.call_id
+        if await self._keyed(sid, run_id, f"{call_id}:end") is not None:
+            return SubagentBegun(None)  # answered already (refused, or closed by a stop)
+        call, _, _ = await self._located(sid, run_id, call_id)
+        name, args = str(call["name"]), dict(call["arguments"])
+        started = await self._claim(
+            sid, run_id, f"{call_id}:start", ToolStart(tool_call_id=call_id, tool_name=name, args=args)
+        )
+        if not started and getattr(await self._keyed(sid, run_id, f"{call_id}:start"), "not_run", False):
+            return SubagentBegun(None)  # closed before it ran: its end says so
+        row = await self._manager._get_session_row(sid)
+        spec = self._manager._pinned_manifest(row).subagents
+        try:
+            if req.denied:
+                raise _Refused("denied by approval", "APPROVAL_DENIED")
+            asked = task(name, args, depth=row.subagent_depth, max_depth=spec.max_depth if spec else 0)
+        except (ToolError, _Refused) as exc:
+            await self._claim(
+                sid,
+                run_id,
+                f"{call_id}:end",
+                ToolEnd(
+                    tool_call_id=call_id,
+                    tool_name=name,
+                    result=render(Outcome({"error": str(exc), "code": exc.code}, is_error=True)),
+                    is_error=True,
+                ),
+            )
+            return SubagentBegun(None)
+        child_id = child_session_id(sid, call_id)
+        # A fork carries the completed turns: everything before this run began.
+        seed = (await self._reader.read_turn(sid, run_id))[0].seq - 1 if asked.mode == "fork" else None
+        await self._manager.create_child(sid, child_id, mode=asked.mode, label=asked.label, seed_until=seed)
+        await self._record(
+            sid,
+            run_id,
+            f"{call_id}:subagent",
+            SubagentStart(
+                run_id=run_id_for(child_id, subagent_task_id(call_id)),
+                child_session_id=child_id,
+                parent_session_id=sid,
+                mode=asked.mode,
+                provider="session",
+                label=asked.label,
+                call_id=call_id,
+            ),
+        )
+        return SubagentBegun(child_id, row.root_session_id or sid, asked.prompt)
+
+    async def subagent_end(self, req: SubagentEndRequest) -> bool:
+        """A child settled: journal how it ended and, when a call waits for it, answer the
+        call with that outcome as githi grades it (``graded``); whether that is a failure."""
+        sid, child_id = req.session_id, req.child_id
+        outcome = last_outcome(await self._reader.read(child_id)) or ChildOutcome(
+            stop_reason="error",
+            error_class="SubagentNotStarted",
+            detail=req.error or "the subagent's session could not start",
+        )
+        ok, text = graded(outcome)
+        settled = SubagentEnd(run_id=req.child_run_id or "", stop_reason=outcome.stop_reason, output=text)
+        await self._manager._record(
+            sid, settled, turn_id=req.run_id, trace_id=None, event_key=f"subagent:{child_id}:end:{req.child_run_id}"
+        )
+        if req.call_id is None or req.run_id is None:
+            return not ok
+        payload = {"subagent_id": child_id, "stop_reason": outcome.stop_reason, "text": text}
+        await self._claim(
+            sid,
+            req.run_id,
+            f"{req.call_id}:end",
+            ToolEnd(
+                tool_call_id=req.call_id,
+                tool_name=str((await self._call(sid, req.run_id, req.call_id))["name"]),
+                result=render(
+                    Outcome(payload | ({} if ok else {"error": text, "code": "SUBAGENT_FAILED"}), is_error=not ok)
+                ),
+                is_error=not ok,
+            ),
+        )
+        done = await self._keyed(sid, req.run_id, f"{req.call_id}:end")
+        return bool(done.is_error) if done is not None else not ok
 
     async def _run_in_hand(
         self,
@@ -1118,8 +1279,17 @@ class GithiSteps:
         return runtime
 
     async def _tool_schemas(self, session_id: str, loop: AgentLoop) -> list[dict[str, Any]]:
-        """The session's catalog tools, then the memory and subagent tools it does not shadow."""
-        hands = self._manager.hand_names(session_id)
+        """The session's catalog tools, then the memory and subagent tools it does not shadow.
+
+        A subagent's sandbox tools act in its root's hands, so it is offered those (its
+        composition pins them as its root's does); it is never offered the parent's control
+        tools (``PARENT_ONLY_TOOLS``)."""
+        row = await self._manager._get_session_row(session_id)
+        hands = (
+            self._manager.pinned_hand_names(row)
+            if row.root_session_id is not None
+            else self._manager.hand_names(session_id)
+        )
         provider = loop.tool_provider
         schemas = [
             with_hand_argument(s, hands) if needs_workspace(provider, s["function"]["name"]) else s
@@ -1128,6 +1298,8 @@ class GithiSteps:
         names = {s["function"]["name"] for s in schemas}
         platform = (await self._memory.tools(session_id)).schemas()
         platform += await self._subagents.schemas(session_id)
+        if row.root_session_id is not None:
+            platform = [s for s in platform if s["function"]["name"] not in PARENT_ONLY_TOOLS]
         # pi's own tools first, in pi's order (read, bash, edit, write …), as its prompt lists them.
         return in_pi_order(schemas + [s for s in platform if s["function"]["name"] not in names])
 

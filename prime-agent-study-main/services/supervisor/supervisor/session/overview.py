@@ -69,6 +69,10 @@ class InboxItem:
     options: list[str]
     created_at_ms: int | None
     expires_at_ms: int | None
+    # A subagent's call: the session at the top of its tree (the one a person opened), and
+    # the label its task was given.
+    root_session_id: str | None = None
+    subagent_label: str | None = None
 
 
 async def approval_inbox(
@@ -103,6 +107,8 @@ async def approval_inbox(
                 options=list(approval.options or []),
                 created_at_ms=created,
                 expires_at_ms=created + int(float(approval.timeout_s) * 1000) if created is not None else None,
+                root_session_id=session.root_session_id,
+                subagent_label=session.subagent_label,
             )
         )
     return out
@@ -179,7 +185,10 @@ async def sandboxes(
     """The sandboxes of one session, or of every open session the caller may see."""
     async with db_factory() as db:
         query = select(SessionRow).where(
-            SessionRow.tenant_id == tenant_id, session_visibility(tenant_id, principal_id)
+            SessionRow.tenant_id == tenant_id,
+            session_visibility(tenant_id, principal_id),
+            # A subagent has no sandbox of its own: it works in its root's.
+            SessionRow.root_session_id.is_(None),
         )
         if session_id is not None:
             query = query.where(SessionRow.id == session_id)
@@ -282,17 +291,20 @@ async def usage(
         p = env.payload
         if not isinstance(p, MessageEnd) or p.role != "assistant" or p.usage is None:
             continue
+        # A subagent's calls are its root session's (the one a person opened).
+        session = sessions[env.session_id]
+        opened = session.root_session_id or session.id
         if by == "day":
             key = _day(env.ts_ms)
         elif by == "agent":
-            key = _agent_of(sessions[env.session_id])
+            key = _agent_of(session)
         else:
-            key = env.session_id
+            key = opened
         for row in (groups.setdefault(key, UsageRow(key=key)), total):
             row.input_tokens += int(p.usage.input_tokens)
             row.output_tokens += int(p.usage.output_tokens)
             row.cost += float(p.usage.cost_total)
             row.calls += 1
-            row.sessions.add(env.session_id)
+            row.sessions.add(opened)
     ordered = sorted(groups.values(), key=lambda r: r.key) if by == "day" else sorted(groups.values(), key=lambda r: -r.cost)
     return [r.out() for r in ordered], total.out()

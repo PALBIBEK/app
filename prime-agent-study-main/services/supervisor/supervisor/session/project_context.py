@@ -51,10 +51,15 @@ def _text(name: str, data: bytes) -> ProjectFile:
     return ProjectFile(name, text)
 
 
-async def read_project_context(manager: SessionManagerBase, session_id: str) -> ProjectFile | None:
-    """The session's project instructions, if its workspace has any; never raises."""
+async def read_project_context(
+    manager: SessionManagerBase, session_id: str, *, hands_of: str | None = None
+) -> ProjectFile | None:
+    """The session's project instructions, if its workspace has any; never raises.
+
+    ``hands_of``: the session whose sandbox it works in (a subagent's root), if not its own."""
+    owner = hands_of or session_id
     try:
-        if (sandbox := manager._hands.sandbox(session_id)) is not None:
+        if (sandbox := manager._hands.sandbox(owner)) is not None:
             workspace = SandboxWorkspace(sandbox)
             for name in CONTEXT_FILES:
                 try:
@@ -66,7 +71,7 @@ async def read_project_context(manager: SessionManagerBase, session_id: str) -> 
         if store is None:
             return None
         state = manager._workspace.get(session_id)
-        scopes = [checkpoint_scope(session_id), *([state.scope_id] if state and state.scope_id else [])]
+        scopes = [checkpoint_scope(owner), *([state.scope_id] if state and state.scope_id else [])]
         for scope in scopes:
             for name in CONTEXT_FILES:
                 record = await store.stat(scope, name)
