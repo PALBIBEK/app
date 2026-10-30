@@ -55,6 +55,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=12, max_length=PASSWORD_MAX_LENGTH)
 
 
+class DeleteAccountRequest(BaseModel):
+    """Deleting the account is confirmed with its password."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(..., min_length=1, max_length=PASSWORD_MAX_LENGTH)
+
+
 class UserResponse(UserBase):
     """Schema for user response (excludes password)."""
 

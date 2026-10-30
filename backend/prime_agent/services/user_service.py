@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from prime_agent.db.models.refresh_token import RefreshToken
 from prime_agent.db.models.user import User
+from prime_agent.schemas.ai_identity import TenantPrincipal
+from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.auth_service import AuthService
 
 _ALLOWED_PROFILE_FIELDS = frozenset({"email", "name", "avatar"})
@@ -81,4 +83,39 @@ class UserService:
             )
             .values(revoked_at=datetime.now(UTC))
         )
+        await db.commit()
+
+    @classmethod
+    async def delete_account(
+        cls,
+        user: User,
+        password: str,
+        db: AsyncSession,
+        *,
+        client: AiClient,
+    ) -> None:
+        """Delete the account and everything kept of it, confirmed by its password.
+
+        The supervisor's copy goes first (sessions, memory, workspaces, secrets): if it
+        cannot be erased now, the account stays so the person can try again. Then the
+        user's row, and with it (``ON DELETE CASCADE``) their harnesses, tools,
+        environments, sessions, datasets, experiments and sign-in tokens.
+        """
+        if not AuthService.verify_password(password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password is incorrect",
+            )
+        if client.configured:
+            try:
+                await client.erase_principal(TenantPrincipal.from_user(user))
+            except AiUpstreamError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error_code": "AI_UPSTREAM_ERROR",
+                        "message": f"Your data could not be erased right now, so the account was kept; try again shortly. ({exc})",
+                    },
+                ) from exc
+        await db.delete(user)
         await db.commit()

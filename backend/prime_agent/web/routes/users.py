@@ -5,9 +5,11 @@ from fastapi import APIRouter, Response, status
 from prime_agent.config import get_settings
 from prime_agent.schemas.user import (
     ChangePasswordRequest,
+    DeleteAccountRequest,
     UserResponse,
     UserUpdate,
 )
+from prime_agent.services.ai_client import AiClient
 from prime_agent.services.user_service import UserService
 from prime_agent.web.dependencies import CurrentUser, DbSession
 from prime_agent.web.dependencies.csrf import clear_csrf_cookie
@@ -53,6 +55,31 @@ async def change_password(
         password_data.new_password,
         db,
     )
+    _clear_sign_in_cookies(response)
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_account(
+    body: DeleteAccountRequest,
+    response: Response,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> None:
+    """Delete the account and erase everything kept of it (confirmed by its password)."""
+    await UserService.delete_account(
+        current_user,
+        body.password,
+        db,
+        client=AiClient.from_settings(get_settings()),
+    )
+    _clear_sign_in_cookies(response)
+
+
+def _clear_sign_in_cookies(response: Response) -> None:
     settings = get_settings()
     response.delete_cookie(
         key=settings.refresh_cookie_name,

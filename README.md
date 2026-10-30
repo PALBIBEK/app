@@ -195,7 +195,16 @@ payloads stored beside it (unless another session holds the same bytes), the fil
 produced, its sandboxes' checkpoints, its run traces, its gateway key and the session itself.
 Workspace files it attached stay (they are the workspace's), and its sealed workflow history
 stays in Temporal until the namespace's retention ends. Ending a session
-(`DELETE /api/v1/sessions/{id}`) keeps its record.
+(`DELETE /api/v1/sessions/{id}`) keeps its record. In the chat, **Erase** does this.
+
+**Deleting an account.** `DELETE /api/v1/users/me` with the account's password (Settings →
+General → Delete account) erases everything of the person: the supervisor first ends and erases
+every session they own, their long-term memory, the workspaces only they belong to (with every
+version of every file) and their tenant's secrets, and removes them from every other workspace;
+a workspace they own that others belong to is handed to the member who joined first. Then their
+account goes, and with it their harnesses, tools, environments, datasets, experiments and
+sign-ins. If the supervisor cannot erase yet (a session still stopping, memory unreachable), the
+account is kept and nothing here is removed, so deleting again finishes the job.
 
 ### Inside a run
 

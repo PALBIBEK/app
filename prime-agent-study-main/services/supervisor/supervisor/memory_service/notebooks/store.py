@@ -48,6 +48,7 @@ from supervisor.memory_service.notebooks.types import (
     Sensitivity,
     notebook_id,
     personal_source,
+    subject_of,
 )
 
 BANK_CONFIDENCE = 0.9
@@ -56,11 +57,6 @@ BANK_CONFIDENCE = 0.9
 
 def now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def subject_of(owner: str) -> str:
-    """The bank subject of an owner's facts (as ``remember`` and durable recall scope them)."""
-    return f"user:{owner}"
 
 
 def _provenance(row: FactRow | FactRevisionRow) -> Provenance:

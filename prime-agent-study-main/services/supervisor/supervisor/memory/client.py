@@ -36,6 +36,7 @@ from supervisor.memory_service.notebooks.types import (
     Notebook,
     NotebookStats,
     Revision,
+    subject_of,
     tenant_of,
 )
 
@@ -201,6 +202,20 @@ class NotebookClient:
         await self._on(
             notebook_id, "POST", "/facts:restore", json={"revision": revision, "author": author}
         )
+
+    # --- erasure ---------------------------------------------------------------
+
+    async def erase_owner(self, *, tenant_id: str, owner: str, actor: str, reason: str) -> int:
+        """Erase everything the memory service keeps of ``owner`` in ``tenant_id``: their
+        notebooks with facts and history, and what was learnt about them. The notebooks
+        removed (0 the second time)."""
+        body = await self._call(
+            tenant_id,
+            "POST",
+            "/v1/memory/erase_subject",
+            json={"tenant": tenant_id, "subject": subject_of(owner), "actor": actor, "reason": reason},
+        )
+        return int((body or {}).get("notebooks_erased", 0))
 
     # --- transport -------------------------------------------------------------
 

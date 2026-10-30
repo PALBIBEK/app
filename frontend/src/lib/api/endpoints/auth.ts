@@ -105,4 +105,12 @@ export const authAPI = {
       new_password: newPassword,
     });
   },
+
+  /**
+   * Delete the account and erase everything kept of it, confirmed by its password
+   * DELETE /users/me
+   */
+  deleteAccount: async (password: string): Promise<void> => {
+    await apiClient.delete('/users/me', { data: { password } });
+  },
 };

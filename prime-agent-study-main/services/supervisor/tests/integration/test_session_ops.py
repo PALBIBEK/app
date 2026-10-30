@@ -250,6 +250,29 @@ async def test_erasing_a_session_ends_it_and_leaves_nothing_of_it(
         assert (await handle.describe()).status is not None and (await handle.describe()).close_time is not None
 
 
+async def test_erasing_a_principal_ends_and_erases_every_session_of_theirs(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    model()
+    worker = await env.state()
+    async with session_worker(env.client, worker, task_queue=env.queue), api(env) as (http, _):
+        talked, idle = await env.create(worker), await env.create(worker)
+        await env.sessions.submit(talked, Message("c1", "hi"))
+        await env.wait_for(worker, talked, run_ended())
+
+        alice, bob = ({**HEADERS, "X-Principal-Id": who} for who in ("alice", "bob"))
+        assert (await http.delete("/v1/principals/me/data", headers=bob)).json()["sessions"] == 0  # not his
+        erased = await http.delete("/v1/principals/me/data", headers=alice)
+        assert erased.status_code == 200, erased.text
+        assert erased.json()["sessions"] == 2
+        for sid in (talked, idle):
+            assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 404
+            assert await worker.reader.read(sid) == []
+            assert (await env.client.get_workflow_handle(workflow_id(sid)).describe()).close_time is not None
+        again = await http.delete("/v1/principals/me/data", headers=alice)
+        assert again.json() == dict.fromkeys(again.json(), 0)
+
+
 async def test_a_fork_is_a_session_with_its_own_workflow(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
