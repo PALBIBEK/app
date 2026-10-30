@@ -10,7 +10,7 @@ is their own tenant, the tenant's secrets.
   files, their versions and their stored bytes;
 - the caller's memberships and grants on every other scope;
 - when the caller is their own tenant (the product's one-person tenants), the tenant's
-  secrets (``supervisor.vault``), which only they could have set, and its monthly spend.
+  secrets (``supervisor.vault``), which only they could have set, and its monthly spend and the record of its erased sessions.
 
 A scope the caller owns with other members is shared work: it is handed to the member
 who joined it first, with an owner's grants, and kept. Long-term memory is the memory
@@ -31,6 +31,7 @@ from sqlalchemy import ColumnElement, and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import (
+    ErasedSessionRow,
     ScopeGrantRow,
     ScopeMembershipRow,
     ScopeRow,
@@ -106,6 +107,7 @@ class PrincipalEraser:
             if principal_id == tenant_id:
                 secrets = await self._delete_tenant_secrets(db, tenant_id)
                 await db.execute(delete(TenantSpendRow).where(TenantSpendRow.tenant_id == tenant_id))
+                await db.execute(delete(ErasedSessionRow).where(ErasedSessionRow.tenant_id == tenant_id))
         for name in secrets:
             if self._forget_secret is not None:
                 self._forget_secret(tenant_id, name)

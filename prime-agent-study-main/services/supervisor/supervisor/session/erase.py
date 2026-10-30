@@ -9,6 +9,10 @@ it (``DELETE /v1/sessions/{id}/data``) removes that record too:
 - the files its runs produced (artifacts), and its sandboxes' checkpoints;
 - its gateway key, its hands' leases, and the session itself.
 
+What stays is a tombstone (``erased_sessions``: its id, tenant and when), so asking for the
+session afterwards answers 410 Gone instead of 404, and clients can tell an erased session
+from one that is not set up yet.
+
 Not here: the workspace files it attached (they are the workspace's, not the
 session's), what long-term memory learnt from it (the principal's; erased with the
 account), and its workflow history, which Temporal keeps sealed until the namespace's
@@ -35,6 +39,7 @@ from supervisor.db.models import (
     ApprovalRow,
     ArtifactRow,
     CommandRow,
+    ErasedSessionRow,
     EventRow,
     HandLeaseRow,
     PartialOutputRow,
@@ -171,6 +176,9 @@ class SessionEraser:
         for table in _SCOPE_TABLES:
             await db.execute(delete(table).where(table.c.scope_id.in_(scopes)))
         await db.execute(delete(ScopeRow).where(ScopeRow.id.in_(scopes)))
+        tenant_id = await db.scalar(select(SessionRow.tenant_id).where(SessionRow.id == session_id))
+        if tenant_id is not None:  # remembered as erased: asking for it says so (410)
+            await db.merge(ErasedSessionRow(session_id=session_id, tenant_id=tenant_id))
         await db.execute(delete(SessionRow).where(SessionRow.id == session_id))
         return int(events or 0)
 

@@ -147,12 +147,16 @@ async def list_sessions(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
     ids: list[str] | None = Query(default=None, max_length=LIST_IDS_MAX, description="Only these sessions"),
+    include_erased: bool = Query(default=False, description="With ids: name the erased ones too"),
 ) -> list[SessionSummary]:
-    """The caller's sessions, newest first; with ``ids``, only those the caller may see."""
+    """The caller's sessions, newest first; with ``ids``, only those the caller may see, and
+    with ``include_erased`` also each of them that was erased, as status ``erased`` (so a
+    client can forget it; one merely not set up yet is simply absent)."""
     manager = deps.get_manager(request)
     rows = await manager.list_sessions(
         tenant_id=tenant_id, principal_id=deps.request_principal_id(request, tenant_id), ids=ids
     )
+    erased = await _erased_among(request, tenant_id, ids) if ids and include_erased else []
     return [
         SessionSummary(
             session_id=r.session_id,
@@ -166,7 +170,24 @@ async def list_sessions(
             is_busy=r.is_busy,
         )
         for r in rows
+    ] + [
+        SessionSummary(session_id=sid, status="erased", harness_version="", runtime="", last_seq=-1)
+        for sid in erased
     ]
+
+
+async def _erased_among(request: Request, tenant_id: str, ids: list[str]) -> list[str]:
+    from sqlalchemy import select
+
+    from supervisor.db.models import ErasedSessionRow
+
+    async with deps.get_session_factory(request)() as db:
+        found = await db.scalars(
+            select(ErasedSessionRow.session_id).where(
+                ErasedSessionRow.session_id.in_(ids), ErasedSessionRow.tenant_id == tenant_id
+            )
+        )
+        return sorted(found)
 
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
@@ -462,13 +483,8 @@ async def erase_session(
 async def stop_for_erasure(request: Request, session_id: str) -> None:
     """End the session and its unfinished background jobs, and wait until they have: nothing
     may write what erasing removes. 503 when one is still stopping (erasing again retries)."""
-    workflows = deps.get_workflows(request)
-    if workflows is None:  # in-process mode
-        await deps.get_manager(request).terminate(session_id)
-        return
-    jobs = await deps.get_reader(request).unfinished_jobs(session_id)
     try:
-        await workflows.close(session_id, jobs=jobs)
+        await end_for_erasure(deps._state(request), session_id)
     except (SessionCommandError, TemporalUnavailable) as exc:
         raise to_http(exc) from exc
     except TimeoutError as exc:
@@ -476,6 +492,21 @@ async def stop_for_erasure(request: Request, session_id: str) -> None:
             status_code=503,
             detail="a session or one of its background jobs is still stopping; erase it again shortly",
         ) from exc
+
+
+async def end_for_erasure(state: Any, session_id: str) -> None:
+    """``stop_for_erasure`` outside a request (the retention sweep): raises as it is."""
+    if state.workflows is None:  # in-process mode
+        await state.manager.terminate(session_id)
+        return
+    jobs = await state.reader.unfinished_jobs(session_id)
+    await state.workflows.close(session_id, jobs=jobs)
+
+
+async def end_and_erase(state: Any, session_id: str) -> None:
+    """End a session (and its jobs), then erase it: what the retention sweep does to each."""
+    await end_for_erasure(state, session_id)
+    await state.manager.erase(session_id)
 
 
 @router.get("/{session_id}/startup", response_model=StartupOut)

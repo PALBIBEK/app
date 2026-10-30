@@ -242,8 +242,11 @@ async def test_erasing_a_session_ends_it_and_leaves_nothing_of_it(
 
         erased = await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)
         assert erased.status_code == 204, erased.text
-        assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 404
-        assert (await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)).status_code == 404
+        assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 410  # erased
+        assert (await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)).status_code == 410
+        assert (await http.get(f"/v1/sessions/{sid}", headers={"X-Tenant-Id": "t2"})).status_code == 404
+        listed = await http.get("/v1/sessions", params={"ids": [sid], "include_erased": "true"}, headers=HEADERS)
+        assert [(s["session_id"], s["status"]) for s in listed.json()] == [(sid, "erased")]
         assert await worker.reader.read(sid) == []
         assert await worker.manager.session_status(sid) is None
         handle = env.client.get_workflow_handle(workflow_id(sid))
@@ -266,7 +269,7 @@ async def test_erasing_a_principal_ends_and_erases_every_session_of_theirs(
         assert erased.status_code == 200, erased.text
         assert erased.json()["sessions"] == 2
         for sid in (talked, idle):
-            assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 404
+            assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 410
             assert await worker.reader.read(sid) == []
             assert (await env.client.get_workflow_handle(workflow_id(sid)).describe()).close_time is not None
         again = await http.delete("/v1/principals/me/data", headers=alice)

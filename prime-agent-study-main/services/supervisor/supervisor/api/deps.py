@@ -190,10 +190,20 @@ async def require_session_access(
     manager = get_manager(request)
     principal_id = request_principal_id(request, tenant_id)
     info = await manager.get(session_id, tenant_id=tenant_id, principal_id=principal_id)
+    if info is None and await _erased(request, tenant_id, session_id):
+        raise HTTPException(status_code=410, detail="session erased")
     if info is None and await _still_starting(request, tenant_id, principal_id, session_id):
         info = await manager.get(session_id, tenant_id=tenant_id, principal_id=principal_id)
     if info is None:
         raise HTTPException(status_code=404, detail="session not found")
+
+
+async def _erased(request: Request, tenant_id: str, session_id: str) -> bool:
+    from supervisor.db.models import ErasedSessionRow
+
+    async with get_session_factory(request)() as db:
+        row = await db.get(ErasedSessionRow, session_id)
+    return row is not None and row.tenant_id == tenant_id
 
 
 STARTING_WAIT_S = 30.0

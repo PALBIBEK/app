@@ -883,3 +883,50 @@ async def test_a_message_longer_than_a_session_takes_is_refused_before_the_super
     assert over.status_code == 422
     assert at.status_code in (200, 201, 202), at.text
     assert len(posted) == 1  # only the one within the limit reached the supervisor
+
+
+@pytest.mark.asyncio
+async def test_a_session_erased_upstream_is_forgotten_here(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    """The supervisor erases ended sessions after SESSION_RETENTION_DAYS; their links went on
+    being listed, and opening one failed."""
+    for ai_id, status in (("ai-erased", "terminated"), ("ai-ended", "terminated"), ("ai-new", "starting")):
+        db_session.add(SessionLink(
+            id=str(uuid4()), user_id=owner.id, harness_id=harness.id, ai_session_id=ai_id,
+            tenant_id=owner.id, harness_version="githi-v1", runtime="githi", status=status,
+            created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        ))
+    await db_session.flush()
+    erased_later = {"ai-erased"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/sessions":
+            assert request.url.params.get("include_erased") == "true"
+            listed = [{"session_id": sid, "status": "erased", "harness_version": "", "runtime": "", "last_seq": -1}
+                      for sid in sorted(erased_later)]
+            if "ai-ended" not in erased_later:
+                listed.append({"session_id": "ai-ended", "status": "terminated", "harness_version": "githi-v1",
+                               "runtime": "githi", "last_seq": 3})
+            return httpx.Response(200, json=listed)  # "ai-new" is not set up yet: absent
+        if request.url.path == "/v1/sessions/ai-ended":
+            return httpx.Response(410, json={"detail": "session erased"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        listed = (await api.get("/api/v1/sessions")).json()
+        kept = {link.ai_session_id: link.id for link in (await db_session.scalars(select(SessionLink))).all()}
+        assert sorted(kept) == ["ai-ended", "ai-new"]  # a session not set up yet is kept
+        assert sorted(item["id"] for item in listed["data"]) == sorted(kept.values())
+        assert listed["total"] == 2
+        erased_later.add("ai-ended")  # erased since: opening it says not found, and forgets it
+        assert (await api.get(f"/api/v1/sessions/{kept['ai-ended']}")).status_code == 404
+    assert [link.ai_session_id for link in (await db_session.scalars(select(SessionLink))).all()] == ["ai-new"]

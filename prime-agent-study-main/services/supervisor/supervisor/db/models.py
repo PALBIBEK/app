@@ -95,6 +95,17 @@ class SessionIndexRow(Base):
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class ErasedSessionRow(Base):
+    """A session that was erased (``supervisor.session.erase``): only its id, tenant and when,
+    so a client asking for it hears it is gone (410), not that it never was."""
+
+    __tablename__ = "erased_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    erased_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
 class TenantSpendRow(Base):
     """What a tenant's model calls cost in one calendar month (UTC), counted as it is spent
     (``supervisor.policy.budget``). Kept apart from the sessions, so erasing one does not
