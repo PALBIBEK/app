@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -41,6 +42,9 @@ from prime_agent.services.harness_bind_service import (
 from prime_agent.services.platform_status_service import (
     PlatformStatusService,
 )
+
+ERASING_AT_ONCE = 8
+"""Sessions ended and erased at the same time when a harness is deleted."""
 
 
 class SessionNotFoundError(Exception):
@@ -516,16 +520,62 @@ class SessionService:
         """Erase the session: the supervisor's record of it (journal, files, checkpoints),
         then the product's link to it. Safe to repeat: one already erased upstream is done."""
         link = await self._get_owned(session_id, user_id, db)
+        await self._erase_upstream(identity, link.ai_session_id)
+        await db.delete(link)
+        await db.commit()
+
+    async def erase_harness_sessions(
+        self,
+        *,
+        harness_id: str,
+        user_id: str,
+        identity: TenantPrincipal,
+        db: AsyncSession,
+    ) -> int:
+        """Erase every session of a harness (before the harness is deleted, which would
+        otherwise drop their links and leave them in the supervisor, out of reach).
+
+        Ended and erased upstream a few at a time; a link goes once its session is gone, so
+        a failure part way keeps what is left reachable, and erasing again finishes the job.
+        Returns the sessions erased."""
+        links = list(
+            (
+                await db.execute(
+                    select(SessionLink).where(SessionLink.harness_id == harness_id, SessionLink.user_id == user_id)
+                )
+            ).scalars()
+        )
+        if not links or not self._client.configured:  # without a supervisor, nothing is kept there
+            return 0
+        at_once = asyncio.Semaphore(ERASING_AT_ONCE)
+
+        async def erase(link: SessionLink) -> SessionLink | HTTPException:
+            async with at_once:
+                try:
+                    await self._erase_upstream(identity, link.ai_session_id)
+                except HTTPException as exc:
+                    return exc
+                return link
+
+        outcomes = await asyncio.gather(*(erase(link) for link in links))
+        for outcome in outcomes:
+            if isinstance(outcome, SessionLink):
+                await db.delete(outcome)
+        await db.commit()
+        if failed := [o for o in outcomes if isinstance(o, HTTPException)]:
+            raise failed[0]
+        return len(links)
+
+    async def _erase_upstream(self, identity: TenantPrincipal, ai_session_id: str) -> None:
+        """End and erase the supervisor's session (already erased counts as done)."""
         try:
-            await self._client.erase_session(identity, link.ai_session_id)
+            await self._client.erase_session(identity, ai_session_id)
         except AiUpstreamError as exc:
             if exc.status_code != 404:
                 raise HTTPException(
                     status_code=exc.status_code or 503,
                     detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
                 ) from exc
-        await db.delete(link)
-        await db.commit()
 
     @staticmethod
     def _product_subagent_provider(provider: str | None) -> str:

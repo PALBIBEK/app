@@ -37,6 +37,7 @@ from prime_agent.services.harness_publish_service import (
     save_draft,
 )
 from prime_agent.services.harness_service import HarnessService
+from prime_agent.services.session_service import SessionService
 from prime_agent.web.dependencies import CurrentUser, DbSession
 
 router = APIRouter()
@@ -123,8 +124,15 @@ async def delete_harness(
     db: DbSession,
     current_user: CurrentUser,
 ) -> Response:
-    """Delete an owned harness."""
+    """Delete an owned harness, after ending and erasing its sessions (503, and the harness
+    kept, while any cannot be erased yet)."""
     await HarnessService.get_owned(harness_id, current_user.id, db)
+    await SessionService.from_settings(get_settings()).erase_harness_sessions(
+        harness_id=harness_id,
+        user_id=current_user.id,
+        identity=TenantPrincipal.from_user(current_user),
+        db=db,
+    )
     await HarnessService.adelete(harness_id, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
