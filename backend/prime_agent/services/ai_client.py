@@ -66,6 +66,9 @@ if TYPE_CHECKING:
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
+SESSION_ERASE_TIMEOUT_S = 90.0
+"""How long erasing one session may take: the supervisor ends it and waits for it to stop."""
+
 ERASE_TIMEOUT_S = 300.0
 """How long erasing a principal may take: each running session is ended and waited for."""
 
@@ -514,6 +517,8 @@ class AiClient:
             identity,
             expected=(204,),
             allow_empty=True,
+            # The supervisor waits for the session and its jobs to stop (up to a minute).
+            timeout=max(self._settings.ai_http_timeout_seconds, SESSION_ERASE_TIMEOUT_S),
         )
 
     async def erase_principal(self, identity: TenantPrincipal) -> dict[str, Any]:

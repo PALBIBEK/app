@@ -46,7 +46,10 @@ function HarnessPageContent(): JSX.Element {
   }
 
   async function handleDelete(): Promise<void> {
-    if (!window.confirm(`Delete agent “${harness!.name}”? This cannot be undone.`)) return;
+    const sure = window.confirm(
+      `Delete agent “${harness!.name}”? Its sessions are ended and erased with it (their messages and files). This cannot be undone.`,
+    );
+    if (!sure) return;
     await deleteHarness.mutateAsync(harness!.id);
     router.push('/');
   }
