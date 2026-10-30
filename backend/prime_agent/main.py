@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from prime_agent.config import get_settings
 from prime_agent.db.session import db as database_session
+from prime_agent.web.body_limit import LimitRequestBody, request_limit
 from prime_agent.web.middlewares import (
     LoggingMiddleware,
     SecurityHeadersMiddleware,
@@ -219,8 +220,12 @@ def create_app() -> FastAPI:
         openapi_url=settings.openapi_url if settings.environment != "production" else None,
     )
 
-    # Register middleware (ORDER MATTERS!)
-    # CORS MUST BE FIRST to handle preflight requests
+    # Register middleware (ORDER MATTERS!). Each one added wraps those before it.
+    # Body size first, innermost: CORS then wraps its 413, so a browser can read why.
+    app.add_middleware(
+        LimitRequestBody,
+        limit_for=request_limit(settings.api_v1_prefix, settings.workspace_max_upload_bytes),
+    )
     setup_cors(app, settings)
     logger.info("CORS middleware registered")
 
