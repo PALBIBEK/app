@@ -13,6 +13,7 @@ from supervisor.sandbox.base import Sandbox, SnapshotUnsupported
 from supervisor.seams.services import (
     WorkspaceConflictError,
 )
+from supervisor.session.erase import Erased, SessionEraser
 from supervisor.session.errors import (
     WorkspaceUnavailable,
 )
@@ -244,6 +245,14 @@ class UpkeepOps(ChildOps):
                     if row is not None and row.status == "active":
                         row.status = "paused"
                 await db.commit()
+
+    async def erase(self, session_id: str) -> Erased:
+        """Erase an ended session's data for good (``supervisor.session.erase``). The
+        caller ends it first, with its background jobs: nothing may write meanwhile."""
+        eraser = SessionEraser(
+            self._db, blob_dir=self._reader.blob_dir, objects=getattr(self._workspace_store, "objects", None)
+        )
+        return await eraser.erase(session_id)
 
     async def terminate(self, session_id: str) -> None:
         # D13 T9: reap open spans via session_terminal before tearing down the session.

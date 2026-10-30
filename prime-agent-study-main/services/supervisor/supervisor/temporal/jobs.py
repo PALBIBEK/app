@@ -56,6 +56,10 @@ class JobSteps:
             )
         if (ended := await self._ended(spec)) is not None:
             return ended
+        if await self._manager.session_status(spec.session_id) is None:
+            # The session was erased while the job stopped: there is no journal to end it in
+            # (and retrying until it lands would retry for ever).
+            return JobOutcome(spec.job_id, req.stop_reason, req.output)
         await journal_background_end(
             self._manager._writer,
             spec.session_id,

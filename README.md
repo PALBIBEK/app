@@ -189,6 +189,14 @@ chat, **Stop** cancels the run going now by its id (pressing it twice, or after 
 does nothing), a queued message has its own **Cancel**, and **Runs** lists each run with its
 status, duration, steps, tokens and cost.
 
+**Erasing a session.** `DELETE /api/v1/sessions/{id}/data` ends the session, waits for it and
+its background jobs to stop, and erases what the platform keeps of it: its journal and the
+payloads stored beside it (unless another session holds the same bytes), the files its runs
+produced, its sandboxes' checkpoints, its run traces, its gateway key and the session itself.
+Workspace files it attached stay (they are the workspace's), and its sealed workflow history
+stays in Temporal until the namespace's retention ends. Ending a session
+(`DELETE /api/v1/sessions/{id}`) keeps its record.
+
 ### Inside a run
 
 A githi run is a sequence of durable steps that the session's workflow drives (pi-temporal's

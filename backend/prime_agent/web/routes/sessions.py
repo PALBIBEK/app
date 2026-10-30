@@ -412,6 +412,21 @@ async def terminate_session(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.delete("/{session_id}/data", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def erase_session(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> Response:
+    """End the session and erase it for good: its conversation, files and checkpoints."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        await _service().erase(session_id=session_id, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/{session_id}/pause", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 async def pause_session(session_id: str, current_user: CurrentUser) -> dict[str, str]:
     return {

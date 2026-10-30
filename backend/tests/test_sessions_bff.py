@@ -13,13 +13,12 @@ import pytest
 from prime_agent.config import Settings, get_settings
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.main import create_app
-from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient
-from tests.support.catalog import DIGEST, PIN
 from prime_agent.services.harness_service import HarnessService
 from prime_agent.services.platform_status_service import PlatformStatusService
 from prime_agent.services.session_service import SessionService
 from prime_agent.web.dependencies import get_current_user, get_db
+from tests.support.catalog import DIGEST
 
 SECRET = "ai-service-jwt-secret-at-least-32-bytes!!"
 
@@ -569,6 +568,49 @@ async def test_delete_maps_to_supervisor_terminate(
         r = await api.delete(f"/api/v1/sessions/{link.id}")
     assert r.status_code == 204
     assert seen["method"] == "DELETE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream", [204, 404], ids=["erased-now", "already-erased-upstream"])
+async def test_erase_erases_upstream_then_forgets_the_link(
+    db_session, owner, harness, session_settings, monkeypatch, upstream
+):
+    link = SessionLink(
+        id=str(uuid4()),
+        user_id=owner.id,
+        harness_id=harness.id,
+        ai_session_id="ai-erase",
+        tenant_id=owner.id,
+        harness_version="githi-v1",
+        runtime="githi",
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db_session.add(link)
+    await db_session.flush()
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(upstream, json={} if upstream == 404 else None)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as api:
+        r = await api.delete(f"/api/v1/sessions/{link.id}/data")
+        again = await api.delete(f"/api/v1/sessions/{link.id}/data")
+    assert r.status_code == 204
+    assert seen == [("DELETE", "/v1/sessions/ai-erase/data")]
+    assert await db_session.get(SessionLink, link.id) is None
+    assert again.status_code == 404  # the product no longer knows it
 
 
 @pytest.mark.asyncio

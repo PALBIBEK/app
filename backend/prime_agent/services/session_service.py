@@ -505,6 +505,28 @@ class SessionService:
         await db.commit()
 
 
+    async def erase(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        identity: TenantPrincipal,
+        db: AsyncSession,
+    ) -> None:
+        """Erase the session: the supervisor's record of it (journal, files, checkpoints),
+        then the product's link to it. Safe to repeat: one already erased upstream is done."""
+        link = await self._get_owned(session_id, user_id, db)
+        try:
+            await self._client.erase_session(identity, link.ai_session_id)
+        except AiUpstreamError as exc:
+            if exc.status_code != 404:
+                raise HTTPException(
+                    status_code=exc.status_code or 503,
+                    detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
+                ) from exc
+        await db.delete(link)
+        await db.commit()
+
     @staticmethod
     def _product_subagent_provider(provider: str | None) -> str:
         """Surface echo stub as lab_echo — never as long-term memory."""

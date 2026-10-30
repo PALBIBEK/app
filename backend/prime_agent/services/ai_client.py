@@ -498,6 +498,16 @@ class AiClient:
             allow_empty=True,
         )
 
+    async def erase_session(self, identity: TenantPrincipal, ai_session_id: str) -> None:
+        """End the session and erase what the supervisor keeps of it (204; 404 once erased)."""
+        await self._json_request(
+            "DELETE",
+            f"/v1/sessions/{ai_session_id}/data",
+            identity,
+            expected=(204,),
+            allow_empty=True,
+        )
+
     async def fork_session(
         self,
         identity: TenantPrincipal,

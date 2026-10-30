@@ -439,6 +439,32 @@ async def terminate_session(
         await deps.get_manager(request).terminate(session_id)
 
 
+@router.delete("/{session_id}/data", status_code=204)
+async def erase_session(
+    session_id: str,
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> None:
+    """End the session (if it runs) and erase what the supervisor keeps of it, for good
+    (``supervisor.session.erase``). Afterwards the session is not found."""
+    await deps.require_session_access(tenant_id, session_id, request)
+    manager = deps.get_manager(request)
+    if (workflows := deps.get_workflows(request)) is not None:
+        jobs = await deps.get_reader(request).unfinished_jobs(session_id)
+        try:
+            await workflows.close(session_id, jobs=jobs)
+        except (SessionCommandError, TemporalUnavailable) as exc:
+            raise to_http(exc) from exc
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="the session or one of its background jobs is still stopping; erase it again shortly",
+            ) from exc
+    else:
+        await manager.terminate(session_id)
+    await manager.erase(session_id)
+
+
 @router.get("/{session_id}/startup", response_model=StartupOut)
 async def session_startup(
     session_id: str,
