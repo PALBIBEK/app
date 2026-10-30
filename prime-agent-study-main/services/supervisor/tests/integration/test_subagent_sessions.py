@@ -32,7 +32,6 @@ from supervisor.traces.kinds import SpanKind
 from supervisor.traces.store import TraceFilter, list_runs, load_run
 from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
 from tests.support.scripted import ScriptedGateway, slow_tool
-from tests.support.workflow_histories import replayable_histories
 
 pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
 
@@ -188,14 +187,23 @@ async def test_a_rounds_subagents_work_at_once_and_their_spend_is_the_parents(
     assert all(costs[c] == Decimal("0.02") for c in children)
 
 
-async def test_subagent_histories_replay_deterministically(env: Env) -> None:
+async def test_subagent_histories_replay_deterministically(env: Env, model: Callable[..., ScriptedGateway]) -> None:
+    """A parent and its subagents (started, waited on, answered, ended) replay as recorded."""
+    model(("subagent", {"prompt": "list", "description": "lister"}), subagent_calls=[LS])
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "delegate"))
+        await env.wait_for(state, sid, run_ended())
+        child = await _child_row(env, sid)
+        await asyncio.wait_for(env.client.get_workflow_handle(workflow_id(child.id)).result(), timeout=30)
+        await env.sessions.terminate(sid)
+
     replayer = Replayer(workflows=[AgentSessionWorkflow, SubagentJobWorkflow], data_converter=pydantic_data_converter)
-    replayed = 0
-    async for history in replayable_histories(env.client, "WorkflowType = 'AgentSession'"):
+    for session in (sid, child.id):
+        history = await env.client.get_workflow_handle(workflow_id(session)).fetch_history()
         result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
-        assert result.replay_failure is None, result.replay_failure
-        replayed += 1
-    assert replayed >= 1
+        assert result.replay_failure is None, (session, result.replay_failure)
 
 
 async def test_a_subagents_run_is_in_its_parents_trace_and_nowhere_else(
