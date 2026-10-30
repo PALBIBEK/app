@@ -38,6 +38,7 @@ from prime_agent.services.session_service import (
     raise_session_not_found_http,
 )
 from prime_agent.web.dependencies import CurrentUser, DbSession
+from prime_agent.web.stream_slots import StreamSlots, max_streams_per_user
 
 router = APIRouter()
 Page = Annotated[int, Query(ge=1)]
@@ -196,6 +197,10 @@ async def post_message(
         raise_ai_not_ready_http(exc)
 
 
+STREAMS = StreamSlots(max_streams_per_user())
+"""Event streams each person holds open in this process (``prime_agent.web.stream_slots``)."""
+
+
 @router.get("/{session_id}/events")
 async def stream_events(
     session_id: str,
@@ -204,19 +209,24 @@ async def stream_events(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     identity = TenantPrincipal.from_user(current_user)
+    slot = STREAMS.claim(current_user.id)
     try:
-        byte_iter = await _service().stream_events(
-            session_id=session_id,
-            user_id=current_user.id,
-            identity=identity,
-            last_event_id=last_event_id,
-            db=db,
-        )
-    except SessionNotFoundError as exc:
-        raise_session_not_found_http(exc)
+        try:
+            byte_iter = await _service().stream_events(
+                session_id=session_id,
+                user_id=current_user.id,
+                identity=identity,
+                last_event_id=last_event_id,
+                db=db,
+            )
+        except SessionNotFoundError as exc:
+            raise_session_not_found_http(exc)
+    except BaseException:
+        slot.release()  # no stream was opened
+        raise
 
     return StreamingResponse(
-        byte_iter,
+        slot.serve(byte_iter),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
