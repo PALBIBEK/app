@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Final, Literal
@@ -20,6 +20,7 @@ from temporalio.client import (
     Client,
     WithStartWorkflowOperation,
     WorkflowExecutionStatus,
+    WorkflowFailureError,
     WorkflowHandle,
     WorkflowUpdateFailedError,
     WorkflowUpdateRPCTimeoutOrCancelledError,
@@ -44,6 +45,7 @@ from supervisor.temporal.contracts import (
     SessionResult,
     SessionStatus,
     Timing,
+    job_workflow_id,
     workflow_id,
 )
 from supervisor.temporal.fleet import QueueStats, queue_stats
@@ -197,6 +199,9 @@ async def _connecting() -> AsyncIterator[None]:
             raise TemporalUnavailable(str(exc)) from exc
         raise
 
+
+CLOSE_WAIT_S: Final = 60.0
+"""How long erasing a session waits for it and its background jobs to stop."""
 
 SUBMIT_ACCEPT_S = 10.0
 """How long a message waits for a worker to take it before it is sent as a signal."""
@@ -495,6 +500,21 @@ class SessionWorkflows:
         except SessionCommandError as exc:
             if exc.kind != "SessionClosed":  # already closed means already terminated
                 raise
+
+    async def close(self, session_id: str, *, jobs: Collection[str] = (), timeout_s: float = CLOSE_WAIT_S) -> None:
+        """End the session and wait until it and its background ``jobs`` have stopped, so
+        nothing it runs writes after this returns. ``TimeoutError`` if they do not stop in
+        ``timeout_s`` (a job whose worker is gone, say)."""
+        await self.terminate(session_id)
+        handles = [
+            self._handle(session_id),
+            *(self._client.get_workflow_handle(job_workflow_id(session_id, job)) for job in jobs),
+        ]
+        async with asyncio.timeout(timeout_s):
+            for handle in handles:
+                # A cancelled job's workflow fails; one already gone is not found: both stopped.
+                with contextlib.suppress(WorkflowFailureError, RPCError):
+                    await handle.result()
 
     async def status(self, session_id: str) -> SessionStatus:
         async with _commands():

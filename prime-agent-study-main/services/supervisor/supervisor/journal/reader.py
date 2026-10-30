@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.agent.events import Envelope, RunEnd, ToolEnd, ToolStart
+from supervisor.agent.events import Envelope, JobEnd, JobStart, RunEnd, ToolEnd, ToolStart
 from supervisor.db.models import EventRow, SessionRow
 from supervisor.journal.serde import decode_event
 
@@ -247,6 +247,17 @@ class JournalReader:
             trace_id=row.trace_id,
             payload=payload,
         )
+
+    async def unfinished_jobs(self, session_id: str) -> set[str]:
+        """The session's background subagent jobs that started and have not ended."""
+        events = await self.read_types([session_id], [JobStart.__name__, JobEnd.__name__])
+        started = {e.payload.job_id for e in events if isinstance(e.payload, JobStart) and e.payload.kind == "subagent"}
+        return started - {e.payload.job_id for e in events if isinstance(e.payload, JobEnd)}
+
+    @property
+    def blob_dir(self) -> Path | None:
+        """Where large payloads are kept beside the journal (``JournalWriter.put_blob``)."""
+        return self._blob_dir
 
     def read_blob(self, ref: str) -> bytes:
         """A blob stored with ``JournalWriter.put_blob``; ``FileNotFoundError`` if there is none."""

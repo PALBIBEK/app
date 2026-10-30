@@ -8,6 +8,7 @@ checkpoints, and is named in the journal.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import threading
@@ -236,3 +237,35 @@ async def test_a_background_jobs_model_calls_count_toward_the_sessions_cost(
         spent = await state.manager._budget.check(sid)
 
     assert spent.total_cost_usd == Decimal("0.04")
+
+
+async def test_erasing_a_session_stops_its_background_job_first(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """A job still working when its session is erased is stopped before anything is
+    removed, so it cannot write into a journal that is being erased."""
+    from httpx import ASGITransport, AsyncClient
+
+    from supervisor.main import create_app
+
+    gate = threading.Event()  # the job is busy until the test lets it go
+    model(
+        ("subagent", {"prompt": "build it", "background": True, "hand": "build"}),
+        child_calls=[("write", {"path": "built.txt", "content": "made by the job"})],
+        child_gate=gate,
+    )
+    state = await env.state(workspace_store=MemoryWorkspaceStore(objects=MemoryObjectStorage()))
+    front = await env.state()
+    front.workflows = env.sessions
+    async with session_worker(env.client, state, task_queue=env.queue), AsyncClient(
+        transport=ASGITransport(app=create_app(state=front)), base_url="http://test"
+    ) as http:
+        sid = await create_with_hands(env, state, "build")
+        await env.sessions.submit(sid, Message("c1", "have a job build"))
+        await env.wait_for(state, sid, run_ended(1))
+        assert await state.reader.unfinished_jobs(sid), "the job is running"
+        erased = await http.delete(f"/v1/sessions/{sid}/data", headers={"X-Tenant-Id": "t1"})
+        gate.set()
+        assert erased.status_code == 204, erased.text
+        await asyncio.sleep(1)  # anything still in flight would land now
+        assert await state.reader.read(sid) == []

@@ -229,6 +229,27 @@ async def test_a_session_busy_only_with_operations_starts_a_fresh_history(
     assert status.turns_completed == 1
 
 
+async def test_erasing_a_session_ends_it_and_leaves_nothing_of_it(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    model(LS)
+    worker = await env.state()
+    async with session_worker(env.client, worker, task_queue=env.queue), api(env) as (http, _):
+        sid = await env.create(worker)
+        await env.sessions.submit(sid, Message("c1", "list the files"))
+        await env.wait_for(worker, sid, run_ended())
+        assert (await env.sessions.op(_invoke(sid, "direct-1", path=".")))["ok"]
+
+        erased = await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)
+        assert erased.status_code == 204, erased.text
+        assert (await http.get(f"/v1/sessions/{sid}", headers=HEADERS)).status_code == 404
+        assert (await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)).status_code == 404
+        assert await worker.reader.read(sid) == []
+        assert await worker.manager.session_status(sid) is None
+        handle = env.client.get_workflow_handle(workflow_id(sid))
+        assert (await handle.describe()).status is not None and (await handle.describe()).close_time is not None
+
+
 async def test_a_fork_is_a_session_with_its_own_workflow(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

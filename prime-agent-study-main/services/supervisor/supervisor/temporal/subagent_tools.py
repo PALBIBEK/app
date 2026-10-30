@@ -177,7 +177,7 @@ class SubagentTools:
 
         op_id = f"{run_id}:{call_id}"
         job_id, job_run = job_ids(op_id)
-        running = await self._running_jobs(session_id)
+        running = await self._reader.unfinished_jobs(session_id)
         # A re-sent call (a retried step) is the job already running, not one more.
         if job_id not in running and len(running) >= MAX_BACKGROUND_JOBS:
             raise TooManyJobs(
@@ -223,17 +223,6 @@ class SubagentTools:
             {"job_id": job_id, "status": "started"}
             | ({"hand": args.hand, "lent_until": "the job ends"} if args.hand else {})
         )
-
-    async def _running_jobs(self, session_id: str) -> set[str]:
-        """The session's background subagents that started and have not ended."""
-        events = await self._reader.read_types([session_id], [JobStart.__name__, JobEnd.__name__])
-        started = {
-            e.payload.job_id
-            for e in events
-            if isinstance(e.payload, JobStart) and e.payload.kind == "subagent"
-        }
-        ended = {e.payload.job_id for e in events if isinstance(e.payload, JobEnd)}
-        return started - ended
 
     async def _lend(self, session_id: str, hand: str, job_id: str) -> Borrower:
         """Lend ``hand`` to the job (a re-sent call renews the same lease)."""
