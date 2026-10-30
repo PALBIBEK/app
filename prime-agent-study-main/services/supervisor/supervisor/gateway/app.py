@@ -19,7 +19,7 @@ from typing import Annotated, Any
 
 from fastapi import Body as JSONBody
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from opentelemetry import trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
@@ -29,6 +29,7 @@ from supervisor.gateway.auth import Caller, authenticate, gateway_error, require
 from supervisor.gateway.config import Settings
 from supervisor.gateway.factory import build_provider_registry
 from supervisor.gateway.metering import cost_usd, normalize_usage
+from supervisor.gateway.metrics import CountModelCalls, ModelCalls, Spend, prometheus
 from supervisor.gateway.otel import setup_tracing
 from supervisor.gateway.providers.base import (
     SSE,
@@ -56,6 +57,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="yal-model-gateway", version="0.1.0", lifespan=_lifespan)
+
+MODEL_CALLS = ModelCalls()
+SPEND = Spend()
+app.add_middleware(CountModelCalls, calls=MODEL_CALLS)
 
 COST_HEADER = "x-litellm-response-cost"
 """LiteLLM's response-cost header; carried on every non-streaming inference response."""
@@ -155,6 +160,12 @@ def _readyz_reason(request: Request) -> str | None:
         if not provider.credential_ok():
             return "credentials"
     return None
+
+
+@app.get("/v1/metrics", response_class=PlainTextResponse)
+def metrics() -> PlainTextResponse:
+    """Model calls by status code and spend, as Prometheus counters (counts only)."""
+    return PlainTextResponse(prometheus(MODEL_CALLS, SPEND), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/v1/readyz")
@@ -323,7 +334,11 @@ def _dispatch(
 
 
 def _charge(store: VirtualKeyStore, caller: Caller, cost: float) -> None:
-    if caller.virtual_key and cost > 0:
+    """Count ``cost`` toward the platform's spend, and the caller's key's."""
+    if cost <= 0:
+        return
+    SPEND.add(cost)
+    if caller.virtual_key:
         store.add_spend(caller.virtual_key, cost)
 
 

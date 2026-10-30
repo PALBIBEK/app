@@ -1,0 +1,63 @@
+# promtool test rules deploy/alerts/platform.rules.test.yml
+rule_files:
+  - platform.rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'yal_dependency_up{dependency="database", instance="api-a"}'
+        values: '1 1 0 0 0 0 0'
+      - series: 'yal_dependency_up{dependency="database", instance="api-b"}'
+        values: '1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: YalDatabaseUnreachable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: YalDatabaseUnreachable
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: A supervisor cannot reach its database
+              description: Sessions cannot start, run or be read. Check Postgres (DATABASE_URL) and its connections.
+
+  - interval: 1m
+    input_series:
+      # 10 responses a minute, 1 of them a 500 (10%), from minute 0.
+      - series: 'yal_api_responses_total{code="200"}'
+        values: '0+9x30'
+      - series: 'yal_api_responses_total{code="500"}'
+        values: '0+1x30'
+      # A quiet gateway: two calls, one failed. Too few to page anyone.
+      - series: 'yal_gateway_responses_total{code="502"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'yal_gateway_responses_total{code="200"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: YalApiErrors
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations:
+              summary: Over 5% of supervisor API responses are server errors
+              description: Look at the API's logs for the failing routes; yal_dependency_up says whether a dependency is the cause.
+      - eval_time: 25m
+        alertname: YalModelCallsFailing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      # $1 a minute on one replica; it restarts at minute 30 and keeps spending.
+      - series: 'yal_gateway_spend_usd_total{instance="gw-a"}'
+        values: '0+1x29 0+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: YalModelSpendHigh
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: YalModelSpendHigh
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations:
+              summary: Model spend passed $25 in the last hour
+              description: Sessions' own budgets still apply; look for a runaway session or tenant in the traces (cost by session).

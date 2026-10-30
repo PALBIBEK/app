@@ -46,6 +46,13 @@ jobs:
       - name: Compose files ship no empty auth defaults
         working-directory: ${{ env.PROJECT }}
         run: python scripts/check_staging_auth.py
+      - name: Alert rules are valid and fire when they should
+        working-directory: ${{ env.PROJECT }}/deploy/alerts
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v2.53.2/prometheus-2.53.2.linux-amd64.tar.gz \
+            | tar xz --strip-components=1 prometheus-2.53.2.linux-amd64/promtool
+          ./promtool check rules *.rules.yml
+          ./promtool test rules *.rules.test.yml
       - name: Types (supervisor)
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
