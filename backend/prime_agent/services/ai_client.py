@@ -461,16 +461,20 @@ class AiClient:
         )
 
     async def list_sessions(
-        self, identity: TenantPrincipal, *, ids: Sequence[str] | None = None
+        self, identity: TenantPrincipal, *, ids: Sequence[str] | None = None, include_erased: bool = False
     ) -> list[dict[str, Any]]:
         """The caller's sessions (``ids``: only those, in one call), each with its status,
-        cost, counts and whether it is busy."""
+        cost, counts and whether it is busy; ``include_erased``: also each of ``ids`` that was
+        erased, as status ``erased``."""
+        params: dict[str, Any] | None = None
+        if ids is not None:
+            params = {"ids": list(ids), **({"include_erased": "true"} if include_erased else {})}
         payload = await self._json_request(
             "GET",
             "/v1/sessions",
             identity,
             expected=(200,),
-            params=None if ids is None else {"ids": list(ids)},
+            params=params,
         )
         return payload if isinstance(payload, list) else []
 

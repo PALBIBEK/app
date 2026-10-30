@@ -43,6 +43,10 @@ from prime_agent.services.platform_status_service import (
     PlatformStatusService,
 )
 
+ERASED = "erased"
+"""The status the supervisor lists an erased session with (its own answer for one is 410):
+its link is forgotten too (``SESSION_RETENTION_DAYS`` erases ended sessions upstream)."""
+
 ERASING_AT_ONCE = 8
 """Sessions ended and erased at the same time when a harness is deleted."""
 
@@ -179,9 +183,10 @@ class SessionService:
             .limit(page_size)
         )
         rows = list((await db.execute(stmt)).scalars().all())
+        data = await self._refresh_page(rows, identity=identity, db=db)
         return SessionListResponse(
-            data=await self._refresh_page(rows, identity=identity, db=db),
-            total=total,
+            data=data,
+            total=total - (len(rows) - len(data)),  # less the links just forgotten
             page=page,
             page_size=page_size,
         )
@@ -565,7 +570,7 @@ class SessionService:
         try:
             await self._client.erase_session(identity, ai_session_id)
         except AiUpstreamError as exc:
-            if exc.status_code != 404:
+            if exc.status_code not in (404, 410):  # gone already: done
                 raise HTTPException(
                     status_code=exc.status_code or 503,
                     detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
@@ -757,20 +762,29 @@ class SessionService:
         if not links:
             return []
         try:
-            listed = await self._client.list_sessions(identity, ids=[link.ai_session_id for link in links])
+            listed = await self._client.list_sessions(
+                identity, ids=[link.ai_session_id for link in links], include_erased=True
+            )
         except AiUpstreamError:
             return [self._to_response(link) for link in links]
         by_id = {str(item.get("session_id")): item for item in listed if isinstance(item, dict)}
         busy: dict[str, bool | None] = {}
         changed = False
+        shown: list[SessionLink] = []
         for link in links:
             if (detail := by_id.get(link.ai_session_id)) is None:
+                shown.append(link)  # not answered for (not set up yet, say): as stored
+                continue
+            if detail.get("status") == ERASED:  # erased upstream (retention, say): forget it
+                await db.delete(link)
+                changed = True
                 continue
             changed = self._apply(link, detail) or changed
             busy[link.id] = detail.get("is_busy") if isinstance(detail.get("is_busy"), bool) else None
+            shown.append(link)
         if changed:
             await db.commit()
-        return [self._to_response(link, is_busy=busy.get(link.id)) for link in links]
+        return [self._to_response(link, is_busy=busy.get(link.id)) for link in shown]
 
     @staticmethod
     def _apply(link: SessionLink, detail: dict[str, Any]) -> bool:
@@ -798,7 +812,11 @@ class SessionService:
     ) -> SessionResponse:
         try:
             detail = await self._client.get_session(identity, link.ai_session_id)
-        except AiUpstreamError:
+        except AiUpstreamError as exc:
+            if exc.status_code == 410:  # erased upstream (retention, say): nothing is left to open
+                await db.delete(link)
+                await db.commit()
+                raise SessionNotFoundError() from exc
             return self._to_response(link)
         if not isinstance(detail, dict):
             return self._to_response(link)

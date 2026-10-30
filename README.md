@@ -197,6 +197,13 @@ Workspace files it attached stay (they are the workspace's), and its sealed work
 stays in Temporal until the namespace's retention ends. Ending a session
 (`DELETE /api/v1/sessions/{id}`) keeps its record. In the chat, **Erase** does this.
 
+**Keeping sessions for a while.** With `SESSION_RETENTION_DAYS` set on the supervisor, an
+ended session (terminated or failed) that has had no activity for that many days is erased the
+same way, by an hourly sweep on the API (one replica at a time). Open sessions are never swept.
+Unset, sessions are kept until someone erases them. The supervisor remembers only that an
+erased session was erased (its id, tenant and when): asking for it answers 410 Gone, the
+product then forgets its link, and it leaves the session list.
+
 **Deleting an account.** `DELETE /api/v1/users/me` with the account's password (Settings →
 General → Delete account) erases everything of the person: the supervisor first ends and erases
 every session they own, their long-term memory, the workspaces only they belong to (with every

@@ -20,6 +20,7 @@ from supervisor.agent.events import HandLost, HandProvisioned, MessageEnd, ToolE
 from supervisor.db.engine import open_db
 from supervisor.db.models import (
     ArtifactRow,
+    ErasedSessionRow,
     EventRow,
     HandLeaseRow,
     ScopeRow,
@@ -115,6 +116,9 @@ async def test_erasing_removes_the_sessions_record_and_keeps_everyone_elses(plat
     ]:
         assert await _count(factory, row, where) == 0, row.__tablename__
     assert not await p["objects"].exists(f"sessions/{GONE}/artifacts/a1")
+    async with factory() as db:  # what stays: that it was erased, and whose it was
+        tombstone = await db.get(ErasedSessionRow, GONE)
+    assert tombstone is not None and tombstone.tenant_id == "t1"
 
     # Its own payloads (the large message, the lost hand's logs) are gone; the payload both
     # sessions hold is not.

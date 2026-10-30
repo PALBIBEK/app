@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.agent.events import MessageEnd
 from supervisor.db.engine import open_db
 from supervisor.db.models import (
+    ErasedSessionRow,
     EventRow,
     ScopeGrantRow,
     ScopeMembershipRow,
@@ -140,6 +141,7 @@ async def test_erasing_takes_her_sessions_and_her_workspace(world: dict[str, Any
         assert not await p["objects"].exists(key)
     assert await _count(p, VaultSecretRow, VaultSecretRow.owner_id == ALICE) == 0
     assert await _count(p, TenantSpendRow, TenantSpendRow.tenant_id == ALICE) == 0
+    assert await _count(p, ErasedSessionRow, ErasedSessionRow.tenant_id == ALICE) == 0  # no trace left
     assert p["forgotten"] == [(ALICE, "mcp:https://tools.example.com")]
 
 

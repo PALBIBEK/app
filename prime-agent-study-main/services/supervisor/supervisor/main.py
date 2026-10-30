@@ -40,10 +40,12 @@ from supervisor.api import (
     traces,
     workspace,
 )
+from supervisor.api.sessions import end_and_erase
 from supervisor.app import SupervisorState
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
 from supervisor.obs.responses import CountResponses, ResponseCounts
+from supervisor.session.retention import Retention, RetentionSweeper, run_retention_loop
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     cfg.reaper_interval_s,
                 )
 
+    retention_task: asyncio.Task[None] | None = None
+    retention_stop = asyncio.Event()
+    if state is not None and (retention := Retention.from_env()) is not None:
+        sweeper = RetentionSweeper(
+            state.reader.session_factory, retention, erase=lambda sid: end_and_erase(state, sid)
+        )
+        retention_task = asyncio.create_task(
+            run_retention_loop(sweeper, retention.sweep_s, retention_stop), name="session-retention"
+        )
+        logger.info("session retention: ended sessions are erased after %d days", retention.days)
+
     # The server (uvicorn) owns SIGTERM and runs the shutdown path below when it
     # receives it. Capture its handler so ours can mark the service as draining
     # first and then hand off; replacing it outright leaves the process running
@@ -125,6 +138,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    if retention_task is not None:
+        retention_stop.set()
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+            await asyncio.wait_for(retention_task, timeout=10)
     if span_reaper_task is not None:
         span_reaper_stop.set()
         try:

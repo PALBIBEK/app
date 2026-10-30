@@ -205,5 +205,14 @@ describe('sessionsAPI.openEventStream', () => {
     expect(onEnded).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
-});
 
+  it('says a session that is gone (erased) has ended, instead of failing to reconnect', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 410, ok: false, body: null })));
+    const onEnded = vi.fn();
+    const seen: unknown[] = [];
+    for await (const event of sessionsAPI.openEventStream('s1', { onEnded })) seen.push(event);
+    expect(seen).toEqual([]);
+    expect(onEnded).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+});

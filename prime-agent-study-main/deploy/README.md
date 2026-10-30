@@ -76,6 +76,7 @@ are then required, and a missing one stops the process at boot.
 | `TENANT_RATE_LIMIT_PER_MINUTE` | Per-tenant HTTP rate limit |
 | `WORKSPACE_MAX_SCOPE_BYTES` | Most one workspace stores, every version of its files counted once per distinct content (default 10 GiB; `0`: no limit). Past it, uploads are refused with 413 and an agent's changed files are reported not saved |
 | `TEMPORAL_CODEC_KEY` | Seals what Temporal stores of each session (32 bytes, base64 or hex; same on every API replica and worker). Required with `ENV=production` or `staging` unless `TEMPORAL_PLAINTEXT_HISTORY=1` says the server encrypts at rest; `TEMPORAL_CODEC_OLD_KEYS` alone is the first step of turning it on |
+| `SESSION_RETENTION_DAYS` | Erase ended sessions after this many quiet days (an hourly sweep on the API; `SESSION_RETENTION_SWEEP_S` to change). Unset: kept |
 | `PLUG_ALLOWED_HOSTS` | More hosts a published service URL (gateway, MCP, ACP, recall server) may name, comma-separated; `*` trusts any. Workers call these URLs, so the default is only the platform's own services |
 | `SANDBOX_DOCKER_DISK_LIMIT` | A `local_docker` sandbox's disk cap (e.g. `10G`); needs overlay2 on XFS with project quotas. Processes (512), memory, CPU, network and privileges are always limited |
 

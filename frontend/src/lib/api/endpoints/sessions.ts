@@ -252,6 +252,11 @@ export const sessionsAPI = {
     if (response.status === 401) {
       throw new StreamUnauthorized();
     }
+    if (response.status === 404 || response.status === 410) {
+      // Erased (410), or no longer there: nothing will ever stream, so do not reconnect.
+      options?.onEnded?.();
+      return;
+    }
     if (!response.ok || !response.body) {
       throw new Error(`SSE failed: ${response.status}`);
     }
