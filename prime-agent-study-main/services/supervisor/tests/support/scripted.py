@@ -21,7 +21,7 @@ from supervisor.harness.core.enums import ApprovalOnTimeout, ToolClass
 from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.compaction.core import COMPACTION_NOTICE, is_summary
 from supervisor.seams.core import factory
-from supervisor.seams.core.types import ChatMessage, Completion
+from supervisor.seams.core.types import ChatMessage, Completion, ModelGatewayError
 from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
 from supervisor.seams.providers.tools import RegistryToolProvider
 
@@ -85,7 +85,14 @@ class ScriptedGateway:
     stream_pause: float = 0.0
     # Raised once the chunks have streamed: the call fails part way through its reply.
     stream_error: Exception | None = None
+    # The session key the supervisor gave it (``rekey``), and keys the gateway no longer
+    # takes: a call made with one is refused as an unknown key (401 AUTH_INVALID).
+    token: str | None = None
+    refused_tokens: set[str] = dataclasses.field(default_factory=set)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+
+    def rekey(self, token: str) -> None:
+        self.token = token
 
     def complete(
         self,
@@ -96,6 +103,8 @@ class ScriptedGateway:
         tool_choice: str | None = None,
         on_delta: Any = None,
     ) -> Completion:
+        if self.token is not None and self.token in self.refused_tokens:
+            raise ModelGatewayError(401, '{"detail":{"error":{"code":"AUTH_INVALID","message":"unknown virtual key"}}}')
         self.tool_choices.append(tool_choice)
         if self.stream_chunks and on_delta is not None and tools:
             for chunk in self.stream_chunks:

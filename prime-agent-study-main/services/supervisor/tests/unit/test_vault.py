@@ -162,6 +162,16 @@ async def test_a_session_key_is_reused_until_it_nears_expiry(db: Factory) -> Non
     assert await keys.stored("s1") is None
 
 
+async def test_a_refused_key_is_replaced_only_while_it_is_the_stored_one(db: Factory) -> None:
+    keys = SessionKeys(Vault(db, _ring("k1")))
+    mint = _Mints(3600)
+    assert await keys.current("s1", mint) == ("token-1", True)
+    assert await keys.current("s1", mint, replacing="token-1") == ("token-2", True)
+    # A refusal of the key already replaced (another worker met it first): the new one.
+    assert await keys.current("s1", mint, replacing="token-1") == ("token-2", False)
+    assert mint.count == 2
+
+
 async def test_workers_starting_one_session_at_once_keep_one_key(db: Factory) -> None:
     vault = Vault(db, _ring("k1"))
     mint = _Mints(3600)

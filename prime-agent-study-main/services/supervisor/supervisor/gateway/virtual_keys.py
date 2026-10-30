@@ -1,15 +1,28 @@
 """Session-scoped virtual keys — provider secrets stay in the gateway process.
 
 WP-M5: mint with the shared service token; chat accepts ``vk_…`` tokens.
-Memory store is the MVP; Postgres can replace without changing callers.
+
+``SignedVirtualKeyStore`` (what the gateway runs): a key carries its own claims,
+signed, so any gateway process that holds the secret takes it, before and after a
+restart. Revocations and per-key spend are kept in the process: after a restart a
+revoked key works again until it expires (a terminated session's key is held only by
+the supervisor, which has forgotten it), and the session's cost cap, which the
+supervisor enforces, is the bound that holds across restarts.
+
+``MemoryVirtualKeyStore``: an in-process registry (tests).
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 import secrets
 import time
-from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass, field, replace
+from typing import Any, Final, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -24,6 +37,7 @@ class VirtualKeyClaims:
     expires_at: float
     revoked: bool = False
     scope_id: str | None = None
+    issued_at: float = 0.0
 
 
 @dataclass
@@ -72,6 +86,7 @@ class MemoryVirtualKeyStore:
             max_budget_usd=req.max_budget_usd,
             expires_at=time.time() + max(1, req.ttl_s),
             scope_id=req.scope_id,
+            issued_at=time.time(),
         )
         self._by_token[token] = claims
         self._spend_usd[token] = 0.0
@@ -94,18 +109,7 @@ class MemoryVirtualKeyStore:
         existing = self._by_token.get(token)
         if existing is None:
             return
-        self._by_token[token] = VirtualKeyClaims(
-            key_id=existing.key_id,
-            token=existing.token,
-            tenant_id=existing.tenant_id,
-            session_id=existing.session_id,
-            principal_id=existing.principal_id,
-            allowed_models=existing.allowed_models,
-            max_budget_usd=existing.max_budget_usd,
-            expires_at=existing.expires_at,
-            revoked=True,
-            scope_id=existing.scope_id,
-        )
+        self._by_token[token] = replace(existing, revoked=True)
 
     def revoke_session(self, session_id: str) -> int:
         n = 0
@@ -114,6 +118,129 @@ class MemoryVirtualKeyStore:
                 self.revoke(token)
                 n += 1
         return n
+
+
+_PREFIX: Final = "vk_"
+_SIGNED_AS: Final = b"vk1."
+"""What a signature covers before the claims: a key format version, so a later format
+never verifies as this one."""
+
+
+def derive_virtual_key_secret(service_token: str) -> bytes:
+    """The signing secret, from the service token every gateway process already shares:
+    whoever holds that token can mint keys anyway, so it may sign them too."""
+    return hmac.new(service_token.encode(), b"yal virtual keys v1", hashlib.sha256).digest()
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+@dataclass
+class SignedVirtualKeyStore:
+    """Keys that carry their claims, signed with ``secret`` (HMAC-SHA256).
+
+    Taken by any process with the same secret, so a restart or a second replica does
+    not cut a session off. A key is ``vk_<claims>.<signature>`` (base64url).
+    """
+
+    secret: bytes
+    _revoked: set[str] = field(default_factory=set)  # key ids
+    _sessions_revoked: dict[str, float] = field(default_factory=dict)  # session -> when
+    _minted: dict[str, dict[str, float]] = field(default_factory=dict)  # session -> key id -> expiry
+    _spend_usd: dict[str, float] = field(default_factory=dict)  # key id -> spent
+
+    def __post_init__(self) -> None:
+        if len(self.secret) < 32:
+            raise ValueError("a virtual key secret needs at least 32 bytes")
+
+    def mint(self, req: MintRequest) -> VirtualKeyClaims:
+        now = time.time()
+        body: dict[str, Any] = {
+            "kid": secrets.token_hex(8),
+            "ten": req.tenant_id,
+            "ses": req.session_id,
+            "pri": req.principal_id,
+            "mod": list(req.allowed_models),
+            "bud": req.max_budget_usd,
+            "iat": now,
+            "exp": now + max(1, req.ttl_s),
+            "sco": req.scope_id,
+        }
+        payload = _b64(json.dumps(body, separators=(",", ":"), sort_keys=True).encode())
+        token = f"{_PREFIX}{payload}.{_b64(self._sign(payload))}"
+        claims = self._claims(token, body)
+        live = self._minted.setdefault(req.session_id, {})
+        for key_id, expires in list(live.items()):  # what this process minted, still live
+            if expires <= now:
+                del live[key_id]
+        live[claims.key_id] = claims.expires_at
+        return claims
+
+    def get(self, token: str) -> VirtualKeyClaims | None:
+        """The key's claims, or None when it is not one this secret signed."""
+        if not token.startswith(_PREFIX):
+            return None
+        payload, dot, signature = token[len(_PREFIX):].partition(".")
+        if not dot:
+            return None
+        try:
+            given = _unb64(signature)
+            body = json.loads(_unb64(payload))
+        except (ValueError, binascii.Error):
+            return None
+        if not hmac.compare_digest(given, self._sign(payload)) or not isinstance(body, dict):
+            return None
+        try:
+            return self._claims(token, body)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def revoke(self, token: str) -> None:
+        if (claims := self.get(token)) is not None:
+            self._revoked.add(claims.key_id)
+
+    def revoke_session(self, session_id: str) -> int:
+        """Revoke every key of the session minted until now; how many this process minted."""
+        self._sessions_revoked[session_id] = time.time()
+        return len(self._minted.pop(session_id, {}))
+
+    def add_spend(self, token: str, amount_usd: float) -> float:
+        claims = self.get(token)
+        if claims is None:
+            raise LookupError("VIRTUAL_KEY_UNKNOWN")
+        spent = self._spend_usd.get(claims.key_id, 0.0) + max(0.0, float(amount_usd))
+        self._spend_usd[claims.key_id] = spent
+        return spent
+
+    def spent_usd(self, token: str) -> float:
+        claims = self.get(token)
+        return 0.0 if claims is None else float(self._spend_usd.get(claims.key_id, 0.0))
+
+    def _sign(self, payload: str) -> bytes:
+        return hmac.new(self.secret, _SIGNED_AS + payload.encode(), hashlib.sha256).digest()
+
+    def _claims(self, token: str, body: dict[str, Any]) -> VirtualKeyClaims:
+        claims = VirtualKeyClaims(
+            key_id=str(body["kid"]),
+            token=token,
+            tenant_id=str(body["ten"]),
+            session_id=str(body["ses"]),
+            principal_id=str(body["pri"]),
+            allowed_models=tuple(str(m) for m in body["mod"]),
+            max_budget_usd=float(body["bud"]),
+            expires_at=float(body["exp"]),
+            scope_id=None if body.get("sco") is None else str(body["sco"]),
+            issued_at=float(body["iat"]),
+        )
+        revoked_at = self._sessions_revoked.get(claims.session_id)
+        if claims.key_id in self._revoked or (revoked_at is not None and claims.issued_at <= revoked_at):
+            return replace(claims, revoked=True)
+        return claims
 
 
 def verify_virtual_key(

@@ -11,6 +11,7 @@ DB, catalog, or harness imports required.
 | Env | Default | Meaning |
 |---|---|---|
 | `MODEL_GATEWAY_TOKEN` | empty | Shared service key. **Required** when `AUTH_REQUIRED=true` or `ENV=production\|staging` (fail-closed). Empty only for local/dev. |
+| `MODEL_GATEWAY_VIRTUAL_KEY_SECRET` | derived from `MODEL_GATEWAY_TOKEN` | Signs session virtual keys (32+ characters). Every gateway process needs the same one. |
 | `MODEL_GATEWAY_API_KEY_HEADER` | `Authorization` | Header a caller's key arrives in (e.g. `x-litellm-api-key`); `Authorization` and `x-api-key` are also read. `Bearer ` prefix optional. |
 | `AUTH_REQUIRED` | `false` | Force fail-closed auth even outside prod/staging |
 | `ENV` | empty | `production` / `staging` → auth required |
@@ -96,6 +97,15 @@ their `allowed_models`, and spend on every wire (streams included) counts
 toward their budget; an exhausted budget is **429**
 `VIRTUAL_KEY_BUDGET_EXCEEDED`.
 
+A virtual key carries its claims (tenant, session, models, budget, expiry), signed
+with the virtual key secret, so a restart or another replica takes the keys sessions
+hold. Revocations and per-key spend are kept in the process: after a restart a revoked
+key works again until it expires (an hour by default; a terminated session's key is
+held only by the supervisor, which forgets it), and the session's cost cap, which the
+supervisor enforces, is the bound that holds across restarts. Changing the secret makes
+every key unknown (**401** `AUTH_INVALID`): the supervisor then mints a new key and asks
+again.
+
 ## Staging / local non-echo Test (D5 E1)
 
 Vendor keys live **only** in the gateway container. To make supervisor session
@@ -117,7 +127,7 @@ Do **not** copy vendor keys onto the supervisor service.
 ## Limits
 
 - Not a full LiteLLM product (no billing UI, protocol translation between
-  wires, or complex fallback graphs); the virtual-key store is in-process.
+  wires, or complex fallback graphs); revocations and per-key spend are per process.
 - Imports nothing from the rest of `supervisor` (`tests/gateway` checks it).
 
 ## Run alone

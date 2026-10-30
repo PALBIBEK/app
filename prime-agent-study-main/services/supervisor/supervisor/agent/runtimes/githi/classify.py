@@ -21,6 +21,7 @@ __all__ = [
     "RetrySpec",
     "is_context_overflow",
     "is_final_step",
+    "is_refused_key",
     "is_retryable",
     "loop_spec",
     "refusal",
@@ -171,6 +172,20 @@ def is_retryable(error: BaseException) -> bool:
         return status in _RETRY_STATUS
     text = str(error).lower()
     return any(marker in text for marker in _RETRY_TEXT)
+
+
+_REFUSED_KEY: Final = (
+    (401, "AUTH_INVALID"),  # the gateway does not know the key (another signing secret)
+    (403, "VIRTUAL_KEY_EXPIRED"),
+)
+
+
+def is_refused_key(error: BaseException) -> bool:
+    """Whether the gateway refused the session's key itself, not the request: a fresh key
+    may pass. A revoked key (the session ended) or a spent budget will not."""
+    status = _status(error)
+    text = str(error)
+    return any(status == code and marker in text for code, marker in _REFUSED_KEY)
 
 
 def retry_spec(manifest: Any) -> RetrySpec:

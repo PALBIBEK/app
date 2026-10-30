@@ -9,10 +9,8 @@ invokes, memory and subagent operations) must use that same set.
 from __future__ import annotations
 
 import dataclasses
-import itertools
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -25,29 +23,11 @@ from supervisor.catalog.loading.bootstrap import (
 from supervisor.catalog.repository import hydrate_composition_catalog
 from supervisor.db.engine import open_db
 from supervisor.seams.providers.gateway.http_gateway import HttpModelGatewayClient
-from supervisor.seams.services.virtual_keys import MintedVirtualKey
+from tests.support.keys import FakeKeys
 from tests.support.platform import all_variants, shipped_harness_catalog
 from tests.support.session_env import TrackingProvider
 
 PINNED_GATEWAY = "http://model-gateway:8090"  # harness/compositions/githi-v1.json
-
-
-class FakeKeys:
-    """Mints a distinct key per call and remembers what was asked for."""
-
-    def __init__(self) -> None:
-        self.minted: list[dict[str, Any]] = []
-        self._ids = itertools.count(1)
-
-    def mint(
-        self, *, tenant_id: str, session_id: str, principal_id: str, **kw: Any
-    ) -> MintedVirtualKey:
-        n = next(self._ids)
-        self.minted.append({"session_id": session_id, **kw})
-        return MintedVirtualKey(f"vk-{n}", f"token-{n}", 0.0, session_id, tenant_id)
-
-    def revoke_session(self, session_id: str) -> int:
-        return 0
 
 
 Boot = Callable[[], Awaitable[SupervisorState]]
@@ -198,3 +178,24 @@ async def test_a_renewed_session_key_rekeys_every_model_calling_seam(boot: Boot)
     assert stored is not None and stored.value == "token-2"
     await state.manager.terminate(sid)
     assert await state.manager._session_keys.stored(sid) is None
+
+
+async def test_a_key_the_gateway_refused_is_replaced_once_for_every_worker(boot: Boot) -> None:
+    """The gateway no longer takes the session's key (its signing secret changed): the
+    first worker to meet the refusal mints the next key; a worker that meets it after
+    takes that key instead of minting another."""
+    state = await boot()
+    state.keys.lifetime_s = 3600  # type: ignore[attr-defined]  # far from expiry
+    sid = await _create(state)
+    _assert_one_keyed_gateway(state, sid, "token-1")
+    assert not await state.manager.renew_gateway_key(sid), "a live key is not renewed"
+
+    assert await state.manager.renew_gateway_key(sid, refused="token-1")
+    _assert_one_keyed_gateway(state, sid, "token-2")
+    minted = len(state.keys.minted)  # type: ignore[attr-defined]
+    # Another worker met the same refusal: it takes token-2, nothing more is minted.
+    assert not await state.manager.renew_gateway_key(sid, refused="token-1")
+    assert len(state.keys.minted) == minted  # type: ignore[attr-defined]
+    assert state.manager._session_keys is not None
+    stored = await state.manager._session_keys.stored(sid)
+    assert stored is not None and stored.value == "token-2"

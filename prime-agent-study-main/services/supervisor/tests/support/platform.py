@@ -39,6 +39,7 @@ async def boot_platform(
     blob_dir: Path,
     *,
     workspace_store: WorkspaceStore | None = None,
+    virtual_key_client: object | None = None,
 ) -> tuple[SupervisorState, TrackingProvider]:
     """One supervisor process, as bootstrap_supervisor builds it (persisted catalog hydrated)."""
     compositions = bootstrap_composition_catalog(default_catalog_dir())
@@ -52,5 +53,6 @@ async def boot_platform(
         sandbox_provider=sandboxes,
         composition_catalog=compositions,
         workspace_store=workspace_store,
+        virtual_key_client=virtual_key_client,
     )
     return state, sandboxes

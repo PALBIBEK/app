@@ -453,9 +453,11 @@ class SessionManager(UpkeepOps):
         ws_state.virtual_key_token = token
         return token
 
-    async def _current_key(self, session_id: str, mint: Callable[[], MintedVirtualKey]) -> str:
+    async def _current_key(
+        self, session_id: str, mint: Callable[[], MintedVirtualKey], *, replacing: str | None = None
+    ) -> str:
         assert self._session_keys is not None
-        token, _ = await self._session_keys.current(session_id, mint)
+        token, _ = await self._session_keys.current(session_id, mint, replacing=replacing)
         stored = await self._session_keys.stored(session_id)
         if stored is not None and stored.expires_at is not None:
             self._key_expiry[session_id] = stored.expires_at.timestamp()
@@ -476,26 +478,31 @@ class SessionManager(UpkeepOps):
         if self._credentials is not None and tenant is not None and seams is not None:
             await self._credentials.authorize(tenant, seams.tool_provider)
 
-    async def renew_gateway_key(self, session_id: str) -> bool:
+    async def renew_gateway_key(self, session_id: str, *, refused: str | None = None) -> bool:
         """Before a model call: swap in a fresh key when this worker's is near its end.
 
         The vault holds the session's key; when it is near expiry the first worker
         to notice mints the next one and every other worker picks that one up. The
         live gateway client (shared by the summarizer and subagents) is rekeyed in
         place. Returns whether the key changed.
+
+        ``refused``: a key the gateway just refused although it had not expired (its
+        signing secret changed, say). Replaced now, unless another worker already did.
         """
         from supervisor.vault.session_keys import RENEW_BEFORE_S
 
         mint = self._key_mints.get(session_id)
         expiry = self._key_expiry.get(session_id)
-        if mint is None or expiry is None or expiry - time.time() > RENEW_BEFORE_S:
+        if mint is None:
+            return False
+        if refused is None and (expiry is None or expiry - time.time() > RENEW_BEFORE_S):
             return False
         ws_state = self._workspace.get(session_id)
         old = ws_state.virtual_key_token if ws_state is not None else None
         if self._session_keys is None:
             token = (await asyncio.to_thread(mint)).token
         else:
-            token = await self._current_key(session_id, mint)
+            token = await self._current_key(session_id, mint, replacing=refused)
         if token == old:
             return False
         if ws_state is not None:
