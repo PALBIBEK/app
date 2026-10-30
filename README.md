@@ -143,7 +143,7 @@ or search facts. *History* restores a notebook to how it was after any change.
 
 | What | Command |
 |---|---|
-| Backend tests | `cd backend && .venv/bin/python -m pytest -q tests` |
+| Backend tests | `cd backend && .venv/bin/python -m pytest -q tests` (the migration tests need `BACKEND_TEST_PG_URL`, a Postgres) |
 | Frontend lint, types, tests | `cd frontend && npx next lint && npx tsc --noEmit && npx vitest run` |
 | In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs`, `traces-journey.mjs` and `startup-journey.mjs` |
 

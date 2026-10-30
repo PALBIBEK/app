@@ -65,6 +65,19 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:  # the migrations run against it (tests/test_migrations.py)
+        image: postgres:16
+        env:
+          POSTGRES_USER: yal
+          POSTGRES_PASSWORD: yal
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      BACKEND_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

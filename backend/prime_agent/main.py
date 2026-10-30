@@ -100,10 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info("Database connection initialized")
 
-    # Create tables in development (use Alembic in production)
-    if settings.environment == "development":
-        logger.info("Development mode: Creating database tables")
-        await database_session.create_tables()
+    # Every environment: the migrations, applied once however many replicas start together.
+    await database_session.migrate()
 
     logger.info("Application startup complete")
 
