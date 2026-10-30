@@ -209,7 +209,8 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
     ),
     Activity.RUN_JOB: StepPolicy(
         Where.ANY_WORKER, Limit.TURN, Retry.STANDARD, True,
-        "heartbeats stop; the job is retried on another worker, never lost",
+        "heartbeats stop; retried on another worker, never lost; a job in a lent hand goes "
+        "on from the calls it journalled",
         "A background subagent job's work",
     ),
     Activity.END_JOB: StepPolicy(

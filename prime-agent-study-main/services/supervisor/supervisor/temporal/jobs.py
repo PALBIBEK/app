@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 
+from temporalio import activity
+
 from supervisor.agent.events import JobEnd
 from supervisor.hands.keys import hand_key
 from supervisor.hands.leases import Borrower
@@ -35,7 +37,12 @@ class JobSteps:
         lease = Borrower.from_dict(fields.pop("lease", None))
         request = SubagentRequest(**fields)
         if lease is not None:  # it works in a hand its session lent it
-            done = await run_hand_job(self._manager, spec, request, lease)
+            # A retried attempt (its worker died, a deploy stopped it) resumes from the
+            # journal; a first one has nothing to read back.
+            retried = activity.in_activity() and activity.info().attempt > 1
+            done = await run_hand_job(
+                self._manager, spec, request, lease, reader=self._reader if retried else None
+            )
             return await self.end(JobEndRequest(spec, done.stop_reason, done.text or None))
         ops = await self._manager.subagent_job_ops(spec.session_id, request)
         result = await heartbeating(asyncio.to_thread(ops.run_background, spec.provider, request))

@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from supervisor.agent.events import HandCheckpointed, HandProvisioned, JobEnd, ToolEnd
+from supervisor.agent.events import HandCheckpointed, HandProvisioned, JobEnd, ToolEnd, ToolStart
 from supervisor.app import SupervisorState
 from supervisor.catalog.core.types import DigestRef, SandboxProviderName
 from supervisor.catalog.repository import persist_offer
@@ -147,3 +147,41 @@ async def test_a_hand_is_lent_to_a_background_subagent_and_comes_back(
     assert [e.tool_name for e in job_calls] == ["write"] and not job_calls[0].is_error
     default = state.manager._hands.sandbox(sid)
     assert default is not None and not await default.exists("built.txt")  # it stayed in its hand
+
+
+async def test_a_background_job_retried_on_another_worker_resumes_from_the_journal(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """A job whose worker is lost after its first call ran is retried, and goes on from
+    what it did: the model is shown that call and its result, and no call runs twice.
+
+    It used to start over: the model was asked from the beginning, and a call it asked
+    for at a used place got the earlier call's result whatever it asked."""
+    gateway = model(
+        ("subagent", {"prompt": "build it", "background": True, "hand": "build"}),
+        child_calls=[
+            ("write", {"path": "one.txt", "content": "first"}),
+            ("write", {"path": "two.txt", "content": "second"}),
+        ],
+        child_answer="built both",
+        child_fail_after=1,  # lost after the first call's result came back
+    )
+    state = await env.state(workspace_store=MemoryWorkspaceStore(objects=MemoryObjectStorage()))
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_with_hands(env, state, "build")
+        await env.sessions.submit(sid, Message("c1", "have a job build"))
+        await env.wait_for(state, sid, run_ended(1))
+        ended = await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
+        build = state.manager._hands.sandbox(hand_key(sid, "build"))
+        assert build is not None
+        assert await build.read_file("one.txt") == b"first"
+        assert await build.read_file("two.txt") == b"second"
+
+    job = payloads(ended, JobEnd)[0]
+    assert (job.stop_reason, job.output) == ("ok", "built both")
+    starts = [e for e in payloads(ended, ToolStart) if e.tool_call_id.startswith(job.job_id)]
+    assert [(e.tool_name, e.args["path"]) for e in starts] == [("write", "one.txt"), ("write", "two.txt")]
+    # Requests: step 0; step 1 (lost); the retry's first, already showing the first
+    # call and its result; then the answer.
+    tools_shown = [[m.tool_call_id for m in seen if m.role == "tool"] for seen in gateway.child_seen]
+    assert tools_shown == [[], [starts[0].tool_call_id], [starts[0].tool_call_id], [e.tool_call_id for e in starts]]
