@@ -8,7 +8,7 @@
 | `../docker-compose.yml` | Local root stack including Memory + `MEMORY_SERVICE_URL` |
 | `k8s/supervisor-deployment.yaml` | HA deployment with preStop + readiness |
 | `k8s/networkpolicy-sandbox-default-deny.yaml` | Default-deny egress template for sandboxes |
-| `k8s/external-secret-gateway.yaml` | ESO template for gateway/DB secrets |
+| `k8s/external-secret-gateway.yaml` | ESO templates: one secret per service, provider keys for the gateway only |
 
 ### Staging
 
@@ -45,8 +45,13 @@ docker compose -f deploy/staging/docker-compose.staging.yml up --build
 | `OPENAI_API_KEY` | gateway only | Enables `openai` route when set |
 
 Never put these in `NEXT_PUBLIC_*`, the browser Settings UI, or sandbox env.
-Kubernetes: template keys live in `k8s/external-secret-gateway.yaml` (ESO →
-`yal-gateway-credentials`, consumed by `k8s/gateway-memory-deployment.yaml`).
+Kubernetes: `k8s/external-secret-gateway.yaml` (ESO) makes one secret per service, each with
+only what that service uses: `yal-gateway-credentials` (the gateway's token and the vendor keys,
+read by the gateway alone), `yal-supervisor-secrets` (database, gateway token, service JWT
+secret, `VAULT_KEYS`, `TEMPORAL_CODEC_KEY`; the API, its workers and the rollout check) and
+`yal-memory-secrets` (the memory service's database and the service JWT secret). Every service
+runs with `ENV=production`: service authentication, the vault keys and the Temporal history key
+are then required, and a missing one stops the process at boot.
 
 ### Sandbox provider (D10)
 
@@ -70,6 +75,7 @@ Kubernetes: template keys live in `k8s/external-secret-gateway.yaml` (ESO →
 | `TENANT_MAX_COST_PER_TENANT` | Most a tenant may spend on models in a calendar month (UTC), across all its sessions. Counted as spent, so erasing sessions does not give it back; at the limit, runs stop before their next model call and new sessions are refused until the month turns |
 | `TENANT_RATE_LIMIT_PER_MINUTE` | Per-tenant HTTP rate limit |
 | `WORKSPACE_MAX_SCOPE_BYTES` | Most one workspace stores, every version of its files counted once per distinct content (default 10 GiB; `0`: no limit). Past it, uploads are refused with 413 and an agent's changed files are reported not saved |
+| `TEMPORAL_CODEC_KEY` | Seals what Temporal stores of each session (32 bytes, base64 or hex; same on every API replica and worker). Required with `ENV=production` or `staging` unless `TEMPORAL_PLAINTEXT_HISTORY=1` says the server encrypts at rest; `TEMPORAL_CODEC_OLD_KEYS` alone is the first step of turning it on |
 | `PLUG_ALLOWED_HOSTS` | More hosts a published service URL (gateway, MCP, ACP, recall server) may name, comma-separated; `*` trusts any. Workers call these URLs, so the default is only the platform's own services |
 | `SANDBOX_DOCKER_DISK_LIMIT` | A `local_docker` sandbox's disk cap (e.g. `10G`); needs overlay2 on XFS with project quotas. Processes (512), memory, CPU, network and privileges are always limited |
 

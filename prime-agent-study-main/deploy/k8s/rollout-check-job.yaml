@@ -19,4 +19,4 @@ spec:
           args: ["rollout", "check", "--limit", "200"]
           envFrom:
             - secretRef:
-                name: yal-gateway-credentials
+                name: yal-supervisor-secrets

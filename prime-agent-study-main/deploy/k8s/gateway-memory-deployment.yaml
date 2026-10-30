@@ -20,6 +20,8 @@ spec:
           ports:
             - containerPort: 8090
           env:
+            - name: ENV  # production: the service token is required
+              value: production
             - name: SERVE_SUPERVISOR_API
               value: "0"
             - name: SERVE_MEMORY_SERVICE
@@ -76,7 +78,7 @@ spec:
               value: production
           envFrom:
             - secretRef:
-                name: yal-gateway-credentials
+                name: yal-memory-secrets
           startupProbe:
             httpGet:
               path: /v1/readyz
