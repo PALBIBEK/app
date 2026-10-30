@@ -5,6 +5,7 @@ Routes never assemble Bearer strings; this service owns auth headers.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -459,12 +460,17 @@ class AiClient:
             expected=(200,),
         )
 
-    async def list_sessions(self, identity: TenantPrincipal) -> list[dict[str, Any]]:
+    async def list_sessions(
+        self, identity: TenantPrincipal, *, ids: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """The caller's sessions (``ids``: only those, in one call), each with its status,
+        cost, counts and whether it is busy."""
         payload = await self._json_request(
             "GET",
             "/v1/sessions",
             identity,
             expected=(200,),
+            params=None if ids is None else {"ids": list(ids)},
         )
         return payload if isinstance(payload, list) else []
 

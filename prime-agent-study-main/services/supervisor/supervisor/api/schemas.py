@@ -45,6 +45,7 @@ class SessionSummary(BaseModel):
     title: str | None = None
     message_count: int = 0
     total_cost: float = 0.0
+    is_busy: bool | None = None
 
 
 class SessionDetailResponse(BaseModel):
