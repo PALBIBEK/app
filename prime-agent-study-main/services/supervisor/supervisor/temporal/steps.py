@@ -124,12 +124,14 @@ from supervisor.temporal.contracts import (
 )
 from supervisor.temporal.subagent_tools import (
     MAX_BACKGROUND_JOBS,
+    MAX_CONTINUABLE,
     SUBAGENT_RESULT,
     SUBAGENT_TOOLS,
     Outcome,
     SubagentTools,
     TooManyJobs,
     announcement,
+    continuable_settlement,
     delegated,
     render,
     settlement,
@@ -911,20 +913,25 @@ class GithiSteps:
             )
 
     async def _said(self, session_id: str, message: Message) -> MessageEnd | SubagentNotice:
-        """What a message journals: the user's words, or a background subagent's notice."""
+        """What a message journals: the user's words, or what a subagent tells the session (a
+        report as sent; a settlement as its recorded end says, githi's wording)."""
         if message.notice_from is None:
             return MessageEnd(role="user", content=[{"type": "text", "text": message.text}])
         child = message.notice_from
-        start = end = None
-        for envelope in await self._reader.read(session_id):
-            match envelope.payload:
-                case SubagentStart(child_session_id=started) as s if started == child:
-                    start = s
-                case SubagentEnd(run_id=run) as e if start is not None and run == start.run_id:
-                    end = e
-        if end is None:  # it never recorded an end (it could not start): say so all the same
-            return SubagentNotice(child, settlement(child, "failed", message.text))
-        return SubagentNotice(child, settlement(child, end.stop_reason, end.output or ""))
+        if message.notice_text is not None:
+            return SubagentNotice(child, message.notice_text)
+        end = next(
+            (
+                e.payload
+                for e in reversed(await self._reader.read(session_id))
+                if isinstance(e.payload, SubagentEnd) and e.payload.run_id == message.notice_run
+            ),
+            None,
+        )
+        status, text = (end.stop_reason, end.output or "") if end is not None else ("failed", message.text)
+        kind = (await self._manager._get_session_row(child)).subagent_kind if end is not None else None
+        told = continuable_settlement if kind == "continuable" else settlement
+        return SubagentNotice(child, told(child, status, text))
 
     async def tool_batch(self, batch: ToolBatch) -> list[bool]:
         """Run a round's read-only calls together; whether each errored, in order.
@@ -1064,13 +1071,16 @@ class GithiSteps:
                 max_depth=spec.max_depth if spec else 0,
                 background_allowed=spec is not None and spec.allow_background,
             )
+            limit = MAX_CONTINUABLE if asked.continuable else MAX_BACKGROUND_JOBS
             if (
                 asked.background
                 and await self._manager.session_status(child_id) is None  # not this call's, retried
-                and (running := await self._subagents.running_in_background(sid)) >= MAX_BACKGROUND_JOBS
+                and (running := await self._subagents.running_in_background(sid, asked.kind)) >= limit
             ):
                 raise TooManyJobs(
-                    f"{running} background subagents are running, the most a session may have; "
+                    f"{running} continuable subagents are open, the most a session may keep"
+                    if asked.continuable
+                    else f"{running} background subagents are running, the most a session may have; "
                     "wait for one to finish (job_output) before starting another"
                 )
         except (ToolError, _Refused) as exc:
@@ -1095,7 +1105,7 @@ class GithiSteps:
             mode=asked.mode,
             label=asked.label,
             seed_until=seed,
-            kind="background" if asked.background else "foreground",
+            kind=asked.kind,
         )
         await self._record(
             sid,
@@ -1111,21 +1121,31 @@ class GithiSteps:
                 call_id=call_id,
             ),
         )
-        if asked.background:  # answered at once: the child's id is its job id
-            started_job = {
-                "job_id": child_id,
-                "status": "started",
-                "mode": asked.mode,
-                "description": asked.label or "",
-                "text": f"started background subagent job {child_id}",
-            }
+        if asked.background:  # answered at once: the child's id is its job (or subagent) id
+            started_job = (
+                {
+                    "subagent_id": child_id,
+                    "message_id": subagent_task_id(call_id),
+                    "kind": "continuable",
+                    "description": asked.label or "",
+                    "text": f"started subagent {child_id}",
+                }
+                if asked.continuable
+                else {
+                    "job_id": child_id,
+                    "status": "started",
+                    "mode": asked.mode,
+                    "description": asked.label or "",
+                    "text": f"started background subagent job {child_id}",
+                }
+            )
             await self._claim(
                 sid,
                 run_id,
                 f"{call_id}:end",
                 ToolEnd(tool_call_id=call_id, tool_name=name, result=render(Outcome(started_job)), is_error=False),
             )
-        return SubagentBegun(child_id, row.root_session_id or sid, asked.prompt)
+        return SubagentBegun(child_id, row.root_session_id or sid, asked.prompt, kind=asked.kind)
 
     async def subagent_end(self, req: SubagentEndRequest) -> bool:
         """A child settled: journal how it ended and, when a call waits for it, answer the

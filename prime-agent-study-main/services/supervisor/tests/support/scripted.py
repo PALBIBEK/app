@@ -36,7 +36,7 @@ def _compacted(text: str) -> bool:
 def _notice(text: str) -> bool:
     """A note the supervisor adds for the model (a sandbox rebuilt, a background subagent
     settled), not the user's request."""
-    return text.startswith(("[The sandbox was rebuilt", "Background subagent job"))
+    return text.startswith(("[The sandbox was rebuilt", "Background subagent "))
 
 
 @dataclasses.dataclass

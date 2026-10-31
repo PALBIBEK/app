@@ -29,6 +29,7 @@ from supervisor.agent.events import (
     ToolEnd,
     TurnEnd,
 )
+from supervisor.app import SupervisorState
 from supervisor.db.models import SessionIndexRow, SessionRow
 from supervisor.hands.keys import hand_key
 from supervisor.main import create_app
@@ -455,3 +456,86 @@ async def test_erasing_a_session_stops_and_erases_its_background_subagents(
         assert await state.reader.read(child.id) == []
     async with env.factory() as db:  # type: ignore[operator]
         assert await db.get(SessionRow, child.id) is None
+
+
+# --- continuable subagents (githi's subagent_continuable, send_message, interrupt_agent,
+# list_agents, report) ----------------------------------------------------------------------
+
+
+async def _quiet(env: Env, state: SupervisorState, sid: str, runs: int) -> list:
+    """The session's journal once ``runs`` runs ended and nothing more started for a moment."""
+    events = await env.wait_for(state, sid, run_ended(runs), timeout=60)
+    while True:
+        await asyncio.sleep(1.0)
+        later = await state.reader.read(sid)
+        if event_types(later).count("RunStart") == event_types(later).count("RunEnd") and len(later) == len(events):
+            return later
+        events = later
+
+
+async def test_a_continuable_subagent_reports_takes_more_turns_and_stays(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gate = threading.Event()  # the child starts once its parent's first run has ended
+    gateway = model(
+        ("subagent_continuable", {"prompt": "first task", "description": "helper"}),
+        subagent_calls=[("report", {"output": "halfway: found 3"})],
+        subagent_answer="turn done",
+        subagent_gate=gate,
+    )
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start a helper"))
+        first = await env.wait_for(state, sid, run_ended())
+        child = await _child_row(env, sid)
+        gateway.calls = []
+        gate.set()
+        told = await _quiet(env, state, sid, 2)  # its report and its settling woke the session
+        gateway.calls = [("send_message", {"subagent_id": child.id, "message": "now the second task"}),
+                         ("list_agents", {})]
+        await env.sessions.submit(sid, Message("c2", "give it more"))
+        runs = event_types(told).count("RunEnd")
+        events = await _quiet(env, state, sid, runs + 2)  # this run, and its settling again
+        child_events = await state.reader.read(child.id)
+        status = (await env.client.get_workflow_handle(workflow_id(child.id)).describe()).status
+        await env.sessions.terminate(sid)
+        handle = env.client.get_workflow_handle(workflow_id(child.id))
+        await asyncio.wait_for(handle.result(), timeout=30)  # it ends with its parent
+
+    started = next(e for e in payloads(first, ToolEnd) if e.tool_name == "subagent_continuable").result["payload"]
+    assert (started["subagent_id"], started["kind"]) == (child.id, "continuable")
+    assert child.subagent_kind == "continuable"
+    notices = [n.text for n in _notices(events)]
+    assert f"Background subagent {child.id} reported:\nhalfway: found 3" in notices
+    settled = [n for n in notices if "will do no further work unless you send it more" in n]
+    assert len(settled) == 2 and all("turn done" in n for n in settled), notices
+    asks = [m.content[0]["text"] for m in payloads(child_events, MessageEnd) if m.role == "user"]
+    assert asks == ["first task", "now the second task"], "the same child, a second turn"
+    assert status is WorkflowExecutionStatus.RUNNING, "it stays while its parent is open"
+    sent = next(e for e in payloads(events, ToolEnd) if e.tool_name == "send_message").result["payload"]
+    assert sent["subagent_id"] == child.id
+    listed = next(e for e in payloads(events, ToolEnd) if e.tool_name == "list_agents").result["payload"]
+    assert [(a["id"], a["label"]) for a in listed["agents"]] == [(child.id, "helper")]
+
+
+async def test_interrupt_agent_stops_the_turn_and_keeps_what_is_queued(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(("subagent_continuable", {"prompt": "list slowly"}), subagent_calls=[LS])
+    state = await env.state()
+    with slow_tool("ls", 4.0):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "start it"))
+            await env.wait_for(state, sid, run_ended())
+            child = await _child_row(env, sid)
+            await env.wait_for(state, child.id, has_event(lambda p: getattr(p, "tool_name", None) == "ls"))
+            gateway.calls = [("send_message", {"subagent_id": child.id, "message": "then this"}),
+                             ("interrupt_agent", {"agent_id": child.id})]
+            await env.sessions.submit(sid, Message("c2", "queue one more, stop this one"))
+            child_events = await env.wait_for(state, child.id, run_ended(2), timeout=60)
+
+    assert [t.stop_reason for t in payloads(child_events, TurnEnd)] == ["aborted", "stop"]
+    asks = [m.content[0]["text"] for m in payloads(child_events, MessageEnd) if m.role == "user"]
+    assert asks == ["list slowly", "then this"], "the queued message ran after the stop"
