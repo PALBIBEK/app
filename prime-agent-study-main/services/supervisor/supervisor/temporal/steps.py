@@ -919,7 +919,7 @@ class GithiSteps:
             return MessageEnd(role="user", content=[{"type": "text", "text": message.text}])
         child = message.notice_from
         if message.notice_text is not None:
-            return SubagentNotice(child, message.notice_text)
+            return SubagentNotice(child, message.notice_text, kind="report", output=message.notice_output)
         end = next(
             (
                 e.payload
@@ -931,7 +931,7 @@ class GithiSteps:
         status, text = (end.stop_reason, end.output or "") if end is not None else ("failed", message.text)
         kind = (await self._manager._get_session_row(child)).subagent_kind if end is not None else None
         told = continuable_settlement if kind == "continuable" else settlement
-        return SubagentNotice(child, told(child, status, text))
+        return SubagentNotice(child, told(child, status, text), status=status, output=text or None)
 
     async def tool_batch(self, batch: ToolBatch) -> list[bool]:
         """Run a round's read-only calls together; whether each errored, in order.

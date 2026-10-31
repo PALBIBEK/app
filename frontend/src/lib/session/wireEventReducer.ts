@@ -4,21 +4,14 @@
 
 import type { ChatMessage, ToolCallView, WireEvent } from '../api/types/session.types';
 import { explainToolResult, readToolResult } from './explain';
-
-export interface SubagentChipView {
-  run_id: string;
-  child_session_id: string;
-  mode: string;
-  provider: string;
-  label?: string;
-  status: 'running' | 'completed' | 'failed';
-  stop_reason?: string;
-}
+import { noticeOf } from './subagents';
 
 export interface SessionViewState {
   messages: ChatMessage[];
   pendingTools: Map<string, ToolCallView>;
-  pendingSubagents: Map<string, SubagentChipView>;
+  /** The subagent each tool call started (call id → its session), from `subagent_start`:
+   * known while the call still runs, so a person can watch it work. */
+  subagentOf: Map<string, string>;
   pendingApprovals: Array<{
     approval_id: string;
     prompt: string;
@@ -66,7 +59,7 @@ export function createSessionViewState(): SessionViewState {
   return {
     messages: [],
     pendingTools: new Map(),
-    pendingSubagents: new Map(),
+    subagentOf: new Map(),
     pendingApprovals: [],
     lastSeq: -1,
     settled: false,
@@ -97,18 +90,6 @@ function textFromMessageEnd(data: Record<string, unknown>): string {
   return '';
 }
 
-/** Product label for echo stub — never "long-term memory". */
-export function displaySubagentProvider(provider: string): {
-  label: string;
-  isLab: boolean;
-} {
-  const raw = (provider || '').trim();
-  if (raw === 'memory' || raw === 'lab_echo') {
-    return { label: 'lab_echo', isLab: true };
-  }
-  return { label: raw || 'unknown', isLab: false };
-}
-
 export function applyWireEvent(state: SessionViewState, event: WireEvent): SessionViewState {
   if (event.type === 'partial_output') {
     // Not a journal event (its seq is the last one journalled): never a replay, never kept.
@@ -129,7 +110,7 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
   const next: SessionViewState = {
     ...state,
     pendingTools: new Map(state.pendingTools),
-    pendingSubagents: new Map(state.pendingSubagents),
+    subagentOf: new Map(state.subagentOf),
     pendingApprovals: [...state.pendingApprovals],
     messages: [...state.messages],
     lastSeq: Math.max(state.lastSeq, event.seq),
@@ -163,34 +144,21 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       break;
     }
     case 'subagent_start': {
-      const runId = String(event.data.run_id ?? event.event_id);
-      const provider = String(event.data.provider ?? 'lab_echo');
-      next.pendingSubagents.set(runId, {
-        run_id: runId,
-        child_session_id: String(
-          event.data.child_session_id ?? event.data.child_id ?? ''
-        ),
-        mode: String(event.data.mode ?? 'spawn'),
-        provider: displaySubagentProvider(provider).label,
-        label:
-          event.data.label != null ? String(event.data.label) : undefined,
-        status: 'running',
-      });
+      const call = event.data.call_id;
+      const child = event.data.child_session_id;
+      if (typeof call === 'string' && typeof child === 'string' && child) next.subagentOf.set(call, child);
       break;
     }
-    case 'subagent_end': {
-      const runId = String(event.data.run_id ?? event.event_id);
-      const prev = next.pendingSubagents.get(runId);
-      const stop = String(event.data.stop_reason ?? 'completed');
-      const failed = /fail|error|cancel|abort/i.test(stop);
-      next.pendingSubagents.set(runId, {
-        run_id: runId,
-        child_session_id: prev?.child_session_id ?? '',
-        mode: prev?.mode ?? 'spawn',
-        provider: prev?.provider ?? 'lab_echo',
-        label: prev?.label,
-        status: failed ? 'failed' : 'completed',
-        stop_reason: stop,
+    case 'subagent_notice': {
+      const notice = noticeOf(event.data);
+      if (!notice) break;
+      next.messages.push({
+        id: event.event_id,
+        role: 'system',
+        content: notice.text,
+        timestamp: new Date(event.ts_ms).toISOString(),
+        seq: event.seq,
+        notice,
       });
       break;
     }

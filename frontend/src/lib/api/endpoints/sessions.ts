@@ -16,6 +16,8 @@ import {
   SessionMessageResponse,
   SessionMessageResponseSchema,
   SessionSchema,
+  Subagent,
+  SubagentListSchema,
   WireEvent,
   WireEventSchema,
 } from '../types/session.types';
@@ -133,6 +135,9 @@ export const sessionsAPI = {
       status: string;
       choice?: string | null;
       timeout_s: number;
+      /** A call of one of the session's subagents waits (answered from the session all the same). */
+      subagent?: boolean;
+      subagent_label?: string | null;
     }>
   > => {
     return apiClient.get(`/sessions/${sessionId}/approvals`);
@@ -161,57 +166,26 @@ export const sessionsAPI = {
   },
 
   /**
-   * List child subagents for a session via BFF (D12 B — no browser→supervisor).
-   * GET /sessions/:id/children
+   * Every subagent below the session (its own, theirs, and so on), via the BFF.
+   * GET /sessions/:id/subagents
    */
-  listChildren: async (
-    sessionId: string,
-    params?: { scope?: string }
-  ): Promise<
-    Array<{
-      id: string;
-      mode: string;
-      provider: string;
-      parent_id: string;
-      run_id: string;
-      label?: string | null;
-      activity: string;
-      depth?: number | null;
-      session_id?: string | null;
-    }>
-  > => {
-    return apiClient.get(`/sessions/${sessionId}/children`, {
-      params: params?.scope ? { scope: params.scope } : undefined,
-    });
+  subagents: async (sessionId: string): Promise<Subagent[]> => {
+    const response = await apiClient.get(`/sessions/${encodeURIComponent(sessionId)}/subagents`);
+    return SubagentListSchema.parse(response).subagents;
   },
 
-  /**
-   * Spawn a child subagent via BFF (D12 B).
-   * POST /sessions/:id/subagents/spawn
-   */
-  spawnSubagent: async (
-    sessionId: string,
-    body: {
-      prompt: string;
-      description?: string;
-      provider?: string;
-      mode?: string;
-      depth_limit?: number;
-    }
-  ): Promise<{
-    child_session_id: string;
-    text?: string | null;
-    status?: string | null;
-    run_id?: string | null;
-    provider?: string | null;
-  }> => {
-    return apiClient.post(`/sessions/${sessionId}/subagents/spawn`, {
-      prompt: body.prompt,
-      description: body.description ?? '',
-      provider: body.provider ?? 'lab_echo',
-      mode: body.mode ?? 'spawn',
-      ...(body.depth_limit != null ? { depth_limit: body.depth_limit } : {}),
-    });
+  /** The next turn of a continuable subagent (any other takes no messages: 409). */
+  messageSubagent: async (sessionId: string, subagentId: string, content: string): Promise<SessionMessageResponse> => {
+    const response = await apiClient.post(
+      `/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/messages`,
+      { content },
+    );
+    return SessionMessageResponseSchema.parse(response);
+  },
+
+  /** Stop what a subagent is doing; the agent that started it is told it was stopped. */
+  stopSubagent: async (sessionId: string, subagentId: string): Promise<void> => {
+    await apiClient.post(`/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/abort`);
   },
 
   /** End the session; its conversation is kept. */
@@ -229,7 +203,14 @@ export const sessionsAPI = {
    */
   openEventStream: async function* (
     sessionId: string,
-    options?: { lastEventId?: string; signal?: AbortSignal; onOpen?: () => void; onEnded?: () => void }
+    options?: {
+      lastEventId?: string;
+      signal?: AbortSignal;
+      onOpen?: () => void;
+      onEnded?: () => void;
+      /** Stream this subagent's transcript (a subagent below the session) instead. */
+      subagentId?: string;
+    }
   ): AsyncGenerator<WireEvent, void, unknown> {
     const accessToken = useAuthStore.getState().accessToken;
     if (!accessToken) {
@@ -243,7 +224,10 @@ export const sessionsAPI = {
       headers['Last-Event-ID'] = options.lastEventId;
     }
 
-    const response = await fetch(`${API_BASE}/sessions/${sessionId}/events`, {
+    const path = options?.subagentId
+      ? `/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(options.subagentId)}/events`
+      : `/sessions/${sessionId}/events`;
+    const response = await fetch(`${API_BASE}${path}`, {
       method: 'GET',
       headers,
       credentials: 'include',

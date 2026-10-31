@@ -82,7 +82,19 @@ export function buildTranscript(trace: RunTrace): TranscriptItem[] {
   const roots = buildTree(trace.spans);
   const root = roots.find((r) => r.span.kind === 'agent') ?? roots[0];
   if (!root) return [];
-  const says = trace.spans.filter((s) => s.kind === 'llm' && s.excerpt);
+  // The run's own last word: a subagent's run nests in the trace (under the call that started
+  // it), and a background one can finish after this run did, so its model calls are not this
+  // run's.
+  const says: TraceSpan[] = [];
+  const walk = (nodes: readonly SpanNode[]): void => {
+    for (const n of nodes) {
+      if (n.span.kind === 'agent') continue;
+      if (n.span.kind === 'llm' && n.span.excerpt) says.push(n.span);
+      walk(n.children);
+    }
+  };
+  walk(root.children);
+  says.sort((a, b) => a.start_ms - b.start_ms);
   const lastSay = says.length ? says[says.length - 1].id : null;
   const out: TranscriptItem[] = [];
   const input = root.span.excerpt ?? trace.rollup.input;

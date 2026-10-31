@@ -1,7 +1,10 @@
 /**
- * D12 §5 B / LOCAL_DEMO #4 — discoverability + wire chips + no browser→supervisor.
+ * D12 §5 B — a session's subagents, as people see them, through the BFF only.
  *
- * Prefer live path for local demo: applyWireEvent must handle subagent_start / subagent_end.
+ * Subagents are sessions the agent starts with its own tool calls; the product never spawns
+ * one. A person finds them where they work: in the conversation (the call that started one,
+ * with its task and answer, and what it told the agent later) and in the session's rail (every
+ * subagent below the session), and reads one's own conversation on its page.
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -17,124 +20,71 @@ function collectProductTsFiles(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     // Acceptance/unit tests may mention banned strings in negative asserts; skip them.
-    if (
-      name === 'node_modules' ||
-      name === '.next' ||
-      name === 'test' ||
-      /_acceptance$/.test(name) ||
-      /_production$/.test(name)
-    ) {
+    if (name === 'node_modules' || name === '.next' || name === 'test' || /_acceptance$/.test(name) || /_production$/.test(name)) {
       continue;
     }
     const full = join(dir, name);
-    let st;
-    try {
-      st = statSync(full);
-    } catch {
-      continue;
-    }
-    if (st.isDirectory()) {
-      collectProductTsFiles(full, out);
-    } else if (
-      /\.(ts|tsx)$/.test(name) &&
-      !name.endsWith('.d.ts') &&
-      !/\.(test|spec)\.(ts|tsx)$/.test(name)
-    ) {
-      out.push(full);
-    }
+    const st = statSync(full);
+    if (st.isDirectory()) collectProductTsFiles(full, out);
+    else if (/\.(ts|tsx)$/.test(name) && !name.endsWith('.d.ts') && !/\.(test|spec)\.(ts|tsx)$/.test(name)) out.push(full);
   }
   return out;
 }
 
-describe('D12 Subagents discoverability + wire + BFF-only', () => {
-  it('Sidebar/nav OR Test page links to Subagents or spawn', () => {
-    const sidebar = read('components/layout/Sidebar.tsx');
-    const testPage = read('app/harness/[id]/test/page.tsx');
-    const headerExists = existsSync(join(root, 'components/layout/Header.tsx'));
-    const header = headerExists ? read('components/layout/Header.tsx') : '';
+const SUBAGENT_UI = [
+  'components/session/subagents.tsx',
+  'components/session/SessionChat.tsx',
+  'app/sessions/[id]/subagents/[subagentId]/page.tsx',
+  'lib/session/subagents.ts',
+];
 
-    const navDiscovers =
-      /href=["']\/subagents|href=["']\/subagents\/spawn|label:\s*['"]Subagents['"]|Subagents/.test(
-        sidebar
-      ) ||
-      /href=["']\/subagents|\/subagents\/spawn|Spawn subagent|Subagents/.test(header);
-
-    const testDiscovers =
-      /\/subagents|spawnSubagent|Spawn subagent|subagents\/spawn/i.test(testPage);
-
-    expect(
-      navDiscovers || testDiscovers,
-      'Sidebar/Header must link Subagents|/subagents|/subagents/spawn, or Test page must surface spawn/subagents'
-    ).toBe(true);
+describe('D12 subagents: where people find them, and BFF-only', () => {
+  it('the session shows its subagents in the conversation and the rail, and each has a page', () => {
+    const chat = read('components/session/SessionChat.tsx');
+    expect(chat).toMatch(/SubagentCallCard/);
+    expect(chat).toMatch(/SubagentNoticeLine/);
+    expect(chat).toMatch(/SubagentsSection/);
+    expect(existsSync(join(root, 'app/sessions/[id]/subagents/[subagentId]/page.tsx'))).toBe(true);
   });
 
-  it('applyWireEvent handles subagent_start and subagent_end (live local-demo chips)', () => {
+  it('the reducer follows the calls that start subagents and what they tell the agent', () => {
     const reducer = read('lib/session/wireEventReducer.ts');
-    expect(reducer).toMatch(/subagent_start/);
-    expect(reducer).toMatch(/subagent_end/);
-    // Case arms (not only a comment) — require switch cases.
     expect(reducer).toMatch(/case\s+['"]subagent_start['"]/);
-    expect(reducer).toMatch(/case\s+['"]subagent_end['"]/);
+    expect(reducer).toMatch(/case\s+['"]subagent_notice['"]/);
   });
 
-  it('sessionsAPI exposes BFF children/spawn when live path is chosen', () => {
+  it('sessionsAPI reads, messages and stops subagents through the BFF, and spawns none', () => {
     const api = read('lib/api/endpoints/sessions.ts');
-    const subagentsApiPath = join(root, 'lib/api/endpoints/subagents.ts');
-    const subagentsApi = existsSync(subagentsApiPath)
-      ? readFileSync(subagentsApiPath, 'utf8')
-      : '';
-    const pages = ['page.tsx', '[id]/page.tsx', 'spawn/page.tsx']
-      .map((rel) => {
-        const p = join(root, 'app/subagents', rel);
-        return existsSync(p) ? readFileSync(p, 'utf8') : '';
-      })
-      .join('\n');
+    expect(api).toMatch(/\/sessions\/\$\{[^}]+\}\/subagents`/);
+    expect(api).toMatch(/\/subagents\/\$\{[^}]+\}\/messages/);
+    expect(api).toMatch(/\/subagents\/\$\{[^}]+\}\/abort/);
+    expect(api).toMatch(/\/subagents\/\$\{[^}]+\}\/events/);
+    expect(api).not.toMatch(/spawn|\/children/);
+  });
 
-    const unavailable =
-      /subagents-unavailable|SubagentsUnavailable|not wired|not available yet|subagents are not wired/i.test(
-        pages
-      );
-    const liveUi =
-      /sessionsAPI\.(listChildren|spawnSubagent|spawn|listSubagents)|subagentsAPI|useSubagents|useSpawnSubagent/.test(
-        pages
-      ) ||
-      /\/sessions\/\$\{[^}]+\}\/(children|subagents)/.test(pages);
-
-    expect(
-      liveUi || unavailable,
-      'Subagents pages must choose live BFF or unavailable before BFF method checks apply'
-    ).toBe(true);
-
-    if (unavailable && !liveUi) {
-      // Honest disabled path: BFF children/spawn optional until wired.
-      return;
+  it('nothing in the product spawns a subagent or shows the retired echo stub', () => {
+    const offenders: string[] = [];
+    for (const file of collectProductTsFiles(root)) {
+      const src = readFileSync(file, 'utf8');
+      if (/spawnSubagent|subagents\/spawn|lab_echo|listChildren/.test(src)) offenders.push(file.replace(root + '/', ''));
     }
+    expect(offenders).toEqual([]);
+  });
 
-    // Live UI requires BFF client surface (never supervisor host).
-    const hasBff =
-      /listChildren|spawnSubagent|listSubagents|\.spawn\b/.test(api) ||
-      /listChildren|spawnSubagent|listSubagents|\.spawn\b/.test(subagentsApi) ||
-      /\/sessions\/\$\{[^}]+\}\/(children|subagents)/.test(api + subagentsApi);
-
-    expect(
-      hasBff,
-      'live Subagents UI requires sessionsAPI/subagentsAPI children+spawn via product BFF'
-    ).toBe(true);
-    expect(api + subagentsApi).not.toMatch(/localhost:8080/);
-    expect(api + subagentsApi).not.toMatch(/\/v1\/sessions\/.*\/subagents/);
+  it('the subagent UI shows real data: no mock theater, no claims about memory', () => {
+    for (const rel of SUBAGENT_UI) {
+      const src = read(rel);
+      expect(src, rel).not.toMatch(/\bmockSubagents?\b|\bmockParentSessions\b/);
+      expect(src, rel).not.toMatch(/long[- ]term memory|\bLTM\b/i);
+    }
   });
 
   it('frontend product src never hits localhost:8080 or supervisor /v1/sessions/*/subagents', () => {
-    const files = collectProductTsFiles(root);
     const offenders: string[] = [];
-    for (const file of files) {
+    for (const file of collectProductTsFiles(root)) {
       const src = readFileSync(file, 'utf8');
-      if (/localhost:8080/.test(src) || /\/v1\/sessions\/[^`'"]*\/subagents/.test(src)) {
-        offenders.push(file.replace(root + '/', ''));
-      }
+      if (/localhost:8080/.test(src) || /\/v1\/sessions\/[^`'"]*\/subagents/.test(src)) offenders.push(file.replace(root + '/', ''));
     }
-    expect(offenders, `browser→supervisor banned: ${offenders.join(', ')}`).toEqual(
-      []
-    );
+    expect(offenders, `browser→supervisor banned: ${offenders.join(', ')}`).toEqual([]);
   });
 });

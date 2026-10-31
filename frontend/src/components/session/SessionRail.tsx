@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * The live session's right rail: its sandboxes, what it has used against its limits, and
- * the exact versions it runs.
+ * The live session's right rail: its subagents (when it has any), its sandboxes, what it has
+ * used against its limits, and the exact versions it runs.
  */
 
 import { useEffect } from 'react';
@@ -87,6 +87,7 @@ export function SessionRail({
   maxSteps,
   maxCost,
   sessionCost,
+  lead,
   children,
 }: {
   sessionId: string;
@@ -97,6 +98,8 @@ export function SessionRail({
   maxSteps?: number;
   maxCost?: number;
   sessionCost: number;
+  /** Panels that go first (the session's subagents, when it has any). */
+  lead?: React.ReactNode;
   children?: React.ReactNode;
 }): JSX.Element {
   const { data: boxes, isLoading, refetch } = useSandboxes({ sessionId, poll: true });
@@ -107,6 +110,7 @@ export function SessionRail({
   const cost = Math.max(usage.cost, sessionCost);
   return (
     <aside aria-label="Session resources" className="flex min-w-0 flex-col gap-4">
+      {lead}
       <Section title="Sandboxes" aside={boxes?.length ? `${boxes.length} attached` : undefined}>
         {boxes && boxes.length ? (
           boxes.map((b) => <SandboxRow key={b.hand} box={b} />)

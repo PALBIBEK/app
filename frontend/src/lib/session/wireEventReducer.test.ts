@@ -137,3 +137,38 @@ describe('applyWireEvent partial_output', () => {
     expect(state.partial).toBeNull();
   });
 });
+
+describe('applyWireEvent subagents', () => {
+  it('knows which subagent a call started while the call still runs', () => {
+    let state = applyWireEvent(createSessionViewState(), ev('tool_start', { tool_call_id: 'c1', tool_name: 'subagent', args: { prompt: 'p' } }));
+    state = applyWireEvent(state, ev('subagent_start', { call_id: 'c1', child_session_id: 'child-1', run_id: 'r1', mode: 'spawn', provider: 'session' }));
+    expect(state.subagentOf.get('c1')).toBe('child-1');
+    expect(state.pendingTools.get('c1')?.status).toBe('running');
+  });
+
+  it('shows what a subagent told the agent, in its own words', () => {
+    let state = applyWireEvent(
+      createSessionViewState(),
+      ev('subagent_notice', {
+        child_session_id: 'child-1',
+        text: 'Background subagent job child-1 finished (completed).\nIts closing message:\nall done',
+        kind: 'settled',
+        status: 'completed',
+        output: 'all done',
+      }),
+    );
+    state = applyWireEvent(
+      state,
+      ev('subagent_notice', { child_session_id: 'child-1', text: 'Background subagent child-1 reported:\nhalfway', kind: 'report', output: 'halfway' }),
+    );
+    expect(state.messages.map((m) => [m.role, m.content, m.notice?.kind, m.notice?.status])).toEqual([
+      ['system', 'all done', 'settled', 'completed'],
+      ['system', 'halfway', 'report', undefined],
+    ]);
+  });
+
+  it('shows an older notice as the model read it', () => {
+    const state = applyWireEvent(createSessionViewState(), ev('subagent_notice', { child_session_id: 'c', text: 'Background subagent c finished' }));
+    expect(state.messages[0].notice).toEqual({ subagentId: 'c', kind: 'settled', status: undefined, text: 'Background subagent c finished' });
+  });
+});

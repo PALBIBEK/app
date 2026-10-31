@@ -253,6 +253,7 @@ function ApprovalStrip({ items }: { items: InboxItem[] }): JSX.Element {
           <li key={item.approval_id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
             <Mono className="text-ink-2">{item.session_id.slice(0, 13)}</Mono>
             <span className="font-medium">{item.session_title || item.harness_name || 'Session'}</span>
+            {item.subagent ? <span className="text-xs text-ink-2">its subagent{item.subagent_label ? ` · ${item.subagent_label}` : ''} asks</span> : null}
             <Mono chip className="max-w-[420px] truncate">
               {item.prompt}
             </Mono>

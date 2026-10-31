@@ -142,7 +142,9 @@ async def test_a_child_that_runs_out_of_room_fails_with_what_it_had(
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state, "githi-short")  # the child asks twice and hits the limit
         await env.sessions.submit(sid, Message("c1", "delegate"))
-        events = await env.wait_for(state, sid, has_event(lambda p: isinstance(p, SubagentEnd)))
+        # The call is answered just after the end is journalled: wait for the answer.
+        answered = has_event(lambda p: isinstance(p, ToolEnd) and p.tool_name == "subagent")
+        events = await env.wait_for(state, sid, answered)
 
     end = _subagent_end(events)
     assert end.is_error and end.result["code"] == "SUBAGENT_FAILED"
@@ -510,6 +512,9 @@ async def test_a_continuable_subagent_reports_takes_more_turns_and_stays(
     assert f"Background subagent {child.id} reported:\nhalfway: found 3" in notices
     settled = [n for n in notices if "will do no further work unless you send it more" in n]
     assert len(settled) == 2 and all("turn done" in n for n in settled), notices
+    # What a person is shown: which it was, how it ended, the subagent's own words.
+    told = {(n.kind, n.status, n.output) for n in _notices(events)}
+    assert told == {("report", None, "halfway: found 3"), ("settled", "completed", "turn done")}, told
     asks = [m.content[0]["text"] for m in payloads(child_events, MessageEnd) if m.role == "user"]
     assert asks == ["first task", "now the second task"], "the same child, a second turn"
     assert status is WorkflowExecutionStatus.RUNNING, "it stays while its parent is open"

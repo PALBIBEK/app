@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * The pieces a conversation is drawn with: messages, tool calls, subagents, approvals.
+ * The pieces a conversation is drawn with: messages, tool calls, approvals (subagents:
+ * ./subagents).
  */
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
   CaretDown,
@@ -26,7 +26,6 @@ import {
 
 import type { ChatMessage, ToolCallView } from '@/lib/api/types/session.types';
 import { clip } from '@/lib/session/explain';
-import { displaySubagentProvider, type SubagentChipView } from '@/lib/session/wireEventReducer';
 import { cn } from '@/lib/utils';
 
 const messageVariants = {
@@ -138,31 +137,6 @@ export function ToolCard({ tool }: { tool: ToolCallView }): JSX.Element {
   );
 }
 
-export function SubagentChip({ chip, sessionId }: { chip: SubagentChipView; sessionId?: string }): JSX.Element {
-  const provider = displaySubagentProvider(chip.provider);
-  const href =
-    chip.child_session_id && sessionId
-      ? `/subagents/${encodeURIComponent(chip.child_session_id)}?session=${encodeURIComponent(sessionId)}`
-      : '/subagents';
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[10px] border border-dashed border-line-strong px-3 py-2 text-sm">
-      {chip.status === 'running' ? <CircleNotch size={15} className="animate-spin text-accent-600" /> : <GitBranch size={15} className="text-ink-2" />}
-      <span className="font-medium">
-        Subagent {chip.status}
-        {chip.label ? ` · ${chip.label}` : ''}
-      </span>
-      <span className="text-[13px] text-ink-2">
-        {chip.mode.replace(/_/g, ' ')} · {provider.label}
-        {chip.stop_reason ? ` · ${chip.stop_reason}` : ''}
-      </span>
-      <span className="flex-1" />
-      <Link href={href} className="text-[13px] font-medium text-accent-700 hover:text-accent-600">
-        Open
-      </Link>
-    </div>
-  );
-}
-
 /** Seconds left until `deadline` (epoch ms), ticking. */
 function useSecondsLeft(deadline?: number): number | undefined {
   const [now, setNow] = useState(() => Date.now());
@@ -184,12 +158,15 @@ export function ApprovalCard({
   deadline,
   onTimeout,
   onAnswer,
+  from,
 }: {
   prompt: string;
   options: string[];
   deadline?: number;
   onTimeout?: string;
   onAnswer: (choice: string) => void;
+  /** Who asks, when it is not the agent itself (one of its subagents). */
+  from?: string;
 }): JSX.Element {
   const left = useSecondsLeft(deadline);
   const allow = options.find((o) => ALLOW.test(o)) ?? options[0];
@@ -200,6 +177,7 @@ export function ApprovalCard({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-accent-50 px-4 py-3 text-accent-700">
         <ShieldWarning size={16} aria-hidden="true" />
         <span className="font-semibold">Approval required</span>
+        {from ? <span data-testid="approval-from" className="text-[13px]">{from}</span> : null}
         <span className="flex-1" />
         {left != null ? (
           <span data-testid="approval-countdown" className="font-mono text-xs">
@@ -258,7 +236,9 @@ export function MessageBubble({
   onCancel,
   onFork,
   agentName,
+  userName = 'You',
   userInitials,
+  renderTool = (tool) => <ToolCard key={tool.id} tool={tool} />,
 }: {
   message: ChatMessage;
   queued?: boolean;
@@ -268,7 +248,11 @@ export function MessageBubble({
   onCancel?: () => void;
   onFork?: () => void;
   agentName?: string;
+  /** Who the user turns are from (a subagent's come from the agent that started it). */
+  userName?: string;
   userInitials?: string;
+  /** How a tool call it made is drawn (a call that started a subagent draws as one). */
+  renderTool?: (tool: ToolCallView) => JSX.Element;
 }): JSX.Element {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
@@ -278,7 +262,7 @@ export function MessageBubble({
       <Avatar user={isUser} initials={userInitials} />
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-ink-3">
-          <span className="font-medium text-ink">{isUser ? 'You' : agentName || 'Agent'}</span>
+          <span className="font-medium text-ink">{isUser ? userName : agentName || 'Agent'}</span>
           <span>· {ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           {queued ? (
             <span data-testid="queued" className="rounded-full bg-accent-50 px-2 py-px font-medium text-accent-700">
@@ -327,9 +311,7 @@ export function MessageBubble({
         ) : null}
         {message.toolCalls?.length ? (
           <div className="flex w-full flex-col gap-2">
-            {message.toolCalls.map((tool) => (
-              <ToolCard key={tool.id} tool={tool} />
-            ))}
+            {message.toolCalls.map(renderTool)}
           </div>
         ) : null}
       </div>

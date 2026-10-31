@@ -14,6 +14,9 @@ export interface InboxItem {
   options: string[];
   created_at_ms: number | null;
   expires_at_ms: number | null;
+  /** One of the session's subagents asks (it is answered from the session all the same). */
+  subagent?: boolean;
+  subagent_label?: string | null;
 }
 
 export type SandboxState = 'running' | 'stopped' | 'lost' | 'not_started';

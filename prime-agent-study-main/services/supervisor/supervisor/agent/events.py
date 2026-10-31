@@ -300,6 +300,11 @@ class SubagentNotice:
 
     child_session_id: str
     text: str
+    # For people (the model reads ``text``): what it was, a turn that settled or a report;
+    # how a settled turn ended (completed, failed, cancelled); and the subagent's own words.
+    kind: str = "settled"
+    status: str | None = None
+    output: str | None = None
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
