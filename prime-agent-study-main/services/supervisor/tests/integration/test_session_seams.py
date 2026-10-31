@@ -34,8 +34,7 @@ Boot = Callable[[], Awaitable[SupervisorState]]
 
 
 @pytest.fixture
-async def boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Boot]:
-    monkeypatch.setenv("ALLOW_LAB_ECHO", "0")  # production wiring: nested-session subagents
+async def boot(tmp_path: Path) -> AsyncIterator[Boot]:
     keys = FakeKeys()
     async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'seams.db'}") as (_, factory):
 
@@ -72,10 +71,8 @@ def _assert_one_keyed_gateway(state: SupervisorState, sid: str, token: str) -> N
     gateway = seams.model_gateway
     assert isinstance(gateway, HttpModelGatewayClient)
     assert (gateway._base, gateway._token) == (PINNED_GATEWAY, token)
-    # The summarizer and nested-session subagents call the model on the same client.
+    # The summarizer calls the model on the same client.
     assert seams.context_memory._gateway is gateway
-    nested = seams.subagent_transport._provider("nested_session")
-    assert nested._gateway is gateway
 
 
 async def test_every_model_calling_seam_uses_the_pinned_gateway_and_session_key(

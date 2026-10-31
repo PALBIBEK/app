@@ -4,7 +4,6 @@ Providers are organized by seam type:
 - tools/     → ToolProvider implementations
 - gateway/   → ModelGatewayClient implementations
 - prompt/    → PromptAssembler implementations
-- subagent/  → SubagentTransport implementations
 - memory/    → ContextMemoryProvider implementations
 - workspace/ → WorkspaceStore implementations
 - storage/   → ObjectStorage implementations
@@ -40,13 +39,6 @@ from supervisor.seams.providers.storage import (
     S3ObjectStorage,
     create_object_storage,
 )
-from supervisor.seams.providers.subagent import (
-    LAB_ECHO_PROVIDER,
-    LEGACY_MEMORY_ALIAS,
-    AcpSubagentProvider,
-    LabEchoSubagentProvider,
-    NestedSessionSubagentProvider,
-)
 
 # Re-export from subfolders for backwards compatibility
 from supervisor.seams.providers.tools import (
@@ -63,9 +55,6 @@ from supervisor.seams.providers.workspace import (
 )
 
 __all__ = [
-    "LAB_ECHO_PROVIDER",
-    "LEGACY_MEMORY_ALIAS",
-    "AcpSubagentProvider",
     "BasicCompactionProvider",
     "CompositeContextMemoryProvider",
     "CompositeToolProvider",
@@ -74,8 +63,6 @@ __all__ = [
     "FakeModelGatewayClient",
     "HttpModelGatewayClient",
     "HttpVirtualKeyClient",
-    # Subagent
-    "LabEchoSubagentProvider",
     "MarkdownRecallProvider",
     "McpSemanticRecallProvider",
     "McpToolProvider",
@@ -86,7 +73,6 @@ __all__ = [
     # Workspace
     "MemoryTreeIO",
     "MemoryWorkspaceStore",
-    "NestedSessionSubagentProvider",
     # Memory
     "NullContextMemoryProvider",
     # Tools

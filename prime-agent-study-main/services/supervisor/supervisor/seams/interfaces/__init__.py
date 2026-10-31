@@ -10,11 +10,6 @@ from supervisor.seams.interfaces.context_memory import (
 )
 from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
-from supervisor.seams.interfaces.subagent_transport import (
-    NamedProviderRegistry,
-    SubagentTransport,
-    SubagentTransportImpl,
-)
 from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 __all__ = [
@@ -27,13 +22,9 @@ __all__ = [
     # ModelGatewayClient
     "ModelCatalog",
     "ModelGatewayClient",
-    "NamedProviderRegistry",
     # PromptAssembler
     "PromptAssembler",
     "RecallBlock",
-    # SubagentTransport
-    "SubagentTransport",
-    "SubagentTransportImpl",
     # ToolProvider
     "ToolClassifier",
     "ToolProvider",

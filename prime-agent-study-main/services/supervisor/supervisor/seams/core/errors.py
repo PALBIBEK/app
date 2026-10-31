@@ -48,8 +48,3 @@ class BadArgs(SeamError):
         super().__init__(message, "BAD_ARGS")
 
 
-class DepthExceeded(SeamError):
-    """Delegation depth cap exceeded."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message, "DEPTH_EXCEEDED")

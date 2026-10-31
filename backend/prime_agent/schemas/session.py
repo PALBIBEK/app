@@ -178,51 +178,37 @@ class ForkSessionResponse(BaseModel):
     parent_id: str
 
 
-class SpawnSubagentRequest(BaseModel):
-    """BFF body for supervisor subagents/spawn (D12 B).
-
-    Product default ``lab_echo`` is the in-process echo stub (supervisor name
-    may be ``lab_echo`` or legacy ``memory``) — never conflate with durable / LTM (D7).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: str = Field(..., min_length=1)
-    description: str = ""
-    provider: str = Field(default="lab_echo", min_length=1)
-    mode: str = Field(default="spawn", min_length=1)
-    parent_depth: int = 0
-    run_id: str | None = None
-    tool_filter: list[str] | None = None
-    persona: str | None = None
-    depth_limit: int | None = None
-    output_schema: dict[str, Any] | None = None
-
-
-class SpawnSubagentResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    child_session_id: str
-    text: str | None = None
-    status: str | None = None
-    run_id: str | None = None
-    provider: str | None = None
-
-
-class SessionChildOut(BaseModel):
-    """Child row from supervisor GET …/children via BFF (D12 B)."""
+class SubagentOut(BaseModel):
+    """A subagent below a session: a session its agent started with a tool call, as the
+    supervisor lists it (``GET /v1/sessions/{id}/subagents``)."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    mode: str
-    provider: str
     parent_id: str
-    run_id: str
+    """The session that started it: this session's own id on the supervisor, or a subagent's."""
+    depth: int
     label: str | None = None
-    activity: str = "running"
-    depth: int | None = None
-    session_id: str | None = None
+    task: str | None = None
+    kind: Literal["foreground", "background", "continuable"]
+    """foreground: its call waited for it. background: it ran while its parent went on.
+    continuable: it stays, and takes more messages."""
+    mode: Literal["spawn", "fork"]
+    status: Literal["starting", "running", "ready", "completed", "failed", "cancelled"]
+    """ready: a continuable subagent waiting for its next message."""
+    outcome: Literal["completed", "failed", "cancelled"] | None = None
+    answer: str | None = None
+    answer_truncated: bool = False
+    open: bool
+    call_id: str | None = None
+    cost_usd: float = 0.0
+    created_at: datetime
+
+
+class SubagentListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subagents: list[SubagentOut]
 
 
 class PinnedPart(BaseModel):

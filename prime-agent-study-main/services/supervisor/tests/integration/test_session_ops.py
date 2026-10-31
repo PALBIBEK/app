@@ -17,6 +17,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
 from supervisor.agent.events import MessageEnd, ToolEnd
+from supervisor.api.workflow_errors import to_http
 from supervisor.app import SupervisorState
 from supervisor.main import create_app
 from supervisor.session.manager_tools import MAX_KEPT_RESULT_CHARS
@@ -134,12 +135,11 @@ async def test_domain_errors_keep_their_http_status(
         )
         assert resp.status_code == 409, resp.text
         sid = await env.create(worker)
-        too_deep = await http.post(
-            f"/v1/sessions/{sid}/subagents/spawn",
-            json={"prompt": "x", "parent_depth": 99, "depth_limit": 1},
-            headers=HEADERS,
-        )
-        assert too_deep.status_code in (400, 409), too_deep.text
+        # An op from before subagents were sessions is answered, not run.
+        with pytest.raises(SessionCommandError) as retired:
+            await env.sessions.op(SessionOp(sid, uuid.uuid4().hex, Op.SPAWN_CHILD, "t1", {"prompt": "x"}))
+        assert retired.value.kind == "OperationRetired"
+        assert to_http(retired.value).status_code == 410
         await env.sessions.terminate(sid)
         closed = await http.post(
             f"/v1/sessions/{sid}/tools/invoke",
@@ -317,26 +317,3 @@ async def test_session_op_histories_replay_deterministically(env: Env) -> None:
     for history in histories:
         result = await replayer.replay_workflow(history, raise_on_replay_failure=False)
         assert result.replay_failure is None, result.replay_failure
-
-
-async def test_a_spawned_child_is_reported_under_the_id_the_journal_and_listing_use(
-    env: Env, model: Callable[..., ScriptedGateway]
-) -> None:
-    """The lab provider numbers its own children (child-1, ...); clients must get the
-    journal's id, or the link they follow finds no such child."""
-    model()
-    worker = await env.state()
-    async with session_worker(env.client, worker, task_queue=env.queue), api(env) as (http, _):
-        sid = await env.create(worker)
-        spawned = await http.post(
-            f"/v1/sessions/{sid}/subagents/spawn",
-            json={"prompt": "summarize", "provider": "lab_echo", "description": "summary"},
-            headers=HEADERS,
-        )
-        assert spawned.status_code == 200, spawned.text
-        child = spawned.json()["child_session_id"]
-        listed = await http.get(f"/v1/sessions/{sid}/children", headers=HEADERS)
-        assert listed.status_code == 200, listed.text
-        assert child in {c["id"] for c in listed.json()}, (child, listed.json())
-        (start,) = [e.payload for e in await worker.reader.read(sid) if type(e.payload).__name__ == "SubagentStart"]
-        assert start.child_session_id == child

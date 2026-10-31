@@ -1,4 +1,6 @@
-"""SubagentJob: one background subagent job, durable on its own.
+"""SubagentJob: one background subagent job, durable on its own; from before subagents were
+sessions. Nothing starts one now; it stays registered so the ones still running end
+(``supervisor.temporal.jobs`` answers their work as retired) and their histories replay.
 
 Started by its session's workflow (parent close policy ABANDON, so the session's
 continue-as-new never cuts it off) and cancelled by it on interrupt or when the

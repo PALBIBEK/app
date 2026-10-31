@@ -10,13 +10,13 @@ from supervisor.session.recovery import ResumeState
 
 __all__ = [
     "MemoryNotConfigured",
+    "OperationRetired",
     "RecoveryBlocked",
     "SessionAwaitingApproval",
     "SessionError",
     "SessionMoved",
     "SessionNotFound",
     "SessionTerminated",
-    "SubagentNotConfigured",
     "ToolInvokeNotConfigured",
     "WorkspaceUnavailable",
 ]
@@ -48,12 +48,12 @@ class ToolInvokeNotConfigured(SessionError):
     pass
 
 
-class SubagentNotConfigured(SessionError):
-    pass
-
-
 class MemoryNotConfigured(SessionError):
     pass
+
+
+class OperationRetired(SessionError):
+    """A session operation this platform no longer runs (``supervisor.temporal.contracts.RETIRED_OPS``)."""
 
 
 class WorkspaceUnavailable(SessionError):

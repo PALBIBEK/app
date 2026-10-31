@@ -1,4 +1,4 @@
-"""Sessions: the manager, its errors, recovery, live fan-out and the child tree.
+"""Sessions: the manager, its errors, recovery and live fan-out.
 
 Every name here is defined in exactly one module of this package.
 """
@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from supervisor.session.errors import (
     MemoryNotConfigured,
+    OperationRetired,
     RecoveryBlocked,
     SessionAwaitingApproval,
     SessionError,
     SessionMoved,
     SessionNotFound,
     SessionTerminated,
-    SubagentNotConfigured,
     ToolInvokeNotConfigured,
     WorkspaceUnavailable,
 )
@@ -27,18 +27,13 @@ from supervisor.session.manager import (
 from supervisor.session.modes import SessionMode
 from supervisor.session.recovery import Recovery, ResumeDecision, ResumeState
 from supervisor.session.registry import SessionRegistry
-from supervisor.session.tree import (
-    SessionTree,
-    build_session_tree,
-    unpaired_compaction_starts,
-    unpaired_subagent_starts,
-)
 
 __all__ = [
     "Dropped",
     "LiveHub",
     "LiveSubscription",
     "MemoryNotConfigured",
+    "OperationRetired",
     "Recovery",
     "RecoveryBlocked",
     "ResumeDecision",
@@ -53,12 +48,7 @@ __all__ = [
     "SessionNotFound",
     "SessionRegistry",
     "SessionTerminated",
-    "SessionTree",
-    "SubagentNotConfigured",
     "ToolInvokeNotConfigured",
     "ToolInvokeOutcome",
     "WorkspaceUnavailable",
-    "build_session_tree",
-    "unpaired_compaction_starts",
-    "unpaired_subagent_starts",
 ]

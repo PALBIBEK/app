@@ -149,7 +149,7 @@ async def test_a_turn_runs_and_streams_to_its_end(client, user, pin) -> None:
     await client.terminate_session(user, forked["session_id"])
 
     assert await client.list_session_approvals(user, sid) == []
-    assert isinstance(await client.list_session_children(user, sid), list)
+    assert await client.list_subagents(user, sid) == []  # it started none
     await client.terminate_session(user, sid)
     with pytest.raises(AiUpstreamError) as refused:
         await client.post_message(user, sid, text="after the end", command_id=f"c-{uuid.uuid4().hex}")

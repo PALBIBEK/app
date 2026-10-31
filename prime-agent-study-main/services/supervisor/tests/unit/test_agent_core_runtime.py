@@ -34,7 +34,6 @@ def test_u6_echo_accepts_empty_seams() -> None:
     seams = RuntimeSeams()
     assert seams.tool_provider is None
     assert seams.prompt_assembler is None
-    assert seams.subagent_transport is None
     assert seams.model_gateway is None
     rt = create_runtime("echo", seams=seams)
     assert rt.seams is seams

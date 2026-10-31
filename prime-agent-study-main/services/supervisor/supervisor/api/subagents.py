@@ -1,153 +1,66 @@
-"""Subagent HTTP routes — session-scoped child commands (AGENT_CONTRACT).
+"""A session's subagents, as a person reads them (``supervisor.session.subagent_view``).
 
-Commands run on the worker holding the parent session (its child agents and
-background jobs live there); listing children is a read of recorded events.
+Subagents are sessions an agent starts with its own tool calls (``supervisor.session.children``);
+nothing here starts one. Each is a session of its own, so its transcript, its runs and its
+trace are read with the session routes under its id, and a person stops one with
+``POST /v1/sessions/{id}/abort`` and messages a continuable one with
+``POST /v1/sessions/{id}/messages`` (``supervisor.api.sessions``).
 """
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from supervisor.api import deps
-from supervisor.api.schemas import (
-    BackgroundJobResponse,
-    ChildMessageRequest,
-    ChildRowOut,
-    ContinuableChildResponse,
-    SpawnChildResponse,
-    SubagentCommandRequest,
-)
-from supervisor.api.session_ops import domain_http_error, run_op
-from supervisor.temporal.contracts import Op
+from supervisor.api.schemas import SubagentListOut, SubagentOut
+from supervisor.session.subagent_view import SubagentView
 
 router = APIRouter(tags=["subagents"])
 
 
-async def _command(
-    request: Request, session_id: str, tenant_id: str, kind: Op, body: SubagentCommandRequest
-) -> dict[str, Any]:
-    await deps.require_session_access(tenant_id, session_id, request)
-    out = await run_op(request, session_id, tenant_id, kind, body.model_dump())
-    assert out is not None
-    return out
-
-
-@router.post(
-    "/v1/sessions/{session_id}/subagents/spawn",
-    response_model=SpawnChildResponse,
-)
-async def spawn_child(
-    session_id: str,
-    body: SubagentCommandRequest,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> SpawnChildResponse:
-    out = await _command(request, session_id, tenant_id, Op.SPAWN_CHILD, body)
-    return SpawnChildResponse(**out)
-
-
-@router.post(
-    "/v1/sessions/{session_id}/subagents/fork",
-    response_model=SpawnChildResponse,
-)
-async def fork_child(
-    session_id: str,
-    body: SubagentCommandRequest,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> SpawnChildResponse:
-    out = await _command(request, session_id, tenant_id, Op.FORK_CHILD, body)
-    return SpawnChildResponse(**out)
-
-
-@router.post(
-    "/v1/sessions/{session_id}/subagents/background",
-    response_model=BackgroundJobResponse,
-)
-async def start_background(
-    session_id: str,
-    body: SubagentCommandRequest,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> BackgroundJobResponse:
-    out = await _command(request, session_id, tenant_id, Op.START_BACKGROUND, body)
-    return BackgroundJobResponse(**out)
-
-
-@router.post(
-    "/v1/sessions/{session_id}/subagents/continuable",
-    response_model=ContinuableChildResponse,
-)
-async def start_continuable(
-    session_id: str,
-    body: SubagentCommandRequest,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> ContinuableChildResponse:
-    out = await _command(request, session_id, tenant_id, Op.START_CONTINUABLE, body)
-    return ContinuableChildResponse(**out)
-
-
-@router.post("/v1/sessions/{session_id}/children/{child_id}/message", status_code=204)
-async def send_child_message(
-    session_id: str,
-    child_id: str,
-    body: ChildMessageRequest,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> None:
-    await deps.require_session_access(tenant_id, session_id, request)
-    await run_op(
-        request,
-        session_id,
-        tenant_id,
-        Op.SEND_CHILD_MESSAGE,
-        {"child_id": child_id, "text": body.text},
+def _out(view: SubagentView) -> SubagentOut:
+    return SubagentOut(
+        id=view.id,
+        parent_id=view.parent_id,
+        depth=view.depth,
+        label=view.label,
+        task=view.task,
+        kind=view.kind,
+        mode=view.mode,
+        status=view.status,
+        outcome=view.outcome,
+        answer=view.answer,
+        answer_truncated=view.answer_truncated,
+        open=view.open,
+        call_id=view.call_id,
+        cost_usd=view.cost_usd,
+        created_at=view.created_at,
     )
 
 
-@router.post("/v1/sessions/{session_id}/children/{child_id}/interrupt", status_code=204)
-async def interrupt_child(
-    session_id: str,
-    child_id: str,
-    request: Request,
-    tenant_id: str = Depends(deps.current_tenant),
-) -> None:
-    await deps.require_session_access(tenant_id, session_id, request)
-    await run_op(request, session_id, tenant_id, Op.INTERRUPT_CHILD, {"child_id": child_id})
-
-
-@router.get(
-    "/v1/sessions/{session_id}/children",
-    response_model=list[ChildRowOut],
-)
-async def list_children(
+@router.get("/v1/sessions/{session_id}/subagents", response_model=SubagentListOut)
+async def list_subagents(
     session_id: str,
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
-    scope: str = Query(default="direct"),
-) -> list[ChildRowOut]:
+) -> SubagentListOut:
+    """Every subagent below the session (its own, theirs, and so on), each level after the
+    one above it: what it was asked, how it is doing, what it answered and what it cost."""
     await deps.require_session_access(tenant_id, session_id, request)
-    try:
-        rows = await deps.get_manager(request).list_children(
-            session_id, tenant_id=tenant_id, scope=scope
-        )
-    except Exception as exc:
-        if (http := domain_http_error(exc)) is None:
-            raise
-        raise http from exc
-    return [
-        ChildRowOut(
-            id=r.id,
-            mode=r.mode,
-            provider=r.provider,
-            parent_id=r.parent_id,
-            run_id=r.run_id,
-            label=r.label,
-            activity=r.activity,
-            depth=r.depth,
-        )
-        for r in rows
-    ]
+    views = await deps.get_manager(request).subagents(session_id)
+    return SubagentListOut(subagents=[_out(v) for v in views])
+
+
+@router.get("/v1/sessions/{session_id}/subagents/{subagent_id}", response_model=SubagentOut)
+async def get_subagent(
+    session_id: str,
+    subagent_id: str,
+    request: Request,
+    tenant_id: str = Depends(deps.current_tenant),
+) -> SubagentOut:
+    """One subagent below the session; 404 when ``subagent_id`` is not one."""
+    await deps.require_session_access(tenant_id, session_id, request)
+    views = await deps.get_manager(request).subagents(session_id, only=subagent_id)
+    if not views:
+        raise HTTPException(status_code=404, detail="subagent not found")
+    return _out(views[0])

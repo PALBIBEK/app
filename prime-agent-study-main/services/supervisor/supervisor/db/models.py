@@ -67,8 +67,10 @@ class SessionRow(Base):
     subagent_depth: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     subagent_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     subagent_label: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # How it runs: its parent waits for it (foreground) or not (background).
+    # How it runs: its parent waits for it (foreground), or not (background), or it stays for
+    # more messages (continuable); and the task it was given, as the call that started it said.
     subagent_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subagent_task: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

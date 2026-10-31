@@ -46,7 +46,6 @@ def bind_runtime_seams(
 
     gateway_url = pins.gateway_base_url or (plug.gateway_base_url if plug else None)
     mcp_url = pins.mcp_server_url or (plug.mcp_server_url if plug else None)
-    acp_url = pins.acp_base_url or (plug.acp_base_url if plug else None)
 
     # Build gateway first so MemoryProfile can share the same client instance.
     seams = build_runtime_seams(
@@ -57,8 +56,6 @@ def bind_runtime_seams(
         session_id=session_id,
         default_model=model,
         mcp_server_url=mcp_url,
-        acp_base_url=acp_url,
-        register_acp=bool(acp_url),
     )
     profile = load_pinned_memory_profile(pins, catalog)
     if profile is None:
@@ -68,9 +65,6 @@ def bind_runtime_seams(
     return build_runtime_seams(
         tool_provider=seams.tool_provider,
         prompt_assembler=seams.prompt_assembler,
-        subagent_transport=seams.subagent_transport,
         model_gateway=seams.model_gateway,
         context_memory=context_memory,
-        register_memory=False,
-        register_acp=False,
     )

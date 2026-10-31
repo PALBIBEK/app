@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import (
@@ -47,6 +47,7 @@ from supervisor.harness import (
     manifest_from_dict,
 )
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import JournalWriter, keyed_event_id
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
@@ -120,6 +121,38 @@ class SessionInfo:
     message_count: int = 0
     is_busy: bool | None = None
     total_cost: float = 0.0
+
+
+async def run_open(db: Any, session_id: str) -> bool:
+    """Whether the session's last run boundary in the journal is a start."""
+    start, end = type_name_of(RunStart), type_name_of(RunEnd)  # as stored, e.g. "RunStart"
+    last = await db.scalar(
+        select(EventRow.type)
+        .where(EventRow.session_id == session_id, EventRow.type.in_((start, end)))
+        .order_by(EventRow.seq.desc())
+        .limit(1)
+    )
+    return last == start
+
+
+async def runs_open(db: Any, session_ids: Sequence[str]) -> set[str]:
+    """Which of ``session_ids`` have a run open (``run_open`` for many, in one query)."""
+    if not session_ids:
+        return set()
+    start, end = type_name_of(RunStart), type_name_of(RunEnd)
+    boundary = EventRow.type.in_((start, end))
+    last = (
+        select(EventRow.session_id, func.max(EventRow.seq).label("seq"))
+        .where(EventRow.session_id.in_(session_ids), boundary)
+        .group_by(EventRow.session_id)
+        .subquery()
+    )
+    open_runs = await db.scalars(
+        select(EventRow.session_id)
+        .join(last, (EventRow.session_id == last.c.session_id) & (EventRow.seq == last.c.seq))
+        .where(EventRow.type == start)
+    )
+    return set(open_runs)
 
 
 def session_model(manifest: HarnessManifest, pins: SessionPins | None) -> str | None:

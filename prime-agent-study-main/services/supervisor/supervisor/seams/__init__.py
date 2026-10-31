@@ -1,4 +1,4 @@
-"""Capability seams: ToolProvider, PromptAssembler, SubagentTransport, ModelGatewayClient, ContextMemoryProvider.
+"""Capability seams: ToolProvider, PromptAssembler, ModelGatewayClient, ContextMemoryProvider.
 
 Folder Structure:
 - interfaces/  → Protocol definitions (contracts)
@@ -7,7 +7,6 @@ Folder Structure:
   - tools/     → ToolProvider implementations
   - gateway/   → ModelGatewayClient implementations
   - prompt/    → PromptAssembler implementations
-  - subagent/  → SubagentTransport implementations
   - memory/    → ContextMemoryProvider implementations
 - services/    → Additional service abstractions
 
@@ -26,7 +25,6 @@ from typing import Any
 # Import from new locations (core/)
 from supervisor.seams.core.errors import (
     BadArgs,
-    DepthExceeded,
     ProviderConflict,
     ProviderMissing,
     SeamError,
@@ -35,14 +33,9 @@ from supervisor.seams.core.errors import (
 from supervisor.seams.core.types import (
     AssembledPrompt,
     ChatMessage,
-    ChildHandle,
-    ChildInfo,
     Completion,
-    JobHandle,
     PromptBindings,
     StreamEvent,
-    SubagentRequest,
-    SubagentRunResult,
     ToolDescriptor,
     ToolInvokeContext,
     ToolResult,
@@ -59,11 +52,6 @@ from supervisor.seams.interfaces.context_memory import (
 )
 from supervisor.seams.interfaces.model_gateway import ModelCatalog, ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
-from supervisor.seams.interfaces.subagent_transport import (
-    NamedProviderRegistry,
-    SubagentTransport,
-    SubagentTransportImpl,
-)
 from supervisor.seams.interfaces.tool_provider import ToolClassifier, ToolProvider
 
 __all__ = [
@@ -72,20 +60,15 @@ __all__ = [
     # Errors (from core/)
     "BadArgs",
     "ChatMessage",
-    "ChildHandle",
-    "ChildInfo",
     # Interfaces (from interfaces/)
     "CompactionDecision",
     "CompactionPreparation",
     "CompactionResult",
     "Completion",
     "ContextMemoryProvider",
-    "DepthExceeded",
-    "JobHandle",
     "MemoryInvokeContext",
     "ModelCatalog",
     "ModelGatewayClient",
-    "NamedProviderRegistry",
     "PromptAssembler",
     "PromptBindings",
     "ProviderConflict",
@@ -93,10 +76,6 @@ __all__ = [
     "RecallBlock",
     "SeamError",
     "StreamEvent",
-    "SubagentRequest",
-    "SubagentRunResult",
-    "SubagentTransport",
-    "SubagentTransportImpl",
     "ToolClassifier",
     "ToolDescriptor",
     "ToolInvokeContext",

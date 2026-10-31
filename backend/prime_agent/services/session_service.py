@@ -22,7 +22,6 @@ from prime_agent.schemas.session import (
     RunResponse,
     SessionApprovalChoice,
     SessionApprovalOut,
-    SessionChildOut,
     SessionListResponse,
     SessionMessageRequest,
     SessionMessageResponse,
@@ -32,8 +31,8 @@ from prime_agent.schemas.session import (
     SessionStartupResponse,
     SessionToolInvokeRequest,
     SessionToolInvokeResponse,
-    SpawnSubagentRequest,
-    SpawnSubagentResponse,
+    SubagentListResponse,
+    SubagentOut,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.harness_bind_service import (
@@ -67,6 +66,14 @@ def raise_session_not_found_http(exc: SessionNotFoundError) -> None:
         status_code=status.HTTP_404_NOT_FOUND,
         detail=exc.to_dict(),
     ) from exc
+
+
+def _upstream_http(exc: AiUpstreamError) -> HTTPException:
+    """The supervisor's refusal as this API's: its status (503 when it gave none) and message."""
+    return HTTPException(
+        status_code=exc.status_code or 503,
+        detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
+    )
 
 
 class SessionService:
@@ -578,115 +585,87 @@ class SessionService:
                     detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)},
                 ) from exc
 
-    @staticmethod
-    def _product_subagent_provider(provider: str | None) -> str:
-        """Surface echo stub as lab_echo — never as long-term memory."""
-        raw = (provider or "").strip() or "lab_echo"
-        if raw == "memory":
-            return "lab_echo"
-        return raw
-
-    async def list_children(
-        self,
-        *,
-        session_id: str,
-        user_id: str,
-        identity: TenantPrincipal,
-        db: AsyncSession,
-        scope: str = "direct",
-    ) -> list[SessionChildOut]:
-        """Owner-scoped children via AiClient — never expose supervisor URL/token."""
+    async def list_subagents(
+        self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> SubagentListResponse:
+        """Every subagent below an owned session, as the supervisor lists it."""
         link = await self._get_owned(session_id, user_id, db)
         try:
-            rows = await self._client.list_session_children(
-                identity, link.ai_session_id, scope=scope
-            )
+            rows = await self._client.list_subagents(identity, link.ai_session_id)
         except AiUpstreamError as exc:
-            raise HTTPException(
-                status_code=exc.status_code or 503,
-                detail={
-                    "error_code": "AI_UPSTREAM_ERROR",
-                    "message": str(exc),
-                },
-            ) from exc
-        out: list[SessionChildOut] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            out.append(
-                SessionChildOut(
-                    id=str(row.get("id") or ""),
-                    mode=str(row.get("mode") or "spawn"),
-                    provider=self._product_subagent_provider(
-                        str(row.get("provider") or "")
-                    ),
-                    parent_id=str(row.get("parent_id") or link.ai_session_id),
-                    run_id=str(row.get("run_id") or ""),
-                    label=str(row["label"]) if row.get("label") is not None else None,
-                    activity=str(row.get("activity") or "running"),
-                    depth=int(row["depth"]) if row.get("depth") is not None else None,
-                    session_id=session_id,
-                )
-            )
-        return out
+            raise _upstream_http(exc) from exc
+        return SubagentListResponse(subagents=[SubagentOut.model_validate(row) for row in rows])
 
-    async def spawn_subagent(
+    async def _subagent(
+        self, session_id: str, subagent_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> str:
+        """``subagent_id`` (a supervisor session id) once it is known to be a subagent below
+        the caller's session ``session_id``; ``SessionNotFoundError`` when it is not."""
+        link = await self._get_owned(session_id, user_id, db)
+        try:
+            await self._client.get_subagent(identity, link.ai_session_id, subagent_id)
+        except AiUpstreamError as exc:
+            if exc.status_code == 404:
+                raise SessionNotFoundError() from exc
+            raise _upstream_http(exc) from exc
+        return subagent_id
+
+    async def stream_subagent_events(
         self,
         *,
         session_id: str,
+        subagent_id: str,
         user_id: str,
         identity: TenantPrincipal,
-        body: SpawnSubagentRequest,
+        last_event_id: str | None,
         db: AsyncSession,
-    ) -> SpawnSubagentResponse:
-        """Owner-scoped spawn via AiClient (D12 B). Product path is one-shot only."""
-        mode = (body.mode or "spawn").strip().lower()
-        if mode not in {"spawn", "one_shot", "one-shot"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "SUBAGENT_MODE_NOT_WIRED",
-                    "message": f"mode {body.mode!r} is not wired on BFF; use spawn",
-                },
-            )
-        link = await self._get_owned(session_id, user_id, db)
+    ):
+        """A subagent's own transcript, as its session's event stream."""
+        child = await self._subagent(session_id, subagent_id, user_id, identity, db)
+        try:
+            return await self._client.stream_session_events(identity, child, last_event_id=last_event_id)
+        except AiUpstreamError as exc:
+            raise _upstream_http(exc) from exc
+
+    async def message_subagent(
+        self,
+        *,
+        session_id: str,
+        subagent_id: str,
+        user_id: str,
+        identity: TenantPrincipal,
+        body: SessionMessageRequest,
+        db: AsyncSession,
+    ) -> SessionMessageResponse:
+        """The next turn of a continuable subagent (the supervisor refuses any other with 409)."""
+        child = await self._subagent(session_id, subagent_id, user_id, identity, db)
         await self._platform.ensure_ready(identity)
+        command_id = body.command_id or str(uuid4())
         try:
-            upstream = await self._client.spawn_subagent(
-                identity,
-                link.ai_session_id,
-                prompt=body.prompt,
-                description=body.description,
-                provider=body.provider,
-                mode="spawn",
-                parent_depth=body.parent_depth,
-                run_id=body.run_id,
-                tool_filter=body.tool_filter,
-                persona=body.persona,
-                depth_limit=body.depth_limit,
-                output_schema=body.output_schema,
+            upstream = await self._client.post_message(
+                identity, child, text=body.content, command_id=command_id, steer=body.steer
             )
         except AiUpstreamError as exc:
-            raise HTTPException(
-                status_code=exc.status_code or 503,
-                detail={
-                    "error_code": "AI_UPSTREAM_ERROR",
-                    "message": str(exc),
-                },
-            ) from exc
-        child_id = str(
-            upstream.get("child_session_id")
-            or upstream.get("id")
-            or upstream.get("child_id")
-            or ""
+            raise _upstream_http(exc) from exc
+        return SessionMessageResponse(
+            turn_id=str(upstream.get("turn_id") or ""),
+            command_id=command_id,
+            status=str(upstream.get("status") or "accepted"),
+            queued=upstream.get("queued") is True,
+            steered=upstream.get("steered") is True,
+            held=upstream.get("held") is True,
         )
-        return SpawnSubagentResponse(
-            child_session_id=child_id,
-            text=str(upstream["text"]) if upstream.get("text") is not None else None,
-            status=str(upstream["status"]) if upstream.get("status") is not None else None,
-            run_id=str(upstream["run_id"]) if upstream.get("run_id") is not None else None,
-            provider=self._product_subagent_provider(body.provider),
-        )
+
+    async def stop_subagent(
+        self, *, session_id: str, subagent_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> dict[str, str]:
+        """Stop the subagent's run; the session that started it is told how it ended."""
+        child = await self._subagent(session_id, subagent_id, user_id, identity, db)
+        try:
+            await self._client.abort_session(identity, child)
+        except AiUpstreamError as exc:
+            raise _upstream_http(exc) from exc
+        return {"status": "ok"}
 
     async def fork(
         self,

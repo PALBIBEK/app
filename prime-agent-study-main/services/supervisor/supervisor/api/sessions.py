@@ -278,6 +278,8 @@ async def post_message(
         raise HTTPException(status_code=503, detail="draining")
     await deps.require_session_access(tenant_id, session_id, request)
     manager = deps.get_manager(request)
+    if (refusal := await manager.refuses_messages(session_id)) is not None:
+        raise HTTPException(status_code=409, detail={"reason": "not_messageable", "message": refusal})
 
     existing = await deps.recorded_command(request, session_id, body.command_id, body.text)
     if existing is not None:

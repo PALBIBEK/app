@@ -197,7 +197,6 @@ combos = {
     "c-route-discovered": {"plug_bindings": {"gateway_base_url": "http://model-gateway:8090", "model_route": "gateway/standin-claude"}},
     "c-route-unknown": {"plug_bindings": {"gateway_base_url": "http://model-gateway:8090", "model_route": "no-such-model"}},
     "c-other-gateway-url": {"plug_bindings": {"gateway_base_url": "http://127.0.0.1:8090", "model_route": "standin-chat"}},
-    "c-acp-subagents": {"plug_bindings": {"gateway_base_url": "http://model-gateway:8090", "model_route": "standin-chat", "acp_base_url": "http://acp:9000"}},
     "c-tiny-window": {"plug_bindings": {"gateway_base_url": "http://model-gateway:8090", "model_route": "tiny-window"}},
 }
 STATE["combos"] = {}

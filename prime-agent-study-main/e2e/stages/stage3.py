@@ -58,8 +58,6 @@ BASE = local("compositions", "githi-v1") | {"sandbox_profile": SANDBOX}
 
 def composition(name: str, route: str = "standin-chat", url: str = "http://model-gateway:8090", **change: object) -> str:
     bindings = {"gateway_base_url": url, "model_route": route}
-    if "acp" in change:
-        bindings["acp_base_url"] = change.pop("acp")
     body = BASE | {"name": name, "plug_bindings": bindings} | change
     return publish("composition", body)["digest"]
 
@@ -244,6 +242,16 @@ evs = u.wait(sid, runs_ended(4), timeout=90)  # and its second
 settled = [e["data"]["text"] for e in evs if e["type"] == "subagent_notice"]
 check("[continuable] send_message gives the same child another turn, and the session is told each time",
       len(settled) == 2 and all("will do no further work unless you send it more" in t for t in settled), settled)
+r = u.get(f"/v1/sessions/{sid}/subagents")
+listed = r.json().get("subagents", []) if r.status_code == 200 else []
+check("[subagents API] lists the helper with its task, status and last answer",
+      [(a["id"], a["task"], a["kind"], a["status"]) for a in listed] == [(helper, "first task", "continuable", "ready")]
+      and bool(listed[0]["answer"]), (r.status_code, listed))
+r = u.say(helper, "a third task from the person", command_id="person-1")
+check("[subagents API] a person can message a continuable subagent", r.status_code == 202, (r.status_code, r.text[:200]))
+evs = u.wait(sid, runs_ended(5), timeout=90)  # the session is told how that turn went too
+check("[subagents API] and its session is told", len([e for e in evs if e["type"] == "subagent_notice"]) == 3,
+      types(evs)[-6:])
 
 # --- F. long-term memory tool (memory service) ---------------------------------------
 print("\n## F. remember → memory service")

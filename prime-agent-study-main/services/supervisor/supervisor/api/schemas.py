@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -163,50 +164,30 @@ class RecallMemoryResponse(BaseModel):
     token_estimate: int = 0
 
 
-class SubagentCommandRequest(BaseModel):
-    prompt: str = Field(min_length=1)
-    description: str = ""
-    provider: str = "memory"
-    parent_depth: int = 0
-    mode: str = "spawn"
-    run_id: str | None = None
-    tool_filter: list[str] | None = None
-    persona: str | None = None
-    depth_limit: int | None = None
-    output_schema: dict[str, Any] | None = None
+class SubagentOut(BaseModel):
+    """A subagent below a session (``supervisor.session.subagent_view``)."""
 
-
-class SpawnChildResponse(BaseModel):
-    child_session_id: str
-    text: str | None = None
-    status: str | None = None
-    run_id: str | None = None
-
-
-class ContinuableChildResponse(BaseModel):
-    child_id: str
-    message_id: str | None = None
-
-
-class BackgroundJobResponse(BaseModel):
-    job_id: str
-
-
-class ChildMessageRequest(BaseModel):
-    text: str = Field(min_length=1)
-
-    _text_no_nul = field_validator("text")(_no_nul)
-
-
-class ChildRowOut(BaseModel):
     id: str
-    mode: str
-    provider: str
     parent_id: str
-    run_id: str
+    depth: int
     label: str | None = None
-    activity: str = "running"
-    depth: int | None = None
+    task: str | None = None
+    kind: Literal["foreground", "background", "continuable"]
+    mode: Literal["spawn", "fork"]
+    status: Literal["starting", "running", "ready", "completed", "failed", "cancelled"]
+    """running while a run is open; ready: a continuable subagent waiting for its next
+    message; starting: before its first run; else how its run ended (``outcome``)."""
+    outcome: Literal["completed", "failed", "cancelled"] | None = None
+    answer: str | None = None
+    answer_truncated: bool = False
+    open: bool
+    call_id: str | None = None
+    cost_usd: float
+    created_at: datetime
+
+
+class SubagentListOut(BaseModel):
+    subagents: list[SubagentOut]
 
 
 class ArtifactMetadataOut(BaseModel):

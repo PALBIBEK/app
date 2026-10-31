@@ -256,7 +256,6 @@ def _assert_user_seams(pipeline: Pipeline, session_id: str) -> None:
     assert "You are MY analyst." in seams.prompt_assembler.assemble(PromptBindings()).text
     assert [t.name for t in seams.tool_provider.list_tools()] == ["edit", "read"]
     assert seams.model_gateway._base == "http://gateway:8090"
-    assert seams.subagent_transport._provider("acp") is not None
     assert seams.context_memory is not None
 
 

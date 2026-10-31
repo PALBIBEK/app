@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Response, status
@@ -17,7 +18,6 @@ from prime_agent.schemas.session import (
     RunResponse,
     SessionApprovalChoice,
     SessionApprovalOut,
-    SessionChildOut,
     SessionListResponse,
     SessionMessageRequest,
     SessionMessageResponse,
@@ -26,8 +26,7 @@ from prime_agent.schemas.session import (
     SessionStartupResponse,
     SessionToolInvokeRequest,
     SessionToolInvokeResponse,
-    SpawnSubagentRequest,
-    SpawnSubagentResponse,
+    SubagentListResponse,
 )
 from prime_agent.services.ai_client import AiPlatformNotReadyError
 from prime_agent.services.harness_bind_service import BindDomainError, raise_bind_http
@@ -201,24 +200,12 @@ STREAMS = StreamSlots(max_streams_per_user())
 """Event streams each person holds open in this process (``prime_agent.web.stream_slots``)."""
 
 
-@router.get("/{session_id}/events")
-async def stream_events(
-    session_id: str,
-    db: DbSession,
-    current_user: CurrentUser,
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-) -> StreamingResponse:
-    identity = TenantPrincipal.from_user(current_user)
-    slot = STREAMS.claim(current_user.id)
+async def _event_stream(user_id: str, opened: Callable[[], Awaitable[AsyncIterator[bytes]]]) -> StreamingResponse:
+    """``opened``'s server-sent events, in one of the person's stream slots."""
+    slot = STREAMS.claim(user_id)
     try:
         try:
-            byte_iter = await _service().stream_events(
-                session_id=session_id,
-                user_id=current_user.id,
-                identity=identity,
-                last_event_id=last_event_id,
-                db=db,
-            )
+            byte_iter = await opened()
         except SessionNotFoundError as exc:
             raise_session_not_found_http(exc)
     except BaseException:
@@ -233,6 +220,26 @@ async def stream_events(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get("/{session_id}/events")
+async def stream_events(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    identity = TenantPrincipal.from_user(current_user)
+    return await _event_stream(
+        current_user.id,
+        lambda: _service().stream_events(
+            session_id=session_id,
+            user_id=current_user.id,
+            identity=identity,
+            last_event_id=last_event_id,
+            db=db,
+        ),
     )
 
 
@@ -328,45 +335,61 @@ async def respond_session_approval(
         raise_session_not_found_http(exc)
 
 
-@router.get(
-    "/{session_id}/children",
-    response_model=list[SessionChildOut],
-)
-async def list_session_children(
-    session_id: str,
-    db: DbSession,
-    current_user: CurrentUser,
-    scope: Annotated[str, Query()] = "direct",
-) -> list[SessionChildOut]:
-    """List child subagents for an owned session via AiClient (D12 B — no browser→supervisor)."""
+@router.get("/{session_id}/subagents", response_model=SubagentListResponse)
+async def list_session_subagents(session_id: str, db: DbSession, current_user: CurrentUser) -> SubagentListResponse:
+    """Every subagent below the session: what each was asked, how it is doing, what it
+    answered and what it cost. Subagents are sessions the agent starts with its own tool
+    calls; nothing here starts one."""
     identity = TenantPrincipal.from_user(current_user)
     try:
-        return await _service().list_children(
-            session_id=session_id,
-            user_id=current_user.id,
-            identity=identity,
-            db=db,
-            scope=scope,
+        return await _service().list_subagents(
+            session_id=session_id, user_id=current_user.id, identity=identity, db=db
         )
     except SessionNotFoundError as exc:
         raise_session_not_found_http(exc)
 
 
-@router.post(
-    "/{session_id}/subagents/spawn",
-    response_model=SpawnSubagentResponse,
-)
-async def spawn_session_subagent(
+@router.get("/{session_id}/subagents/{subagent_id}/events")
+async def stream_subagent_events(
     session_id: str,
-    body: SpawnSubagentRequest,
+    subagent_id: str,
     db: DbSession,
     current_user: CurrentUser,
-) -> SpawnSubagentResponse:
-    """Spawn a child subagent for an owned session via AiClient (D12 B)."""
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """A subagent's own transcript, as the session's events stream reads."""
+    identity = TenantPrincipal.from_user(current_user)
+    return await _event_stream(
+        current_user.id,
+        lambda: _service().stream_subagent_events(
+            session_id=session_id,
+            subagent_id=subagent_id,
+            user_id=current_user.id,
+            identity=identity,
+            last_event_id=last_event_id,
+            db=db,
+        ),
+    )
+
+
+@router.post(
+    "/{session_id}/subagents/{subagent_id}/messages",
+    response_model=SessionMessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def message_subagent(
+    session_id: str,
+    subagent_id: str,
+    body: SessionMessageRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> SessionMessageResponse:
+    """The next turn of a continuable subagent; any other takes no messages (409)."""
     identity = TenantPrincipal.from_user(current_user)
     try:
-        return await _service().spawn_subagent(
+        return await _service().message_subagent(
             session_id=session_id,
+            subagent_id=subagent_id,
             user_id=current_user.id,
             identity=identity,
             body=body,
@@ -376,6 +399,25 @@ async def spawn_session_subagent(
         raise_session_not_found_http(exc)
     except AiPlatformNotReadyError as exc:
         raise_ai_not_ready_http(exc)
+
+
+@router.post("/{session_id}/subagents/{subagent_id}/abort")
+async def stop_subagent(
+    session_id: str, subagent_id: str, db: DbSession, current_user: CurrentUser
+) -> dict[str, str]:
+    """Stop the subagent's run; the session that started it is told how it ended."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().stop_subagent(
+            session_id=session_id,
+            subagent_id=subagent_id,
+            user_id=current_user.id,
+            identity=identity,
+            db=db,
+        )
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
 
 @router.post(
     "/{session_id}/fork",

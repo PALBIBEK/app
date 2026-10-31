@@ -205,7 +205,7 @@ jobs:
       - name: Databases and service hostnames
         run: |
           PGPASSWORD=yal psql -h 127.0.0.1 -p 5433 -U yal -d supervisor -c "create database memory"
-          echo "127.0.0.1 model-gateway acp temporal memory-service" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 model-gateway temporal memory-service" | sudo tee -a /etc/hosts
       - name: Start the stack
         run: $PROJECT/e2e/stack/up.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
       - name: The migrated schema matches the models

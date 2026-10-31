@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from supervisor.agent.events import (
     ApprovalRequired,
@@ -37,7 +37,7 @@ from supervisor.catalog.services.resolver import (
     require_tenant_access,
     resolve_composition,
 )
-from supervisor.db.models import EventRow, ScopeRow, SessionIndexRow, SessionRow
+from supervisor.db.models import ScopeRow, SessionIndexRow, SessionRow
 from supervisor.hands import HandRecipe, HandWorkspace
 from supervisor.hands.keys import hand_key
 from supervisor.harness import (
@@ -49,7 +49,6 @@ from supervisor.harness.core.errors import UnknownHarness
 from supervisor.harness.repository import harness_owner, sync_harness_version
 from supervisor.harness.repository import visible_to as harness_visible_to
 from supervisor.harness.services.compat_checker import capabilities_for, check
-from supervisor.journal.serde import type_name_of
 from supervisor.memory.binding import MemoryRequest, agent_pin, long_term_agent, resolve_binding
 from supervisor.memory.client import (
     MemoryRefused,
@@ -86,12 +85,12 @@ logger = logging.getLogger(__name__)
 # Re-exported: callers import these from here.
 from supervisor.session.errors import (  # noqa: F401
     MemoryNotConfigured,
+    OperationRetired,
     SessionAwaitingApproval,
     SessionError,
     SessionMoved,
     SessionNotFound,
     SessionTerminated,
-    SubagentNotConfigured,
     ToolInvokeNotConfigured,
     WorkspaceUnavailable,
 )
@@ -100,41 +99,11 @@ from supervisor.session.manager_base import (  # noqa: F401
     SessionInfo,
     ToolInvokeOutcome,
     _summarizer_model,
+    run_open,
+    runs_open,
     session_model,
 )
 from supervisor.session.manager_upkeep import UpkeepOps
-
-
-async def _run_open(db: Any, session_id: str) -> bool:
-    """Whether the session's last run boundary in the journal is a start."""
-    start, end = type_name_of(RunStart), type_name_of(RunEnd)  # as stored, e.g. "RunStart"
-    last = await db.scalar(
-        select(EventRow.type)
-        .where(EventRow.session_id == session_id, EventRow.type.in_((start, end)))
-        .order_by(EventRow.seq.desc())
-        .limit(1)
-    )
-    return last == start
-
-
-async def _runs_open(db: Any, session_ids: Sequence[str]) -> set[str]:
-    """Which of ``session_ids`` have a run open (``_run_open`` for many, in one query)."""
-    if not session_ids:
-        return set()
-    start, end = type_name_of(RunStart), type_name_of(RunEnd)
-    boundary = EventRow.type.in_((start, end))
-    last = (
-        select(EventRow.session_id, func.max(EventRow.seq).label("seq"))
-        .where(EventRow.session_id.in_(session_ids), boundary)
-        .group_by(EventRow.session_id)
-        .subquery()
-    )
-    open_runs = await db.scalars(
-        select(EventRow.session_id)
-        .join(last, (EventRow.session_id == last.c.session_id) & (EventRow.seq == last.c.seq))
-        .where(EventRow.type == start)
-    )
-    return set(open_runs)
 
 
 class SessionManager(UpkeepOps):
@@ -658,7 +627,7 @@ class SessionManager(UpkeepOps):
             # Temporal workers run the session in steps, so a runtime here (if any) is not
             # the one working: the journal says whether a run is open (its last run_start
             # has no run_end after it).
-            is_busy = await _run_open(db, session_id) or bool(is_busy)
+            is_busy = await run_open(db, session_id) or bool(is_busy)
             return SessionInfo(
                 session_id=row.id,
                 tenant_id=row.tenant_id,
@@ -695,7 +664,7 @@ class SessionManager(UpkeepOps):
             query = query.where(SessionRow.parent_session_id.is_(None))
         async with self._db() as db:
             rows = (await db.execute(query)).all()
-            busy = await _runs_open(db, [row.id for row, _ in rows])
+            busy = await runs_open(db, [row.id for row, _ in rows])
         return [
             SessionInfo(
                 session_id=row.id,
@@ -913,12 +882,14 @@ class SessionManager(UpkeepOps):
         label: str | None,
         seed_until: int | None = None,
         kind: str = "foreground",
+        task: str | None = None,
     ) -> None:
         """Make ``child_id``, a subagent of ``parent_id`` (``supervisor.session.children``):
         its parent's pins, owner and workspace, one level deeper, working in its root's
         sandbox, without long-term memory of its own (githi's child has none). ``seed_until``:
         it starts with its parent's journal up to that seq (a fork); None: empty. ``kind``:
-        foreground (its parent waits for it) or background. Safe to retry with the same id."""
+        foreground (its parent waits for it), background or continuable; ``task``: what it
+        was asked. Safe to retry with the same id."""
         parent = await self._get_session_row(parent_id)
         events = (
             []
@@ -936,6 +907,7 @@ class SessionManager(UpkeepOps):
             subagent_mode=mode,
             subagent_label=label,
             subagent_kind=kind,
+            subagent_task=task,
         )
 
     async def _copy_session(

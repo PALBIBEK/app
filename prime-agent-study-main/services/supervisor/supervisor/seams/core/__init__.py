@@ -2,7 +2,6 @@
 
 from supervisor.seams.core.errors import (
     BadArgs,
-    DepthExceeded,
     ProviderConflict,
     ProviderMissing,
     SeamError,
@@ -11,14 +10,9 @@ from supervisor.seams.core.errors import (
 from supervisor.seams.core.types import (
     AssembledPrompt,
     ChatMessage,
-    ChildHandle,
-    ChildInfo,
     Completion,
-    JobHandle,
     PromptBindings,
     StreamEvent,
-    SubagentRequest,
-    SubagentRunResult,
     ToolDescriptor,
     ToolInvokeContext,
     ToolResult,
@@ -30,11 +24,7 @@ __all__ = [
     # Errors
     "BadArgs",
     "ChatMessage",
-    "ChildHandle",
-    "ChildInfo",
     "Completion",
-    "DepthExceeded",
-    "JobHandle",
     "PromptBindings",
     "ProviderConflict",
     "ProviderMissing",
