@@ -43,6 +43,7 @@ from supervisor.temporal.contracts import (
     CANCEL_CHILD_CALL_SIGNAL,
     CHILD_CALL_DONE_SIGNAL,
     CHILD_CALL_SIGNAL,
+    CHILD_REPORT_SIGNAL,
     CHILD_SETTLED_SIGNAL,
     CLOSE_SIGNAL,
     CLOSED_STATUSES,
@@ -67,6 +68,7 @@ from supervisor.temporal.contracts import (
     ChildCall,
     ChildCallDone,
     ChildInput,
+    ChildReport,
     ChildSettled,
     Compacted,
     CreateRequest,
@@ -1457,10 +1459,12 @@ class AgentSessionWorkflow:
         if (child := begun.child_id) is None:
             return True  # answered without a child (its arguments, the depth cap, a denial)
         if call.in_background:
-            # Answered already with the child's id; the session hears when it settles.
+            # Answered already with the child's id; the session hears when it settles (a
+            # continuable child, each time it does).
             await self._start_child(begun, call.call_id)
-            if child not in self._state.background:
-                self._state.background.append(child)
+            kept = self._state.continuable if begun.kind == "continuable" else self._state.background
+            if child not in kept:
+                kept.append(child)
             return False
         self._waiting_for.add(child)
         try:
@@ -1558,8 +1562,8 @@ class AgentSessionWorkflow:
             return
         if settled.child_id not in self._state.children:
             return  # ended already
-        # Nothing waits (a background child, or a call that was stopped): record how it
-        # ended, then end it.
+        # Nothing waits (a background or continuable child, or a call that was stopped):
+        # record how it ended; end it unless it is continuable (it waits for more).
         try:
             await self._session_activity(
                 Activity.SUBAGENT_END,
@@ -1568,28 +1572,52 @@ class AgentSessionWorkflow:
             )
         except ActivityError as err:
             workflow.logger.warning("could not record how subagent %s ended: %s", settled.child_id, err)
-        await self._close_child(settled.child_id)
-        if settled.child_id in self._state.background:
-            self._state.background.remove(settled.child_id)
-            self._notify(settled)
+        if settled.child_id in self._state.continuable and settled.error is None:
+            told = True
+        else:
+            await self._close_child(settled.child_id)
+            told = settled.child_id in self._state.background or settled.child_id in self._state.continuable
+            for kept in (self._state.background, self._state.continuable):
+                with contextlib.suppress(ValueError):
+                    kept.remove(settled.child_id)
+        if told:
+            self._tell(
+                Message(
+                    f"subagent-settled:{settled.child_id}:{settled.run_id}",
+                    settled.error or "a subagent finished",
+                    notice_from=settled.child_id,
+                    notice_run=settled.run_id,
+                ),
+                stopped=settled.child_id in self._state.stopped,
+            )
         with contextlib.suppress(ValueError):
             self._state.stopped.remove(settled.child_id)
 
-    def _notify(self, settled: ChildSettled) -> None:
-        """Tell the model a background subagent settled (githi's settlement notice): at the
-        working run's next step, or, with the session idle, as a run of its own."""
-        notice = Message(
-            f"subagent-settled:{settled.child_id}:{settled.run_id}",
-            settled.error or "a background subagent finished",
-            notice_from=settled.child_id,
+    @workflow.signal(name=CHILD_REPORT_SIGNAL)
+    def child_report(self, report: ChildReport) -> None:
+        """A continuable subagent reported (githi's ``report``): told as it arrives."""
+        if report.child_id not in self._state.continuable:
+            return
+        self._tell(
+            Message(
+                f"subagent-report:{report.report_id}",
+                report.text,
+                notice_from=report.child_id,
+                notice_text=report.text,
+            )
         )
+
+    def _tell(self, notice: Message, *, stopped: bool = False) -> None:
+        """Tell the model what a subagent said (githi's next-turn and follow-up notices): at
+        the working run's next step, or, with the session idle, as a run of its own. A
+        subagent this session's stop ended starts no run: it is told in the next one."""
         if notice.command_id in self._state.seen_commands or self._terminate_requested:
             return
         self._remember(notice.command_id)
         if self._steerable is not None:
             self._state.steering.append(notice)
-        elif settled.child_id in self._state.stopped:
-            self._state.held.append(notice)  # the user stopped the session: no run starts for it
+        elif stopped:
+            self._state.held.append(notice)
         else:
             self._state.pending.append(notice)
 
@@ -1761,7 +1789,8 @@ class AgentSessionWorkflow:
             if task is not None and not task.done():
                 task.cancel()
         for child in self._state.children:
-            if child in self._state.background and child not in self._state.stopped:
+            told_later = child in self._state.background or child in self._state.continuable
+            if told_later and child not in self._state.stopped:
                 self._state.stopped.append(child)
             asyncio.ensure_future(self._signal(child, "abort"))
 

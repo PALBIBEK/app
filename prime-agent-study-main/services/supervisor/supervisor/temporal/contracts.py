@@ -49,6 +49,8 @@ CHILD_SETTLED_SIGNAL = "child_settled"
 CHILD_CALL_SIGNAL = "child_call"
 CHILD_CALL_DONE_SIGNAL = "child_call_done"
 CANCEL_CHILD_CALL_SIGNAL = "cancel_child_call"
+# A continuable subagent's ``report``: told to the session that started it as it arrives.
+CHILD_REPORT_SIGNAL = "child_report"
 # Sent by a parent to end a subagent's session (its run, if one is going, is stopped first).
 CLOSE_SIGNAL = "close"
 
@@ -206,9 +208,12 @@ class Message:
     # pi's steering: sent while a run works, it is placed in that run at its next step
     # (the round's calls not yet run are skipped) instead of waiting for the run to end.
     steer: bool = False
-    # Not the user's words: a background subagent of this session settled (this is its id),
-    # and the model is told how (a ``SubagentNotice``), in the working run or as a run.
+    # Not the user's words: a subagent of this session (this is its id) settled after its run
+    # ``notice_run``, or reported ``notice_text``; the model is told (a ``SubagentNotice``),
+    # in the working run or as a run.
     notice_from: str | None = None
+    notice_run: str | None = None
+    notice_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,6 +455,18 @@ class SubagentBegun:
     child_id: str | None
     root_id: str | None = None
     prompt: str = ""
+    # foreground (the call waits for it), background (a job), or continuable (it stays).
+    kind: str = "foreground"
+
+
+@dataclass(frozen=True, slots=True)
+class ChildReport:
+    """What a continuable subagent reported (githi's ``report``) mid-turn: ``text`` as its
+    parent's model reads it."""
+
+    child_id: str
+    report_id: str
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,9 +708,11 @@ class Carried:
     tokens_used: int = 0
     seconds_used: float = 0.0
     # Subagent sessions this one started that are still open (stopped and ended with it),
-    # and those of them running in the background (the session is told when each settles).
+    # those of them running in the background (the session is told when each settles), and
+    # its continuable ones (told each time one settles; they stay until the session ends).
     children: list[str] = field(default_factory=list)
     background: list[str] = field(default_factory=list)
+    continuable: list[str] = field(default_factory=list)
     # Background subagents this session's stop reached (their end wakes no run), and the
     # notices of those that settled: told at the next run, never waking one.
     stopped: list[str] = field(default_factory=list)

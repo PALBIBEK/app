@@ -19,7 +19,10 @@ HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
 COMMON = {"semver": "1.0.0", "protocol_version": 1, "status": "offered"}
 GITHI_TOOLS = {"echo", "grep", "ls", "read", "remember", "write"}
-PLATFORM = {"memory", "history", "subagent", "subagent_fork", "job_output", "job_kill"}
+PLATFORM = {
+    "memory", "history", "subagent", "subagent_fork", "job_output", "job_kill",
+    "subagent_continuable", "send_message", "interrupt_agent", "list_agents",
+}
 results: list[tuple[str, bool, str]] = []
 u = User("t1", "alice")
 
@@ -230,6 +233,17 @@ run, _, _ = turn(sid, "/tool job_output " + json.dumps({"job_id": job}), 4)
 output = ((payloads(run, "ToolEnd") or [{}])[0].get("result") or {}).get("payload") or {}
 check("[background] job_output reads its status and closing message",
       output.get("status") == "completed" and bool(output.get("text")), output)
+
+sid = session("s-continuable", composition("s-continuable"))
+run, _, _ = turn(sid, '/tool subagent_continuable {"prompt": "first task", "description": "helper"}', 1)
+helper = (((payloads(run, "ToolEnd") or [{}])[0].get("result") or {}).get("payload") or {}).get("subagent_id")
+check("[continuable] starts a child that stays", bool(helper), helper)
+u.wait(sid, runs_ended(2), timeout=90)  # told it finished its first turn
+run, _, _ = turn(sid, "/tool send_message " + json.dumps({"subagent_id": helper, "message": "second task"}), 3)
+evs = u.wait(sid, runs_ended(4), timeout=90)  # and its second
+settled = [e["data"]["text"] for e in evs if e["type"] == "subagent_notice"]
+check("[continuable] send_message gives the same child another turn, and the session is told each time",
+      len(settled) == 2 and all("will do no further work unless you send it more" in t for t in settled), settled)
 
 # --- F. long-term memory tool (memory service) ---------------------------------------
 print("\n## F. remember → memory service")

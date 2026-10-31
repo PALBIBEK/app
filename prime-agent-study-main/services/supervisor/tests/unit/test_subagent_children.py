@@ -6,7 +6,13 @@ import pytest
 
 from supervisor.agent.events import Envelope, ErrorEvent, MessageEnd, RunStart, ToolEnd, TurnEnd
 from supervisor.session.children import ChildOutcome, graded, last_outcome, status_of
-from supervisor.temporal.subagent_tools import DepthExceeded, delegated, task
+from supervisor.temporal.subagent_tools import (
+    DepthExceeded,
+    continuable_settlement,
+    delegated,
+    report_notice,
+    task,
+)
 from supervisor.tools import InvalidArguments
 
 
@@ -77,3 +83,16 @@ def test_a_task_needs_a_prompt_and_room_below_the_depth_cap() -> None:
         task("subagent_fork", {"prompt": "x"}, depth=1, max_depth=1, background_allowed=True)
     with pytest.raises(InvalidArguments, match="may not start background"):
         task("subagent", {"prompt": "x", "run_in_background": True}, depth=0, max_depth=3, background_allowed=False)
+
+
+def test_a_continuable_child_and_what_its_parent_is_told() -> None:
+    assert delegated("subagent_continuable", {"prompt": "x"}) == ("spawn", True)
+    kept = task("subagent_continuable", {"prompt": "x", "description": "helper"}, depth=0, max_depth=3, background_allowed=True)
+    assert (kept.kind, kept.label) == ("continuable", "helper")
+    assert continuable_settlement("c1", "completed", "all done") == (
+        "Background subagent c1 finished and will do no further work unless you send it more.\n"
+        "Its closing message:\nall done"
+    )
+    assert continuable_settlement("c1", "cancelled", "").startswith("Background subagent c1 was stopped before it finished.")
+    assert continuable_settlement("c1", "failed", "x").startswith("Background subagent c1 failed before it finished.")
+    assert report_notice("c1", " found 3 \n") == "Background subagent c1 reported:\nfound 3"

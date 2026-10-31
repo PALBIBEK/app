@@ -243,7 +243,11 @@ holds every message, call and result: clients read it, and a retried step reads 
   child settles the parent's model is told how it went: at the working run's next step, or in a
   run of its own when the session is idle (a stop's cancelled children wait for the next run).
   `job_output` reads a job's status and closing message, `job_kill` stops it, and at most 8 run
-  at once. A round's subagents work at once, children may start their own while shallower than
+  at once. `subagent_continuable` starts a child that stays: `send_message` gives it another turn
+  (queued behind the one it is running, or waking it), `interrupt_agent` stops its current turn
+  (what is queued stays), `list_agents` lists them, and the session is told each time one
+  settles. A continuable child may `report` to its parent mid-turn; the parent hears it at its
+  next step, or wakes for it. A round's subagents work at once, children may start their own while shallower than
   `subagents.max_depth`, a child's spend counts toward its parent's cost cap, and stopping or
   ending the parent stops its children. Each child's journal can be read like any session's.
   A child is part of its session everywhere else: its run is nested in the trace of the run that
