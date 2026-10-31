@@ -20,7 +20,7 @@ import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session, ToolCallView } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
-import { SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
+import { anyActive, SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { useAuthStore } from '@/lib/store/authStore';
 import { cn, formatMoney } from '@/lib/utils';
@@ -114,7 +114,7 @@ export function SessionChat({
   const nameOf = new Map((subagents ?? []).map((s) => [s.id, subagentName(s)]));
   // A subagent's call that waits on a person shows here too: it is answered from this session.
   const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
-    active: state.running || (subagents?.length ?? 0) > 0,
+    active: state.running || anyActive(subagents ?? []), // only a working subagent asks
   });
   const renderTool = (tool: ToolCallView): JSX.Element =>
     SUBAGENT_TOOLS.has(tool.name) ? (
