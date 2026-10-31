@@ -19,7 +19,7 @@ HARNESS = Path(os.environ["REPO"]) / "harness"
 REAL_IMAGE = "sha256:" + hashlib.sha256(b"githi-runtime-image").hexdigest()
 COMMON = {"semver": "1.0.0", "protocol_version": 1, "status": "offered"}
 GITHI_TOOLS = {"echo", "grep", "ls", "read", "remember", "write"}
-PLATFORM = {"memory", "history", "subagent", "subagent_fork", "subagent_result"}
+PLATFORM = {"memory", "history", "subagent", "subagent_fork", "job_output", "job_kill"}
 results: list[tuple[str, bool, str]] = []
 u = User("t1", "alice")
 
@@ -207,7 +207,7 @@ run, _, calls = turn(sid, '/tool ls {"path": "."}', 1)
 check("[different gateway URL] still answers (chat-completions client)", "run_end" in types(run) and bool(calls), (types(run), [c["path"] for c in calls]))
 
 # --- E. subagents -----------------------------------------------------------------
-print("\n## E. Subagents: child sessions, and background jobs on the pinned transport")
+print("\n## E. Subagents are child sessions (githi's subagent, run_in_background, job_output)")
 sid = session("s-nested", composition("s-nested"))
 mark = relay_mark()
 run, _, calls = turn(sid, '/tool subagent {"prompt": "summarise the repo", "description": "summary"}', 1)
@@ -218,13 +218,18 @@ check("[child] the child's model call went through the gateway, as a subagent",
       len(calls))
 check("[child] the child's answer comes back to the parent", bool(end.get("output")), end)
 
-run, allev, _ = turn(sid, '/tool subagent {"prompt": "long background task", "background": true}', 2)
+run, _, _ = turn(sid, '/tool subagent {"prompt": "long background task", "run_in_background": true}', 2)
 started = ((payloads(run, "ToolEnd") or [{}])[0].get("result") or {}).get("payload") or {}
-check("[background] starts and returns a job_id", started.get("status") == "started" and started.get("job_id"), started)
-u.wait(sid, lambda evs: any(e["type"] == "job_end" for e in evs), timeout=60)
-run, _, calls = turn(sid, "anything new?", 3)
-announced = [c for c in calls if "Background subagents you started have finished" in json.dumps(c["body"])]
-check("[background] its result is announced to the model on the next turn", bool(announced), len(calls))
+job = started.get("job_id")
+check("[background] starts a child and returns its id as a job id", started.get("status") == "started" and job, started)
+evs = u.wait(sid, runs_ended(3), timeout=90)  # its end wakes the session, which is told how it went
+notices = [e["data"] for e in evs if e["type"] == "subagent_notice"]
+check("[background] its end is told to the model, in a run of its own",
+      bool(notices) and "finished (completed)" in notices[0].get("text", ""), notices)
+run, _, _ = turn(sid, "/tool job_output " + json.dumps({"job_id": job}), 4)
+output = ((payloads(run, "ToolEnd") or [{}])[0].get("result") or {}).get("payload") or {}
+check("[background] job_output reads its status and closing message",
+      output.get("status") == "completed" and bool(output.get("text")), output)
 
 # --- F. long-term memory tool (memory service) ---------------------------------------
 print("\n## F. remember → memory service")

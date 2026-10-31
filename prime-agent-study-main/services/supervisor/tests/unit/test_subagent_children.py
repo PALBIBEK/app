@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from supervisor.agent.events import Envelope, ErrorEvent, MessageEnd, RunStart, ToolEnd, TurnEnd
-from supervisor.session.children import ChildOutcome, graded, last_outcome
-from supervisor.temporal.subagent_tools import DepthExceeded, foreground, task
+from supervisor.session.children import ChildOutcome, graded, last_outcome, status_of
+from supervisor.temporal.subagent_tools import DepthExceeded, delegated, task
 from supervisor.tools import InvalidArguments
 
 
@@ -34,6 +34,19 @@ def test_the_last_runs_outcome_is_read() -> None:
 
 
 @pytest.mark.parametrize(
+    ("outcome", "status"),
+    [
+        (ChildOutcome("stop", "an answer"), "completed"),
+        (ChildOutcome("stop", ""), "failed"),
+        (ChildOutcome("aborted", "half"), "cancelled"),
+        (ChildOutcome("error", "", "ModelError"), "failed"),
+    ],
+)
+def test_a_childs_job_status(outcome: ChildOutcome, status: str) -> None:
+    assert status_of(outcome) == status
+
+
+@pytest.mark.parametrize(
     ("outcome", "ok", "says"),
     [
         (ChildOutcome("stop", "the answer"), True, "the answer"),
@@ -50,15 +63,17 @@ def test_only_an_answer_is_a_success(outcome: ChildOutcome, ok: bool, says: str)
 
 
 def test_which_calls_start_a_child() -> None:
-    assert foreground("subagent", {"prompt": "x"}) == "spawn"
-    assert foreground("subagent_fork", {"prompt": "x"}) == "fork"
-    assert foreground("subagent", {"prompt": "x", "background": True}) is None, "a job, not a child"
-    assert foreground("ls", {}) is None
+    assert delegated("subagent", {"prompt": "x"}) == ("spawn", False)
+    assert delegated("subagent_fork", {"prompt": "x", "run_in_background": True}) == ("fork", True)
+    assert delegated("ls", {}) is None
 
 
 def test_a_task_needs_a_prompt_and_room_below_the_depth_cap() -> None:
-    assert task("subagent", {"prompt": " do it ", "description": "it"}, depth=0, max_depth=1).prompt == "do it"
+    ok = task("subagent", {"prompt": " do it ", "description": "it"}, depth=0, max_depth=1, background_allowed=True)
+    assert ok.prompt == "do it" and ok.label == "it" and not ok.background
     with pytest.raises(InvalidArguments):
-        task("subagent", {"prompt": "  "}, depth=0, max_depth=3)
+        task("subagent", {"prompt": "  "}, depth=0, max_depth=3, background_allowed=True)
     with pytest.raises(DepthExceeded, match="depth 2 but max_depth is 1"):
-        task("subagent_fork", {"prompt": "x"}, depth=1, max_depth=1)
+        task("subagent_fork", {"prompt": "x"}, depth=1, max_depth=1, background_allowed=True)
+    with pytest.raises(InvalidArguments, match="may not start background"):
+        task("subagent", {"prompt": "x", "run_in_background": True}, depth=0, max_depth=3, background_allowed=False)

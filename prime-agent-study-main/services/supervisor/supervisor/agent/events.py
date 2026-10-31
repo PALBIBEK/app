@@ -290,6 +290,17 @@ class BackgroundResults:
     category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
 
 
+@dataclass(frozen=True)
+class SubagentNotice:
+    """What a subagent tells the session that started it without being asked: that a
+    background subagent finished, and how (githi's settlement notice). The model reads it as
+    the next thing said to it, where it arrived (``supervisor.session.children``)."""
+
+    child_session_id: str
+    text: str
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
 # ── Hands (sandboxes) ──────────────────────────────────────────────────────────
 
 
@@ -453,6 +464,7 @@ AgentEvent = (
     | ModelRetry
     | ProjectContext
     | WorkspaceRestored
+    | SubagentNotice
     | ErrorEvent
 )
 

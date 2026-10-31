@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import json
 import uuid
 from collections.abc import Callable
 from decimal import Decimal
@@ -22,10 +21,8 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
 from supervisor.agent.events import (
-    BackgroundResults,
     CompactionEnd,
     HandProvisioned,
-    JobEnd,
     MemoryRecall,
     SubagentEnd,
     SubagentStart,
@@ -45,10 +42,9 @@ from supervisor.catalog.repository import persist_offer
 from supervisor.hands import HandWorkspace
 from supervisor.seams.compaction.core import is_summary
 from supervisor.session.workspaces import session_workspace
-from supervisor.temporal.contracts import CreateSession, Message, job_ids
+from supervisor.temporal.contracts import CreateSession, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.sessions import SessionCommandError
-from supervisor.temporal.steps import run_id_for
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from tests.support.githi_env import FAST, WRITE, Env, payloads, run_ended
@@ -58,7 +54,7 @@ from tests.support.workflow_histories import replayable_histories
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 PINNED_TOOLS = ["echo", "edit", "find", "grep", "ls", "read", "remember", "write"]  # harness/tool_sets/githi-tools
-PLATFORM_TOOLS = ["memory", "history", "subagent", "subagent_fork", "subagent_result"]
+PLATFORM_TOOLS = ["memory", "history", "subagent", "subagent_fork", "job_output", "job_kill"]
 
 
 @dataclasses.dataclass
@@ -563,32 +559,6 @@ async def test_githi_delegates_to_a_child_session(
     assert tool.result["ok"] and tool.result["payload"]["text"] == end.output
 
 
-async def test_a_background_subagent_runs_as_a_durable_job(
-    env: Env, model: Callable[..., ScriptedGateway]
-) -> None:
-    gateway = model(("subagent", {"prompt": "long task", "background": True}))
-    state = await env.state()
-    async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await env.create(state)
-        await env.sessions.submit(sid, Message("c1", "start it"))
-        events = await env.wait_for(state, sid, run_ended())
-        started = payloads(events, ToolEnd)[0].result["payload"]
-        job_id, _ = job_ids(f"{run_id_for(sid, 'c1')}:call-0-0")
-        assert started == {"job_id": job_id, "status": "started"}
-        events = await env.wait_for(
-            state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs)
-        )
-        gateway.calls = [("subagent_result", {"job_id": job_id})]
-        await env.sessions.submit(sid, Message("c2", "is it done?"))
-        events = await env.wait_for(state, sid, run_ended(2))
-
-    result = payloads(events, ToolEnd)[-1].result
-    job = payloads(events, JobEnd)[0]
-    assert result["ok"] and result["payload"] == json.loads(
-        json.dumps({"job_id": job_id, "status": job.stop_reason, "text": job.output})
-    )
-
-
 async def test_a_subagents_model_call_counts_toward_the_sessions_cost(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
@@ -604,43 +574,3 @@ async def test_a_subagents_model_call_counts_toward_the_sessions_cost(
 
     assert payloads(events, SubagentStart)[0].provider == "session"
     assert spent.total_cost_usd == Decimal("0.03")
-
-
-async def test_a_background_subagents_model_call_counts_toward_the_sessions_cost(
-    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ALLOW_LAB_ECHO", "0")
-    model(("subagent", {"prompt": "long task", "background": True}), cost_per_call=0.01)
-    state = await env.state()
-    async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await env.create(state)
-        await env.sessions.submit(sid, Message("c1", "start it"))
-        await env.wait_for(state, sid, run_ended())
-        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
-        spent = await state.manager._budget.check(sid)
-
-    assert spent.total_cost_usd == Decimal("0.03"), "two model steps and the job's call"
-
-
-async def test_a_finished_background_subagent_is_announced_once(
-    env: Env, model: Callable[..., ScriptedGateway]
-) -> None:
-    gateway = model(("subagent", {"prompt": "long task", "background": True}))
-    calls = recording(gateway)
-    state = await env.state()
-    async with session_worker(env.client, state, task_queue=env.queue):
-        sid = await env.create(state)
-        await env.sessions.submit(sid, Message("c1", "start it"))
-        await env.wait_for(state, sid, run_ended())
-        await env.wait_for(state, sid, lambda evs: any(isinstance(e.payload, JobEnd) for e in evs))
-        gateway.calls = []
-        await env.sessions.submit(sid, Message("c2", "anything new?"))
-        await env.wait_for(state, sid, run_ended(2))
-        await env.sessions.submit(sid, Message("c3", "and now?"))
-        events = await env.wait_for(state, sid, run_ended(3))
-
-    job_id, _ = job_ids(f"{run_id_for(sid, 'c1')}:call-0-0")
-    (announced,) = payloads(events, BackgroundResults)  # once, not again on the third turn
-    assert [r["job_id"] for r in announced.results] == [job_id]
-    told = [m for m in calls[-2].messages if m.role == "system" and job_id in m.content]
-    assert told and told[0].content.startswith("Background subagents you started have finished")

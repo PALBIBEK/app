@@ -41,6 +41,7 @@ from supervisor.agent.events import (
     RunEnd,
     RunStart,
     SubagentEnd,
+    SubagentNotice,
     SubagentStart,
     ToolEnd,
     ToolStart,
@@ -88,6 +89,7 @@ from supervisor.session.children import (
     ChildOutcome,
     graded,
     last_outcome,
+    status_of,
 )
 from supervisor.session.project_context import read_project_context
 from supervisor.session.tool_outbox import idempotency_key
@@ -103,6 +105,7 @@ from supervisor.temporal.contracts import (
     EndRunRequest,
     GuardSettings,
     LostCall,
+    Message,
     PlaceInputs,
     PlannedCall,
     RetryMode,
@@ -120,17 +123,20 @@ from supervisor.temporal.contracts import (
     subagent_task_id,
 )
 from supervisor.temporal.subagent_tools import (
-    SPAWN_MODES,
+    MAX_BACKGROUND_JOBS,
     SUBAGENT_RESULT,
     SUBAGENT_TOOLS,
     Outcome,
     SubagentTools,
+    TooManyJobs,
     announcement,
-    foreground,
+    delegated,
     render,
+    settlement,
     task,
 )
 from supervisor.tools import ToolError
+from supervisor.traces.store import record_run
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
 
@@ -208,12 +214,13 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
     """
     messages = list(prior)
     user_at: int | None = None
-    notes: list[str] = []  # WorkspaceRestored, waiting for their round's results
+    notes: list[str] = []  # WorkspaceRestored and SubagentNotice, waiting for their round's results
     for envelope in run:
         event = envelope.payload
-        if isinstance(event, WorkspaceRestored):
+        if isinstance(event, WorkspaceRestored | SubagentNotice):
             # Shown once the round it happened in has its results (a note between a
-            # reply's calls and their results would break the exchange).
+            # reply's calls and their results would break the exchange). A subagent's notice
+            # is the next thing said to the model, as githi's settlement notice is.
             notes.append(event.text)
             continue
         if notes and isinstance(event, MessageEnd):
@@ -296,9 +303,10 @@ FILE_TOOLS = frozenset({"read", "write", "edit"})
 def call_lane(name: str, args: dict[str, Any]) -> str | None:
     """The calls a call must not overtake (pi's file mutation queue): the file a file tool
     names, normalised so ``./a``, ``a`` and ``/workspace/a`` are one; the memory and
-    subagent tools keep their order among themselves, except the subagents themselves: each is
-    a session of its own, so a round's subagents work at once. None: it runs whenever it can."""
-    if name in SPAWN_MODES and foreground(name, args) is not None:
+    subagent tools keep their order among themselves, except a subagent the call waits for:
+    each is a session of its own, so a round's subagents work at once. (Background starts keep
+    the platform lane, so each sees how many are running.) None: it runs whenever it can."""
+    if (how := delegated(name, args)) is not None and not how[1]:
         return None
     if name in PLATFORM_TOOLS or name in SUBAGENT_TOOLS or name == SUBAGENT_RESULT:
         return "platform"
@@ -459,12 +467,7 @@ class GithiSteps:
         await self._close_interrupted_run(session_id, run_id)
         self._manager._budget.begin_turn(session_id)
         await self._record(session_id, run_id, "start", RunStart(), trace_id=message.trace_id)
-        await self._record(
-            session_id,
-            run_id,
-            "user",
-            MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
-        )
+        await self._record(session_id, run_id, "user", await self._said(session_id, message))
         await self._memory.checkpoint(session_id, run_id, self._record)
         manifest = await self._manifest(session_id)
         if _past_session_bound(manifest.budget, req):
@@ -752,8 +755,8 @@ class GithiSteps:
             return plan
         # A model step runs on any worker: what the session offers comes from its brain.
         catalog = (await self._brain(sid)).loop().offers(name)
-        if not catalog and (mode := foreground(name, args)) is not None:
-            return dataclasses.replace(plan, delegate=mode)
+        if not catalog and (how := delegated(name, args)) is not None:
+            return dataclasses.replace(plan, delegate=how[0], in_background=how[1])
         platform = not catalog and (name in SUBAGENT_TOOLS or (await self._memory.tools(sid)).handles(name))
         return dataclasses.replace(plan, in_root=True) if child and not platform else plan
 
@@ -896,15 +899,32 @@ class GithiSteps:
     # --- tools ---------------------------------------------------------------
 
     async def place_inputs(self, req: PlaceInputs) -> None:
-        """Journal steering messages as the user's, before step ``req.step`` (pi's steer)."""
+        """Journal steering messages as the user's, before step ``req.step`` (pi's steer),
+        and what settled background subagents tell the run (githi's next-turn notice)."""
         for message in req.messages:
             await self._record(
                 req.session_id,
                 req.run_id,
                 f"{req.step}:steer:{message.command_id}",
-                MessageEnd(role="user", content=[{"type": "text", "text": message.text}]),
+                await self._said(req.session_id, message),
                 trace_id=message.trace_id,
             )
+
+    async def _said(self, session_id: str, message: Message) -> MessageEnd | SubagentNotice:
+        """What a message journals: the user's words, or a background subagent's notice."""
+        if message.notice_from is None:
+            return MessageEnd(role="user", content=[{"type": "text", "text": message.text}])
+        child = message.notice_from
+        start = end = None
+        for envelope in await self._reader.read(session_id):
+            match envelope.payload:
+                case SubagentStart(child_session_id=started) as s if started == child:
+                    start = s
+                case SubagentEnd(run_id=run) as e if start is not None and run == start.run_id:
+                    end = e
+        if end is None:  # it never recorded an end (it could not start): say so all the same
+            return SubagentNotice(child, settlement(child, "failed", message.text))
+        return SubagentNotice(child, settlement(child, end.stop_reason, end.output or ""))
 
     async def tool_batch(self, batch: ToolBatch) -> list[bool]:
         """Run a round's read-only calls together; whether each errored, in order.
@@ -1033,10 +1053,26 @@ class GithiSteps:
             return SubagentBegun(None)  # closed before it ran: its end says so
         row = await self._manager._get_session_row(sid)
         spec = self._manager._pinned_manifest(row).subagents
+        child_id = child_session_id(sid, call_id)
         try:
             if req.denied:
                 raise _Refused("denied by approval", "APPROVAL_DENIED")
-            asked = task(name, args, depth=row.subagent_depth, max_depth=spec.max_depth if spec else 0)
+            asked = task(
+                name,
+                args,
+                depth=row.subagent_depth,
+                max_depth=spec.max_depth if spec else 0,
+                background_allowed=spec is not None and spec.allow_background,
+            )
+            if (
+                asked.background
+                and await self._manager.session_status(child_id) is None  # not this call's, retried
+                and (running := await self._subagents.running_in_background(sid)) >= MAX_BACKGROUND_JOBS
+            ):
+                raise TooManyJobs(
+                    f"{running} background subagents are running, the most a session may have; "
+                    "wait for one to finish (job_output) before starting another"
+                )
         except (ToolError, _Refused) as exc:
             await self._claim(
                 sid,
@@ -1050,10 +1086,17 @@ class GithiSteps:
                 ),
             )
             return SubagentBegun(None)
-        child_id = child_session_id(sid, call_id)
-        # A fork carries the completed turns: everything before this run began.
+        # A fork carries the completed turns: everything before this run began (taken now, as
+        # githi takes a background fork's at the call, not when the child first runs).
         seed = (await self._reader.read_turn(sid, run_id))[0].seq - 1 if asked.mode == "fork" else None
-        await self._manager.create_child(sid, child_id, mode=asked.mode, label=asked.label, seed_until=seed)
+        await self._manager.create_child(
+            sid,
+            child_id,
+            mode=asked.mode,
+            label=asked.label,
+            seed_until=seed,
+            kind="background" if asked.background else "foreground",
+        )
         await self._record(
             sid,
             run_id,
@@ -1068,6 +1111,20 @@ class GithiSteps:
                 call_id=call_id,
             ),
         )
+        if asked.background:  # answered at once: the child's id is its job id
+            started_job = {
+                "job_id": child_id,
+                "status": "started",
+                "mode": asked.mode,
+                "description": asked.label or "",
+                "text": f"started background subagent job {child_id}",
+            }
+            await self._claim(
+                sid,
+                run_id,
+                f"{call_id}:end",
+                ToolEnd(tool_call_id=call_id, tool_name=name, result=render(Outcome(started_job)), is_error=False),
+            )
         return SubagentBegun(child_id, row.root_session_id or sid, asked.prompt)
 
     async def subagent_end(self, req: SubagentEndRequest) -> bool:
@@ -1080,11 +1137,23 @@ class GithiSteps:
             detail=req.error or "the subagent's session could not start",
         )
         ok, text = graded(outcome)
-        settled = SubagentEnd(run_id=req.child_run_id or "", stop_reason=outcome.stop_reason, output=text)
+        settled = SubagentEnd(run_id=req.child_run_id or "", stop_reason=status_of(outcome), output=text)
         await self._manager._record(
             sid, settled, turn_id=req.run_id, trace_id=None, event_key=f"subagent:{child_id}:end:{req.child_run_id}"
         )
         if req.call_id is None or req.run_id is None:
+            # A background child settled after the run that started it ended: that run's
+            # rollup (its cost, its subagent's outcome) is refreshed now.
+            started_in = next(
+                (
+                    e.turn_id
+                    for e in await self._reader.read(sid)
+                    if isinstance(e.payload, SubagentStart) and e.payload.child_session_id == child_id
+                ),
+                None,
+            )
+            if started_in is not None:
+                await record_run(self._manager._db, self._reader, sid, started_in)
             return not ok
         payload = {"subagent_id": child_id, "stop_reason": outcome.stop_reason, "text": text}
         await self._claim(

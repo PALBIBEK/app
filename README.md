@@ -233,13 +233,17 @@ holds every message, call and result: clients read it, and a retried step reads 
   (`loop.hard_run_seconds`; waiting for an approval counts toward it). A session: tokens and
   time (`budget.max_tokens_per_session`, `max_seconds_per_session`), and cost
   (`max_cost_per_session`, which counts every model call the session pays for: its steps,
-  summaries, subagents and memory's extraction). At most 8 background subagents run at once.
+  summaries, subagents and memory's extraction).
 - **Subagents.** `subagent` and `subagent_fork` (as githi has them) start a child session: its
   own conversation and steps on the parent's harness, tools and model, working in the parent's
   files (the sandbox of the session at the top of its tree, whose worker runs its sandbox calls).
   A fork starts with the parent's completed turns. The parent waits for the child's answer; a
-  child that stops, fails or runs out of steps is a failed call carrying its partial answer. A
-  round's subagents work at once, children may start their own while shallower than
+  child that stops, fails or runs out of steps is a failed call carrying its partial answer. With
+  `run_in_background` the call is answered at once with the child's id as a job id, and when the
+  child settles the parent's model is told how it went: at the working run's next step, or in a
+  run of its own when the session is idle (a stop's cancelled children wait for the next run).
+  `job_output` reads a job's status and closing message, `job_kill` stops it, and at most 8 run
+  at once. A round's subagents work at once, children may start their own while shallower than
   `subagents.max_depth`, a child's spend counts toward its parent's cost cap, and stopping or
   ending the parent stops its children. Each child's journal can be read like any session's.
   A child is part of its session everywhere else: its run is nested in the trace of the run that
@@ -249,8 +253,8 @@ holds every message, call and result: clients read it, and a retried step reads 
 - **When something fails.** A model call that may pass (a rate limit, an overload) is asked
   again on a durable timer. A dead worker is noticed within the heartbeat timeout (30 s; every
   step heartbeats), and its session moves to another worker. A call that may already have run is
-  never run twice: it is answered as an unknown outcome, and the model checks. A background
-  subagent retried on another worker goes on from the calls it journalled.
+  never run twice: it is answered as an unknown outcome, and the model checks. A subagent is a
+  session, so it moves to another worker the same way and goes on from its journal.
 - **Long conversations.** Once the conversation outgrows the model's window it is summarised,
   as a run opens or between steps. A summary that fails is retried; if it keeps failing, the
   conversation is kept whole. The summary names the journal entries it replaced, and the model

@@ -431,6 +431,8 @@ class AgentSessionWorkflow:
     async def _run_turn(self, message: Message) -> None:
         self._running, self._state.phase = message, Phase.RUNNING
         self._state.last_run_id = run_id_for(self._session_id, message.command_id)
+        # Held notices are told in this run, at its first step (as steering is placed).
+        self._state.steering[:0], self._state.held = self._state.held, []
         try:
             plan = await self._session_activity(
                 Activity.BEGIN_RUN,
@@ -464,11 +466,16 @@ class AgentSessionWorkflow:
                 # The activities journal the failure for clients; the session stays usable.
                 workflow.logger.warning("turn %s failed: %s", message.command_id, err)
         finally:
+            stopped = self._abort_requested
             self._running, self._turn, self._abort_requested = None, None, False
             self._deadline_hit = False
             self._steerable = None
             if self._state.steering:
-                # Arrived as the run ended: they run next, in order (pi's follow-ups).
+                # Arrived as the run ended: they run next, in order (pi's follow-ups). A
+                # subagent's notice that a stop left behind starts no run: it is told in the next.
+                if stopped:
+                    self._state.held += [m for m in self._state.steering if m.notice_from is not None]
+                    self._state.steering = [m for m in self._state.steering if m.notice_from is None]
                 self._state.pending[:0] = self._state.steering
                 self._state.steering = []
             self._state.turns_completed += 1
@@ -1449,6 +1456,12 @@ class AgentSessionWorkflow:
             return True
         if (child := begun.child_id) is None:
             return True  # answered without a child (its arguments, the depth cap, a denial)
+        if call.in_background:
+            # Answered already with the child's id; the session hears when it settles.
+            await self._start_child(begun, call.call_id)
+            if child not in self._state.background:
+                self._state.background.append(child)
+            return False
         self._waiting_for.add(child)
         try:
             await self._start_child(begun, call.call_id)
@@ -1545,7 +1558,8 @@ class AgentSessionWorkflow:
             return
         if settled.child_id not in self._state.children:
             return  # ended already
-        # Nothing waits (its call was stopped): record how it ended, then end it.
+        # Nothing waits (a background child, or a call that was stopped): record how it
+        # ended, then end it.
         try:
             await self._session_activity(
                 Activity.SUBAGENT_END,
@@ -1555,6 +1569,29 @@ class AgentSessionWorkflow:
         except ActivityError as err:
             workflow.logger.warning("could not record how subagent %s ended: %s", settled.child_id, err)
         await self._close_child(settled.child_id)
+        if settled.child_id in self._state.background:
+            self._state.background.remove(settled.child_id)
+            self._notify(settled)
+        with contextlib.suppress(ValueError):
+            self._state.stopped.remove(settled.child_id)
+
+    def _notify(self, settled: ChildSettled) -> None:
+        """Tell the model a background subagent settled (githi's settlement notice): at the
+        working run's next step, or, with the session idle, as a run of its own."""
+        notice = Message(
+            f"subagent-settled:{settled.child_id}:{settled.run_id}",
+            settled.error or "a background subagent finished",
+            notice_from=settled.child_id,
+        )
+        if notice.command_id in self._state.seen_commands or self._terminate_requested:
+            return
+        self._remember(notice.command_id)
+        if self._steerable is not None:
+            self._state.steering.append(notice)
+        elif settled.child_id in self._state.stopped:
+            self._state.held.append(notice)  # the user stopped the session: no run starts for it
+        else:
+            self._state.pending.append(notice)
 
     @workflow.signal(name=CLOSE_SIGNAL)
     def close(self) -> None:
@@ -1724,6 +1761,8 @@ class AgentSessionWorkflow:
             if task is not None and not task.done():
                 task.cancel()
         for child in self._state.children:
+            if child in self._state.background and child not in self._state.stopped:
+                self._state.stopped.append(child)
             asyncio.ensure_future(self._signal(child, "abort"))
 
     @workflow.update

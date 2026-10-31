@@ -38,6 +38,7 @@ from supervisor.agent.events import (
     RunEnd,
     RunStart,
     SubagentEnd,
+    SubagentNotice,
     SubagentStart,
     ToolEnd,
     ToolStart,
@@ -483,6 +484,11 @@ class _Builder:
         self._marker(env, "model_retry",
                      f"model call failed ({p.error_class}); retrying in {p.delay_s:g}s, "
                      f"attempt {p.attempt} of {p.max_attempts}")
+
+    def _on_SubagentNotice(self, env: Envelope, p: SubagentNotice) -> None:
+        assert self.root is not None
+        self.root.detail.setdefault("input", _cut(p.text))  # a run a background subagent woke
+        self._marker(env, "subagent_notice", _line(p.text) or "a background subagent finished")
 
     def _on_WorkspaceRestored(self, env: Envelope, p: WorkspaceRestored) -> None:
         self._marker(env, "workspace_restored",

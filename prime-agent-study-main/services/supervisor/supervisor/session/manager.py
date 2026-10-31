@@ -912,12 +912,13 @@ class SessionManager(UpkeepOps):
         mode: str,
         label: str | None,
         seed_until: int | None = None,
+        kind: str = "foreground",
     ) -> None:
         """Make ``child_id``, a subagent of ``parent_id`` (``supervisor.session.children``):
         its parent's pins, owner and workspace, one level deeper, working in its root's
         sandbox, without long-term memory of its own (githi's child has none). ``seed_until``:
-        it starts with its parent's journal up to that seq (a fork); None: empty. Safe to
-        retry with the same id."""
+        it starts with its parent's journal up to that seq (a fork); None: empty. ``kind``:
+        foreground (its parent waits for it) or background. Safe to retry with the same id."""
         parent = await self._get_session_row(parent_id)
         events = (
             []
@@ -934,6 +935,7 @@ class SessionManager(UpkeepOps):
             subagent_depth=parent.subagent_depth + 1,
             subagent_mode=mode,
             subagent_label=label,
+            subagent_kind=kind,
         )
 
     async def _copy_session(
