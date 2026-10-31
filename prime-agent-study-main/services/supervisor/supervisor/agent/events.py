@@ -161,9 +161,11 @@ class SubagentStart:
     run_id: str
     child_session_id: str
     parent_session_id: str
-    mode: str  # one_shot | fork | continuable | background
-    provider: str
+    mode: str  # one_shot | fork | continuable | background (a subagent session: spawn | fork)
+    provider: str  # "session" for a subagent session (supervisor.session.children)
     label: str | None = None
+    # The tool call that started it (a subagent session's), if one did.
+    call_id: str | None = None
     category: EventCategory = field(default=EventCategory.BACKGROUND, repr=False)
 
 

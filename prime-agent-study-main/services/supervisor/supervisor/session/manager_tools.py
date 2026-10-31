@@ -14,9 +14,10 @@ from supervisor.agent.events import (
     ToolEnd,
     ToolStart,
 )
+from supervisor.catalog import SessionPins
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
-from supervisor.hands.keys import hand_key, split_key, take_hand
+from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key, take_hand
 from supervisor.hands.leases import Borrower
 from supervisor.models.browser import BrowserAccess, BrowserGrant
 from supervisor.seams import (
@@ -78,6 +79,13 @@ class ToolOps(ApprovalOps):
     def hand_names(self, session_id: str) -> list[str]:
         """The session's hands by name, its default hand first (one entry: no named hands)."""
         return [split_key(key)[1] for key in self._hands.keys_of(session_id)]
+
+    @staticmethod
+    def pinned_hand_names(row: SessionRow) -> list[str]:
+        """The hands ``row``'s composition pins, by name, the default first: what a subagent
+        is offered, whose calls run in its root's hands (pinned the same way)."""
+        pins = SessionPins.from_dict(dict(row.composition_pins)) if row.composition_pins else None
+        return [DEFAULT_HAND, *(name for name, _, _ in (pins.hands if pins is not None else ()))]
 
     async def hand_for_call(
         self,

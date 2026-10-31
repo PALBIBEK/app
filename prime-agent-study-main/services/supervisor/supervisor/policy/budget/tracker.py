@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +33,38 @@ if TYPE_CHECKING:
 
 
 __all__ = ["BudgetTracker", "current_month", "tenant_spend"]
+
+
+MAX_TREE_DEPTH = 16
+"""Sessions above a subagent followed at most (harness depth caps are far smaller)."""
+
+
+async def _with_ancestors(db: AsyncSession, session_id: str) -> list[str]:
+    """``session_id`` and the sessions that started it (subagents), nearest first."""
+    chain = [session_id]
+    while len(chain) <= MAX_TREE_DEPTH and (
+        parent := await db.scalar(select(SessionRow.parent_session_id).where(SessionRow.id == chain[-1]))
+    ):
+        chain.append(parent)
+    return chain
+
+
+async def _add_session_cost(db: AsyncSession, session_id: str, cost: Decimal) -> Decimal:
+    add = (
+        update(SessionIndexRow)
+        .where(SessionIndexRow.session_id == session_id)
+        .values(total_cost=SessionIndexRow.total_cost + cost)
+        .returning(SessionIndexRow.total_cost)
+    )
+    total = await db.scalar(add)
+    if total is None:
+        # No index row yet; a concurrent first insert loses and adds instead.
+        try:
+            async with db.begin_nested():
+                db.add(SessionIndexRow(session_id=session_id, total_cost=cost))
+        except IntegrityError:
+            total = await db.scalar(add)
+    return cost if total is None else Decimal(str(total))
 
 
 def current_month() -> str:
@@ -230,35 +262,30 @@ class BudgetTracker:
         )
 
     async def _load_cost(self, session_id: str) -> tuple[Decimal, Decimal]:
-        """The session's cost, and its tenant's spend this month (0 when none is limited)."""
+        """What counts toward the session's cost cap (its tree's spend: a subagent shares its
+        root's cap), and its tenant's spend this month (0 when none is limited)."""
         async with self._db() as db:
+            root = await db.scalar(
+                select(func.coalesce(SessionRow.root_session_id, SessionRow.id)).where(SessionRow.id == session_id)
+            )
             total = await db.scalar(
-                select(SessionIndexRow.total_cost).where(SessionIndexRow.session_id == session_id)
+                select(SessionIndexRow.total_cost).where(SessionIndexRow.session_id == (root or session_id))
             )
             tenant = await self._tenant_spend(db, session_id) if self._tenant_limit is not None else Decimal(0)
         return Decimal(str(total or 0)), tenant
 
     async def _add_cost(self, session_id: str, cost: Decimal) -> tuple[Decimal, Decimal]:
-        """Add ``cost`` to the session's total and its tenant's month, in one transaction;
-        returns both new totals."""
-        add = (
-            update(SessionIndexRow)
-            .where(SessionIndexRow.session_id == session_id)
-            .values(total_cost=SessionIndexRow.total_cost + cost)
-            .returning(SessionIndexRow.total_cost)
-        )
+        """Add ``cost`` to the session's total, to every session above it (a subagent's spend
+        is its parent's too, so each total is the session's own plus its subagents'), and to
+        its tenant's month (once), in one transaction; returns the tree's new total (its
+        root's, which the cap is held to) and the tenant's."""
         async with self._db() as db:
-            total = await db.scalar(add)
-            if total is None:
-                # No index row yet; a concurrent first insert loses and adds instead.
-                try:
-                    async with db.begin_nested():
-                        db.add(SessionIndexRow(session_id=session_id, total_cost=cost))
-                except IntegrityError:
-                    total = await db.scalar(add)
+            total: Decimal | None = None
+            for sid in await _with_ancestors(db, session_id):
+                total = await _add_session_cost(db, sid, cost)
             tenant = await self._add_tenant_cost(db, session_id, cost)
             await db.commit()
-        return (cost if total is None else Decimal(str(total))), tenant
+        return (cost if total is None else total), tenant
 
     async def _add_tenant_cost(self, db: AsyncSession, session_id: str, cost: Decimal) -> Decimal:
         tenant_id = await db.scalar(select(SessionRow.tenant_id).where(SessionRow.id == session_id))

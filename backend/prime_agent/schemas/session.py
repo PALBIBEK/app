@@ -154,6 +154,9 @@ class SessionApprovalOut(BaseModel):
     status: str
     choice: str | None = None
     timeout_s: float
+    subagent: bool = False
+    """A call of one of the session's subagents waits (answered here all the same)."""
+    subagent_label: str | None = None
 
 
 class SessionApprovalChoice(BaseModel):

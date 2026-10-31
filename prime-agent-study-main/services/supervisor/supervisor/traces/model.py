@@ -121,6 +121,8 @@ class Rollup:
     denials: int = 0
     """Approvals that were denied or ran out of time."""
     errors: int = 0
+    subagents: int = 0
+    """Subagents the run started; their own spans (and spend) are in the run's tree."""
     models: list[str] = field(default_factory=list)
     tools: dict[str, int] = field(default_factory=dict)
     slowest_span_id: str | None = None

@@ -138,3 +138,21 @@ async def test_erasing_again_finds_nothing_left(platform: dict[str, Any]) -> Non
     await _session(platform, GONE, unique=LARGE)
     await platform["eraser"].erase(GONE)
     assert await platform["eraser"].erase(GONE) == Erased()
+
+
+async def test_erasing_a_session_erases_its_subagents(platform: dict[str, Any]) -> None:
+    p = platform
+    for sid, parent in ((GONE, None), ("s-child", GONE), ("s-grandchild", "s-child"), (KEPT, None)):
+        await _session(p, sid, unique=f"in {sid}")
+        async with p["factory"]() as db:
+            row = await db.get(SessionRow, sid)
+            row.parent_session_id = parent
+            await db.commit()
+
+    erased = await p["eraser"].erase(GONE)
+
+    assert erased.events == 18, "its own six events, and each subagent's"
+    gone = [GONE, "s-child", "s-grandchild"]
+    assert await _count(p["factory"], SessionRow, SessionRow.id.in_(gone)) == 0
+    assert await _count(p["factory"], EventRow, EventRow.session_id.in_(gone)) == 0
+    assert await _count(p["factory"], SessionRow, SessionRow.id == KEPT) == 1

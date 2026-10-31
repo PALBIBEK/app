@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.db.models import EventRow, RunTraceRow, SessionRow
 from supervisor.journal.reader import JournalReader
 from supervisor.session.access import session_visibility
-from supervisor.traces.build import build_run_trace, trace_id
+from supervisor.traces.build import build_run_trace, subagent_runs, trace_id
 from supervisor.traces.model import RunStatus, RunTrace
 from supervisor.traces.scores import write_checks
 from supervisor.traces.summary import describe
@@ -42,10 +42,12 @@ logger = logging.getLogger(__name__)
 
 Factory = async_sessionmaker[AsyncSession]
 
+MAX_NESTING = 8
+"""Levels of subagents nested in a run's trace at most (harness depth caps are smaller)."""
 BACKFILL_LIMIT = 500
 """Runs filled in per tenant listing, oldest unrecorded first; the rest on later listings."""
 _FINISHED = frozenset(s.value for s in RunStatus if s.finished)
-ROLLUP_VERSION = 5
+ROLLUP_VERSION = 6
 """Bumped when the builder changes what a rollup says; rows from an older one are rebuilt on read."""
 _backfilled: weakref.WeakKeyDictionary[Factory, set[str]] = weakref.WeakKeyDictionary()
 """Per database, the tenants whose older runs are all filled in (new runs are recorded as
@@ -64,12 +66,32 @@ def _running(row: SessionRow) -> bool:
 
 
 async def load_run(factory: Factory, reader: JournalReader, row: SessionRow, run_id: str) -> RunTrace | None:
-    """Run ``run_id``'s trace, built now from the journal (and its rollup row kept in step)."""
-    events = await reader.read_run_window(row.id, run_id)
-    trace = build_run_trace(row.id, run_id, events, agent=agent_label(row), session_running=_running(row))
+    """Run ``run_id``'s trace, built now from the journal (and its rollup row kept in step),
+    with the runs of the subagents it started nested in it."""
+    trace = await _build(factory, reader, row, run_id, depth=0)
     if trace is not None:
         await _save(factory, row, trace)
     return trace
+
+
+async def _build(factory: Factory, reader: JournalReader, row: SessionRow, run_id: str, *, depth: int) -> RunTrace | None:
+    events = await reader.read_run_window(row.id, run_id)
+    nested: dict[str, RunTrace] = {}
+    started = subagent_runs(run_id, events) if depth < MAX_NESTING else []
+    if started:
+        async with factory() as db:
+            children = {
+                s.id: s
+                for s in (await db.execute(select(SessionRow).where(SessionRow.id.in_({c for c, _ in started})))).scalars()
+            }
+        for child_id, child_run in started:
+            if (child := children.get(child_id)) is not None and (
+                sub := await _build(factory, reader, child, child_run, depth=depth + 1)
+            ) is not None:
+                nested[child_run] = sub
+    return build_run_trace(
+        row.id, run_id, events, agent=agent_label(row), session_running=_running(row), subagents=nested
+    )
 
 
 async def record_run(factory: Factory, reader: JournalReader, session_id: str, run_id: str) -> None:
@@ -161,6 +183,7 @@ def summary(row: RunTraceRow) -> dict[str, Any]:
         "tool_errors": row.tool_errors,
         "denials": row.denials,
         "errors": row.errors,
+        "subagents": rollup.get("subagents", 0),
         "checks_failed": row.checks_failed,
         "feedback_good": row.feedback_good,
         "feedback_bad": row.feedback_bad,
@@ -277,7 +300,12 @@ async def list_runs(
     limit: int = 50,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """The caller's runs, newest first, and the cursor for the next page (None at the end)."""
-    visible = and_(SessionRow.tenant_id == tenant_id, session_visibility(tenant_id, principal_id))
+    # A subagent's runs are in the trace of the run that started it, not listed on their own.
+    visible = and_(
+        SessionRow.tenant_id == tenant_id,
+        session_visibility(tenant_id, principal_id),
+        SessionRow.parent_session_id.is_(None),
+    )
     done = _backfilled.setdefault(factory, set())
     if tenant_id not in done:
         missing = await _unrecorded(factory, SessionRow.tenant_id == tenant_id, BACKFILL_LIMIT)

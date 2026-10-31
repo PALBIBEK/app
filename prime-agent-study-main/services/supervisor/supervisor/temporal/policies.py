@@ -218,6 +218,16 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         "retried until exactly one end reaches the session's journal",
         "Record how a background job ended",
     ),
+    Activity.SUBAGENT_BEGIN: StepPolicy(
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True,
+        _ADOPTED + " (keyed by the call, so it makes one child)",
+        "Start a subagent call: journal it and make its child session",
+    ),
+    Activity.SUBAGENT_END: StepPolicy(
+        Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True,
+        _ADOPTED + " (keyed, so the outcome lands once)",
+        "A subagent settled: record its outcome and answer the call waiting for it",
+    ),
 })
 
 

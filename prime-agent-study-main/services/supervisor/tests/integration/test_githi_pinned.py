@@ -58,7 +58,7 @@ from tests.support.workflow_histories import replayable_histories
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 PINNED_TOOLS = ["echo", "edit", "find", "grep", "ls", "read", "remember", "write"]  # harness/tool_sets/githi-tools
-PLATFORM_TOOLS = ["memory", "history", "subagent", "subagent_result"]
+PLATFORM_TOOLS = ["memory", "history", "subagent", "subagent_fork", "subagent_result"]
 
 
 @dataclasses.dataclass
@@ -545,22 +545,22 @@ async def test_recall_comes_from_the_pinned_backend(
 # --- subagents --------------------------------------------------------------------
 
 
-async def test_githi_delegates_through_the_pinned_transport(
+async def test_githi_delegates_to_a_child_session(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
+    """A foreground subagent is a session of its own (supervisor.session.children), and its
+    answer is the call's result."""
     model(("subagent", {"prompt": "summarise the repo", "description": "summary"}))
     state = await env.state()
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "delegate it"))
         events = await env.wait_for(state, sid, run_ended())
-        runtime = state.manager._registry.get(sid)
-        default = runtime.seams.subagent_transport.default_provider
 
     start, end = payloads(events, SubagentStart)[0], payloads(events, SubagentEnd)[0]
-    assert start.provider == default and start.label == "summary"
+    assert start.provider == "session" and start.label == "summary"
     tool = payloads(events, ToolEnd)[0]
-    assert tool.result["ok"] and tool.result["payload"]["status"] == end.stop_reason
+    assert tool.result["ok"] and tool.result["payload"]["text"] == end.output
 
 
 async def test_a_background_subagent_runs_as_a_durable_job(
@@ -590,11 +590,10 @@ async def test_a_background_subagent_runs_as_a_durable_job(
 
 
 async def test_a_subagents_model_call_counts_toward_the_sessions_cost(
-    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+    env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
-    """The child runs on the session's gateway, so the session pays for it: two model
-    steps and the child's call, $0.01 each (it used to cost the session nothing)."""
-    monkeypatch.setenv("ALLOW_LAB_ECHO", "0")  # production wiring: nested-session subagents
+    """The child's spend is its session's too: two model steps and the child's one call,
+    $0.01 each (it used to cost the session nothing)."""
     model(("subagent", {"prompt": "summarise the repo"}), cost_per_call=0.01)
     state = await env.state()
     async with session_worker(env.client, state, task_queue=env.queue):
@@ -603,7 +602,7 @@ async def test_a_subagents_model_call_counts_toward_the_sessions_cost(
         events = await env.wait_for(state, sid, run_ended())
         spent = await state.manager._budget.check(sid)
 
-    assert payloads(events, SubagentStart)[0].provider == "nested_session"
+    assert payloads(events, SubagentStart)[0].provider == "session"
     assert spent.total_cost_usd == Decimal("0.03")
 
 

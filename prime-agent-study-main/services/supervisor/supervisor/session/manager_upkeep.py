@@ -6,6 +6,8 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func, or_, select
+
 from supervisor.agent.events import HandStopped
 from supervisor.db.models import SessionIndexRow, SessionRow
 from supervisor.hands.keys import split_key
@@ -145,10 +147,15 @@ class UpkeepOps(ChildOps):
         return since <= threshold
 
     async def _session_last_activity(self, session_id: str) -> datetime | None:
+        """When the session, or a subagent working in its sandbox, last did anything."""
         async with self._db() as db:
-            idx = await db.get(SessionIndexRow, session_id)
-            if idx is not None and idx.last_event_at is not None:
-                return idx.last_event_at
+            latest = await db.scalar(
+                select(func.max(SessionIndexRow.last_event_at))
+                .join(SessionRow, SessionRow.id == SessionIndexRow.session_id)
+                .where(or_(SessionRow.id == session_id, SessionRow.root_session_id == session_id))
+            )
+            if latest is not None:
+                return latest
             row = await db.get(SessionRow, session_id)
             if row is None:
                 return None

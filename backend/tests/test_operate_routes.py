@@ -119,6 +119,10 @@ async def test_inbox_and_sandboxes_speak_this_products_session_ids(db_session, o
                      "created_at_ms": 1, "expires_at_ms": 2},
                     {"approval_id": "ap-2", "session_id": "ai-not-mine", "agent": "x",
                      "prompt": "?", "options": []},
+                    # A subagent of the user's session: answered from that session.
+                    {"approval_id": "ap-3", "session_id": "ai-child", "root_session_id": "ai-1",
+                     "subagent_label": "writer", "agent": "comp-research", "prompt": "Run bash?",
+                     "options": ["allow", "deny"]},
                 ],
             )
         if request.url.path == "/v1/sandboxes":
@@ -135,7 +139,12 @@ async def test_inbox_and_sandboxes_speak_this_products_session_ids(db_session, o
         assert inbox == [
             {"approval_id": "ap-1", "session_id": link.id, "session_title": "Quarterly research",
              "harness_id": link.harness_id, "harness_name": "research-agent", "prompt": "Write notes.md?",
-             "options": ["allow", "deny"], "created_at_ms": 1, "expires_at_ms": 2}
+             "options": ["allow", "deny"], "created_at_ms": 1, "expires_at_ms": 2,
+             "subagent": False, "subagent_label": None},
+            {"approval_id": "ap-3", "session_id": link.id, "session_title": "Quarterly research",
+             "harness_id": link.harness_id, "harness_name": "research-agent", "prompt": "Run bash?",
+             "options": ["allow", "deny"], "created_at_ms": None, "expires_at_ms": None,
+             "subagent": True, "subagent_label": "writer"},
         ]
 
         boxes = (await api.get("/api/v1/sandboxes", params={"session_id": link.id})).json()

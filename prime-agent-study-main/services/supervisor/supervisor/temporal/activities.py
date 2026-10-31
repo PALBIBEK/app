@@ -43,6 +43,8 @@ from supervisor.temporal.contracts import (
     SessionOp,
     StepRequest,
     StepResult,
+    SubagentBegun,
+    SubagentEndRequest,
     ToolBatch,
     ToolRequest,
     TurnOutcome,
@@ -294,6 +296,16 @@ class SessionActivities:
         with _as_application_error():
             return await self._jobs.end(req)
 
+    @activity.defn(name=Activity.SUBAGENT_BEGIN)
+    async def subagent_begin(self, req: ToolRequest) -> SubagentBegun:
+        with _as_application_error():
+            return await self._steps.subagent_begin(req)
+
+    @activity.defn(name=Activity.SUBAGENT_END)
+    async def subagent_end(self, req: SubagentEndRequest) -> bool:
+        with _as_application_error():
+            return await self._steps.subagent_end(req)
+
     @activity.defn(name=Activity.CLOSE_LOST_CALL)
     async def close_lost_call(self, lost: LostCall) -> None:
         with _as_application_error():
@@ -325,6 +337,8 @@ class SessionActivities:
             self.run_job,
             self.end_job,
             self.capture_memory,
+            self.subagent_begin,
+            self.subagent_end,
         ]
 
     @contextlib.asynccontextmanager

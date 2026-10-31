@@ -395,6 +395,8 @@ class SessionService:
                     status=str(row.get("status") or ""),
                     choice=str(row["choice"]) if row.get("choice") is not None else None,
                     timeout_s=float(row.get("timeout_s") or 0),
+                    subagent=bool(row.get("subagent")),
+                    subagent_label=str(row["subagent_label"]) if row.get("subagent_label") else None,
                 )
             )
         return out
