@@ -34,8 +34,9 @@ def _compacted(text: str) -> bool:
 
 
 def _notice(text: str) -> bool:
-    """A note the supervisor adds for the model (a sandbox rebuilt), not the user's request."""
-    return text.startswith("[The sandbox was rebuilt")
+    """A note the supervisor adds for the model (a sandbox rebuilt, a background subagent
+    settled), not the user's request."""
+    return text.startswith(("[The sandbox was rebuilt", "Background subagent job"))
 
 
 @dataclasses.dataclass
@@ -164,7 +165,11 @@ class ScriptedGateway:
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
         if self.one_at_a_time:
             return self._next_of(messages, usage)
-        fresh = messages[-1].role == "user" and not _compacted(messages[-1].content)
+        fresh = (
+            messages[-1].role == "user"
+            and not _compacted(messages[-1].content)
+            and not _notice(messages[-1].content)
+        )
         asking = bool(self.calls) and (fresh or self.repeat or self.vary_args)
         if not asking:
             text = f"done after {results} tool results"

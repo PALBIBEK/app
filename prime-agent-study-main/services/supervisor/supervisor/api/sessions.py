@@ -481,8 +481,9 @@ async def erase_session(
 
 
 async def stop_for_erasure(request: Request, session_id: str) -> None:
-    """End the session and its unfinished background jobs, and wait until they have: nothing
-    may write what erasing removes. 503 when one is still stopping (erasing again retries)."""
+    """End the session, its subagents and its unfinished background jobs, and wait until they
+    have: nothing may write what erasing removes. 503 when one is still stopping (erasing
+    again retries)."""
     try:
         await end_for_erasure(deps._state(request), session_id)
     except (SessionCommandError, TemporalUnavailable) as exc:
@@ -500,7 +501,9 @@ async def end_for_erasure(state: Any, session_id: str) -> None:
         await state.manager.terminate(session_id)
         return
     jobs = await state.reader.unfinished_jobs(session_id)
-    await state.workflows.close(session_id, jobs=jobs)
+    # Its subagents end with it (supervisor.session.children); erasing waits for them too.
+    subagents = [sid for sid, _ in (await state.manager.session_tree(session_id))[1:]]
+    await state.workflows.close(session_id, jobs=jobs, sessions=subagents)
 
 
 async def end_and_erase(state: Any, session_id: str) -> None:

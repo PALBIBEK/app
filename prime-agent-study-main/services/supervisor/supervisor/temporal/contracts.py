@@ -206,6 +206,9 @@ class Message:
     # pi's steering: sent while a run works, it is placed in that run at its next step
     # (the round's calls not yet run are skipped) instead of waiting for the run to end.
     steer: bool = False
+    # Not the user's words: a background subagent of this session settled (this is its id),
+    # and the model is told how (a ``SubagentNotice``), in the working run or as a run.
+    notice_from: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +333,8 @@ class PlannedCall:
     lane: str | None = None
     # A subagent call the workflow runs as a child session ("spawn" or "fork"); None: a tool.
     delegate: str | None = None
+    # The child runs in the background: the call is answered at once with its job id.
+    in_background: bool = False
     # A subagent's sandbox call: it runs in the sandbox of the session at the top of its
     # tree (``ChildInput.root_id``), on that session's worker.
     in_root: bool = False
@@ -685,8 +690,14 @@ class Carried:
     # seconds its runs have taken (budget.max_seconds_per_session).
     tokens_used: int = 0
     seconds_used: float = 0.0
-    # Subagent sessions this one started that are still open (stopped and ended with it).
+    # Subagent sessions this one started that are still open (stopped and ended with it),
+    # and those of them running in the background (the session is told when each settles).
     children: list[str] = field(default_factory=list)
+    background: list[str] = field(default_factory=list)
+    # Background subagents this session's stop reached (their end wakes no run), and the
+    # notices of those that settled: told at the next run, never waking one.
+    stopped: list[str] = field(default_factory=list)
+    held: list[Message] = field(default_factory=list)
     # A subagent: the session that started it, the one whose sandbox it works in, and its
     # latest run (what it reports when it settles).
     parent_id: str | None = None

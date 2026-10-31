@@ -501,14 +501,23 @@ class SessionWorkflows:
             if exc.kind != "SessionClosed":  # already closed means already terminated
                 raise
 
-    async def close(self, session_id: str, *, jobs: Collection[str] = (), timeout_s: float = CLOSE_WAIT_S) -> None:
-        """End the session and wait until it and its background ``jobs`` have stopped, so
-        nothing it runs writes after this returns. ``TimeoutError`` if they do not stop in
-        ``timeout_s`` (a job whose worker is gone, say)."""
+    async def close(
+        self,
+        session_id: str,
+        *,
+        jobs: Collection[str] = (),
+        sessions: Collection[str] = (),
+        timeout_s: float = CLOSE_WAIT_S,
+    ) -> None:
+        """End the session and wait until it, its background ``jobs`` and its subagent
+        ``sessions`` (which it ends as it ends) have stopped, so nothing it runs writes after
+        this returns. ``TimeoutError`` if they do not stop in ``timeout_s`` (a job whose worker
+        is gone, say)."""
         await self.terminate(session_id)
         handles = [
             self._handle(session_id),
             *(self._client.get_workflow_handle(job_workflow_id(session_id, job)) for job in jobs),
+            *(self._client.get_workflow_handle(workflow_id(sid)) for sid in sessions),
         ]
         async with asyncio.timeout(timeout_s):
             for handle in handles:

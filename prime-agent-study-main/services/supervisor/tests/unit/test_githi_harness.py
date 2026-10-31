@@ -270,8 +270,8 @@ def test_a_calls_lane_is_the_file_it_names_or_the_platform_tools() -> None:
     assert call_lane("read", {"path": "/workspace"}) == "file:."
     assert call_lane("bash", {"command": "ls"}) is None  # runs whenever it can, as pi's
     assert call_lane("grep", {"pattern": "x", "path": "a.py"}) is None
-    assert call_lane("memory", {"action": "add"}) == call_lane("subagent_result", {"job_id": "j"}) == "platform"
-    assert call_lane("subagent", {"prompt": "x", "background": True}) == "platform"  # a job
+    assert call_lane("memory", {"action": "add"}) == call_lane("job_output", {"job_id": "j"}) == "platform"
+    assert call_lane("subagent", {"prompt": "x", "run_in_background": True}) == "platform"  # counts jobs
     # Each subagent is a session of its own: a round's subagents work at once.
     assert call_lane("subagent", {"prompt": "x"}) is None and call_lane("subagent_fork", {"prompt": "x"}) is None
     assert call_lane("write", {"content": "no path"}) is None

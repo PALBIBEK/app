@@ -33,6 +33,7 @@ __all__ = [
     "ChildOutcome",
     "graded",
     "last_outcome",
+    "status_of",
 ]
 
 PARENT_ONLY_TOOLS: Final = frozenset(
@@ -88,6 +89,14 @@ def last_outcome(events: Sequence[Envelope]) -> ChildOutcome | None:
         error_class=error.error_class if error else None,
         detail=error.detail if error else "",
     )
+
+
+def status_of(outcome: ChildOutcome) -> str:
+    """githi's job status for a child's run: completed (it answered), cancelled (it was
+    stopped), or failed (anything else, an empty answer included)."""
+    if outcome.stop_reason == "aborted":
+        return "cancelled"
+    return "completed" if graded(outcome)[0] else "failed"
 
 
 def graded(outcome: ChildOutcome) -> tuple[bool, str]:

@@ -9,6 +9,7 @@ child too, and the child's spend counts toward its parent's.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -20,17 +21,29 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-from supervisor.agent.events import MessageEnd, SubagentEnd, SubagentStart, ToolEnd, TurnEnd
+from supervisor.agent.events import (
+    MessageEnd,
+    SubagentEnd,
+    SubagentNotice,
+    SubagentStart,
+    ToolEnd,
+    TurnEnd,
+)
 from supervisor.db.models import SessionIndexRow, SessionRow
+from supervisor.hands.keys import hand_key
 from supervisor.main import create_app
+from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
+from supervisor.seams.providers.workspace.memory_workspace_store import MemoryWorkspaceStore
 from supervisor.session.children import SUBAGENT_BRIEF
+from supervisor.temporal import steps
 from supervisor.temporal.contracts import Message, workflow_id
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
 from supervisor.traces.kinds import SpanKind
 from supervisor.traces.store import TraceFilter, list_runs, load_run
-from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
+from tests.integration.test_many_hands import create_with_hands
+from tests.support.githi_env import LS, WRITE, Env, event_types, has_event, payloads, run_ended
 from tests.support.scripted import ScriptedGateway, slow_tool
 
 pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
@@ -260,3 +273,185 @@ async def test_a_subagents_approval_is_answered_from_its_parent(
     assert not _subagent_end(events).is_error
     write = next(e for e in payloads(await state.reader.read(child.id), ToolEnd) if e.tool_name == "write")
     assert not write.is_error, "allowed, so the child's write ran"
+
+
+# --- background subagents (githi's run_in_background, job_output, job_kill) ------------------
+
+
+def _notices(events: list) -> list[SubagentNotice]:
+    return payloads(events, SubagentNotice)
+
+
+async def test_a_background_subagent_answers_at_once_and_its_end_wakes_the_session(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gate = threading.Event()  # the child waits until the parent's first run has ended
+    gateway = model(
+        ("subagent", {"prompt": "count the files", "description": "counter", "run_in_background": True}),
+        subagent_answer="42 files",
+        subagent_gate=gate,
+        cost_per_call=0.01,
+    )
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "count them in the background"))
+        first = await env.wait_for(state, sid, run_ended())
+        child = await _child_row(env, sid)
+        gateway.calls = []
+        gate.set()
+        woken = await env.wait_for(state, sid, run_ended(2))  # the child's end starts a run
+        gateway.calls = [("job_output", {"job_id": child.id})]
+        await env.sessions.submit(sid, Message("c2", "what did it find?"))
+        events = await env.wait_for(state, sid, run_ended(3))
+        handle = env.client.get_workflow_handle(workflow_id(child.id))
+        await asyncio.wait_for(handle.result(), timeout=30)
+        spent = await state.manager._budget.check(sid)
+
+    started = _subagent_end(first).result["payload"]
+    assert (started["job_id"], started["status"]) == (child.id, "started")
+    assert child.subagent_kind == "background"
+    (notice,) = _notices(woken)
+    assert notice.child_session_id == child.id
+    assert notice.text.startswith(f"Background subagent job {child.id} finished (completed)")
+    assert "42 files" in notice.text
+    assert any(request[-1].content == notice.text for request in gateway.seen), "the woken run's model read it"
+    output = next(e for e in payloads(events, ToolEnd) if e.tool_name == "job_output").result["payload"]
+    assert (output["status"], output["text"]) == ("completed", "42 files")
+    # Five model calls of the session's own (two, one when woken, two) and the child's one.
+    assert spent.total_cost_usd == Decimal("0.06")
+
+
+async def test_a_subagent_that_settles_while_its_parent_works_is_told_at_the_next_step(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(
+        ("subagent", {"prompt": "quick one", "run_in_background": True}), LS, one_at_a_time=True
+    )
+    state = await env.state()
+    with slow_tool("ls", 3.0):  # the child settles while the parent's ls runs
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "start it, then list"))
+            events = await env.wait_for(state, sid, run_ended())
+            await asyncio.sleep(1.5)  # a wrongly woken run would start now
+            after = await state.reader.read(sid)
+
+    (notice,) = _notices(events)
+    run = events[-1].turn_id
+    assert next(e for e in events if isinstance(e.payload, SubagentNotice)).turn_id == run, "told in the run"
+    assert any(m.content == notice.text for m in gateway.seen[-1]), "the next step's request had it"
+    assert event_types(after).count("RunEnd") == 1, "no run of its own"
+
+
+async def test_job_kill_stops_a_background_subagent(env: Env, model: Callable[..., ScriptedGateway]) -> None:
+    gateway = model(("subagent", {"prompt": "list slowly", "run_in_background": True}), subagent_calls=[LS])
+    state = await env.state()
+    with slow_tool("ls", 6.0):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "start it"))
+            await env.wait_for(state, sid, run_ended())
+            child = await _child_row(env, sid)
+            await env.wait_for(state, child.id, has_event(lambda p: getattr(p, "tool_name", None) == "ls"))
+            gateway.calls = [("job_kill", {"job_id": child.id})]
+            await env.sessions.submit(sid, Message("c2", "stop it"))
+            events = await env.wait_for(state, sid, has_event(lambda p: isinstance(p, SubagentNotice)), timeout=60)
+
+    killed = next(e for e in payloads(events, ToolEnd) if e.tool_name == "job_kill").result["payload"]
+    assert killed["text"] == f"sent cancel to background subagent job {child.id}"
+    (notice,) = _notices(events)
+    assert "finished (cancelled)" in notice.text
+    assert payloads(events, SubagentEnd)[-1].stop_reason == "cancelled"
+
+
+async def test_a_session_runs_at_most_so_many_background_subagents(
+    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(steps, "MAX_BACKGROUND_JOBS", 1)
+    gate = threading.Event()  # the first runs until the test lets it end
+    model(
+        ("subagent", {"prompt": "first", "run_in_background": True}),
+        ("subagent", {"prompt": "second", "run_in_background": True}),
+        subagent_gate=gate,
+    )
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start two"))
+        events = await env.wait_for(state, sid, run_ended())
+        gate.set()
+
+    started, refused = [e for e in payloads(events, ToolEnd) if e.tool_name == "subagent"]
+    assert started.result["payload"]["status"] == "started"
+    assert refused.is_error and refused.result["code"] == "TOO_MANY_JOBS"
+
+
+async def test_a_stop_reaches_background_subagents_and_their_end_waits_for_the_next_run(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(
+        ("subagent", {"prompt": "list slowly", "run_in_background": True}), LS, one_at_a_time=True,
+        subagent_calls=[LS],
+    )
+    state = await env.state()
+    with slow_tool("ls", 4.0):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state)
+            await env.sessions.submit(sid, Message("c1", "start it, then list"))
+            await env.wait_for(state, sid, has_event(lambda p: getattr(p, "tool_name", None) == "ls"))
+            await env.sessions.stop_run(sid, "c1")
+            stopped = await env.wait_for(
+                state, sid, lambda evs: run_ended()(evs) and has_event(lambda p: isinstance(p, SubagentEnd))(evs), timeout=60
+            )
+            await asyncio.sleep(2)  # a run started for the notice would be under way now
+            quiet = await state.reader.read(sid)
+            gateway.calls = []
+            await env.sessions.submit(sid, Message("c2", "anything new?"))
+            events = await env.wait_for(state, sid, run_ended(2))
+
+    assert payloads(stopped, SubagentEnd)[-1].stop_reason == "cancelled", "the stop reached the child"
+    assert event_types(quiet).count("RunStart") == 1 and not _notices(quiet), [
+        (type(e.payload).__name__, (e.turn_id or "")[:6], str(e.payload)[:110]) for e in quiet[-14:]
+    ]
+    (notice,) = _notices(events)
+    assert notice.text.startswith("Background subagent job") and "(cancelled)" in notice.text
+
+
+async def test_a_background_subagent_works_in_a_named_hand_of_its_session(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(
+        ("subagent", {"prompt": "build it", "run_in_background": True}),
+        subagent_calls=[("write", {"path": "built.txt", "content": "made by the child", "hand": "build"})],
+    )
+    state = await env.state(workspace_store=MemoryWorkspaceStore(objects=MemoryObjectStorage()))
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await create_with_hands(env, state, "build")
+        await env.sessions.submit(sid, Message("c1", "have a child build"))
+        await env.wait_for(state, sid, run_ended(2))  # the child's end woke the session
+        built = state.manager._hands.sandbox(hand_key(sid, "build"))
+        assert built is not None and await built.read_file("built.txt") == b"made by the child"
+        default = state.manager._hands.sandbox(sid)
+        assert default is None or not await default.exists("built.txt"), "it stayed in its hand"
+    assert any("hand" in (s["function"]["parameters"].get("properties") or {}) for s in gateway.tools_seen[0])
+
+
+async def test_erasing_a_session_stops_and_erases_its_background_subagents(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gate = threading.Event()  # the child is busy until the test lets it go
+    model(("subagent", {"prompt": "work", "run_in_background": True}), subagent_gate=gate, subagent_calls=[WRITE])
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue), api(env) as http:
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start it"))
+        await env.wait_for(state, sid, run_ended())
+        child = await _child_row(env, sid)
+        erased = await http.delete(f"/v1/sessions/{sid}/data", headers=HEADERS)
+        gate.set()
+        assert erased.status_code == 204, erased.text
+        await asyncio.sleep(1.5)  # anything still in flight would land now
+        assert await state.reader.read(child.id) == []
+    async with env.factory() as db:  # type: ignore[operator]
+        assert await db.get(SessionRow, child.id) is None

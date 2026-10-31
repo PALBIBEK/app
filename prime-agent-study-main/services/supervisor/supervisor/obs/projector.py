@@ -62,6 +62,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "MemoryInjected": "event_on_turn",
     "MemoryContext": "event_on_turn",
     "BackgroundResults": "event_on_turn",
+    "SubagentNotice": "event_on_turn",
     "HandProvisioned": "event_on_turn",
     "HandLost": "event_on_turn",
     "HandStopped": "event_on_turn",
