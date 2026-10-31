@@ -174,6 +174,8 @@ class SubagentEnd:
     run_id: str
     stop_reason: str
     output: str | None = None
+    # The subagent session that ended a run (a continuable one ends one per message it gets).
+    child_session_id: str | None = None
     category: EventCategory = field(default=EventCategory.BACKGROUND, repr=False)
 
 

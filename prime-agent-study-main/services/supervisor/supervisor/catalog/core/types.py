@@ -476,7 +476,8 @@ class PlugBindings:
     Attributes:
         gateway_base_url: Model gateway URL
         mcp_server_url: MCP server URL
-        acp_base_url: ACP service URL
+        acp_base_url: Unused: the ACP subagent transport is retired (subagents are
+            sessions). Kept so the compositions that name one keep their digests.
         model_route: Model routing configuration
     """
 
@@ -606,7 +607,8 @@ class SessionPins:
         memory_profile_digest: Optional MemoryProfile hash
         gateway_base_url: Model gateway URL
         mcp_server_url: MCP server URL
-        acp_base_url: ACP service URL
+        acp_base_url: Unused: the ACP subagent transport is retired (subagents are
+            sessions). Kept so the compositions that name one keep their digests.
         model_route: Model routing config
     """
 

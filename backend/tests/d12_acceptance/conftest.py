@@ -1,4 +1,4 @@
-"""Reuse d6 fixtures for D12 BFF subagent spawn/children gates."""
+"""Reuse d6 fixtures for the D12 BFF subagent gates."""
 
 from __future__ import annotations
 

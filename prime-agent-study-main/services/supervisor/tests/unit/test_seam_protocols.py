@@ -55,10 +55,8 @@ def test_sp_c01_runtimes_do_not_construct_providers() -> None:
     banned = (
         "NullToolProvider(",
         "FakeModelGatewayClient(",
-        "SubagentTransportImpl(",
         "build_runtime_seams(",
         "StaticPromptAssembler(",
-        "MemorySubagentProvider(",
     )
     offenders: list[str] = []
     for path in root.rglob("*.py"):
@@ -87,7 +85,6 @@ def test_sp_c03_journal_session_api_free_of_provider_concretes() -> None:
         "NullToolProvider",
         "FakeModelGatewayClient",
         "StaticPromptAssembler",
-        "MemorySubagentProvider",
         "NullContextMemoryProvider",
         "BasicCompactionProvider",
         "githi.seams",
@@ -105,7 +102,6 @@ def test_sp_a03_journal_schemas_remain_provider_type_free() -> None:
     banned = (
         "ToolProvider",
         "PromptAssembler",
-        "SubagentTransport",
         "ModelGatewayClient",
         "NullToolProvider",
         "FakeModelGatewayClient",

@@ -9,7 +9,16 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.agent.events import Envelope, JobEnd, JobStart, RunEnd, ToolEnd, ToolStart
+from supervisor.agent.events import (
+    CompactionEnd,
+    CompactionStart,
+    Envelope,
+    JobEnd,
+    JobStart,
+    RunEnd,
+    ToolEnd,
+    ToolStart,
+)
 from supervisor.db.models import EventRow, SessionRow
 from supervisor.journal.serde import decode_event
 
@@ -67,26 +76,16 @@ class JournalReader:
                 ended.add(env.payload.tool_call_id)
         return [starts[cid] for cid in starts if cid not in ended]
 
-    async def unpaired_subagent_starts(self, session_id: str) -> list:
-        """SubagentStart events whose run_id has no matching SubagentEnd."""
-        from supervisor.session import unpaired_subagent_starts
-
-        envs = await self.read(session_id, since=-1)
-        return unpaired_subagent_starts(envs)
-
-    async def unpaired_compaction_starts(self, session_id: str) -> list:
+    async def unpaired_compaction_starts(self, session_id: str) -> list[CompactionStart]:
         """CompactionStart events whose compaction_id has no matching CompactionEnd."""
-        from supervisor.session import unpaired_compaction_starts
-
-        envs = await self.read(session_id, since=-1)
-        return unpaired_compaction_starts(envs)
-
-    async def session_tree(self, session_id: str):
-        """Rebuild child/job tree from this session's journal."""
-        from supervisor.session import build_session_tree
-
-        envs = await self.read(session_id, since=-1)
-        return build_session_tree(session_id, envs)
+        ended: set[str] = set()
+        starts: dict[str, CompactionStart] = {}
+        for env in await self.read(session_id, since=-1):
+            if isinstance(env.payload, CompactionStart):
+                starts[env.payload.compaction_id] = env.payload
+            elif isinstance(env.payload, CompactionEnd):
+                ended.add(env.payload.compaction_id)
+        return [starts[cid] for cid in starts if cid not in ended]
 
     async def last_seq(self, session_id: str) -> int:
         async with self._factory() as db:

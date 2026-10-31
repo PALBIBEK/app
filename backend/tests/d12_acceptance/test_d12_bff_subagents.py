@@ -1,4 +1,4 @@
-"""D12 Acceptance B — BFF proxies spawn + list children; browser never hits supervisor."""
+"""D12 Acceptance B — the BFF proxies a session's subagents; the browser never hits the supervisor."""
 
 from __future__ import annotations
 
@@ -65,34 +65,16 @@ def _fail_if_route_missing(resp: httpx.Response, *, path_hint: str) -> None:
 
 
 def test_ai_client_subagent_proxies() -> None:
-    """AiClient must expose spawn + list-children against supervisor paths (not browser URLs)."""
-    has_spawn = (
-        hasattr(AiClient, "spawn_subagent")
-        or hasattr(AiClient, "spawn_session_subagent")
-        or hasattr(AiClient, "spawn_child")
-    )
-    has_list = (
-        hasattr(AiClient, "list_session_children")
-        or hasattr(AiClient, "list_children")
-        or hasattr(AiClient, "list_session_subagents")
-    )
-    assert has_spawn, (
-        "AiClient missing spawn_subagent (or equivalent) — BFF cannot proxy spawn (D12 B)"
-    )
-    assert has_list, (
-        "AiClient missing list_session_children (or equivalent) — "
-        "BFF cannot proxy children (D12 B)"
-    )
+    """AiClient reads a session's subagents from supervisor paths (never browser URLs), and
+    no longer spawns one (subagents are started by the agent's own tool calls)."""
+    assert hasattr(AiClient, "list_subagents") and hasattr(AiClient, "get_subagent")
+    assert not hasattr(AiClient, "spawn_subagent"), "the product does not spawn subagents"
 
     import prime_agent.services.ai_client as mod
 
     src = Path(mod.__file__).read_text(encoding="utf-8")
-    has_sessions_prefix = "/v1/sessions/" in src
-    has_spawn_path = "subagents/spawn" in src
-    has_children_path = "/children" in src
-    assert has_sessions_prefix, "AiClient must use supervisor /v1/sessions/ paths"
-    assert has_spawn_path, "AiClient source must contain subagents/spawn"
-    assert has_children_path, "AiClient source must contain /children"
+    assert "/v1/sessions/" in src and "/subagents" in src
+    assert "subagents/spawn" not in src and "/children" not in src
     # Relative supervisor paths only — never hardcoded browser supervisor hosts.
     assert "localhost:8080" not in src
     assert "http://localhost" not in src
@@ -100,19 +82,17 @@ def test_ai_client_subagent_proxies() -> None:
 
 
 def test_bff_routes_wire_subagents() -> None:
-    """Sessions (or dedicated) routes must wire spawn + children; no supervisor host leak."""
+    """Session routes wire the subagent list, transcript, message and stop; no host leak."""
     combined = _route_sources()
     svc = (PRIME / "services" / "session_service.py").read_text(encoding="utf-8")
-
-    wired_spawn = "subagents/spawn" in combined or (
-        "spawn_subagent" in combined and "subagents" in combined
-    )
-    wired_spawn = wired_spawn or ("spawn_subagent" in svc and "subagents/spawn" in svc)
-    wired_children = "/{session_id}/children" in combined or (
-        "list_session_children" in combined or "list_children" in svc
-    )
-    assert wired_spawn, "BFF must wire subagents/spawn (routes or SessionService)"
-    assert wired_children, "BFF must wire GET …/children (routes or SessionService)"
+    for route in (
+        '"/{session_id}/subagents"',
+        '"/{session_id}/subagents/{subagent_id}/events"',
+        '"/{session_id}/subagents/{subagent_id}/messages"',
+        '"/{session_id}/subagents/{subagent_id}/abort"',
+    ):
+        assert route in combined, f"BFF must wire {route}"
+    assert "subagents/spawn" not in combined and "/children" not in combined
     assert "localhost:8080" not in combined
     assert "localhost:8080" not in svc
 
@@ -145,14 +125,8 @@ def test_bff_does_not_expose_supervisor_token_in_sources() -> None:
     assert "localhost:8080" not in svc
 
 
-@pytest.mark.asyncio
-async def test_owner_list_spawn_via_bff(
-    db_session, owner, d6_settings, monkeypatch
-) -> None:
-    """Authenticated owner: list children + spawn via BFF → AiClient with service JWT."""
-    harness = await make_harness(db_session, owner, bound=True)
-    ai_sid = f"ai-d12-{uuid4().hex[:10]}"
-    link = SessionLink(
+def _link(owner, harness, ai_sid: str) -> SessionLink:
+    return SessionLink(
         id=str(uuid4()),
         user_id=owner.id,
         harness_id=harness.id,
@@ -167,8 +141,39 @@ async def test_owner_list_spawn_via_bff(
         total_cost=0.0,
         last_seq=0,
     )
+
+
+SUBAGENT = {
+    "id": "child-1",
+    "parent_id": "",  # set per test: the session's supervisor id
+    "depth": 1,
+    "label": "helper",
+    "task": "summarize the workspace",
+    "kind": "continuable",
+    "mode": "spawn",
+    "status": "ready",
+    "outcome": "completed",
+    "answer": "three files, one TODO",
+    "answer_truncated": False,
+    "open": True,
+    "call_id": "call-1",
+    "cost_usd": 0.002,
+    "created_at": "2026-10-31T00:00:00Z",
+}
+
+
+@pytest.mark.asyncio
+async def test_owner_reads_messages_and_stops_subagents_via_bff(
+    db_session, owner, d6_settings, monkeypatch
+) -> None:
+    """The owner lists the subagents, reads one's transcript, messages and stops it, each
+    through AiClient with a service JWT; a subagent not below the session is a 404."""
+    harness = await make_harness(db_session, owner, bound=True)
+    ai_sid = f"ai-d12-{uuid4().hex[:10]}"
+    link = _link(owner, harness, ai_sid)
     db_session.add(link)
     await db_session.commit()
+    subagent = SUBAGENT | {"parent_id": ai_sid}
 
     calls: list[str] = []
     upstream_tokens: list[str] = []
@@ -177,112 +182,74 @@ async def test_owner_list_spawn_via_bff(
         path = request.url.path
         calls.append(f"{request.method} {path}")
         if path.rstrip("/").endswith("/readyz"):
-            return httpx.Response(
-                200, json={"ready": True, "status": "ok", "run_allowed": True}
-            )
+            return httpx.Response(200, json={"ready": True, "status": "ok", "run_allowed": True})
         claims = _service_claims(request)
-        assert claims.get("type") == "service"
-        assert claims.get("principal_id") == str(owner.id)
-        assert claims.get("iss") == "prime-agent-api"
-        assert claims.get("aud") == "yal-supervisor"
-        upstream_tokens.append(
-            request.headers["Authorization"].removeprefix("Bearer ").strip()
-        )
-
-        if path.endswith(f"/sessions/{ai_sid}/children") and request.method == "GET":
-            assert _principal_from_request(request) == str(owner.id)
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": "child-1",
-                        "mode": "spawn",
-                        "provider": "memory",
-                        "parent_id": ai_sid,
-                        "run_id": "run-1",
-                        "label": "lab child",
-                        "activity": "running",
-                        "depth": 1,
-                    }
-                ],
-            )
-        if (
-            path.endswith(f"/sessions/{ai_sid}/subagents/spawn")
-            and request.method == "POST"
-        ):
-            assert _principal_from_request(request) == str(owner.id)
-            body = json.loads(request.content.decode())
-            assert body.get("prompt")
-            return httpx.Response(
-                200,
-                json={
-                    "child_session_id": "child-spawned-1",
-                    "text": "ok",
-                    "status": "completed",
-                    "run_id": "run-spawn-1",
-                },
-            )
-        return httpx.Response(404, json={"detail": "not found"})
+        assert (claims.get("type"), claims.get("principal_id")) == ("service", str(owner.id))
+        assert (claims.get("iss"), claims.get("aud")) == ("prime-agent-api", "yal-supervisor")
+        upstream_tokens.append(request.headers["Authorization"].removeprefix("Bearer ").strip())
+        match request.method, path:
+            case "GET", p if p.endswith(f"/sessions/{ai_sid}/subagents"):
+                return httpx.Response(200, json={"subagents": [subagent]})
+            case "GET", p if p.endswith(f"/sessions/{ai_sid}/subagents/child-1"):
+                return httpx.Response(200, json=subagent)
+            case "GET", p if p.endswith("/sessions/child-1/events"):
+                return httpx.Response(
+                    200, content=b"id: 1\nevent: run_start\ndata: {}\n\n", headers={"content-type": "text/event-stream"}
+                )
+            case "POST", p if p.endswith("/sessions/child-1/messages"):
+                body = json.loads(request.content.decode())
+                assert body["text"] == "one more thing"
+                return httpx.Response(202, json={"turn_id": "run-2", "status": "accepted"})
+            case "POST", p if p.endswith("/sessions/child-1/abort"):
+                return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(404, json={"detail": "subagent not found"})
 
     patch_ai_transport(monkeypatch, d6_settings, handler)
 
     async with as_user(db_session, owner) as client:
-        listed = await client.get(f"/api/v1/sessions/{link.id}/children")
-        _fail_if_route_missing(listed, path_hint="GET /sessions/{id}/children")
+        listed = await client.get(f"/api/v1/sessions/{link.id}/subagents")
+        _fail_if_route_missing(listed, path_hint="GET /sessions/{id}/subagents")
         assert listed.status_code == 200, listed.text
-        assert listed.json()[0]["id"] == "child-1"
-        # BFF must not echo supervisor service JWT / signing secret to the browser.
-        assert SECRET not in listed.text
-        assert "Bearer " not in listed.text
-        for tok in upstream_tokens:
-            assert tok not in listed.text
+        (row,) = listed.json()["subagents"]
+        assert (row["id"], row["task"], row["status"], row["answer"]) == (
+            "child-1", "summarize the workspace", "ready", "three files, one TODO"
+        )
 
-        spawned = await client.post(
-            f"/api/v1/sessions/{link.id}/subagents/spawn",
-            json={"prompt": "summarize the workspace", "provider": "lab_echo"},
-        )
-        _fail_if_route_missing(
-            spawned, path_hint="POST /sessions/{id}/subagents/spawn"
-        )
-        assert spawned.status_code in {200, 201}, spawned.text
-        body = spawned.json()
-        assert (
-            body.get("child_session_id") == "child-spawned-1"
-            or body.get("id") == "child-spawned-1"
-        )
-        assert SECRET not in spawned.text
-        assert "Bearer " not in spawned.text
-        for tok in upstream_tokens:
-            assert tok not in spawned.text
+        streamed = await client.get(f"/api/v1/sessions/{link.id}/subagents/child-1/events")
+        assert streamed.status_code == 200, streamed.text
+        assert "run_start" in streamed.text
 
-    assert any("/children" in c for c in calls)
-    assert any("subagents/spawn" in c for c in calls)
+        sent = await client.post(
+            f"/api/v1/sessions/{link.id}/subagents/child-1/messages", json={"content": "one more thing"}
+        )
+        assert sent.status_code == 202, sent.text
+        assert sent.json()["turn_id"] == "run-2"
+
+        stopped = await client.post(f"/api/v1/sessions/{link.id}/subagents/child-1/abort")
+        assert stopped.status_code == 200, stopped.text
+
+        not_below = await client.get(f"/api/v1/sessions/{link.id}/subagents/other-1/events")
+        assert not_below.status_code == 404, not_below.text
+
+        for response in (listed, streamed, sent, stopped):
+            assert SECRET not in response.text and "Bearer " not in response.text
+            for tok in upstream_tokens:
+                assert tok not in response.text
+
+    # Each subagent action first checks the subagent is below the session.
+    assert calls.count(f"GET /v1/sessions/{ai_sid}/subagents/child-1") == 3
+    assert "GET /v1/sessions/other-1/events" not in calls, "an unknown subagent is never read"
     assert all("8080" not in c for c in calls)
-    assert upstream_tokens, "AiClient must mint service JWT toward supervisor"
 
 
 @pytest.mark.asyncio
 async def test_foreign_session_subagents_denied(
     db_session, owner, other_user, d6_settings, monkeypatch
 ) -> None:
-    """Foreign harness/session owner → 404/403; never 200 from supervisor leak."""
+    """Another user's session → 404 at the BFF; the supervisor is never called."""
     harness = await make_harness(db_session, owner, bound=True)
     ai_sid = f"ai-d12-idor-{uuid4().hex[:8]}"
-    link = SessionLink(
-        id=str(uuid4()),
-        user_id=owner.id,
-        harness_id=harness.id,
-        ai_session_id=ai_sid,
-        tenant_id=str(owner.id),
-        status="active",
-        harness_version="githi-v1",
-        runtime="echo",
-        composition_id="githi-v1",
-        composition_digest=harness.composition_digest,
-        message_count=0,
-        total_cost=0.0,
-        last_seq=0,
-    )
+    link = _link(owner, harness, ai_sid)
     db_session.add(link)
     await db_session.commit()
 
@@ -290,37 +257,24 @@ async def test_foreign_session_subagents_denied(
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal reached_supervisor
-        path = request.url.path
-        if path.rstrip("/").endswith("/readyz"):
-            return httpx.Response(
-                200, json={"ready": True, "status": "ok", "run_allowed": True}
-            )
-        if f"/sessions/{ai_sid}/" in path or path.endswith(
-            f"/sessions/{ai_sid}/children"
-        ):
-            reached_supervisor = True
-            return httpx.Response(200, json=[{"id": "leaked"}])
-        return httpx.Response(404, json={"detail": "not found"})
+        if request.url.path.rstrip("/").endswith("/readyz"):
+            return httpx.Response(200, json={"ready": True, "status": "ok", "run_allowed": True})
+        reached_supervisor = True
+        return httpx.Response(200, json={"subagents": [SUBAGENT | {"parent_id": ai_sid}]})
 
     patch_ai_transport(monkeypatch, d6_settings, handler)
 
     async with as_user(db_session, other_user) as client:
-        stolen_list = await client.get(f"/api/v1/sessions/{link.id}/children")
-        _fail_if_route_missing(stolen_list, path_hint="GET foreign /children")
-        assert stolen_list.status_code in {403, 404}, stolen_list.text
-        assert stolen_list.status_code != 200
-        assert SECRET not in stolen_list.text
-
-        stolen_spawn = await client.post(
-            f"/api/v1/sessions/{link.id}/subagents/spawn",
-            json={"prompt": "steal", "provider": "lab_echo"},
-        )
-        _fail_if_route_missing(
-            stolen_spawn, path_hint="POST foreign /subagents/spawn"
-        )
-        assert stolen_spawn.status_code in {403, 404}, stolen_spawn.text
-        assert stolen_spawn.status_code != 200
-        assert SECRET not in stolen_spawn.text
+        for method, path, body in (
+            ("GET", f"/api/v1/sessions/{link.id}/subagents", None),
+            ("GET", f"/api/v1/sessions/{link.id}/subagents/child-1/events", None),
+            ("POST", f"/api/v1/sessions/{link.id}/subagents/child-1/messages", {"content": "steal"}),
+            ("POST", f"/api/v1/sessions/{link.id}/subagents/child-1/abort", None),
+        ):
+            response = await client.request(method, path, json=body)
+            _fail_if_route_missing(response, path_hint=f"{method} foreign {path}")
+            assert response.status_code in {403, 404}, (path, response.text)
+            assert SECRET not in response.text
 
     assert not reached_supervisor, (
         "foreign session must be denied at BFF ownership — supervisor must not be called"

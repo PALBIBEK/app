@@ -1358,7 +1358,8 @@ class AgentSessionWorkflow:
 
     @workflow.update
     async def session_op(self, op: SessionOp) -> OpResult:
-        """Tool invoke, memory, subagents, workspace: on the worker holding the session."""
+        """Tool invoke, memory, workspace: on the worker holding the session (the retired
+        subagent operations are answered by it too: ``RETIRED_OPS``)."""
         await workflow.wait_condition(lambda: self._state.phase is not Phase.CREATING)
         if self._creation_error is not None:
             raise self._creation_error
@@ -1394,7 +1395,10 @@ class AgentSessionWorkflow:
             await self._start_job(op, provider=(result.body or {}).get("provider"))
         return result
 
-    # --- background subagent jobs ----------------------------------------------
+    # --- background subagent jobs from before subagents were sessions -------------
+    # Nothing starts one now (START_BACKGROUND is retired, and START_JOB_SIGNAL has no
+    # sender): kept so the histories that did replay, and the jobs they started still end
+    # with their session (supervisor.temporal.jobs ends each one as retired).
 
     async def _start_job(self, op: SessionOp, *, provider: str | None) -> None:
         """Run the job journalled by ``op`` as its own workflow, owned by this session.

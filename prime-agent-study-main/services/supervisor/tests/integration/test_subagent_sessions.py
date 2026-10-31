@@ -539,3 +539,59 @@ async def test_interrupt_agent_stops_the_turn_and_keeps_what_is_queued(
     assert [t.stop_reason for t in payloads(child_events, TurnEnd)] == ["aborted", "stop"]
     asks = [m.content[0]["text"] for m in payloads(child_events, MessageEnd) if m.role == "user"]
     assert asks == ["list slowly", "then this"], "the queued message ran after the stop"
+
+
+
+async def _told(env: Env, state: SupervisorState, sid: str, notices: int) -> list:
+    """The session's journal once it was told ``notices`` times and every run it started
+    for them (or that took them in at a step) has ended."""
+    events = await env.wait_for(state, sid, lambda evs: len(_notices(evs)) >= notices, timeout=60)
+    return await _quiet(env, state, sid, event_types(events).count("RunStart"))
+
+async def test_a_person_reads_the_subagents_and_messages_only_a_continuable_one(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    model(
+        ("subagent", {"prompt": "write the notes file", "description": "notes"}),
+        ("subagent_continuable", {"prompt": "stand by", "description": "helper"}),
+        cost_per_call=0.01,
+        subagent_answer="done it",
+    )
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue), api(env) as http:
+        sid = await env.create(state)
+        other = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "start two"))
+        await _told(env, state, sid, 1)  # the helper's first turn settled
+        # The round started both at once: which was created first is not fixed.
+        started = (await http.get(f"/v1/sessions/{sid}/subagents", headers=HEADERS)).json()["subagents"]
+        one_shot, helper = sorted(started, key=lambda a: a["kind"] == "continuable")
+        await asyncio.wait_for(env.client.get_workflow_handle(workflow_id(one_shot["id"])).result(), timeout=30)
+        listed = {a["id"]: a for a in (await http.get(f"/v1/sessions/{sid}/subagents", headers=HEADERS)).json()["subagents"]}
+        single = await http.get(f"/v1/sessions/{sid}/subagents/{helper['id']}", headers=HEADERS)
+        not_below = await http.get(f"/v1/sessions/{other}/subagents/{helper['id']}", headers=HEADERS)
+        refused = await http.post(
+            f"/v1/sessions/{one_shot['id']}/messages", json={"command_id": "p1", "text": "more"}, headers=HEADERS
+        )
+        sent = await http.post(
+            f"/v1/sessions/{helper['id']}/messages", json={"command_id": "p2", "text": "one more"}, headers=HEADERS
+        )
+        helper_events = await env.wait_for(state, helper["id"], run_ended(2))
+        await _told(env, state, sid, 2)  # and its second
+        after = (await http.get(f"/v1/sessions/{sid}/subagents/{helper['id']}", headers=HEADERS)).json()
+        await env.sessions.terminate(sid)
+
+    done, kept = listed[one_shot["id"]], listed[helper["id"]]
+    assert (done["id"], done["parent_id"], done["depth"]) == (one_shot["id"], sid, 1)
+    assert (done["label"], done["task"], done["kind"], done["mode"]) == ("notes", "write the notes file", "foreground", "spawn")
+    assert (done["status"], done["outcome"], done["answer"], done["open"]) == ("completed", "completed", "done it", False)
+    assert done["call_id"] and done["cost_usd"] == pytest.approx(0.01)
+    assert (kept["label"], kept["task"], kept["kind"]) == ("helper", "stand by", "continuable")
+    assert (kept["status"], kept["outcome"], kept["answer"], kept["open"]) == ("ready", "completed", "done it", True)
+    assert single.status_code == 200 and single.json() == kept
+    assert not_below.status_code == 404, "a subagent is read only from the session above it"
+    assert refused.status_code == 409 and refused.json()["detail"]["reason"] == "not_messageable"
+    assert sent.status_code == 202, sent.text
+    asks = [m.content[0]["text"] for m in payloads(helper_events, MessageEnd) if m.role == "user"]
+    assert asks == ["stand by", "one more"], "the person's message is the helper's next turn"
+    assert (after["status"], after["cost_usd"]) == ("ready", pytest.approx(0.02))

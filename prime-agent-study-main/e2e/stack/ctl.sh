@@ -17,7 +17,6 @@ start_service() {
   case $1 in
     temporal) start_one temporal "$TEMPORAL_CLI server start-dev --ip 127.0.0.1 --port 7233 --ui-port 8233 --db-filename $E2E_RUN_DIR/temporal.db --log-level warn --dynamic-config-value limit.historyCount.suggestContinueAsNew=120" ;;
     s3)       start_one s3 "$PY -m moto.server -H 127.0.0.1 -p 8333" ;;
-    acp)      start_one acp "$PY $E2E_DIR/stack/acp.py" ;;
     relay)    start_one relay "$PY $E2E_DIR/stack/relay.py" ;;
     # One image, three processes, as compose and k8s deploy it: each serves its own part.
     gateway)  start_one gateway "cd $SVC/supervisor && env $GW_ENV MODEL_GATEWAY_ROUTES_JSON='$MODEL_GATEWAY_ROUTES_JSON' HOST=127.0.0.1 SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 $PY -m supervisor api" ;;
@@ -38,10 +37,10 @@ stop_service() {  # $1 name, $2 signal (TERM default)
   rm -f "$f"
 }
 
-ALL="temporal s3 relay acp gateway memory api worker"
+ALL="temporal s3 relay gateway memory api worker"
 case ${1:-} in
   start)   for s in ${2:-$ALL}; do start_service "$s"; done ;;
-  stop)    for s in ${2:-worker2 worker api memory gateway acp relay s3 temporal}; do stop_service "$s"; done ;;
+  stop)    for s in ${2:-worker2 worker api memory gateway relay s3 temporal}; do stop_service "$s"; done ;;
   kill)    stop_service "$2" KILL ;;
   restart) stop_service "$2"; start_service "$2" ;;
   status)  for s in $ALL worker2; do

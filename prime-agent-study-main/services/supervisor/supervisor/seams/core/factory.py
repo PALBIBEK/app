@@ -10,17 +10,11 @@ from supervisor.agent.seams import RuntimeSeams
 from supervisor.catalog.core.types import RecallBackend
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.seams.interfaces.prompt_assembler import PromptAssembler
-from supervisor.seams.interfaces.subagent_transport import SubagentTransport, SubagentTransportImpl
 from supervisor.seams.interfaces.tool_provider import ToolProvider
 from supervisor.seams.providers.gateway.fake_gateway import FakeModelGatewayClient
 from supervisor.seams.providers.gateway.http_gateway import HttpModelGatewayClient
 from supervisor.seams.providers.memory.null_memory import NullContextMemoryProvider
 from supervisor.seams.providers.prompt.static_prompt import StaticPromptAssembler
-from supervisor.seams.providers.subagent.memory_subagent import (
-    LAB_ECHO_PROVIDER,
-    LEGACY_MEMORY_ALIAS,
-    LabEchoSubagentProvider,
-)
 from supervisor.seams.providers.tools.null_tools import NullToolProvider
 
 logger = logging.getLogger(__name__)
@@ -29,36 +23,12 @@ if TYPE_CHECKING:
     from supervisor.catalog import MemoryProfile
     from supervisor.seams.interfaces.context_memory import ContextMemoryProvider
 
-# Nested session provider constant
-NESTED_SESSION_PROVIDER = "nested_session"
-
 DEFAULT_RECALL_MAX_TOKENS: Final = 512
 """Recall's share of the context when a memory profile does not set ``recall.max_tokens``."""
 
 STANDALONE_TOOLS: Final = ("read", "write", "ls", "grep")
 """Offered to a githi runtime created without a tool seam (no catalog pins):
 workspace file tools only, never a shell."""
-
-
-def _env_name() -> str:
-    return (os.environ.get("ENV") or os.environ.get("APP_ENV") or "local").strip().lower()
-
-
-def _staging_or_prod() -> bool:
-    return _env_name() in ("staging", "production", "prod")
-
-
-def lab_echo_allowed(*, explicit: bool | None = None) -> bool:
-    """Lab echo is local/tests-only unless ALLOW_LAB_ECHO / explicit override."""
-    if explicit is not None:
-        return explicit
-    flag = (os.environ.get("ALLOW_LAB_ECHO") or "").strip().lower()
-    if flag in ("1", "true", "yes"):
-        return True
-    if flag in ("0", "false", "no"):
-        return False
-    # Staging/prod: never unmarked echo.
-    return not _staging_or_prod()
 
 
 def build_context_memory_from_profile(
@@ -146,7 +116,7 @@ def _resolve_gateway(
     (or ``GATEWAY_BASE_URL``'s) chat-completions client; else the offline fake.
     ``gateway_token`` is the session's key and ``default_model`` its pinned model
     either way, so a seam that calls the model without naming one (the compaction
-    summarizer, a nested-session subagent) uses the session's model.
+    summarizer) uses the session's model.
     """
     if model_gateway is not None:
         return model_gateway
@@ -168,82 +138,17 @@ def _resolve_gateway(
     return FakeModelGatewayClient()
 
 
-def _build_subagent_transport(
-    *,
-    gateway: ModelGatewayClient,
-    register_lab_echo: bool,
-    register_acp: bool,
-    acp_base_url: str | None,
-) -> SubagentTransport:
-    """Wire production-safe defaults: ACP > nested_session > lab_echo (lab only)."""
-    acp_url = (acp_base_url or os.environ.get("ACP_BASE_URL") or "").strip()
-    want_acp = register_acp or bool(acp_url)
-
-    if want_acp:
-        default_name = "acp"
-    elif register_lab_echo:
-        default_name = LAB_ECHO_PROVIDER
-    else:
-        default_name = NESTED_SESSION_PROVIDER
-
-    impl = SubagentTransportImpl(default_provider=default_name)
-
-    if register_lab_echo:
-        echo = LabEchoSubagentProvider()
-        impl.register_provider(LAB_ECHO_PROVIDER, echo)
-        # Deprecated alias for older tests — never the staging/prod default.
-        impl.register_provider(LEGACY_MEMORY_ALIAS, echo)
-
-    if want_acp:
-        from supervisor.seams.providers.subagent.acp_subagent import AcpSubagentProvider
-
-        impl.register_provider(
-            "acp",
-            AcpSubagentProvider(base_url=acp_url or "http://127.0.0.1:8091"),
-        )
-
-    if not want_acp and not register_lab_echo:
-        from supervisor.seams.providers.subagent.nested_session import NestedSessionSubagentProvider
-        impl.register_provider(
-            NESTED_SESSION_PROVIDER,
-            NestedSessionSubagentProvider(gateway),
-        )
-    elif not want_acp and register_lab_echo:
-        # Lab path already registered; also offer nested when gateway is real.
-        pass
-    else:
-        # ACP primary — still register nested as optional alternate when not lab.
-        if not register_lab_echo:
-            try:
-                from supervisor.seams.providers.subagent.nested_session import (
-                    NestedSessionSubagentProvider,
-                )
-                impl.register_provider(
-                    NESTED_SESSION_PROVIDER,
-                    NestedSessionSubagentProvider(gateway),
-                )
-            except Exception:
-                logger.warning("registering the nested-session subagent provider failed", exc_info=True)
-
-    return impl
-
-
 def build_runtime_seams(
     *,
     tool_provider: ToolProvider | None = None,
     prompt_assembler: PromptAssembler | None = None,
-    subagent_transport: SubagentTransport | None = None,
     model_gateway: ModelGatewayClient | None = None,
     context_memory: ContextMemoryProvider | None = None,
     gateway_base_url: str | None = None,
     gateway_token: str | None = None,
     session_id: str | None = None,
     default_model: str | None = None,
-    register_memory: bool | None = None,
-    register_lab_echo: bool | None = None,
-    register_acp: bool = False,
     mcp_server_url: str | None = None,
-    acp_base_url: str | None = None,
 ) -> RuntimeSeams:
     """Construct default in-process providers for tests / binder hooks.
 
@@ -254,13 +159,9 @@ def build_runtime_seams(
     ``gateway_base_url``, else the routed model gateway (``MODEL_GATEWAY_URL``),
     else env ``GATEWAY_BASE_URL`` → ``HttpModelGatewayClient``, else the fake.
 
-    Subagent defaults (D12):
-    - Prefer ``acp`` when ``ACP_BASE_URL`` / ``acp_base_url`` / ``register_acp``.
-    - Else ``nested_session`` (gateway-backed) in staging/prod.
-    - ``lab_echo`` (legacy alias ``memory``) only when lab allowed
-      (local/tests, ``ALLOW_LAB_ECHO=1``, or explicit ``register_lab_echo=True``).
+    Subagents are not a seam: they are sessions (``supervisor.session.children``).
 
-    Optional out-of-process plugs (QUEUE ``oop-mcp-acp``):
+    Optional out-of-process plug:
     ``MCP_SERVER_URL`` / ``mcp_server_url`` → ``McpToolProvider`` (composed with
     ``tool_provider`` when both set).
     """
@@ -278,26 +179,10 @@ def build_runtime_seams(
         default_model=default_model,
     )
 
-    # register_memory is deprecated alias for register_lab_echo.
-    explicit_lab = register_lab_echo if register_lab_echo is not None else register_memory
-    allow_lab = lab_echo_allowed(explicit=explicit_lab)
-
-    transport: SubagentTransport
-    if subagent_transport is not None:
-        transport = subagent_transport
-    else:
-        transport = _build_subagent_transport(
-            gateway=gateway,
-            register_lab_echo=allow_lab,
-            register_acp=register_acp,
-            acp_base_url=acp_base_url,
-        )
-
     memory = context_memory if context_memory is not None else NullContextMemoryProvider()
     return RuntimeSeams(
         tool_provider=tools,
         prompt_assembler=prompts,
-        subagent_transport=transport,
         model_gateway=gateway,
         context_memory=memory,
     )

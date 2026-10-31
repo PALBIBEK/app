@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 from supervisor.seams import (
     ModelGatewayClient,
     PromptAssembler,
-    SubagentTransport,
     ToolProvider,
 )
 
@@ -16,7 +15,7 @@ if TYPE_CHECKING:
     from supervisor.seams import ContextMemoryProvider
 
 
-_SEAM_FIELDS = ("tool_provider", "prompt_assembler", "subagent_transport", "model_gateway", "context_memory")
+_SEAM_FIELDS = ("tool_provider", "prompt_assembler", "model_gateway", "context_memory")
 
 
 @dataclass(frozen=True)
@@ -24,7 +23,6 @@ class RuntimeSeams:
     """Immutable DI container for runtime services. All fields optional."""
     tool_provider: ToolProvider | None = None
     prompt_assembler: PromptAssembler | None = None
-    subagent_transport: SubagentTransport | None = None
     model_gateway: ModelGatewayClient | None = None
     context_memory: ContextMemoryProvider | None = None
 

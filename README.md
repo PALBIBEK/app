@@ -247,13 +247,19 @@ holds every message, call and result: clients read it, and a retried step reads 
   (queued behind the one it is running, or waking it), `interrupt_agent` stops its current turn
   (what is queued stays), `list_agents` lists them, and the session is told each time one
   settles. A continuable child may `report` to its parent mid-turn; the parent hears it at its
-  next step, or wakes for it. A round's subagents work at once, children may start their own while shallower than
-  `subagents.max_depth`, a child's spend counts toward its parent's cost cap, and stopping or
+  next step, or wakes for it. A round's subagents work at once, children may start their own
+  while shallower than `subagents.max_depth`, a child's spend counts toward its parent's cost cap, and stopping or
   ending the parent stops its children. Each child's journal can be read like any session's.
   A child is part of its session everywhere else: its run is nested in the trace of the run that
   started it (and its spend in that run's cost), its approvals are listed and answered with its
   parent's, its usage is its parent's, it is not listed as a session of its own, it counts
-  toward no session quota, and erasing the parent erases it.
+  toward no session quota, and erasing the parent erases it. `GET /v1/sessions/{id}/subagents`
+  lists every subagent below a session: its task, how it runs, its status, its last answer and
+  what it cost. A person reads one's transcript and runs under its own id, stops it with
+  `POST /v1/sessions/{id}/abort`, and messages a continuable one with `POST .../messages` (a
+  one-shot or background subagent takes no messages: it works on the task it was given).
+  Nothing else starts a subagent: the transport-based ones that came before (`lab_echo`,
+  `nested_session`, `acp`) are retired, and a job one of them was still running ends as retired.
 - **When something fails.** A model call that may pass (a rate limit, an overload) is asked
   again on a durable timer. A dead worker is noticed within the heartbeat timeout (30 s; every
   step heartbeats), and its session moves to another worker. A call that may already have run is

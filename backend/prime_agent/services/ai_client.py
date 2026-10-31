@@ -95,7 +95,7 @@ SAFE_READY_REASONS = frozenset(
 
 
 LONG_CALL_TIMEOUT_S = 300.0
-"""For calls that answer only when work finishes (a subagent run, a tool call): the
+"""For calls that answer only when work finishes (a tool call, a command): the
 usual short timeout turned a slow but healthy run into a 503."""
 
 
@@ -988,73 +988,25 @@ class AiClient:
             raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
 
 
-    @staticmethod
-    def _supervisor_subagent_provider(provider: str | None) -> str:
-        """Map product lab_echo alias → supervisor echo stub name ``memory`` (not LTM)."""
-        raw = (provider or "memory").strip() or "memory"
-        return raw  # lab_echo or memory alias — supervisor factory maps both when lab allowed
-
-    async def spawn_subagent(
-        self,
-        identity: TenantPrincipal,
-        ai_session_id: str,
-        *,
-        prompt: str,
-        description: str = "",
-        provider: str = "memory",
-        mode: str = "spawn",
-        parent_depth: int = 0,
-        run_id: str | None = None,
-        tool_filter: list[str] | None = None,
-        persona: str | None = None,
-        depth_limit: int | None = None,
-        output_schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """POST /v1/sessions/{id}/subagents/spawn — service JWT (D12 B)."""
-        body: dict[str, Any] = {
-            "prompt": prompt,
-            "description": description,
-            "provider": self._supervisor_subagent_provider(provider),
-            "mode": mode,
-            "parent_depth": parent_depth,
-        }
-        if run_id is not None:
-            body["run_id"] = run_id
-        if tool_filter is not None:
-            body["tool_filter"] = tool_filter
-        if persona is not None:
-            body["persona"] = persona
-        if depth_limit is not None:
-            body["depth_limit"] = depth_limit
-        if output_schema is not None:
-            body["output_schema"] = output_schema
-        return await self._json_request(
-            "POST",
-            f"/v1/sessions/{ai_session_id}/subagents/spawn",
-            identity,
-            json_body=body,
-            expected=(200, 201),
-            timeout=LONG_CALL_TIMEOUT_S,  # the child runs to completion before this answers
-        )
-
-    async def list_session_children(
-        self,
-        identity: TenantPrincipal,
-        ai_session_id: str,
-        *,
-        scope: str = "direct",
-    ) -> list[dict[str, Any]]:
-        """GET /v1/sessions/{id}/children — service JWT (D12 B)."""
-        path = f"/v1/sessions/{ai_session_id}/children"
-        if scope:
-            path = f"{path}?scope={quote(scope, safe='')}"
+    async def list_subagents(self, identity: TenantPrincipal, ai_session_id: str) -> list[dict[str, Any]]:
+        """GET /v1/sessions/{id}/subagents: every subagent below the session."""
         raw = await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/subagents", identity, expected=(200,)
+        )
+        listed = raw.get("subagents") if isinstance(raw, dict) else None
+        return [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
+
+    async def get_subagent(
+        self, identity: TenantPrincipal, ai_session_id: str, subagent_id: str
+    ) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/subagents/{subagent_id}: one subagent below the session
+        (``AiUpstreamError`` 404 when it is not one)."""
+        return await self._json_request(
             "GET",
-            path,
+            f"/v1/sessions/{quote(ai_session_id, safe='')}/subagents/{quote(subagent_id, safe='')}",
             identity,
             expected=(200,),
         )
-        return raw if isinstance(raw, list) else []
 
     async def list_traces(self, identity: TenantPrincipal, params: dict[str, Any]) -> dict[str, Any]:
         """GET /v1/traces: the caller's runs, newest first (``items``, ``next_before_ms``)."""

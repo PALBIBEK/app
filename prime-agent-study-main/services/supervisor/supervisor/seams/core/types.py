@@ -61,54 +61,6 @@ class AssembledPrompt:
     content_digest: str | None = None
 
 
-@dataclass
-class SubagentRequest:
-    """Provider-neutral spawn / fork / background / continuable request."""
-
-    prompt: str
-    description: str = ""
-    parent_depth: int = 0
-    mode: str = "spawn"
-    run_id: str | None = None
-    tool_filter: list[str] | None = None
-    persona: str | None = None
-    depth_limit: int | None = None
-    output_schema: dict[str, Any] | None = None
-
-
-@dataclass
-class SubagentRunResult:
-    """One-shot / fork result (harness-neutral)."""
-
-    text: str = ""
-    child_id: str | None = None
-    status: str = "ok"
-    meta: dict[str, Any] = field(default_factory=dict)
-    spent: dict[str, Any] = field(default_factory=dict)
-    """What its model calls through the session's gateway cost (``input_tokens``,
-    ``output_tokens``, ``cost``); empty when the child pays its own way (ACP)."""
-
-
-@dataclass
-class JobHandle:
-    job_id: str
-
-
-@dataclass
-class ChildHandle:
-    child_id: str
-    message_id: str = ""
-
-
-@dataclass
-class ChildInfo:
-    id: str
-    status: str
-    description: str = ""
-    pending: int = 0
-    live: bool = False
-
-
 class ModelGatewayError(RuntimeError):
     """A model call the gateway (or the provider behind it) refused, with its HTTP status.
 

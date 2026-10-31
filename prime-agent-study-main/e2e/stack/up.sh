@@ -8,7 +8,7 @@ set -euo pipefail
 here="$(dirname "${BASH_SOURCE[0]}")"
 source "$here/env.sh"
 
-for host in model-gateway acp temporal memory-service; do
+for host in model-gateway temporal memory-service; do
   getent hosts "$host" >/dev/null || { echo "add '127.0.0.1 $host' to /etc/hosts" >&2; exit 1; }
 done
 
@@ -21,7 +21,7 @@ wait_http() {  # url, seconds
   echo "timed out waiting for $1" >&2; return 1
 }
 
-"$here/ctl.sh" start "temporal s3 relay acp gateway memory"
+"$here/ctl.sh" start "temporal s3 relay gateway memory"
 wait_http http://127.0.0.1:8333 60
 wait_http http://127.0.0.1:8090/v1/healthz 60
 wait_http http://127.0.0.1:8092/v1/healthz 60

@@ -153,8 +153,8 @@ NON_RETRYABLE = (
     "InvalidApprovalChoice",
     # Session operations: missing seams, bad requests, workspace preconditions.
     "ToolInvokeNotConfigured",
-    "SubagentNotConfigured",
     "MemoryNotConfigured",
+    "OperationRetired",
     "WorkspaceNotReadyError",
     "WorkspaceUnavailable",
     "SandboxUnavailable",
@@ -569,6 +569,7 @@ class Op(StrEnum):
     INVOKE_TOOL = "invoke_tool"
     COMPACT_MEMORY = "compact_memory"
     RECALL_MEMORY = "recall_memory"
+    # Retired (RETIRED_OPS): the transport-based subagents from before subagents were sessions.
     SPAWN_CHILD = "spawn_child"
     FORK_CHILD = "fork_child"
     START_BACKGROUND = "start_background"
@@ -578,8 +579,14 @@ class Op(StrEnum):
     REHYDRATE_WORKSPACE = "rehydrate_workspace"
 
 
+# Answered with OperationRetired: subagents are sessions their agent starts with a tool call
+# (supervisor.session.children). Kept so an op sent before they were is answered, not lost.
+RETIRED_OPS = frozenset(
+    {Op.SPAWN_CHILD, Op.FORK_CHILD, Op.START_BACKGROUND, Op.START_CONTINUABLE, Op.SEND_CHILD_MESSAGE, Op.INTERRUPT_CHILD}
+)
+
 # Safe to run again if the first attempt's outcome is unknown; the rest run at most once.
-RETRYABLE_OPS = frozenset({Op.INTERRUPT_CHILD, Op.REHYDRATE_WORKSPACE})
+RETRYABLE_OPS = frozenset({Op.REHYDRATE_WORKSPACE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,7 +605,8 @@ class SessionOp:
 
 @dataclass(frozen=True, slots=True)
 class StartJob:
-    """A journalled START_BACKGROUND op and the provider it was validated against."""
+    """A journalled START_BACKGROUND op and the provider it was validated against (retired:
+    from before subagents were sessions, kept so their histories decode)."""
 
     op: SessionOp
     provider: str
@@ -606,7 +614,8 @@ class StartJob:
 
 @dataclass(frozen=True, slots=True)
 class JobSpec:
-    """A background subagent job; ``request`` is the SubagentRequest's fields."""
+    """A background subagent job from before subagents were sessions (``supervisor.temporal.jobs``);
+    ``request`` is the fields of the transport request it ran."""
 
     session_id: str
     job_id: str

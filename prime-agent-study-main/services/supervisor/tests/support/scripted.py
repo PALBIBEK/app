@@ -22,7 +22,6 @@ from supervisor.harness.core.types import ApprovalSpec, BudgetSpec
 from supervisor.seams.compaction.core import COMPACTION_NOTICE, is_summary
 from supervisor.seams.core import factory
 from supervisor.seams.core.types import ChatMessage, Completion, ModelGatewayError
-from supervisor.seams.interfaces.subagent_transport import SubagentTransportImpl
 from supervisor.seams.providers.tools import RegistryToolProvider
 from supervisor.session.children import SUBAGENT_BRIEF
 
@@ -69,15 +68,6 @@ class ScriptedGateway:
     overflow_calls: set[int] = dataclasses.field(default_factory=set)
     seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     tools_seen: list[list[dict[str, Any]]] = dataclasses.field(default_factory=list)
-    # A background subagent working in a borrowed hand (``temporal.hand_jobs``): what it
-    # asks for, its answer, and an event it waits on before its first call.
-    child_calls: list[tuple[str, dict[str, Any]]] = dataclasses.field(default_factory=list)
-    child_answer: str = "the job is done"
-    child_gate: threading.Event | None = None
-    # The job's model call after this many tool results fails once (its worker is lost:
-    # the job is retried); every request the job made, in order.
-    child_fail_after: int | None = None
-    child_seen: list[list[ChatMessage]] = dataclasses.field(default_factory=list)
     # A subagent session (its system prompt carries SUBAGENT_BRIEF): what it asks for, one
     # call per step, then its answer; an event each of its model calls waits on; and every
     # request a subagent made, in order.
@@ -135,8 +125,6 @@ class ScriptedGateway:
             )
         if (answer := self._one_shot(messages)) is not None:
             return Completion(ChatMessage("assistant", answer), model="scripted", usage={})
-        if messages and messages[0].content.startswith("You are a background subagent"):
-            return self._child(messages)
         if any(m.role == "system" and m.content == SUBAGENT_BRIEF for m in messages):
             return self._subagent(messages)
         with self._lock:
@@ -236,24 +224,6 @@ class ScriptedGateway:
                               usage=usage, tool_calls=calls, finish_reason="tool_calls")
         return Completion(ChatMessage("assistant", self.subagent_answer), model="scripted", usage=usage)
 
-    def _child(self, messages: list[ChatMessage]) -> Completion:
-        if self.child_gate is not None and not self.child_gate.wait(timeout=60):
-            raise TimeoutError("the child's gate was never opened")
-        done = sum(1 for m in messages if m.role == "tool")
-        with self._lock:
-            self.child_seen.append(list(messages))
-            if self.child_fail_after == done:
-                self.child_fail_after = None
-                raise ConnectionError("the job's worker was lost (scripted)")
-        usage = {"prompt_tokens": 10, "completion_tokens": 5, "cost_total": self.cost_per_call}
-        if done < len(self.child_calls):
-            name, args = self.child_calls[done]
-            calls = [{"id": f"child-{done}", "type": "function",
-                      "function": {"name": name, "arguments": json.dumps(args)}}]
-            return Completion(ChatMessage("assistant", "", tool_calls=calls), model="scripted",
-                              usage=usage, tool_calls=calls)
-        return Completion(ChatMessage("assistant", self.child_answer), model="scripted", usage=usage)
-
     def _one_shot(self, messages: list[ChatMessage]) -> str | None:
         system = messages[0].content if messages and messages[0].role == "system" else ""
         if system.startswith("You extract durable facts"):
@@ -317,22 +287,6 @@ def slow_end_run(seconds: float) -> Iterator[None]:
         yield
     finally:
         GithiSteps.end_run = original  # type: ignore[method-assign]
-
-
-@contextmanager
-def slow_subagent(seconds: float) -> Iterator[None]:
-    """Make every subagent run (any provider) take ``seconds`` (in the caller's thread)."""
-    original = SubagentTransportImpl.start_one_shot
-
-    def start_one_shot(self: SubagentTransportImpl, provider: str, request: Any) -> Any:
-        time.sleep(seconds)
-        return original(self, provider, request)
-
-    SubagentTransportImpl.start_one_shot = start_one_shot  # type: ignore[method-assign]
-    try:
-        yield
-    finally:
-        SubagentTransportImpl.start_one_shot = original  # type: ignore[method-assign]
 
 
 def githi_variant(catalog: HarnessCatalog, version: str, **changes: Any) -> HarnessManifest:

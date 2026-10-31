@@ -1106,6 +1106,7 @@ class GithiSteps:
             label=asked.label,
             seed_until=seed,
             kind=asked.kind,
+            task=asked.prompt,
         )
         await self._record(
             sid,
@@ -1157,7 +1158,9 @@ class GithiSteps:
             detail=req.error or "the subagent's session could not start",
         )
         ok, text = graded(outcome)
-        settled = SubagentEnd(run_id=req.child_run_id or "", stop_reason=status_of(outcome), output=text)
+        settled = SubagentEnd(
+            run_id=req.child_run_id or "", stop_reason=status_of(outcome), output=text, child_session_id=child_id
+        )
         await self._manager._record(
             sid, settled, turn_id=req.run_id, trace_id=None, event_key=f"subagent:{child_id}:end:{req.child_run_id}"
         )

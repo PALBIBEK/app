@@ -37,9 +37,9 @@ _STATUS: Final[dict[str, int]] = {
     "ApprovalTimedOut": 409,
     "InvalidApprovalChoice": 422,
     "ValueError": 422,
-    # Session operations (tool invoke, memory, subagents, workspace).
+    # Session operations (tool invoke, memory, workspace).
     "ToolInvokeNotConfigured": 409,
-    "SubagentNotConfigured": 409,
+    "OperationRetired": 410,
     "MemoryNotConfigured": 409,
     # Notebooks (the memory service): its errors, and it being absent or down.
     "NotebookNotFound": 404,
@@ -57,7 +57,6 @@ _STATUS: Final[dict[str, int]] = {
     "WorkspaceNotReadyError": 409,
     "WorkspaceUnavailable": 409,
     "ToolOutcomeUnknown": 503,
-    "DepthExceeded": 400,
     # Too big for the session's workflow history (supervisor.temporal.contracts).
     "MessageTooLong": 413,
     "CommandTooLarge": 413,
@@ -88,8 +87,6 @@ def _detail(err: SessionCommandError) -> Any:
             return {"code": err.details.get("code", err.kind), "message": message}
         case "SessionTerminated" | "SessionClosed":
             return "session terminated"
-        case "DepthExceeded":
-            return {"code": err.details.get("code", "DEPTH_EXCEEDED"), "message": message}
         case "ToolOutcomeUnknown":
             return {"reason": "tool_outcome_unknown", "message": message}
         case _:
