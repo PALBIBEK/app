@@ -23,7 +23,10 @@ export function backoffMs(attempt: number): number {
   return Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.max(0, attempt));
 }
 
-export function useSessionStream(sessionId: string | undefined, { enabled = true }: { enabled?: boolean } = {}) {
+export function useSessionStream(
+  sessionId: string | undefined,
+  { enabled = true, subagentId }: { enabled?: boolean; /** A subagent's transcript, below the session. */ subagentId?: string } = {},
+) {
   const [state, setState] = useState<SessionViewState>(() => createSessionViewState());
   const [connection, setConnection] = useState<Connection>('connecting');
   const lastSeq = useRef(-1);
@@ -31,7 +34,7 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
   useEffect(() => {
     setState(createSessionViewState());
     lastSeq.current = -1;
-  }, [sessionId]);
+  }, [sessionId, subagentId]);
 
   useEffect(() => {
     if (!sessionId || !enabled) {
@@ -54,7 +57,7 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
             setConnection('live');
             attempt = 0;
           };
-          const stream = sessionsAPI.openEventStream(sessionId, { signal: ac.signal, lastEventId: resume, onOpen, onEnded });
+          const stream = sessionsAPI.openEventStream(sessionId, { signal: ac.signal, lastEventId: resume, onOpen, onEnded, subagentId });
           for await (const event of stream) {
             lastSeq.current = Math.max(lastSeq.current, event.seq);
             setState((prev) => applyWireEvent(prev, event));
@@ -79,7 +82,7 @@ export function useSessionStream(sessionId: string | undefined, { enabled = true
     })();
 
     return () => ac.abort();
-  }, [sessionId, enabled]);
+  }, [sessionId, enabled, subagentId]);
 
   /** Show a message the user just sent until the journal confirms it. */
   const addLocalMessage = useCallback((text: string) => {

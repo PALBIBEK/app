@@ -56,6 +56,11 @@ function Row({ item, now, onAnswered }: { item: InboxItem; now: number; onAnswer
           {item.session_title || `${item.harness_name ?? 'Agent'} session`}
         </Link>
         {item.harness_name ? <Mono className="text-ink-2">{item.harness_name}</Mono> : null}
+        {item.subagent ? (
+          <span data-testid="inbox-subagent" className="rounded-full bg-line-soft px-2 py-px text-xs text-ink-2">
+            Asked by its subagent{item.subagent_label ? ` · ${item.subagent_label}` : ''}
+          </span>
+        ) : null}
         <Mono className="text-xs text-ink-3">{item.session_id.slice(0, 13)}</Mono>
         <span className="flex-1" />
         <span className="tabular font-mono text-xs text-ink-3">

@@ -1608,6 +1608,7 @@ class AgentSessionWorkflow:
                 report.text,
                 notice_from=report.child_id,
                 notice_text=report.text,
+                notice_output=report.output or None,
             )
         )
 

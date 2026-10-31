@@ -90,6 +90,31 @@ export const WireEventSchema = z.object({
   data: z.record(z.unknown()).default({}),
 });
 
+/** A subagent below a session: a session its agent started with a tool call. */
+export const SubagentSchema = z.object({
+  id: z.string(),
+  parent_id: z.string(),
+  depth: z.number(),
+  label: z.string().nullish(),
+  task: z.string().nullish(),
+  /** foreground: the agent waited for it. background: it worked while the agent went on.
+   * continuable: it stays, and takes more messages. */
+  kind: z.enum(['foreground', 'background', 'continuable']),
+  mode: z.enum(['spawn', 'fork']),
+  /** ready: a continuable subagent waiting for its next message. */
+  status: z.enum(['starting', 'running', 'ready', 'completed', 'failed', 'cancelled']),
+  outcome: z.enum(['completed', 'failed', 'cancelled']).nullish(),
+  answer: z.string().nullish(),
+  answer_truncated: z.boolean().default(false),
+  open: z.boolean(),
+  call_id: z.string().nullish(),
+  cost_usd: z.number().default(0),
+  created_at: z.string(),
+});
+
+export const SubagentListSchema = z.object({ subagents: z.array(SubagentSchema) });
+
+export type Subagent = z.infer<typeof SubagentSchema>;
 export type Session = z.infer<typeof SessionSchema>;
 export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
 export type SessionMessageResponse = z.infer<typeof SessionMessageResponseSchema>;
@@ -109,6 +134,19 @@ export interface ChatMessage {
   toolCalls?: ToolCallView[];
   /** The journal position, for "fork from here" (absent on a message not yet confirmed). */
   seq?: number;
+  /** Set when a subagent told the agent something (it finished, or sent an update). */
+  notice?: SubagentNoticeView;
+}
+
+/** What a subagent told the agent that started it, as a person reads it. */
+export interface SubagentNoticeView {
+  subagentId: string;
+  /** settled: a turn of its ended. report: it sent an update while working. */
+  kind: 'settled' | 'report';
+  /** How a settled turn ended. */
+  status?: 'completed' | 'failed' | 'cancelled';
+  /** Its own words: its closing message, or the update. */
+  text: string;
 }
 
 export interface ToolCallView {

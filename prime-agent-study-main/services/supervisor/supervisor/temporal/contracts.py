@@ -214,6 +214,7 @@ class Message:
     notice_from: str | None = None
     notice_run: str | None = None
     notice_text: str | None = None
+    notice_output: str | None = None  # a report's own words, unframed (for people)
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,6 +468,7 @@ class ChildReport:
     child_id: str
     report_id: str
     text: str
+    output: str = ""  # its own words, unframed (for people)
 
 
 @dataclass(frozen=True, slots=True)

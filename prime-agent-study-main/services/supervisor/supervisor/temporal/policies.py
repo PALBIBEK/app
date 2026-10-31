@@ -191,7 +191,7 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
         Where.SESSION_WORKER, Limit.TURN, Retry.STANDARD, True,
         "an operation with side effects is not re-run: a tool invoke is closed as lost and "
         "reported as outcome unknown",
-        "Tool invoke, memory, subagents, workspace",
+        "Tool invoke, memory, workspace (the retired subagent operations are answered here too)",
         retry_note="once for operations with side effects",
     ),
     Activity.CLOSE_LOST_CALL: StepPolicy(
@@ -209,14 +209,13 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
     ),
     Activity.RUN_JOB: StepPolicy(
         Where.ANY_WORKER, Limit.TURN, Retry.STANDARD, True,
-        "heartbeats stop; retried on another worker, never lost; a job in a lent hand goes "
-        "on from the calls it journalled",
-        "A background subagent job's work",
+        "retried on another worker; its end is journalled once",
+        "Retired: a background job from before subagents were sessions, ended as retired",
     ),
     Activity.END_JOB: StepPolicy(
         Where.ANY_WORKER, Limit.SHORT, Retry.UNTIL_DONE, True,
         "retried until exactly one end reaches the session's journal",
-        "Record how a background job ended",
+        "Record how such a job ended",
     ),
     Activity.SUBAGENT_BEGIN: StepPolicy(
         Where.SESSION_WORKER, Limit.SHORT, Retry.STANDARD, True,

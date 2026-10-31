@@ -282,6 +282,9 @@ jobs:
       - name: Traces journey (runs list, transcript, tree, raw events, session replay)
         working-directory: frontend
         run: e2e/ci-run.sh traces-journey.mjs
+      - name: Subagents journey (a subagent asks, answers and has its own page; a continuable one takes a person's message)
+        working-directory: frontend
+        run: e2e/ci-run.sh subagents-journey.mjs
       - name: Chat journey (kills and restarts the backend mid-stream)
         working-directory: frontend
         run: e2e/ci-run.sh chat-journey.mjs

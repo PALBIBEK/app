@@ -15,16 +15,20 @@ import { toast } from 'sonner';
 
 import { Card, StatusPill, type StatusKind } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
-import type { Session } from '@/lib/api/types/session.types';
+import { useSubagentApprovals } from '@/lib/api/hooks/useSubagentApprovals';
+import { useSubagents } from '@/lib/api/hooks/useSubagents';
+import type { Session, ToolCallView } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
+import { SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { useAuthStore } from '@/lib/store/authStore';
 import { cn, formatMoney } from '@/lib/utils';
 
-import { ApprovalCard, MessageBubble, SubagentChip, ToolCard } from './parts';
+import { ApprovalCard, MessageBubble, ToolCard } from './parts';
 import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
+import { SubagentCallCard, SubagentNoticeLine, SubagentsSection } from './subagents';
 
 const ENDED = new Set(['terminated', 'failed', 'budget_exceeded']);
 
@@ -104,15 +108,31 @@ export function SessionChat({
   const [runsKey, setRunsKey] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const pendingTools = Array.from(state.pendingTools.values());
-  const subagents = Array.from(state.pendingSubagents.values());
+  const { data: subagents, isLoading: subagentsLoading, refetch: refetchSubagents } = useSubagents(session.id, {
+    sessionRunning: state.running,
+  });
+  const nameOf = new Map((subagents ?? []).map((s) => [s.id, subagentName(s)]));
+  // A subagent's call that waits on a person shows here too: it is answered from this session.
+  const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
+    active: state.running || (subagents?.length ?? 0) > 0,
+  });
+  const renderTool = (tool: ToolCallView): JSX.Element =>
+    SUBAGENT_TOOLS.has(tool.name) ? (
+      <SubagentCallCard key={tool.id} tool={tool} sessionId={session.id} startedId={state.subagentOf.get(tool.id)} />
+    ) : (
+      <ToolCard key={tool.id} tool={tool} />
+    );
 
   useEffect(() => setStatus(session.status), [session.status]);
   const wasRunning = useRef(false);
   useEffect(() => {
     if (wasRunning.current && !state.running) onRunEnd?.();
-    if (wasRunning.current !== state.running) setRunsKey((k) => k + 1);
+    if (wasRunning.current !== state.running) {
+      setRunsKey((k) => k + 1);
+      void refetchSubagents(); // a run starts or ends subagents
+    }
     wasRunning.current = state.running;
-  }, [state.running, onRunEnd]);
+  }, [state.running, onRunEnd, refetchSubagents]);
   useEffect(
     () => endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
     [state.messages.length, pendingTools.length, state.pendingApprovals.length],
@@ -125,7 +145,7 @@ export function SessionChat({
     ? status === 'terminated'
       ? 'done'
       : 'failed'
-    : state.pendingApprovals.length > 0
+    : state.pendingApprovals.length > 0 || subagentApprovals.length > 0
       ? 'awaiting'
       : state.running
         ? 'running'
@@ -156,13 +176,17 @@ export function SessionChat({
     }
   }
 
-  async function answer(approvalId: string, choice: string): Promise<void> {
+  /** Whether the answer was taken. */
+  async function answer(approvalId: string, choice: string): Promise<boolean> {
     try {
       await sessionsAPI.respondApproval(session.id, approvalId, choice);
+      return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to answer');
+      return false;
     }
   }
+
 
   // Stop cancels the run going now, by its id: safe to press twice, and it never stops a
   // later run by mistake. Without a run to name (none recorded yet), it aborts the session's turn.
@@ -343,10 +367,14 @@ export function SessionChat({
             ) : null}
 
             <AnimatePresence initial={false}>
-              {state.messages.map((m) => (
+              {state.messages.map((m) =>
+                m.notice ? (
+                  <SubagentNoticeLine key={m.id} message={m} sessionId={session.id} name={nameOf.get(m.notice.subagentId)} />
+                ) : (
                 <MessageBubble
                   key={m.id}
                   message={m}
+                  renderTool={renderTool}
                   agentName={agentName}
                   userInitials={initials(user?.name)}
                   queued={queuedRun(m.content, m.id)?.cancelled === false}
@@ -354,23 +382,15 @@ export function SessionChat({
                   onCancel={queuedRun(m.content, m.id) ? () => void cancelQueued(m.content, queuedRun(m.content, m.id)!.runId) : undefined}
                   onFork={m.role === 'assistant' && m.seq != null ? () => void fork(m.seq) : undefined}
                 />
-              ))}
+                ),
+              )}
             </AnimatePresence>
             {pendingTools.length > 0 ? (
               <div className="flex flex-col gap-2 pl-10">
-                {pendingTools.map((tool) => (
-                  <ToolCard key={tool.id} tool={tool} />
-                ))}
+                {pendingTools.map(renderTool)}
               </div>
             ) : null}
-            {subagents.length > 0 ? (
-              <div className="flex flex-col gap-2 pl-10">
-                {subagents.map((chip) => (
-                  <SubagentChip key={chip.run_id} chip={chip} sessionId={session.id} />
-                ))}
-              </div>
-            ) : null}
-            {state.pendingApprovals.length > 0 ? (
+            {state.pendingApprovals.length > 0 || subagentApprovals.length > 0 ? (
               <div className="flex flex-col gap-3 pl-10">
                 {state.pendingApprovals.map((a) => (
                   <ApprovalCard
@@ -380,6 +400,16 @@ export function SessionChat({
                     deadline={a.deadline_ms}
                     onTimeout={onApprovalTimeout}
                     onAnswer={(choice) => void answer(a.approval_id, choice)}
+                  />
+                ))}
+                {subagentApprovals.map((a) => (
+                  <ApprovalCard
+                    key={a.approval_id}
+                    prompt={a.prompt}
+                    options={a.options}
+                    onTimeout={onApprovalTimeout}
+                    from={a.subagent_label ? `Asked by its subagent · ${a.subagent_label}` : 'Asked by its subagent'}
+                    onAnswer={(choice) => void answer(a.approval_id, choice).then((ok) => ok && subagentAnswered(a.approval_id))}
                   />
                 ))}
               </div>
@@ -463,6 +493,7 @@ export function SessionChat({
           maxSteps={maxSteps}
           maxCost={maxCost}
           sessionCost={session.total_cost}
+          lead={<SubagentsSection sessionId={session.id} subagents={subagents} loading={subagentsLoading} />}
         >
           {railExtra}
         </SessionRail>

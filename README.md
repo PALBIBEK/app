@@ -145,7 +145,7 @@ or search facts. *History* restores a notebook to how it was after any change.
 |---|---|
 | Backend tests | `cd backend && .venv/bin/python -m pytest -q tests` (the migration tests need `BACKEND_TEST_PG_URL`, a Postgres) |
 | Frontend lint, types, tests | `cd frontend && npx next lint && npx tsc --noEmit && npx vitest run` |
-| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs`, `traces-journey.mjs` and `startup-journey.mjs` |
+| In the browser (needs `./dev.sh` running) | `cd frontend && npm i --no-save playwright && npx playwright install chromium`, then `node e2e/builder-journey.mjs`, `memory-journey.mjs`, `chat-journey.mjs`, `environment-journey.mjs`, `operate-journey.mjs`, `traces-journey.mjs`, `subagents-journey.mjs` and `startup-journey.mjs` |
 
 CI runs all of these on every push, including the browser journeys against a fresh `./dev.sh`.
 
@@ -258,6 +258,11 @@ holds every message, call and result: clients read it, and a retried step reads 
   what it cost. A person reads one's transcript and runs under its own id, stops it with
   `POST /v1/sessions/{id}/abort`, and messages a continuable one with `POST .../messages` (a
   one-shot or background subagent takes no messages: it works on the task it was given).
+  In the product, a subagent shows where it works: in the conversation, the call that started it
+  (its task, then its answer) and what it later tells the agent; in the session's rail, every
+  subagent below the session with its status and cost; and on its own page, its conversation,
+  with a composer for a continuable one. A subagent's approval is asked and answered in the
+  session that started it, and the approvals inbox says which subagent asks.
   Nothing else starts a subagent: the transport-based ones that came before (`lab_echo`,
   `nested_session`, `acp`) are retired, and a job one of them was still running ends as retired.
 - **When something fails.** A model call that may pass (a rate limit, an overload) is asked
@@ -374,12 +379,12 @@ waiting for a session's worker that is gone (60 s placement limit) is adopted by
 | `session.end_run` | Close a run: final answer, usage, why it stopped | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | a call left half done is closed first, then the session is adopted |
 | `session.run_turn` | A whole runtime-driven turn (non-stepped harnesses) | session worker | turn limit (24 h) | every 30 s | 3 attempts, 2 s apart | heartbeats stop; retried after adoption, but never resent once tools ran |
 | `session.respond_approval` | Deliver an answer to a runtime-driven turn | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
-| `session.op` | Tool invoke, memory, subagents, workspace | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for operations with side effects) | an operation with side effects is not re-run: a tool invoke is closed as lost and reported as outcome unknown |
+| `session.op` | Tool invoke, memory, workspace (the retired subagent operations are answered here too) | session worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s (once for operations with side effects) | an operation with side effects is not re-run: a tool invoke is closed as lost and reported as outcome unknown |
 | `session.close_lost_call` | Close a call whose worker died | any worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker (journal only) |
 | `session.terminate` | End the session: stop its runtime and sandbox | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again |
 | `session.capture_memory` | Save durable facts from a burst of turns | any worker | 10 min | every 30 s | 5 attempts, 1 s doubling to 30 s | retried elsewhere; a burst that keeps failing is dropped (best effort) |
-| `subagent.run_job` | A background subagent job's work | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | heartbeats stop; retried on another worker, never lost; a job in a lent hand goes on from the calls it journalled |
-| `subagent.end_job` | Record how a background job ended | any worker | 2 min | every 30 s | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
+| `subagent.run_job` | Retired: a background job from before subagents were sessions, ended as retired | any worker | turn limit (24 h) | every 30 s | 5 attempts, 1 s doubling to 30 s | retried on another worker; its end is journalled once |
+| `subagent.end_job` | Record how such a job ended | any worker | 2 min | every 30 s | until it lands, 1 s doubling to 30 s | retried until exactly one end reaches the session's journal |
 | `subagent.begin` | Start a subagent call: journal it and make its child session | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again (keyed by the call, so it makes one child) |
 | `subagent.end` | A subagent settled: record its outcome and answer the call waiting for it | session worker | 2 min | every 30 s | 5 attempts, 1 s doubling to 30 s | placement times out; another worker adopts the session and runs it again (keyed, so the outcome lands once) |
 <!-- step-policies:end -->

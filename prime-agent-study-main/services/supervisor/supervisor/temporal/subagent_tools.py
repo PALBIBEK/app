@@ -499,7 +499,7 @@ class SubagentTools:
             raise NotFound("report is only available to continuable subagents")
         report_id = f"{session_id}:{call_id}"
         handle = activity.client().get_workflow_handle(workflow_id(row.parent_session_id))
-        notice = ChildReport(session_id, report_id, report_notice(session_id, text))
+        notice = ChildReport(session_id, report_id, report_notice(session_id, text), output=text)
         try:
             await handle.signal(CHILD_REPORT_SIGNAL, notice)
         except Exception as exc:  # noqa: BLE001 — its parent has ended: nobody to tell

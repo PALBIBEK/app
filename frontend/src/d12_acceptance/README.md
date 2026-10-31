@@ -1,12 +1,14 @@
-# Independent D12 acceptance (frontend Subagents UI)
+# Independent D12 acceptance (frontend subagents)
 
-Authored from D12 §5 B / T14 + LOCAL_DEMO #4 + G6 — `/subagents` must use
-live BFF (children/spawn) **or** an explicit unavailable banner. Silent
-`mockSubagents` / `mockSubagent` / `mockParentSessions` theater fails.
-Browser never calls supervisor child APIs. Wire reducer must handle
-`subagent_start` / `subagent_end` for local-demo chips.
+Subagents are sessions that the agent starts with its own tool calls. The product never spawns one. A person finds a session's subagents in three places:
+
+- in its conversation: the call that started each one, with its task and answer, and what each told the agent later;
+- in the session's rail: every subagent below the session, with status, cost and a stop button;
+- on each subagent's own page: its conversation, and a composer for a continuable one.
+
+All of this goes through the BFF. The browser never calls the supervisor. The UI never fakes data, never shows the retired echo stub, and never calls anything long-term memory.
 
 ```bash
-cd /Users/rahulrawatadmin/Downloads/prime-agent-study-main/frontend
+cd frontend
 ./node_modules/.bin/vitest run src/d12_acceptance
 ```

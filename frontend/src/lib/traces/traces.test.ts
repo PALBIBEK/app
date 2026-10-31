@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { traceListQuery } from '@/lib/api/endpoints/traces';
 
-import { sampleRun } from './fixture';
+import { sampleRun, span } from './fixture';
 import { formatMs, runStatus, splitParts, toolsLine } from './format';
 import { buildTranscript } from './transcript';
 import { buildTree, timeWindow, visibleRows } from './tree';
@@ -49,6 +49,18 @@ describe('transcript', () => {
   it('ends with how a run that did not answer ended', () => {
     const items = buildTranscript(sampleRun({ status: 'budget_exceeded', reason: 'cost cap reached' }));
     expect(items.at(-1)).toMatchObject({ type: 'end', status: 'budget_exceeded', reason: 'cost cap reached' });
+  });
+
+  it("keeps a background subagent's later words from being the run's answer", () => {
+    const run = sampleRun();
+    // A background subagent started in step 2 answered after the run's own last word.
+    run.spans.push(
+      span({ id: 'sub', parent_id: 's2', kind: 'tool', name: 'subagent', start_ms: 3_200, attrs: { tool: 'subagent' }, preview: 'subagent summarise' }),
+      span({ id: 'child', parent_id: 'sub', kind: 'agent', name: 'summary', start_ms: 3_300, end_ms: 45_000, duration_ms: 41_700 }),
+      span({ id: 'cl', parent_id: 'child', kind: 'llm', name: 'chat m1', start_ms: 44_000, excerpt: 'Summary done.' }),
+    );
+    const finals = buildTranscript(run).filter((i) => i.type === 'say' && i.final);
+    expect(finals.map((i) => i.type === 'say' && i.span.id)).toEqual(['l3']);
   });
 
   it('shows a single look on its own, not folded', () => {
