@@ -71,6 +71,7 @@ PROJECTION_TABLE: dict[str, str] = {
     "SubagentEnd": "close_nested",
     "JobStart": "platform_span",
     "JobEnd": "close_job",
+    "UnknownEvent": "not_projected",  # a newer build wrote it: this one cannot say what it is
 }
 
 

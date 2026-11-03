@@ -52,6 +52,7 @@ from supervisor.agent.events import (
     ToolStart,
     TurnEnd,
     TurnStart,
+    UnknownEvent,
     Usage,
     WorkspaceRestored,
 )
@@ -109,6 +110,9 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "HandStopped": HandStopped,
 }
 
+_UNKNOWN_SEEN: set[str] = set()
+"""Event types this process met that it does not know (each is logged once)."""
+
 # Reverse mapping for validation
 _TYPE_NAMES: dict[type[AgentEvent], str] = {v: k for k, v in _EVENT_TYPES.items()}
 
@@ -127,6 +131,8 @@ def event_type_name(event: AgentEvent) -> str:
     Raises:
         SerializationError: If the event type is not registered.
     """
+    if isinstance(event, UnknownEvent):
+        return event.type_name  # kept under the type a newer build wrote it as
     event_cls = type(event)
     name = _TYPE_NAMES.get(event_cls)
     if name is None:
@@ -215,6 +221,8 @@ def encode_event(event: AgentEvent) -> dict[str, Any]:
         'ToolStart'
     """
     type_name = event_type_name(event)
+    if isinstance(event, UnknownEvent):
+        return {**jsonable(event.data), "_type": type_name}  # as it was stored
     data = dataclasses.asdict(event)
     # Derived from the event type, never stored (and an Enum is not JSON).
     data.pop(_DERIVED_FIELD, None)
@@ -256,11 +264,12 @@ def decode_event(data: dict[str, Any]) -> AgentEvent:
 
     event_cls = _EVENT_TYPES.get(type_name)
     if event_cls is None:
-        raise DeserializationError(
-            f"unknown event type {type_name!r}; "
-            f"known types: {sorted(_EVENT_TYPES.keys())}",
-            data,
-        )
+        # A newer build wrote it (a rolling deploy): kept as it is, skipped by whatever
+        # does not know it, rather than failing every read of the session.
+        if type_name not in _UNKNOWN_SEEN:
+            _UNKNOWN_SEEN.add(type_name)
+            logger.warning("journal holds event type %r this build does not know; passing it through", type_name)
+        return UnknownEvent(type_name=str(type_name), data=payload)
 
     try:
         return _construct_event(event_cls, payload)

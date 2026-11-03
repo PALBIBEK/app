@@ -39,6 +39,7 @@ from supervisor.agent.events import (
     ToolStart,
     TurnEnd,
     TurnStart,
+    UnknownEvent,
     Usage,
     WorkspaceRestored,
 )
@@ -207,6 +208,7 @@ def test_agent_event_union_covers_all_payloads() -> None:
         HandStopped,
         CompactionEnd,
         MemoryRecall,
+        UnknownEvent,  # read only: what a newer build wrote
     }
     assert members == expected
 
