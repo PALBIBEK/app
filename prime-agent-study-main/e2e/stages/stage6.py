@@ -97,7 +97,12 @@ end = (payloads(run, "CompactionEnd") or [{}])[0]
 check("a conversation past the window is compacted before the next turn", end.get("stop_reason") == "ok", end)
 body = seen(calls)
 check("the next model call no longer carries the long turn", long_text.strip()[:200] not in body, len(body))
-summary = next((m for m in (end.get("messages") or []) if m.get("role") == "user"), {}).get("content", "")
+# What replaced it is read from the run's recorded events (the trace's): the event stream
+# does not send a compaction's messages, which are the supervisor's own (supervisor.api.wire).
+run_id = next(e.get("turn_id") for e in run if e.get("type") == "run_start")
+recorded = alice.get(f"/v1/sessions/{sid}/runs/{run_id}/trace/events").json().get("events", [])
+stored = next((e["payload"] for e in recorded if e.get("event_type") == "CompactionEnd"), {})
+summary = next((m for m in (stored.get("messages") or []) if m.get("role") == "user"), {}).get("content", "")
 print(f"     (info) what replaced it: {str(summary)[:160]!r}")
 check("the replacement is a real summary (not the bare fallback notice), framed as pi frames it",
       "compacted into the following summary:\n\n<summary>" in str(summary), str(summary)[:120])
@@ -122,7 +127,7 @@ if nb:
 sid = session(c)
 run, calls = turn(sid, "Remind me of the codename.", 1)
 injected = (payloads(run, "MemoryInjected") or [{}])[0]
-check("the fact is recalled into the turn (MemoryInjected)", "Falcon" in json.dumps(injected), injected)
+check("the fact is recalled into the turn (MemoryInjected)", injected.get("items", 0) >= 1, injected)
 check("...and the model actually received it", "Falcon" in seen(calls), seen(calls)[:120])
 run, _ = turn(sid, '/tool memory {"action": "add", "facts": [{"text": "Alice prefers tea."}]}', 2)
 end = (payloads(run, "ToolEnd") or [{}])[0]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -103,9 +103,14 @@ class ForkSessionResponse(BaseModel):
     session_id: str
 
 
-class WireEvent(BaseModel):
-    """Versioned SSE / JSON event. Envelope flat; payload in data."""
+WIRE_VERSION: Final = 2
+"""The wire's version (``supervisor.api.wire``): 2 stopped sending internal fields."""
 
+
+class WireEvent(BaseModel):
+    """Versioned SSE / JSON event. Envelope flat; payload in data (``supervisor.api.wire``)."""
+
+    v: int = WIRE_VERSION
     seq: int
     event_id: str
     turn_id: str | None = None
