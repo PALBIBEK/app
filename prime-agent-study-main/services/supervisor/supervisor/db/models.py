@@ -112,7 +112,6 @@ class SessionIndexRow(Base):
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_cost: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False, default=0)
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class ErasedSessionRow(Base):

@@ -172,3 +172,32 @@ describe('applyWireEvent subagents', () => {
     expect(state.messages[0].notice).toEqual({ subagentId: 'c', kind: 'settled', status: undefined, text: 'Background subagent c finished' });
   });
 });
+
+describe('applyWireEvent session notes', () => {
+  const notes = (...events: WireEvent[]) =>
+    events.reduce(applyWireEvent, createSessionViewState()).messages.map((m) => [m.note?.kind, m.content]);
+
+  it('tells a person when the conversation was summarized, the sandbox rebuilt or memory recalled', () => {
+    expect(
+      notes(
+        ev('compaction_end', { compaction_id: 'c1', stop_reason: 'ok', tokens_after: 20000 }),
+        ev('workspace_restored', { hand: 'default', hand_id: 'h', lost: ['c1', 'c2'] }),
+        ev('memory_injected', { run_id: 'r1', items: 1 }),
+      ),
+    ).toEqual([
+      ['compaction', 'Earlier conversation summarized to fit the context (20,000 tokens now)'],
+      ['workspace', 'Sandbox rebuilt from its last checkpoint: the file changes of 2 tool calls after it are gone, and the agent was told to redo them'],
+      ['memory', 'Recalled 1 memory for this reply'],
+    ]);
+  });
+
+  it('says nothing for what changed nothing', () => {
+    expect(
+      notes(
+        ev('compaction_end', { compaction_id: 'c1', stop_reason: 'error' }),
+        ev('memory_injected', { run_id: 'r1', items: 0 }),
+        ev('settled', {}), // retired: an old journal's
+      ),
+    ).toEqual([]);
+  });
+});

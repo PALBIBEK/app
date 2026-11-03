@@ -17,9 +17,9 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.agent.events import AgentEvent, MessageEnd, RunEnd
+from supervisor.agent.events import AgentEvent, RunEnd
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
-from supervisor.journal import snapshots
+from supervisor.journal import index, snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.secrets import mask
@@ -334,8 +334,7 @@ class JournalWriter:
                     raise _AlreadyAppended  # rolls the seq allocation back
             first = int(last_seq) - n + 1
             now_ms = int(time.time() * 1000)
-            index_update: RunEnd | None = None
-            replied = False
+            in_chat, title, active = 0, None, False
             for i, (event, turn_id, trace_id) in enumerate(events):
                 seq = first + i
                 payload = payloads[i]
@@ -351,11 +350,12 @@ class JournalWriter:
                         trace_id=trace_id,
                     )
                 )
-                if isinstance(event, RunEnd):
-                    index_update = event
-                replied = replied or (isinstance(event, MessageEnd) and event.usage is not None)
-            if index_update is not None or replied:
-                await self._touch_index(db, session_id, run_end=index_update, ts_ms=now_ms)
+                if index.in_chat(event):
+                    in_chat += 1
+                    title = title or index.title_of(event)
+                active = active or index.active(event)
+            if active:
+                await self._touch_index(db, session_id, messages=in_chat, title=title, ts_ms=now_ms)
             await notify(db, session_id)  # delivered on commit (supervisor.journal.watch)
         return int(last_seq), now_ms
 
@@ -404,21 +404,18 @@ class JournalWriter:
         return Written(seq, event_id, now_ms, created=True)
 
     async def _touch_index(
-        self,
-        db: AsyncSession,
-        session_id: str,
-        *,
-        run_end: RunEnd | None,
-        ts_ms: int,
+        self, db: AsyncSession, session_id: str, *, messages: int, title: str | None, ts_ms: int
     ) -> None:
-        """The session's index after a reply or a run's end. Not its cost: the budget
-        tracker owns ``total_cost`` (it charges each call once, before it is journalled)."""
+        """The session's index after it did something, with ``messages`` more chat
+        messages (``supervisor.journal.index``). Not its cost: the budget tracker owns ``total_cost``
+        (it charges each call once, before it is journalled)."""
         idx = await db.get(SessionIndexRow, session_id)
         if idx is None:
-            idx = SessionIndexRow(session_id=session_id)
+            idx = SessionIndexRow(session_id=session_id, message_count=0)
             db.add(idx)
-        if run_end is not None:
-            idx.message_count = len(run_end.messages)
+        idx.message_count = int(idx.message_count or 0) + messages
+        if idx.title is None and title is not None:
+            idx.title = title
         idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
     async def put_blob(self, data: bytes) -> str | None:

@@ -15,7 +15,6 @@ from supervisor.agent.events import (
     MessageEnd,
     RunEnd,
     RunStart,
-    Settled,
     SubagentEnd,
     SubagentStart,
     ToolEnd,
@@ -48,7 +47,6 @@ def test_section_32_cheat_sheet_projections() -> None:
     events = [
         _e(0, RunStart(), turn=None),
         _e(1, TurnStart()),
-        _e(2, Settled()),  # event-only — no new span
         _e(
             3,
             MessageEnd(
@@ -121,8 +119,7 @@ def test_section_32_cheat_sheet_projections() -> None:
     assert "yal.compaction" in names
     assert "search_memory" in names
     assert "yal.job" in names
-    # Settled / ErrorEvent must not create dedicated spans
-    assert "settled" not in {n.lower() for n in names}
+    # ErrorEvent must not create a dedicated span
     assert not any("error" == n.lower() for n in names)
     # Sandbox never projected
     assert not any("sandbox" in n for n in names)

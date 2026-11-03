@@ -181,6 +181,10 @@ class SubagentEnd:
 
 @dataclass(frozen=True)
 class JobStart:
+    """A transport-based background subagent's start, from before subagents were sessions.
+    No build writes one now; a session that has them still reads its jobs (and is told how
+    they ended, ``BackgroundResults``)."""
+
     job_id: str
     kind: str
     command: str | None = None
@@ -381,11 +385,6 @@ class HandLost:
 
 
 @dataclass(frozen=True)
-class Settled:
-    category: EventCategory = field(default=EventCategory.META, repr=False)
-
-
-@dataclass(frozen=True)
 class ProjectContext:
     """The project's own instructions for the agent (``AGENTS.md``, ``CLAUDE.md``), read
     from the workspace as the run began; githi puts them in the system prompt, as pi does.
@@ -479,7 +478,6 @@ AgentEvent = (
     | HandCheckpointed
     | HandLost
     | HandStopped
-    | Settled
     | ModelRetry
     | ProjectContext
     | WorkspaceRestored
