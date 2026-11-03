@@ -841,8 +841,8 @@ class _HandHooks:
         ref = None
         if logs:
             try:
-                ref = await asyncio.to_thread(self._m._writer.put_blob, logs)
-            except OSError:
+                ref = await self._m._writer.put_blob(logs)
+            except Exception:
                 logger.warning("saving lost hand %s's logs failed session=%s", sandbox.id, session_id, exc_info=True)
         await self._m._record(
             session_id,

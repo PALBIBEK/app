@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.hands.runners import RunnerHub
 from supervisor.harness import HarnessCatalog
+from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
@@ -70,6 +71,7 @@ def build_supervisor(
     session_factory: async_sessionmaker[AsyncSession],
     catalog: HarnessCatalog,
     blob_dir: Path | str | None = None,
+    blobs: BlobStore | None = None,
     sandbox_provider: SandboxProvider | None = None,
     composition_catalog: CompositionCatalog | None = None,
     live_queue_max: int = 256,
@@ -93,8 +95,10 @@ def build_supervisor(
     vault: Vault | None = None,
     notebooks: NotebookClient | None = None,
 ) -> SupervisorState:
-    writer = JournalWriter(session_factory, blob_dir=blob_dir)
-    reader = JournalReader(session_factory, blob_dir=blob_dir)
+    # One store for both: what the writer offloads, the reader (and erasing) must find.
+    blobs = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
+    writer = JournalWriter(session_factory, blobs=blobs)
+    reader = JournalReader(session_factory, blobs=blobs)
     commands = CommandStore(session_factory)
     registry = SessionRegistry()
     from supervisor.seams.services import GrantStore, SessionWorkspaceService, VirtualKeyClient

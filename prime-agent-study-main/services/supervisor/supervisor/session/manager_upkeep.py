@@ -270,7 +270,7 @@ class UpkeepOps(ChildOps):
 
     def _session_eraser(self) -> SessionEraser:
         return SessionEraser(
-            self._db, blob_dir=self._reader.blob_dir, objects=getattr(self._workspace_store, "objects", None)
+            self._db, blobs=self._reader.blobs, objects=getattr(self._workspace_store, "objects", None)
         )
 
     def _principal_eraser(self) -> PrincipalEraser:

@@ -19,14 +19,27 @@ from supervisor.db.engine import make_engine, session_factory
 from supervisor.db.migrate import migrate
 from supervisor.harness import HarnessCatalog, load_manifest
 from supervisor.harness.repository import hydrate_harness_catalog
+from supervisor.journal.blobs import BlobStore, LocalBlobs, ObjectBlobs
 from supervisor.obs.metrics import setup_metrics
 from supervisor.obs.tracing import setup_tracing
 from supervisor.policy.quotas import TenantQuotaEnforcer, TenantQuotaLimits
 from supervisor.policy.rate_limit import MemoryRateLimiter
 from supervisor.sandbox.factory import create_sandbox_provider
 from supervisor.sandbox.security.guards import assert_multi_tenant_sandbox_provider
+from supervisor.seams.services.object_storage import ObjectStorage
 
 logger = logging.getLogger(__name__)
+
+
+def journal_blobs(objects: ObjectStorage, blob_dir: Path) -> BlobStore:
+    """Where the journal keeps large payloads: the platform's object storage when it is
+    shared (every replica and worker reads every session), else ``BLOB_DIR`` (one process,
+    or processes sharing the directory: dev, tests)."""
+    from supervisor.seams.providers.storage.memory_object_storage import MemoryObjectStorage
+
+    if isinstance(objects, MemoryObjectStorage):  # per process: a directory outlives it
+        return LocalBlobs(blob_dir)
+    return ObjectBlobs(objects)
 
 
 def bootstrap_harness_catalog(versions_dir: Path) -> HarnessCatalog:
@@ -154,7 +167,7 @@ async def bootstrap_supervisor(
     return build_supervisor(
         session_factory=session_maker,
         catalog=harness_catalog,
-        blob_dir=settings.blob_dir,
+        blobs=journal_blobs(objects, settings.blob_dir),
         sandbox_provider=sandbox,
         composition_catalog=composition_catalog,
         auth_token=settings.auth_token,

@@ -122,16 +122,16 @@ What holds state, and how to keep it:
 | Postgres `memory` (`MEMORY_DATABASE_URL`) | long-term memory: notebooks, facts, their history | The same, with the same schedule. |
 | The product's Postgres (backend `DATABASE_URL`) | accounts, harnesses, tools, environments, session links, datasets | The same. |
 | Postgres `temporal`, `temporal_visibility` | running workflows and their histories | The same; see below for what losing it costs. |
-| Object storage (`OBJECT_STORAGE`, `OBJECT_STORAGE_BUCKET`) | the bytes of artifacts, workspace files (each version) and checkpoints | Bucket versioning plus replication to a second bucket or region. |
-| `BLOB_DIR` | journal payloads too large to keep in a row, and lost sandboxes' logs | A persistent volume every API replica and worker mounts; snapshot it. |
+| Object storage (`OBJECT_STORAGE`, `OBJECT_STORAGE_BUCKET`) | the bytes of artifacts, workspace files (each version) and checkpoints, and the journal's payloads too large to keep in a row and lost sandboxes' logs (under `journal/blobs/`) | Bucket versioning plus replication to a second bucket or region. |
+| `BLOB_DIR` | the journal's large payloads only when `OBJECT_STORAGE=memory` (one process: dev, tests) | Nothing to back up in a deployment: with shared object storage the journal keeps them in the bucket. |
 | `VAULT_KEYS` | the keys that seal secrets in the database | Keep in your secret manager, outside the database's backups. Without them the sealed secrets cannot be read. |
 
 The database holds the references and the stores hold the bytes, and bytes are only ever added
-under new keys. So take each database's backup **before** the object-storage and `BLOB_DIR`
+under new keys. So take each database's backup **before** the object-storage
 snapshots of the same moment: every reference the restored database holds then finds its bytes.
 
 **Restoring.** Stop the workers and API replicas. Restore the databases to the same point in
-time. Restore the bucket and `BLOB_DIR` to that point or later, then start the API and the
+time. Restore the bucket to that point or later, then start the API and the
 workers. If Temporal's databases are restored to an earlier point than the supervisor's, or
 lost, sessions whose workflows no longer exist cannot take new messages. Their conversations
 are still in the journal and can be read, and forking one starts a new session that carries the

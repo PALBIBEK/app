@@ -69,7 +69,7 @@ async def _session(p: dict[str, Any], sid: str, *, unique: str) -> None:
     await writer.append(sid, ToolStart(tool_call_id="c1", tool_name="ls", args={}), turn_id="r1", trace_id=None)
     await writer.append(sid, ToolEnd(tool_call_id="c1", tool_name="ls", result={"ok": True}), turn_id="r1", trace_id=None)
     await writer.append(sid, HandProvisioned(hand_id="h1", provider="docker", cause="first_use", hand="build"), turn_id=None, trace_id=None)
-    logs = writer.put_blob(f"logs of {sid}".encode())
+    logs = await writer.put_blob(f"logs of {sid}".encode())
     await writer.append(sid, HandLost(hand_id="h1", provider="docker", reason="gone", hand="build", logs_ref=logs), turn_id=None, trace_id=None)
     factory: async_sessionmaker[AsyncSession] = p["factory"]
     await p["objects"].put(f"sessions/{sid}/artifacts/a1", REPORT, content_sha256=REPORT_SHA)
