@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from supervisor.agent.events import AgentEvent, Envelope, ErrorEvent
+from supervisor.agent.events import AgentEvent, Envelope, ErrorEvent, UnknownEvent
 from supervisor.api.schemas import WireEvent
 from supervisor.journal.serde import encode_event
 
@@ -13,7 +13,7 @@ from supervisor.journal.serde import encode_event
 def _wire_type(payload: AgentEvent) -> str:
     if isinstance(payload, ErrorEvent):
         return "error"
-    name = type(payload).__name__
+    name = payload.type_name if isinstance(payload, UnknownEvent) else type(payload).__name__
     return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 

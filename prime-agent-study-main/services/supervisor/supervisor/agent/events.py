@@ -440,6 +440,18 @@ class ErrorEvent:
     category: EventCategory = field(default=EventCategory.META, repr=False)
 
 
+@dataclass(frozen=True)
+class UnknownEvent:
+    """An event of a type this build does not know, read from the journal: a newer build
+    wrote it (during a rolling deploy, before every replica runs it). Kept as stored, so it
+    passes through (the wire sends it under its own type, a fork copies it) and every
+    consumer that does not know it skips it, instead of the whole session failing to read."""
+
+    type_name: str
+    data: dict[str, Any] = field(default_factory=dict)
+    category: EventCategory = field(default=EventCategory.META, repr=False)
+
+
 # ── Union & Envelope ───────────────────────────────────────────────────────────
 
 
@@ -473,6 +485,7 @@ AgentEvent = (
     | WorkspaceRestored
     | SubagentNotice
     | ErrorEvent
+    | UnknownEvent
 )
 
 
@@ -489,6 +502,8 @@ class Envelope:
 
     @property
     def event_type(self) -> str:
+        if isinstance(self.payload, UnknownEvent):
+            return self.payload.type_name
         return type(self.payload).__name__
 
     @property

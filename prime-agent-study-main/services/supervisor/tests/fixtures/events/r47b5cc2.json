@@ -1,0 +1,203 @@
+{
+ "ApprovalRequired": {
+  "_type": "ApprovalRequired",
+  "approval_id": "sample",
+  "harness_request_id": null,
+  "metadata": {},
+  "options": [],
+  "prompt": "sample",
+  "timeout_s": 0.5
+ },
+ "ApprovalResolved": {
+  "_type": "ApprovalResolved",
+  "approval_id": "sample",
+  "choice": "sample",
+  "responded_by": null,
+  "status": "sample"
+ },
+ "BackgroundResults": {
+  "_type": "BackgroundResults",
+  "results": [],
+  "run_id": "sample"
+ },
+ "CompactionEnd": {
+  "_type": "CompactionEnd",
+  "compaction_id": "sample",
+  "error": null,
+  "in_run": false,
+  "messages": null,
+  "replaced_from_seq": null,
+  "replaced_to_seq": null,
+  "stop_reason": "sample",
+  "summary_digest": null,
+  "tokens_after": null,
+  "usage": null
+ },
+ "CompactionStart": {
+  "_type": "CompactionStart",
+  "compaction_id": "sample",
+  "first_kept_entry_id": null,
+  "reason": "sample",
+  "tokens_before": 1
+ },
+ "ErrorEvent": {
+  "_type": "ErrorEvent",
+  "detail": "sample",
+  "error_class": "sample",
+  "error_code": null,
+  "retryable": true
+ },
+ "HandCheckpointed": {
+  "_type": "HandCheckpointed",
+  "files": 1,
+  "hand": "default",
+  "hand_id": "sample",
+  "processes": [],
+  "removed": 1
+ },
+ "HandLost": {
+  "_type": "HandLost",
+  "hand": "default",
+  "hand_id": "sample",
+  "logs_bytes": 0,
+  "logs_ref": null,
+  "provider": "sample",
+  "reason": "sample"
+ },
+ "HandProvisioned": {
+  "_type": "HandProvisioned",
+  "cause": "sample",
+  "hand": "default",
+  "hand_id": "sample",
+  "provider": "sample"
+ },
+ "HandStopped": {
+  "_type": "HandStopped",
+  "hand": "default",
+  "hand_id": "sample",
+  "idle_s": 0.0,
+  "provider": "sample",
+  "reason": "sample"
+ },
+ "JobEnd": {
+  "_type": "JobEnd",
+  "exit_code": null,
+  "job_id": "sample",
+  "output": null,
+  "stop_reason": "sample"
+ },
+ "JobStart": {
+  "_type": "JobStart",
+  "command": null,
+  "job_id": "sample",
+  "kind": "sample"
+ },
+ "MemoryContext": {
+  "_type": "MemoryContext",
+  "audience": "sample",
+  "through_seq": 1
+ },
+ "MemoryInjected": {
+  "_type": "MemoryInjected",
+  "run_id": "sample",
+  "shown": [],
+  "text": "sample"
+ },
+ "MemoryRecall": {
+  "_type": "MemoryRecall",
+  "block_id": "sample",
+  "injected": true,
+  "relevance_score": null,
+  "source": "sample",
+  "text": null,
+  "token_estimate": 1
+ },
+ "MessageEnd": {
+  "_type": "MessageEnd",
+  "content": [],
+  "finish_reason": null,
+  "model": null,
+  "role": "sample",
+  "usage": null
+ },
+ "ModelRetry": {
+  "_type": "ModelRetry",
+  "attempt": 1,
+  "delay_s": 0.5,
+  "detail": "sample",
+  "error_class": "sample",
+  "max_attempts": 1,
+  "step": 1
+ },
+ "ProjectContext": {
+  "_type": "ProjectContext",
+  "digest": "sample",
+  "path": "sample",
+  "text": "sample"
+ },
+ "RunEnd": {
+  "_type": "RunEnd",
+  "messages": [],
+  "total_usage": null
+ },
+ "RunStart": {
+  "_type": "RunStart"
+ },
+ "Settled": {
+  "_type": "Settled"
+ },
+ "SubagentEnd": {
+  "_type": "SubagentEnd",
+  "child_session_id": null,
+  "output": null,
+  "run_id": "sample",
+  "stop_reason": "sample"
+ },
+ "SubagentNotice": {
+  "_type": "SubagentNotice",
+  "child_session_id": "sample",
+  "kind": "settled",
+  "output": null,
+  "status": null,
+  "text": "sample"
+ },
+ "SubagentStart": {
+  "_type": "SubagentStart",
+  "call_id": null,
+  "child_session_id": "sample",
+  "label": null,
+  "mode": "sample",
+  "parent_session_id": "sample",
+  "provider": "sample",
+  "run_id": "sample"
+ },
+ "ToolEnd": {
+  "_type": "ToolEnd",
+  "duration_ms": null,
+  "is_error": false,
+  "result": {},
+  "tool_call_id": "sample",
+  "tool_name": "sample"
+ },
+ "ToolStart": {
+  "_type": "ToolStart",
+  "args": {},
+  "not_run": false,
+  "tool_call_id": "sample",
+  "tool_name": "sample"
+ },
+ "TurnEnd": {
+  "_type": "TurnEnd",
+  "stop_reason": "sample"
+ },
+ "TurnStart": {
+  "_type": "TurnStart"
+ },
+ "WorkspaceRestored": {
+  "_type": "WorkspaceRestored",
+  "hand": "sample",
+  "hand_id": "sample",
+  "lost": [],
+  "text": "sample"
+ }
+}

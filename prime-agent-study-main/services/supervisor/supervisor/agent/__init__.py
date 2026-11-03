@@ -65,6 +65,7 @@ from supervisor.agent.events import (
     ToolStart,
     TurnEnd,
     TurnStart,
+    UnknownEvent,
     Usage,
     WorkspaceRestored,
 )
@@ -134,6 +135,7 @@ __all__ = [
     "ToolStart",
     "TurnEnd",
     "TurnStart",
+    "UnknownEvent",
     "Usage",
     "WorkspaceRestored",
     "create_runtime",
