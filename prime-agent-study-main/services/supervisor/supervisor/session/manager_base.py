@@ -46,7 +46,7 @@ from supervisor.harness import (
 )
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
-from supervisor.journal.writer import JournalWriter
+from supervisor.journal.writer import JournalWriter, Written
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
 from supervisor.policy.approvals import ApprovalBroker
@@ -262,7 +262,7 @@ class SessionManagerBase:
         self._brains: OrderedDict[str, Any] = OrderedDict()
         self._browser = browser
         self._run_traces: dict[str, str] = {}
-        self._tool_outbox = ToolOutbox(session_factory, writer)
+        self._tool_outbox = ToolOutbox(session_factory, writer, announce=self._announce)
         self._memory = memory or MemoryPlatform(session_factory)
         self._recovery = Recovery(
             registry=registry,
@@ -443,21 +443,8 @@ class SessionManagerBase:
         written = await self._writer.write(
             session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
-        if not written.created:
-            return written.seq  # a retry: it was published and projected when it was written
-        envelope = Envelope(
-            session_id=session_id,
-            seq=written.seq,
-            event_id=written.event_id,
-            ts_ms=written.ts_ms,
-            turn_id=turn_id,
-            trace_id=trace_id,
-            payload=payload,
-        )
-        self._live.publish(session_id, envelope)
-        await self._project(session_id, envelope)
-        if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
-            self._record_trace(session_id, turn_id, ended=isinstance(payload, RunEnd))
+        if written.created:  # a retry's event was announced when it was written
+            await self._announce(session_id, payload, written, turn_id=turn_id, trace_id=trace_id)
         return written.seq
 
     async def _record_once(
@@ -481,6 +468,16 @@ class SessionManagerBase:
         )
         if written is None:
             return None
+        await self._announce(session_id, payload, written, turn_id=turn_id, trace_id=trace_id)
+        return written.seq
+
+    async def _announce(
+        self, session_id: str, payload: Any, written: Written, *, turn_id: str | None, trace_id: str | None
+    ) -> None:
+        """What every event journalled goes through once written: published live and
+        projected into tracing as it was stored (its id and time are the row's), and a
+        run's start or end refreshes its trace rollup. Writers that journal inside their
+        own transaction (the tool outbox) call it once that commits."""
         envelope = Envelope(
             session_id=session_id,
             seq=written.seq,
@@ -492,7 +489,8 @@ class SessionManagerBase:
         )
         self._live.publish(session_id, envelope)
         await self._project(session_id, envelope)
-        return written.seq
+        if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
+            self._record_trace(session_id, turn_id, ended=isinstance(payload, RunEnd))
 
     def _trace_model_client(self, row: SessionRow) -> Any:
         """The session's own model client, for judging and summarising its runs."""

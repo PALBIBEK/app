@@ -75,7 +75,7 @@ class ChildOps(ToolOps):
         return MemoryOps(
             session_id=session_id,
             memory=memory,
-            writer=self._writer,
+            record=self._record,
             tenant_id=row.tenant_id,
             workspace_path=str(ws),
         )

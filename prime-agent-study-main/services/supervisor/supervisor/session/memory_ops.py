@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from supervisor.agent.events import CompactionEnd, CompactionStart, MemoryRecall
-from supervisor.journal.writer import JournalWriter
 from supervisor.seams import (
     CompactionPreparation,
     ContextMemoryProvider,
@@ -18,6 +18,9 @@ from supervisor.seams import (
 )
 
 logger = logging.getLogger(__name__)
+
+type RecordEvent = Callable[..., Awaitable[int]]
+"""Journals an event as every other one is: ``(session_id, payload, *, turn_id, trace_id)``."""
 
 
 @dataclass(frozen=True)
@@ -51,13 +54,13 @@ class MemoryOps:
         *,
         session_id: str,
         memory: ContextMemoryProvider,
-        writer: JournalWriter,
+        record: RecordEvent,
         tenant_id: str = "",
         workspace_path: str = "",
     ) -> None:
         self._session_id = session_id
         self._memory = memory
-        self._writer = writer
+        self._record = record  # the session's one write path (SessionManagerBase._record)
         self._tenant_id = tenant_id
         self._workspace_path = workspace_path
 
@@ -84,7 +87,7 @@ class MemoryOps:
         trace_id: str | None = None,
     ) -> CompactMemoryOutcome:
         compaction_id = self._compaction_id()
-        await self._writer.append(
+        await self._record(
             self._session_id,
             CompactionStart(
                 compaction_id=compaction_id,
@@ -102,7 +105,7 @@ class MemoryOps:
                 reason=reason,
             )
         except Exception:
-            await self._writer.append(
+            await self._record(
                 self._session_id,
                 CompactionEnd(
                     compaction_id=compaction_id,
@@ -114,7 +117,7 @@ class MemoryOps:
             raise
 
         if decision.action == "cancel":
-            await self._writer.append(
+            await self._record(
                 self._session_id,
                 CompactionEnd(
                     compaction_id=compaction_id,
@@ -130,7 +133,7 @@ class MemoryOps:
             )
 
         if decision.action == "proceed_default":
-            await self._writer.append(
+            await self._record(
                 self._session_id,
                 CompactionEnd(
                     compaction_id=compaction_id,
@@ -147,7 +150,7 @@ class MemoryOps:
 
         result = decision.result
         if result is None:
-            await self._writer.append(
+            await self._record(
                 self._session_id,
                 CompactionEnd(
                     compaction_id=compaction_id,
@@ -163,7 +166,7 @@ class MemoryOps:
             )
 
         digest = self._summary_digest(result.summary)
-        await self._writer.append(
+        await self._record(
             self._session_id,
             CompactionEnd(
                 compaction_id=compaction_id,
@@ -202,7 +205,7 @@ class MemoryOps:
             block = None
 
         if block is None or not (block.text or "").strip():
-            await self._writer.append(
+            await self._record(
                 self._session_id,
                 MemoryRecall(
                     block_id=block_id,
@@ -222,7 +225,7 @@ class MemoryOps:
         token_estimate = self._memory.estimate_tokens(
             [{"role": "user", "content": block.text}],
         )
-        await self._writer.append(
+        await self._record(
             self._session_id,
             MemoryRecall(
                 block_id=block_id,

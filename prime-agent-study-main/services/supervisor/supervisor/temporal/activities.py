@@ -19,7 +19,6 @@ from temporalio.exceptions import ApplicationError
 
 from supervisor.agent.events import ErrorEvent, RunEnd, ToolStart, TurnEnd
 from supervisor.journal.reader import JournalReader
-from supervisor.journal.writer import JournalWriter
 from supervisor.session import Dropped, SessionManager
 from supervisor.session.dispatch import run_operation
 from supervisor.temporal.contracts import (
@@ -86,13 +85,11 @@ class SessionActivities:
         manager: SessionManager,
         *,
         reader: JournalReader,
-        writer: JournalWriter,
         home_queue: str,
         heartbeats: WorkerHeartbeats | None = None,
     ) -> None:
         self._manager = manager
         self._reader = reader
-        self._writer = writer
         self._heartbeats = heartbeats
         self._home = Placement(home_queue)
         self._steps = GithiSteps(manager, reader)
@@ -369,11 +366,12 @@ class SessionActivities:
             f"turn starting at seq {open_run[0]} was interrupted by a worker failure; "
             "re-send to retry"
         )
-        await self._writer.append(
+        await self._manager._record(
             session_id,
             ErrorEvent(error_class="TurnInterrupted", retryable=False, detail=detail),
             turn_id=None,
             trace_id=None,
+            event_key=f"interrupted:{open_run[0]}",  # once, however often this is retried
         )
         raise ApplicationError(detail, type="TurnInterrupted", non_retryable=True)
 
@@ -384,7 +382,7 @@ class SessionActivities:
         becomes final (TurnInterrupted) instead of retryable.
         """
         retryable = not side_effects and domain_kind(exc) is None
-        await self._writer.append(
+        await self._manager._record(
             session_id,
             ErrorEvent(error_class=type(exc).__name__, retryable=retryable, detail=str(exc)),
             turn_id=None,

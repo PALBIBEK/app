@@ -5,6 +5,7 @@ See Memory/adrs/ADR-004-tool-outbox-ownership.md.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.agent.events import ToolEnd, ToolStart
 from supervisor.db.models import ToolOutboxRow
 from supervisor.journal.serde import jsonable
-from supervisor.journal.writer import JournalWriter
+from supervisor.journal.writer import JournalWriter, Written
 from supervisor.seams import ToolResult
 
 
@@ -60,14 +61,27 @@ class BeginOutcome:
     cached: ToolResult | None = None
 
 
+type Announce = Callable[..., Awaitable[None]]
+"""``SessionManagerBase._announce``: publish and project an event once it is written."""
+
+
 class ToolOutbox:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         writer: JournalWriter,
+        *,
+        announce: Announce | None = None,
     ) -> None:
+        """The outbox journals in its own transaction (with its row, atomically), so it
+        announces what it wrote (``announce``) once that commits, as every event is."""
         self._factory = session_factory
         self._writer = writer
+        self._announce = announce
+
+    async def _announced(self, session_id: str, event: ToolStart | ToolEnd, written: Written, trace_id: str | None) -> None:
+        if self._announce is not None:
+            await self._announce(session_id, event, written, turn_id=None, trace_id=trace_id)
 
     async def get_by_key(self, key: str) -> ToolOutboxRow | None:
         async with self._factory() as db:
@@ -119,17 +133,8 @@ class ToolOutbox:
             if again is not None and again.status == "pending":
                 return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
-            await self._writer.append_in_session(
-                db,
-                session_id,
-                ToolStart(
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    args=dict(arguments),
-                ),
-                turn_id=None,
-                trace_id=trace_id,
-            )
+            start = ToolStart(tool_call_id=tool_call_id, tool_name=tool_name, args=dict(arguments))
+            written = await self._writer.append_in_session(db, session_id, start, turn_id=None, trace_id=trace_id)
             db.add(
                 ToolOutboxRow(
                     id=uuid4().hex,
@@ -142,6 +147,7 @@ class ToolOutbox:
                     result=None,
                 )
             )
+        await self._announced(session_id, start, written, trace_id)
         return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
     async def complete(
@@ -177,18 +183,8 @@ class ToolOutbox:
             if row is not None and row.status == "done" and row.result is not None:
                 return wire_to_result(row.result)
 
-            await self._writer.append_in_session(
-                db,
-                session_id,
-                ToolEnd(
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    result=end_payload,
-                    is_error=is_error,
-                ),
-                turn_id=None,
-                trace_id=trace_id,
-            )
+            end = ToolEnd(tool_call_id=tool_call_id, tool_name=tool_name, result=end_payload, is_error=is_error)
+            written = await self._writer.append_in_session(db, session_id, end, turn_id=None, trace_id=trace_id)
             if row is None:
                 # Should not happen in normal path; still record completion.
                 db.add(
@@ -206,4 +202,5 @@ class ToolOutbox:
             else:
                 row.status = "done"
                 row.result = wire
+        await self._announced(session_id, end, written, trace_id)
         return result
