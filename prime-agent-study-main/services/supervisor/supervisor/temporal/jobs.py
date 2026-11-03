@@ -55,7 +55,7 @@ class JobSteps:
             (JobEnd(job_id=spec.job_id, stop_reason=req.stop_reason, output=req.output), "end"),
             (SubagentEnd(run_id=spec.run_id, stop_reason=req.stop_reason, output=req.output), "subagent_end"),
         ):
-            await self._manager._writer.append(
+            await self._manager._record(
                 spec.session_id, event, turn_id=None, trace_id=None, event_key=f"job:{spec.job_id}:{key}"
             )
         ended = await self._ended(spec)

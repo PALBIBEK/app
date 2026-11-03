@@ -60,8 +60,8 @@ async def test_model_steps_run_on_a_worker_without_the_sandbox(
     store = MemoryWorkspaceStore(objects=MemoryObjectStorage())
     a, b = await env.state(workspace_store=store), await env.state(workspace_store=store)
     assert a.writer is not None and b.writer is not None
-    acts_a = SessionActivities(a.manager, reader=a.reader, writer=a.writer, home_queue=home_queue(env.queue))
-    acts_b = SessionActivities(b.manager, reader=b.reader, writer=b.writer, home_queue=home_queue(env.queue))
+    acts_a = SessionActivities(a.manager, reader=a.reader, home_queue=home_queue(env.queue))
+    acts_b = SessionActivities(b.manager, reader=b.reader, home_queue=home_queue(env.queue))
     shared = {"task_queue": env.queue, "workflows": [AgentSessionWorkflow, SubagentJobWorkflow]}
     a_home = Worker(env.client, task_queue=acts_a.home_queue, activities=acts_a.all(), identity="a")
     async with a_home:

@@ -95,11 +95,9 @@ async def session_worker(
     step); ``load`` counts the ones running now. ``deployment`` registers both pollers as one
     version of a worker deployment (supervisor.temporal.rollout).
     """
-    assert state.writer is not None
     activities = SessionActivities(
         state.manager,
         reader=state.reader,
-        writer=state.writer,
         home_queue=home_queue(task_queue),
         heartbeats=state.heartbeats,
     )

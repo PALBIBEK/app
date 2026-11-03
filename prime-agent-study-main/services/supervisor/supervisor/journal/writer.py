@@ -320,8 +320,9 @@ class JournalWriter:
         *,
         turn_id: str | None,
         trace_id: str | None,
-    ) -> int:
-        """Append one event inside an open transaction (caller owns begin/commit)."""
+    ) -> Written:
+        """Append one event inside an open transaction (caller owns begin/commit); where it
+        is once that commits."""
         await db.execute(
             text("SELECT id FROM sessions WHERE id = :id"),
             {"id": session_id},
@@ -339,11 +340,12 @@ class JournalWriter:
         seq = int(result.scalar_one())
         now_ms = int(time.time() * 1000)
         payload = await self._store_payload(session_id, event)
+        event_id = uuid4().hex
         db.add(
             EventRow(
                 session_id=session_id,
                 seq=seq,
-                event_id=uuid4().hex,
+                event_id=event_id,
                 turn_id=turn_id,
                 type=event_type_name(event),
                 payload=payload,
@@ -352,7 +354,7 @@ class JournalWriter:
             )
         )
         await notify(db, session_id)  # delivered when the caller commits
-        return seq
+        return Written(seq, event_id, now_ms, created=True)
 
     async def _touch_index(
         self,
