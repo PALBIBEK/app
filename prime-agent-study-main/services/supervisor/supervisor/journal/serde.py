@@ -12,8 +12,14 @@ Key design decisions:
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import enum
 import logging
+import math
+from collections.abc import Mapping
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any, TypeVar
 
 from supervisor.agent.events import (
@@ -139,6 +145,51 @@ def type_name_of(event_cls: type) -> str:
     return name
 
 
+def jsonable(value: Any) -> Any:
+    """``value`` as plain JSON: what a tool, a model or a provider hands over is stored and
+    sent as it can be (a value Postgres's ``json`` or the wire would refuse failed the whole
+    write, and the step's retry ran its tool again).
+
+    Plain JSON is returned unchanged. Otherwise: a timestamp as ISO 8601; a ``Decimal`` as a
+    number (as its text when it has no float); a set or tuple as a list (a set sorted when
+    its items sort); text bytes as text, other bytes as ``{"base64": ...}``; NaN and the
+    infinities, which JSON has no word for, as ``"NaN"``, ``"Infinity"``, ``"-Infinity"``; an
+    enum as its value; a dict's keys as text; anything else as its ``str``.
+    """
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
+    if isinstance(value, Mapping):
+        return {k if isinstance(k, str) else str(jsonable(k)): jsonable(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [jsonable(v) for v in value]
+    if isinstance(value, set | frozenset):
+        items = [jsonable(v) for v in value]
+        try:
+            return sorted(items)
+        except TypeError:
+            return items
+    if isinstance(value, datetime | date | time):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else str(value)
+    if isinstance(value, bytes | bytearray | memoryview):
+        raw = bytes(value)
+        try:
+            return raw.decode()
+        except UnicodeDecodeError:
+            return {"base64": base64.b64encode(raw).decode()}
+    if isinstance(value, enum.Enum):
+        return jsonable(value.value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return jsonable(dataclasses.asdict(value))
+    return str(value)
+
+
 # Every event class fixes its category; it is implied by ``_type``.
 _DERIVED_FIELD = "category"
 
@@ -152,7 +203,7 @@ def encode_event(event: AgentEvent) -> dict[str, Any]:
         event: Any AgentEvent instance.
 
     Returns:
-        Dictionary suitable for JSON serialization and storage.
+        Dictionary of plain JSON (``jsonable``), for storage and the wire.
 
     Raises:
         SerializationError: If the event type is not registered.
@@ -167,6 +218,7 @@ def encode_event(event: AgentEvent) -> dict[str, Any]:
     data = dataclasses.asdict(event)
     # Derived from the event type, never stored (and an Enum is not JSON).
     data.pop(_DERIVED_FIELD, None)
+    data = jsonable(data)
     data["_type"] = type_name
     return data
 
