@@ -22,6 +22,7 @@ from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
 from supervisor.journal import snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.secrets import mask
 from supervisor.journal.serde import encode_event, event_type_name
 from supervisor.journal.watch import notify
 
@@ -430,7 +431,7 @@ class JournalWriter:
         return ref
 
     async def _store_payload(self, session_id: str, event: AgentEvent) -> dict[str, Any]:
-        encoded = encode_event(event)
+        encoded = mask(encode_event(event))  # no credential is kept (supervisor.journal.secrets)
         if isinstance(event, RunEnd):
             # What it adds to the session's previous RunEnd (supervisor.journal.snapshots).
             # Any committed RunEnd is a sound base, so a racing write costs only size.
