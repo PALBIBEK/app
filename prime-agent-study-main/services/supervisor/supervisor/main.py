@@ -163,6 +163,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await state.manager.drain_trace_rollups()
         except Exception:
             logger.exception("drain failed")
+        if state.watch is not None:
+            await state.watch.close()  # its listening connection back to the pool
         try:
             from supervisor.obs.tracing import shutdown_tracing
 

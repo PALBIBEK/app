@@ -23,6 +23,7 @@ from supervisor.journal import snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import encode_event, event_type_name
+from supervisor.journal.watch import notify
 
 
 def keyed_event_id(session_id: str, event_key: str) -> str:
@@ -308,6 +309,7 @@ class JournalWriter:
                 replied = replied or (isinstance(event, MessageEnd) and event.usage is not None)
             if index_update is not None or replied:
                 await self._touch_index(db, session_id, run_end=index_update, ts_ms=now_ms)
+            await notify(db, session_id)  # delivered on commit (supervisor.journal.watch)
         return int(last_seq), now_ms
 
     async def append_in_session(
@@ -349,6 +351,7 @@ class JournalWriter:
                 trace_id=trace_id,
             )
         )
+        await notify(db, session_id)  # delivered when the caller commits
         return seq
 
     async def _touch_index(
