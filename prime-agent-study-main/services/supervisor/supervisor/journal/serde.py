@@ -20,7 +20,7 @@ import math
 from collections.abc import Mapping
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from supervisor.agent.events import (
     AgentEvent,
@@ -44,7 +44,6 @@ from supervisor.agent.events import (
     ProjectContext,
     RunEnd,
     RunStart,
-    Settled,
     SubagentEnd,
     SubagentNotice,
     SubagentStart,
@@ -77,6 +76,11 @@ class DeserializationError(Exception):
         self.data = data
 
 
+RETIRED_TYPES: Final = frozenset({"Settled"})
+"""Types no build writes any more. A journal from before keeps them: they read as
+``UnknownEvent`` (passed through, copied by a fork as they were), which nothing acts on.
+A type is retired here, never just removed (tests/fixtures/events/README.md)."""
+
 # Type name → Event class mapping
 _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "RunStart": RunStart,
@@ -86,7 +90,6 @@ _EVENT_TYPES: dict[str, type[AgentEvent]] = {
     "MessageEnd": MessageEnd,
     "ToolStart": ToolStart,
     "ToolEnd": ToolEnd,
-    "Settled": Settled,
     "ErrorEvent": ErrorEvent,
     "ModelRetry": ModelRetry,
     "ProjectContext": ProjectContext,

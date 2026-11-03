@@ -29,6 +29,7 @@ import { ApprovalCard, MessageBubble, ToolCard } from './parts';
 import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
 import { SubagentCallCard, SubagentNoticeLine, SubagentsSection } from './subagents';
+import { SessionNoteLine } from './SessionNoteLine';
 
 const ENDED = new Set(['terminated', 'failed', 'budget_exceeded']);
 
@@ -370,6 +371,8 @@ export function SessionChat({
               {state.messages.map((m) =>
                 m.notice ? (
                   <SubagentNoticeLine key={m.id} message={m} sessionId={session.id} name={nameOf.get(m.notice.subagentId)} />
+                ) : m.note ? (
+                  <SessionNoteLine key={m.id} message={m} />
                 ) : (
                 <MessageBubble
                   key={m.id}

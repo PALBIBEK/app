@@ -2,7 +2,7 @@
  * Reduce supervisor WireEvents into chat UI state.
  */
 
-import type { ChatMessage, ToolCallView, WireEvent } from '../api/types/session.types';
+import type { ChatMessage, SessionNoteView, ToolCallView, WireEvent } from '../api/types/session.types';
 import { explainToolResult, readToolResult } from './explain';
 import { noticeOf } from './subagents';
 
@@ -88,6 +88,17 @@ function textFromMessageEnd(data: Record<string, unknown>): string {
       .join('');
   }
   return '';
+}
+
+function note(state: SessionViewState, event: WireEvent, kind: SessionNoteView['kind'], text: string): void {
+  state.messages.push({
+    id: event.event_id,
+    role: 'system',
+    content: text,
+    timestamp: new Date(event.ts_ms).toISOString(),
+    seq: event.seq,
+    note: { kind, text },
+  });
 }
 
 export function applyWireEvent(state: SessionViewState, event: WireEvent): SessionViewState {
@@ -256,7 +267,26 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       next.partial = null; // the reply it was writing failed; the next attempt starts afresh
       break;
     }
-    case 'settled':
+    case 'compaction_end': {
+      if (event.data.stop_reason !== 'ok') break; // a failed or skipped one changed nothing
+      const after = Number(event.data.tokens_after ?? 0);
+      note(next, event, 'compaction', after > 0
+        ? `Earlier conversation summarized to fit the context (${after.toLocaleString('en-US')} tokens now)`
+        : 'Earlier conversation summarized to fit the context');
+      break;
+    }
+    case 'workspace_restored': {
+      const lost = Array.isArray(event.data.lost) ? event.data.lost.length : 0;
+      note(next, event, 'workspace', lost > 0
+        ? `Sandbox rebuilt from its last checkpoint: the file changes of ${lost} tool ${lost === 1 ? 'call' : 'calls'} after it are gone, and the agent was told to redo them`
+        : 'Sandbox rebuilt from its last checkpoint');
+      break;
+    }
+    case 'memory_injected': {
+      const items = Number(event.data.items ?? 0);
+      if (items > 0) note(next, event, 'memory', `Recalled ${items} ${items === 1 ? 'memory' : 'memories'} for this reply`);
+      break;
+    }
     case 'run_end': {
       next.settled = true;
       next.partial = null;

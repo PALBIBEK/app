@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
-from supervisor.agent.events import RunEnd, RunStart, ToolStart, TurnStart
+from supervisor.agent.events import MessageEnd, RunEnd, RunStart, ToolStart, TurnStart
 from supervisor.db.engine import open_db
 from supervisor.db.models import EventRow
 from supervisor.journal.writer import JournalWriter, OversizedPayloadError, Written
@@ -196,24 +196,34 @@ async def test_oversized_payload_offloaded_row_holds_reference(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_run_end_updates_session_index(tmp_path: Path) -> None:
+async def test_the_session_index_counts_what_its_chat_shows(tmp_path: Path) -> None:
+    """``message_count`` is the messages a person reads (supervisor.journal.index), not
+    the length of the conversation the model last held; ``title`` is the first message's."""
     async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'idx.db'}") as (_engine, factory):
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
-        await w.append(
-            "s1",
-            RunEnd(messages=[{"role": "user"}, {"role": "assistant"}]),
-            turn_id=None,
-            trace_id=None,
-        )
-        async with factory() as session:
-            row = (
-                await session.execute(
-                    text("SELECT message_count FROM session_index WHERE session_id = :s"),
-                    {"s": "s1"},
-                )
-            ).scalar_one()
-            assert row == 2
+
+        async def index() -> tuple[int, str | None]:
+            async with factory() as session:
+                row = (
+                    await session.execute(
+                        text("SELECT message_count, title FROM session_index WHERE session_id = :s"), {"s": "s1"}
+                    )
+                ).one()
+            return int(row[0]), row[1]
+
+        said = [{"type": "text", "text": "\n  Fix the flaky login test, please\nit fails on CI"}]
+        await w.append("s1", MessageEnd(role="user", content=said), turn_id="r1", trace_id=None)
+        tools_only = [{"type": "toolCall", "id": "c1", "name": "read", "arguments": {}}]
+        await w.append("s1", MessageEnd(role="assistant", content=tools_only), turn_id="r1", trace_id=None)
+        assert await index() == (1, "Fix the flaky login test, please")
+        reply = [{"type": "text", "text": "Fixed."}]
+        await w.append("s1", MessageEnd(role="assistant", content=reply), turn_id="r1", trace_id=None)
+        long_history = [{"role": "user"}, {"role": "assistant"}, {"role": "tool"}, {"role": "assistant"}]
+        await w.append("s1", RunEnd(messages=long_history), turn_id="r1", trace_id=None)
+        assert await index() == (2, "Fix the flaky login test, please")
+        await w.append("s1", MessageEnd(role="user", content=[{"type": "text", "text": "thanks"}]), turn_id="r2", trace_id=None)
+        assert await index() == (3, "Fix the flaky login test, please"), "the first message names it"
 
 
 @pytest.mark.asyncio

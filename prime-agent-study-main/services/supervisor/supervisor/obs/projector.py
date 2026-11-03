@@ -23,7 +23,6 @@ from supervisor.agent.events import (
     MessageEnd,
     RunEnd,
     RunStart,
-    Settled,
     SubagentEnd,
     SubagentStart,
     ToolEnd,
@@ -46,7 +45,6 @@ PROJECTION_TABLE: dict[str, str] = {
     "RunEnd": "close_root",
     "TurnStart": "platform_span",
     "TurnEnd": "close_turn",
-    "Settled": "event_on_turn",
     "MessageEnd": "chat_span",
     "ToolStart": "tool_span",
     "ToolEnd": "close_tool",
@@ -232,8 +230,6 @@ class JournalProjector:
             self._on_turn_start(env)
         elif isinstance(p, TurnEnd):
             self._on_turn_end(env)
-        elif isinstance(p, Settled):
-            pass  # event-only on turn
         elif isinstance(p, MessageEnd):
             self._on_message_end(env, p)
         elif isinstance(p, ToolStart):

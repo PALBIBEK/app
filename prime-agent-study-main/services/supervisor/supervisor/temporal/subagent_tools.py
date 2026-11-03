@@ -549,10 +549,13 @@ class SubagentTools:
     async def unannounced(self, session_id: str) -> list[dict[str, Any]]:
         """Finished jobs of the transport-based background subagents (from before subagents
         were sessions) the model has neither been told about nor asked for."""
+        if not await self._reader.last_of(session_id, [JobStart.__name__]):
+            return []  # every session since subagents became sessions: one indexed lookup
         jobs: list[str] = []
         ended: dict[str, JobEnd] = {}
         announced: set[str] = set()
-        for envelope in await self._reader.read(session_id):
+        types = [JobStart.__name__, JobEnd.__name__, BackgroundResults.__name__, ToolEnd.__name__]
+        for envelope in await self._reader.read_types([session_id], types):
             match envelope.payload:
                 case JobStart(job_id=job_id, kind="subagent"):
                     jobs.append(job_id)

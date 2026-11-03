@@ -138,6 +138,16 @@ export interface ChatMessage {
   seq?: number;
   /** Set when a subagent told the agent something (it finished, or sent an update). */
   notice?: SubagentNoticeView;
+  /** Set on a line the session itself adds to the chat: what happened to its context or sandbox. */
+  note?: SessionNoteView;
+}
+
+/** Something that changed what the agent works from, as a person reads it. */
+export interface SessionNoteView {
+  /** compaction: earlier conversation was summarized. workspace: the sandbox was rebuilt and
+   * some changes were lost. memory: memories were recalled for the reply. */
+  kind: 'compaction' | 'workspace' | 'memory';
+  text: string;
 }
 
 /** What a subagent told the agent that started it, as a person reads it. */

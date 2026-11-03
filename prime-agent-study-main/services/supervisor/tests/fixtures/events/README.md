@@ -14,3 +14,7 @@ current code:
 
 Keep the older files. A type a build does not know at all (a newer build wrote it during a
 rolling deploy) is read as `UnknownEvent` and passed through, not refused.
+
+A type no build writes any more is retired, not just deleted: name it in
+`supervisor.journal.serde.RETIRED_TYPES`, and its old samples are then checked to read as
+`UnknownEvent` (which nothing acts on) instead of as the type.

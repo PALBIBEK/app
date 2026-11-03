@@ -11,7 +11,7 @@ import pytest
 from supervisor.agent.events import Envelope, RunEnd, RunStart, ToolEnd, UnknownEvent
 from supervisor.api.wire import envelope_to_wire
 from supervisor.journal.reader import JournalReader
-from supervisor.journal.serde import _EVENT_TYPES, decode_event, encode_event
+from supervisor.journal.serde import _EVENT_TYPES, RETIRED_TYPES, decode_event, encode_event
 from supervisor.journal.writer import JournalWriter
 from tests.support.event_samples import samples
 from tests.support.journal_db import Factory
@@ -24,6 +24,9 @@ RECORDED = sorted(SAMPLES.glob("r*.json"))
 def test_every_recorded_event_still_reads(path: Path) -> None:
     for name, payload in json.loads(path.read_text()).items():
         event = decode_event(payload)
+        if name in RETIRED_TYPES:  # no build writes it now: it passes through as it was
+            assert event == UnknownEvent(name, {k: v for k, v in payload.items() if k != "_type"})
+            continue
         assert not isinstance(event, UnknownEvent), f"{path.name}: {name} is no longer a known type"
         assert type(event) is _EVENT_TYPES[name]
         assert encode_event(event)["_type"] == name
