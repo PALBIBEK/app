@@ -82,6 +82,8 @@ export const RunSchema = z.object({
 });
 
 export const WireEventSchema = z.object({
+  /** The wire's version: 2 stopped sending the supervisor's internal fields. */
+  v: z.number().default(1),
   seq: z.number(),
   event_id: z.string(),
   turn_id: z.string().nullish(),

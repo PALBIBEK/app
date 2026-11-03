@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from supervisor.api import deps
-from supervisor.api.wire import envelope_to_wire
+from supervisor.api.wire import WIRE_VERSION, envelope_to_wire
 from supervisor.journal.partials import Partial, PartialOutputs
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.watch import JournalWatch
@@ -54,6 +54,7 @@ def _partial_wire(partial: Partial, cursor: int) -> str:
     """A partial in the wire shape; ``seq`` is the last journalled one (not a position)."""
     return json.dumps(
         {
+            "v": WIRE_VERSION,
             "seq": cursor,
             "event_id": f"partial:{partial.run_id}:{partial.step}",
             "turn_id": partial.run_id,
