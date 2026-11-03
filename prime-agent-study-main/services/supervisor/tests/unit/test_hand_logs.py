@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar
 
+import pytest
+
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
 from supervisor.sandbox.base import SandboxInfo
@@ -54,16 +56,17 @@ async def test_a_destroyed_container_has_none() -> None:
     assert await sandbox.logs() is None
 
 
-def test_blobs_are_stored_by_content_and_read_back_only_by_their_ref(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_blobs_are_stored_by_content_and_read_back_only_by_their_ref(tmp_path: Path) -> None:
     writer = JournalWriter(None, blob_dir=tmp_path)  # type: ignore[arg-type]
     reader = JournalReader(None, blob_dir=tmp_path)  # type: ignore[arg-type]
-    ref = writer.put_blob(b"exit_code=137")
-    assert ref is not None and writer.put_blob(b"exit_code=137") == ref
-    assert reader.read_blob(ref) == b"exit_code=137"
+    ref = await writer.put_blob(b"exit_code=137")
+    assert ref is not None and await writer.put_blob(b"exit_code=137") == ref
+    assert await reader.read_blob(ref) == b"exit_code=137"
     for bad in ("../etc/passwd", "a" * 63, ref.upper()):
         try:
-            reader.read_blob(bad)
+            await reader.read_blob(bad)
         except FileNotFoundError:
             continue
         raise AssertionError(f"read {bad!r}")
-    assert JournalWriter(None).put_blob(b"x") is None  # type: ignore[arg-type]
+    assert await JournalWriter(None).put_blob(b"x") is None  # type: ignore[arg-type]

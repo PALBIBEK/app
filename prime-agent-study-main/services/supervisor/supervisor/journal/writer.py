@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import time
@@ -20,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import AgentEvent, MessageEnd, RunEnd
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
+from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.serde import encode_event, event_type_name
 
 
@@ -52,13 +52,19 @@ class JournalWriter:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         blob_dir: Path | str | None = None,
+        blobs: BlobStore | None = None,
         blob_threshold: int = _DEFAULT_BLOB_THRESHOLD,
     ) -> None:
+        """``blobs`` keeps what is too large for a row (``supervisor.journal.blobs``: shared
+        object storage when more than one process reads the journal); ``blob_dir`` is a
+        directory for it instead (one process, dev, tests)."""
         self._factory = session_factory
-        self._blob_dir = Path(blob_dir) if blob_dir is not None else None
+        self._blobs: BlobStore | None = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
         self._blob_threshold = blob_threshold
-        if self._blob_dir is not None:
-            self._blob_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def blobs(self) -> BlobStore | None:
+        return self._blobs
 
     async def ensure_session(
         self,
@@ -243,6 +249,10 @@ class JournalWriter:
         back) when an event id given is already in the journal; checked under the lock, so a
         racing writer that got there first has committed and is seen."""
         n = len(events)
+        # Large payloads go to the blob store first, outside the session's lock (they are
+        # content-addressed: one left by a write that then fails is harmless, and erasing
+        # deletes what no journal names).
+        payloads = [await self._store_payload(event) for event, _, _ in events]
 
         async with self._factory() as db, db.begin():
             # Serialize allocators under SQLite.
@@ -277,7 +287,7 @@ class JournalWriter:
             replied = False
             for i, (event, turn_id, trace_id) in enumerate(events):
                 seq = first + i
-                payload = self._store_payload(event)
+                payload = payloads[i]
                 db.add(
                     EventRow(
                         session_id=session_id,
@@ -323,7 +333,7 @@ class JournalWriter:
         )
         seq = int(result.scalar_one())
         now_ms = int(time.time() * 1000)
-        payload = self._store_payload(event)
+        payload = await self._store_payload(event)
         db.add(
             EventRow(
                 session_id=session_id,
@@ -356,31 +366,28 @@ class JournalWriter:
             idx.message_count = len(run_end.messages)
         idx.last_event_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
-    def put_blob(self, data: bytes) -> str | None:
-        """Store ``data`` content-addressed beside the journal; its ref (SHA-256), ``None`` without a blob dir."""
-        if self._blob_dir is None:
+    async def put_blob(self, data: bytes) -> str | None:
+        """Keep ``data`` content-addressed beside the journal; its ref (SHA-256), ``None``
+        without a blob store."""
+        if self._blobs is None:
             return None
-        digest = hashlib.sha256(data).hexdigest()
-        path = self._blob_dir / digest
-        if not path.exists():
-            path.write_bytes(data)
-        return digest
+        ref = blob_ref(data)
+        await self._blobs.put(ref, data)
+        return ref
 
-    def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
+    async def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
         encoded = encode_event(event)
         raw = json.dumps(encoded, separators=(",", ":"), allow_nan=False).encode()  # plain JSON already
         if len(raw) <= self._blob_threshold:
             return encoded
-        if self._blob_dir is None:
+        if self._blobs is None:
             raise OversizedPayloadError(
                 f"payload {len(raw)} bytes exceeds threshold {self._blob_threshold} "
-                "and no blob_dir configured"
+                "and no blob store configured"
             )
-        digest = hashlib.sha256(raw).hexdigest()
-        path = self._blob_dir / digest
-        if not path.exists():
-            path.write_bytes(raw)
-        return {"_type": event_type_name(event), "_blob_ref": digest}
+        ref = blob_ref(raw)
+        await self._blobs.put(ref, raw)
+        return {"_type": event_type_name(event), "_blob_ref": ref}
 
 
 class _AlreadyAppended(Exception):

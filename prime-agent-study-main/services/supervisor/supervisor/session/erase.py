@@ -25,7 +25,6 @@ erasing again finds nothing left to remove.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -59,6 +58,7 @@ from supervisor.db.models import (
 )
 from supervisor.hands.checkpoint import checkpoint_scope
 from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key
+from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.seams.services.object_storage import ObjectStorage
 
 __all__ = ["Erased", "SessionEraser"]
@@ -107,11 +107,14 @@ class SessionEraser:
         self,
         factory: async_sessionmaker[AsyncSession],
         *,
-        blob_dir: Path | None,
+        blobs: BlobStore | None = None,
+        blob_dir: Path | None = None,
         objects: ObjectStorage | None,
     ) -> None:
+        """``blobs``: where the journal's large payloads are (``supervisor.journal.blobs``);
+        ``blob_dir``: a directory instead."""
         self._db = factory
-        self._blob_dir = blob_dir
+        self._blobs: BlobStore | None = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
         self._objects = objects
 
     async def erase(self, session_id: str) -> Erased:
@@ -205,7 +208,7 @@ class SessionEraser:
 
     async def _delete_unreferenced(self, refs: set[str]) -> int:
         """Delete the payloads no other session's journal still holds (they are stored once)."""
-        if self._blob_dir is None or not refs:
+        if self._blobs is None or not refs:
             return 0
         async with self._db() as db:
             shared = set(
@@ -224,8 +227,11 @@ class SessionEraser:
             )
         removed = 0
         for ref in refs - shared:
-            with contextlib.suppress(FileNotFoundError):
-                (self._blob_dir / ref).unlink()
-                removed += 1
+            try:
+                removed += await self._blobs.delete(ref)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                logger.warning("could not delete journal payload %s while erasing", ref, exc_info=True)
         return removed
 

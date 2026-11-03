@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -20,6 +21,7 @@ from supervisor.agent.events import (
     ToolStart,
 )
 from supervisor.db.models import EventRow, SessionRow
+from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.journal.serde import decode_event
 
 
@@ -29,9 +31,11 @@ class JournalReader:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         blob_dir: Path | str | None = None,
+        blobs: BlobStore | None = None,
     ) -> None:
         self._factory = session_factory
-        self._blob_dir = Path(blob_dir) if blob_dir is not None else None
+        # Where large payloads are (supervisor.journal.blobs); the writer's store.
+        self._blobs: BlobStore | None = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
 
     @property
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
@@ -47,7 +51,7 @@ class JournalReader:
                     .order_by(EventRow.seq.asc())
                 )
             ).scalars().all()
-        return [self._to_envelope(row) for row in rows]
+        return await self._envelopes(rows)
 
     async def hand_logs(self, session_id: str, ref: str) -> bytes | None:
         """A lost hand's saved logs, if one of the session's ``HandLost`` events names ``ref``."""
@@ -57,10 +61,10 @@ class JournalReader:
                     select(EventRow).where(EventRow.session_id == session_id, EventRow.type == "HandLost")
                 )
             ).scalars().all()
-        if not any(getattr(self._to_envelope(r).payload, "logs_ref", None) == ref for r in rows):
+        if not any(getattr(e.payload, "logs_ref", None) == ref for e in await self._envelopes(rows)):
             return None
         try:
-            return self.read_blob(ref)
+            return await self.read_blob(ref)
         except FileNotFoundError:
             return None
 
@@ -123,10 +127,7 @@ class JournalReader:
                     )
                 )
             ).scalars().all()
-        if any(
-            getattr(decode_event(self._load_payload(row.payload)), "stop_reason", None) == "aborted"
-            for row in turn_ends
-        ):
+        if any(getattr(e.payload, "stop_reason", None) == "aborted" for e in await self._envelopes(turn_ends)):
             return None
         return run_start
 
@@ -140,7 +141,7 @@ class JournalReader:
                     .order_by(EventRow.seq.asc())
                 )
             ).scalars().all()
-        return [self._to_envelope(row) for row in rows]
+        return await self._envelopes(rows)
 
     async def read_run_window(self, session_id: str, turn_id: str) -> list[Envelope]:
         """One run's events plus the session's own events (those with no run) that happened
@@ -177,7 +178,7 @@ class JournalReader:
                     .order_by(EventRow.seq.asc())
                 )
             ).scalars().all()
-        return [self._to_envelope(row) for row in rows]
+        return await self._envelopes(rows)
 
     async def event(self, session_id: str, event_id: str) -> Envelope | None:
         async with self._factory() as db:
@@ -188,7 +189,7 @@ class JournalReader:
                     )
                 )
             ).scalar_one_or_none()
-        return None if row is None else self._to_envelope(row)
+        return None if row is None else (await self._envelopes([row]))[0]
 
     async def latest_history(self, session_id: str) -> list[dict] | None:
         """Messages from the most recent RunEnd, or None if none."""
@@ -203,7 +204,7 @@ class JournalReader:
             ).scalar_one_or_none()
         if row is None:
             return None
-        payload = self._load_payload(row.payload)
+        payload = await self._load_payload(row.payload)
         event = decode_event(payload)
         assert isinstance(event, RunEnd)
         return list(event.messages)
@@ -233,19 +234,24 @@ class JournalReader:
             rows = (
                 await db.execute(query.order_by(EventRow.ts_ms.asc(), EventRow.seq.asc()).limit(limit))
             ).scalars().all()
-        return [self._to_envelope(row) for row in rows]
+        return await self._envelopes(rows)
 
-    def _to_envelope(self, row: EventRow) -> Envelope:
-        payload = decode_event(self._load_payload(row.payload))
-        return Envelope(
-            session_id=row.session_id,
-            seq=int(row.seq),
-            event_id=row.event_id,
-            ts_ms=int(row.ts_ms),
-            turn_id=row.turn_id,
-            trace_id=row.trace_id,
-            payload=payload,
-        )
+    async def _envelopes(self, rows: Sequence[EventRow]) -> list[Envelope]:
+        """``rows`` as envelopes, their large payloads fetched from the blob store at once."""
+        refs = {ref for row in rows if (ref := row.payload.get("_blob_ref")) is not None}
+        fetched = dict(zip(refs, await asyncio.gather(*(self._blob(ref) for ref in refs)), strict=True))
+        return [
+            Envelope(
+                session_id=row.session_id,
+                seq=int(row.seq),
+                event_id=row.event_id,
+                ts_ms=int(row.ts_ms),
+                turn_id=row.turn_id,
+                trace_id=row.trace_id,
+                payload=decode_event(fetched.get(row.payload.get("_blob_ref")) or row.payload),
+            )
+            for row in rows
+        ]
 
     async def unfinished_jobs(self, session_id: str) -> set[str]:
         """The session's background subagent jobs that started and have not ended."""
@@ -254,21 +260,21 @@ class JournalReader:
         return started - {e.payload.job_id for e in events if isinstance(e.payload, JobEnd)}
 
     @property
-    def blob_dir(self) -> Path | None:
-        """Where large payloads are kept beside the journal (``JournalWriter.put_blob``)."""
-        return self._blob_dir
+    def blobs(self) -> BlobStore | None:
+        """Where large payloads and lost sandboxes' logs are kept (``supervisor.journal.blobs``)."""
+        return self._blobs
 
-    def read_blob(self, ref: str) -> bytes:
+    async def read_blob(self, ref: str) -> bytes:
         """A blob stored with ``JournalWriter.put_blob``; ``FileNotFoundError`` if there is none."""
-        if self._blob_dir is None or not re.fullmatch(r"[0-9a-f]{64}", ref):
+        if self._blobs is None:
             raise FileNotFoundError(ref)
-        return (self._blob_dir / ref).read_bytes()
+        return await self._blobs.get(ref)
 
-    def _load_payload(self, payload: dict) -> dict:
+    async def _blob(self, ref: str) -> dict:
+        if self._blobs is None:
+            raise FileNotFoundError(f"blob ref {ref!r} but no blob store configured")
+        return json.loads((await self._blobs.get(ref)).decode())
+
+    async def _load_payload(self, payload: dict) -> dict:
         ref = payload.get("_blob_ref")
-        if ref is None:
-            return payload
-        if self._blob_dir is None:
-            raise FileNotFoundError(f"blob ref {ref!r} but no blob_dir configured")
-        raw = (self._blob_dir / ref).read_bytes()
-        return json.loads(raw.decode())
+        return payload if ref is None else await self._blob(ref)

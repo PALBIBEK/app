@@ -77,6 +77,8 @@ services:
       YAL_CATALOG_DIR: ${YAL_CATALOG_DIR:-/harness}
       HARNESS_VERSIONS_DIR: ${HARNESS_VERSIONS_DIR:-/harness/versions}
       YAL_CONTRACTS_DIR: ${YAL_CONTRACTS_DIR:-/contracts}
+      # Only used with OBJECT_STORAGE=memory: with shared object storage (below) the journal keeps
+      # its large payloads in the bucket, where every replica and worker reads them.
       BLOB_DIR: ${BLOB_DIR:-/tmp/yal-blobs}
       # Local demo: load harness compositions from YAL_CATALOG_DIR (/harness mount).
       # Escape hatch (skip catalog / incomplete harness): YAL_LOAD_COMPOSITION_CATALOG=false
