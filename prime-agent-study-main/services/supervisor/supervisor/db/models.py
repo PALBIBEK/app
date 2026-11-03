@@ -83,6 +83,11 @@ class EventRow(Base):
         # Idempotent appends look events up by their deterministic id, which is unique: a
         # keyed write lands once (supervisor.journal.writer).
         Index("uq_events_session_event_id", "session_id", "event_id", unique=True),
+        # A session's latest events of a type, one run's events, a type across sessions
+        # in time order: read without scanning journals (migration 0035).
+        Index("ix_events_session_type_seq", "session_id", "type", "seq"),
+        Index("ix_events_session_turn_seq", "session_id", "turn_id", "seq"),
+        Index("ix_events_type_ts", "type", "ts_ms"),
     )
 
     session_id: Mapped[str] = mapped_column(
