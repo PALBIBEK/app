@@ -143,6 +143,9 @@ def event_type_name(event: AgentEvent) -> str:
     return name
 
 
+_USAGE_FIELDS: dict[type, str] = {MessageEnd: "usage", CompactionEnd: "usage", RunEnd: "total_usage"}
+
+
 def type_name_of(event_cls: type) -> str:
     """The stored type name of an event class (``EventRow.type``), e.g. ``"RunStart"``."""
     name = _TYPE_NAMES.get(event_cls)
@@ -298,13 +301,13 @@ def _construct_event[T: AgentEvent](event_cls: type[T], payload: dict[str, Any])
         payload = {k: v for k, v in payload.items() if k in known}
         logger.debug("ignoring %s fields unknown to this build: %s", event_cls.__name__, sorted(unknown))
 
-    # A reply's or a compaction's usage is a nested dataclass.
-    if event_cls in (MessageEnd, CompactionEnd):
-        usage_data = payload.get("usage")
+    # Usage is a nested dataclass: a reply's, a compaction's, a run's total.
+    if (usage_field := _USAGE_FIELDS.get(event_cls)) is not None:
+        usage_data = payload.get(usage_field)
         if usage_data is not None and isinstance(usage_data, dict):
             payload = dict(payload)
             usage_known = {f.name for f in dataclasses.fields(Usage)}
-            payload["usage"] = Usage(**{k: v for k, v in usage_data.items() if k in usage_known})
+            payload[usage_field] = Usage(**{k: v for k, v in usage_data.items() if k in usage_known})
 
     return event_cls(**payload)  # type: ignore[return-value]
 

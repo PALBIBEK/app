@@ -16,13 +16,14 @@ from supervisor.agent.events import (
     Envelope,
     JobEnd,
     JobStart,
-    RunEnd,
     ToolEnd,
     ToolStart,
 )
 from supervisor.db.models import EventRow, SessionRow
+from supervisor.journal import snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.journal.serde import decode_event
+from supervisor.journal.snapshots import MAX_CHAIN, Snapshot
 
 
 class JournalReader:
@@ -193,21 +194,26 @@ class JournalReader:
 
     async def latest_history(self, session_id: str) -> list[dict] | None:
         """Messages from the most recent RunEnd, or None if none."""
+        latest = await self.latest_run_end(session_id)
+        return None if latest is None else list(latest.messages)
+
+    async def latest_run_end(self, session_id: str) -> Snapshot | None:
+        """The session's most recent ``RunEnd`` conversation, resolved (at most
+        ``MAX_CHAIN`` + 1 rows read, however long the session)."""
+        done = await self._snapshots(session_id, None)
+        return done[max(done)] if done else None
+
+    async def last_of(
+        self, session_id: str, types: Sequence[str], *, limit: int = 1, before_seq: int | None = None
+    ) -> list[Envelope]:
+        """The session's latest ``limit`` events of ``types``, newest first, without
+        reading the rest of its journal."""
+        query = select(EventRow).where(EventRow.session_id == session_id, EventRow.type.in_(list(types)))
+        if before_seq is not None:
+            query = query.where(EventRow.seq < before_seq)
         async with self._factory() as db:
-            row = (
-                await db.execute(
-                    select(EventRow)
-                    .where(EventRow.session_id == session_id, EventRow.type == "RunEnd")
-                    .order_by(EventRow.seq.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-        if row is None:
-            return None
-        payload = await self._load_payload(row.payload)
-        event = decode_event(payload)
-        assert isinstance(event, RunEnd)
-        return list(event.messages)
+            rows = (await db.execute(query.order_by(EventRow.seq.desc()).limit(limit))).scalars().all()
+        return await self._envelopes(rows)
 
     async def read_types(
         self,
@@ -237,9 +243,9 @@ class JournalReader:
         return await self._envelopes(rows)
 
     async def _envelopes(self, rows: Sequence[EventRow]) -> list[Envelope]:
-        """``rows`` as envelopes, their large payloads fetched from the blob store at once."""
-        refs = {ref for row in rows if (ref := row.payload.get("_blob_ref")) is not None}
-        fetched = dict(zip(refs, await asyncio.gather(*(self._blob(ref) for ref in refs)), strict=True))
+        """``rows`` as envelopes: large payloads fetched from the blob store at once, and
+        ``RunEnd`` deltas (``supervisor.journal.snapshots``) resolved into conversations."""
+        payloads = await self._resolve(list(zip(rows, await self._payloads(rows), strict=True)))
         return [
             Envelope(
                 session_id=row.session_id,
@@ -248,10 +254,86 @@ class JournalReader:
                 ts_ms=int(row.ts_ms),
                 turn_id=row.turn_id,
                 trace_id=row.trace_id,
-                payload=decode_event(fetched.get(row.payload.get("_blob_ref")) or row.payload),
+                payload=decode_event(payload),
             )
-            for row in rows
+            for row, payload in zip(rows, payloads, strict=True)
         ]
+
+    async def _payloads(self, rows: Sequence[EventRow]) -> list[dict]:
+        """Each row's payload, with those kept in the blob store fetched concurrently."""
+        refs = {ref for row in rows if (ref := row.payload.get("_blob_ref")) is not None}
+        fetched = dict(zip(refs, await asyncio.gather(*(self._blob(ref) for ref in refs)), strict=True))
+        return [fetched.get(row.payload.get("_blob_ref")) or row.payload for row in rows]
+
+    async def _resolve(self, items: list[tuple[EventRow, dict]]) -> list[dict]:
+        """``items``' payloads with every ``RunEnd`` delta replaced by the ``RunEnd`` it
+        stands for. Bases in ``items`` are used as they are; others are read (one query a
+        chain: they are the session's preceding ``RunEnd`` rows)."""
+        if not any(snapshots.is_delta(p) for _, p in items):
+            return [p for _, p in items]
+        known: dict[tuple[str, int], list[dict]] = {}
+        out = [p for _, p in items]
+        for i in sorted(range(len(items)), key=lambda i: (items[i][0].session_id, int(items[i][0].seq))):
+            row, payload = items[i]
+            if snapshots.is_delta(payload):
+                key = (row.session_id, int(payload["_base_seq"]))
+                if key not in known:
+                    known.update({(row.session_id, n): s.messages for n, s in (await self._snapshots(*key)).items()})
+                if key not in known:
+                    raise LookupError(f"session {row.session_id}: RunEnd {row.seq} has no base {key[1]}")
+                payload = snapshots.resolve(payload, known[key])
+                out[i] = payload
+            if row.type == "RunEnd":
+                known[(row.session_id, int(row.seq))] = payload["messages"]
+        return out
+
+    async def _snapshots(self, session_id: str, through_seq: int | None) -> dict[int, Snapshot]:
+        """The resolved ``RunEnd`` conversation at ``through_seq`` (the newest when
+        ``None``), with those it was resolved from, by seq; empty if there is none.
+
+        One query reads the ``MAX_CHAIN`` + 1 ``RunEnd`` rows up to it, which hold its
+        whole chain when each delta stands on the ``RunEnd`` before it (the writer's
+        normal case); a base outside them is read on its own."""
+        query = select(EventRow).where(EventRow.session_id == session_id, EventRow.type == "RunEnd")
+        if through_seq is not None:
+            query = query.where(EventRow.seq <= through_seq)
+        async with self._factory() as db:
+            rows = (await db.execute(query.order_by(EventRow.seq.desc()).limit(MAX_CHAIN + 1))).scalars().all()
+        if not rows or (through_seq is not None and int(rows[0].seq) != through_seq):
+            return {}
+        stored = dict(zip((int(r.seq) for r in rows), await self._payloads(rows), strict=True))
+        done: dict[int, Snapshot] = {}
+
+        async def snapshot(seq: int, hops: int) -> Snapshot:
+            if seq in done:
+                return done[seq]
+            if hops > MAX_CHAIN:
+                raise LookupError(f"session {session_id}: RunEnd {seq} is more than {MAX_CHAIN} deltas from a full one")
+            if seq not in stored:
+                stored.update(await self._run_end_payloads(session_id, seq))
+            payload = stored.get(seq)
+            if payload is None:
+                raise LookupError(f"session {session_id}: no RunEnd at {seq} for a delta to stand on")
+            depth = snapshots.depth(payload)
+            if snapshots.is_delta(payload):
+                base = await snapshot(int(payload["_base_seq"]), hops + 1)
+                payload = snapshots.resolve(payload, base.messages)
+            done[seq] = Snapshot(seq, depth, payload["messages"])
+            return done[seq]
+
+        await snapshot(int(rows[0].seq), 0)
+        return done
+
+    async def _run_end_payloads(self, session_id: str, seq: int) -> dict[int, dict]:
+        async with self._factory() as db:
+            rows = (
+                await db.execute(
+                    select(EventRow).where(
+                        EventRow.session_id == session_id, EventRow.type == "RunEnd", EventRow.seq == seq
+                    )
+                )
+            ).scalars().all()
+        return dict(zip((int(r.seq) for r in rows), await self._payloads(rows), strict=True))
 
     async def unfinished_jobs(self, session_id: str) -> set[str]:
         """The session's background subagent jobs that started and have not ended."""
@@ -274,7 +356,3 @@ class JournalReader:
         if self._blobs is None:
             raise FileNotFoundError(f"blob ref {ref!r} but no blob store configured")
         return json.loads((await self._blobs.get(ref)).decode())
-
-    async def _load_payload(self, payload: dict) -> dict:
-        ref = payload.get("_blob_ref")
-        return payload if ref is None else await self._blob(ref)

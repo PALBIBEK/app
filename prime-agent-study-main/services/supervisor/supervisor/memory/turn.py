@@ -21,12 +21,14 @@ from typing import Any, Final
 from supervisor.agent.events import (
     CompactionEnd,
     Envelope,
+    MemoryContext,
     MemoryInjected,
     MessageEnd,
     RunEnd,
     ToolStart,
 )
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory import boundary
 from supervisor.memory.binding import CaptureMode, MemoryBinding, Strategy
@@ -166,10 +168,9 @@ class SessionMemory:
         scope = await self.scope(session_id)
         if scope is None:
             return
-        events = await self._reader.read(session_id)
-        previous = boundary.latest_context(events)
+        previous = await self._latest_context(session_id)
         nxt = boundary.next_context(
-            previous, boundary.fingerprint(scope.audience), events[-1].seq if events else -1
+            previous, boundary.fingerprint(scope.audience), await self._reader.last_seq(session_id)
         )
         if previous is None or nxt != previous:
             await record(session_id, run_id, "memory_context", nxt)
@@ -178,14 +179,26 @@ class SessionMemory:
         """The conversation carried into the next run, unless the audience cutoff has passed it.
 
         The latest checkpoint wins: a run's closing messages, or the compacted
-        conversation a later compaction replaced them with.
+        conversation a later compaction replaced them with. Read from the latest few
+        events of those types, not the whole journal (this runs on every model step).
         """
-        events = await self._reader.read(session_id)
-        through = boundary.cutoff(events)
-        checkpoint = next((e for e in reversed(events) if _checkpoint(e.payload) is not None), None)
-        if checkpoint is None or checkpoint.seq <= through:
-            return []
-        return list(_checkpoint(checkpoint.payload) or [])
+        context = await self._latest_context(session_id)
+        through = -1 if context is None else context.through_seq
+        before: int | None = None
+        while True:
+            page = await self._reader.last_of(session_id, _CHECKPOINTS, limit=8, before_seq=before)
+            for event in page:
+                if event.seq <= through:
+                    return []
+                if (messages := _checkpoint(event.payload)) is not None:
+                    return messages
+            if len(page) < 8:
+                return []
+            before = page[-1].seq
+
+    async def _latest_context(self, session_id: str) -> MemoryContext | None:
+        latest = await self._reader.last_of(session_id, [type_name_of(MemoryContext)])
+        return latest[0].payload if latest and isinstance(latest[0].payload, MemoryContext) else None
 
     # --- recall ------------------------------------------------------------------
 
@@ -297,6 +310,9 @@ class SessionMemory:
                 idempotency_key=key,
             ),
         )
+
+
+_CHECKPOINTS: Final = (type_name_of(RunEnd), type_name_of(CompactionEnd))
 
 
 def _checkpoint(event: object) -> list[dict[str, Any]] | None:
