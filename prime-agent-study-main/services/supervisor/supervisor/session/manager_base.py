@@ -45,6 +45,7 @@ from supervisor.harness import (
     manifest_from_dict,
 )
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.secrets import mask_event
 from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import JournalWriter, Written
 from supervisor.memory.platform import MemoryPlatform
@@ -477,7 +478,9 @@ class SessionManagerBase:
         """What every event journalled goes through once written: published live and
         projected into tracing as it was stored (its id and time are the row's), and a
         run's start or end refreshes its trace rollup. Writers that journal inside their
-        own transaction (the tool outbox) call it once that commits."""
+        own transaction (the tool outbox) call it once that commits. Credentials in it are
+        masked, as they were where it was stored (``supervisor.journal.secrets``)."""
+        payload = mask_event(payload)
         envelope = Envelope(
             session_id=session_id,
             seq=written.seq,
