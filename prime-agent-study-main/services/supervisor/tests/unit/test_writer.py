@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from supervisor.agent.events import RunEnd, RunStart, ToolStart, TurnStart
 from supervisor.db.engine import open_db
 from supervisor.db.models import EventRow
-from supervisor.journal.writer import JournalWriter, OversizedPayloadError
+from supervisor.journal.writer import JournalWriter, OversizedPayloadError, Written
 
 
 @pytest.fixture
@@ -224,7 +224,7 @@ async def test_a_claim_under_one_key_is_won_once(tmp_path: Path) -> None:
         w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
         await w.ensure_session("s1", runtime="echo")
 
-        async def claim(not_run: bool) -> int | None:
+        async def claim(not_run: bool) -> Written | None:
             event = ToolStart(tool_call_id="c1", tool_name="write", args={}, not_run=not_run)
             return await w.append_once("s1", event, turn_id="t1", trace_id=None, event_key="r1:c1:start")
 

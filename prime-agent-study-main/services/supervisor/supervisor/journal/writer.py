@@ -8,12 +8,14 @@ import json
 import logging
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import AgentEvent, MessageEnd, RunEnd
@@ -31,6 +33,17 @@ _DEFAULT_BLOB_THRESHOLD = 64 * 1024
 
 class OversizedPayloadError(RuntimeError):
     """Payload exceeds threshold but no blob_dir is configured."""
+
+
+@dataclass(frozen=True, slots=True)
+class Written:
+    """Where an event is in the journal: as stored (its id and time are the row's), and
+    whether this write put it there or found it there already (a retried keyed write)."""
+
+    seq: int
+    event_id: str
+    ts_ms: int
+    created: bool
 
 
 class JournalWriter:
@@ -55,32 +68,38 @@ class JournalWriter:
         tenant_id: str = "default",
         harness_version: str = "",
     ) -> None:
+        """Create the session's row and index once; safe to race (a retried create, a
+        retried subagent copy): whoever loses finds the row there and returns."""
         async with self._factory() as db:
-            existing = await db.get(SessionRow, session_id)
-            if existing is not None:
+            if await db.get(SessionRow, session_id) is not None:
                 return
-            db.add(
-                SessionRow(
-                    id=session_id,
-                    tenant_id=tenant_id,
-                    runtime=runtime,
-                    harness_version=harness_version,
-                    status="active",
-                    last_seq=-1,
+            try:
+                db.add(
+                    SessionRow(
+                        id=session_id,
+                        tenant_id=tenant_id,
+                        runtime=runtime,
+                        harness_version=harness_version,
+                        status="active",
+                        last_seq=-1,
+                    )
                 )
-            )
-            # Flush parent first — no ORM relationship, so commit order is not guaranteed.
-            await db.flush()
-            db.add(
-                SessionIndexRow(
-                    session_id=session_id,
-                    title=None,
-                    message_count=0,
-                    total_cost=0,
-                    last_event_at=None,
+                # Flush parent first — no ORM relationship, so commit order is not guaranteed.
+                await db.flush()
+                db.add(
+                    SessionIndexRow(
+                        session_id=session_id,
+                        title=None,
+                        message_count=0,
+                        total_cost=0,
+                        last_event_at=None,
+                    )
                 )
-            )
-            await db.commit()
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                if await db.get(SessionRow, session_id) is None:
+                    raise  # not the race: something else is wrong
 
     async def append(
         self,
@@ -97,14 +116,52 @@ class JournalWriter:
         the key, and appending the same key again returns the original seq. This
         is what lets a retried workflow activity journal safely.
         """
-        event_id = None
-        if event_key is not None:
-            event_id = keyed_event_id(session_id, event_key)
-            if (seq := await self.seq_of(session_id, event_id)) is not None:
-                return seq
-        return await self.append_batch(
-            session_id, [(event, turn_id, trace_id)], event_ids=[event_id]
+        return (await self.write(session_id, event, turn_id=turn_id, trace_id=trace_id, event_key=event_key)).seq
+
+    async def write(
+        self,
+        session_id: str,
+        event: AgentEvent,
+        *,
+        turn_id: str | None,
+        trace_id: str | None,
+        event_key: str | None = None,
+    ) -> Written:
+        """``append``, saying where the event is as stored, and whether this write put it
+        there. A keyed write is idempotent even when two attempts race (Temporal can start a
+        step's next attempt while the last one still runs): the key is looked up under the
+        session's lock, so of two writers exactly one appends and the other gets its event."""
+        if event_key is None:
+            return await _run_to_completion(self._write(session_id, event, turn_id, trace_id, None))
+        event_id = keyed_event_id(session_id, event_key)
+        if (found := await self._find(session_id, event_id)) is not None:
+            return found  # the usual retry: no lock taken
+        try:
+            return await _run_to_completion(self._write(session_id, event, turn_id, trace_id, event_id))
+        except _AlreadyAppended:
+            found = await self._find(session_id, event_id)
+            assert found is not None
+            return found
+
+    async def _write(
+        self, session_id: str, event: AgentEvent, turn_id: str | None, trace_id: str | None, event_id: str | None
+    ) -> Written:
+        keyed, stored_id = event_id is not None, event_id or uuid4().hex
+        seq, ts_ms = await self._append_batch(
+            session_id, [(event, turn_id, trace_id)], event_ids=[stored_id], if_absent=keyed
         )
+        return Written(seq, stored_id, ts_ms, created=True)
+
+    async def _find(self, session_id: str, event_id: str) -> Written | None:
+        async with self._factory() as db:
+            row = (
+                await db.execute(
+                    select(EventRow.seq, EventRow.ts_ms).where(
+                        EventRow.session_id == session_id, EventRow.event_id == event_id
+                    )
+                )
+            ).first()
+        return None if row is None else Written(int(row.seq), event_id, int(row.ts_ms), created=False)
 
     async def append_once(
         self,
@@ -114,9 +171,9 @@ class JournalWriter:
         turn_id: str | None,
         trace_id: str | None,
         event_key: str,
-    ) -> int | None:
-        """Append under ``event_key`` only if nothing holds that key yet: its seq, or None
-        when another writer already did. Atomic: the check runs inside the append's
+    ) -> Written | None:
+        """Append under ``event_key`` only if nothing holds that key yet: where it was
+        written, or None when another writer already did. Atomic: the check runs inside the append's
         transaction, after the session row's lock, so of two writers racing for one key
         exactly one wins (a claim: who may run a tool call, who closes it unrun).
         """
@@ -124,13 +181,14 @@ class JournalWriter:
         if await self.seq_of(session_id, event_id) is not None:
             return None
         try:
-            return await _run_to_completion(
+            seq, ts_ms = await _run_to_completion(
                 self._append_batch(
                     session_id, [(event, turn_id, trace_id)], event_ids=[event_id], if_absent=True
                 )
             )
         except _AlreadyAppended:
             return None
+        return Written(seq, event_id, ts_ms, created=True)
 
     async def seq_of(self, session_id: str, event_id: str) -> int | None:
         async with self._factory() as db:
@@ -159,7 +217,18 @@ class JournalWriter:
         """
         if not events:
             raise ValueError("append_batch requires at least one event")
-        return await _run_to_completion(self._append_batch(session_id, events, event_ids=event_ids))
+        keyed = any(event_ids or [])
+        try:
+            seq, _ = await _run_to_completion(
+                self._append_batch(session_id, events, event_ids=event_ids, if_absent=keyed)
+            )
+        except _AlreadyAppended:
+            # A retry of the same batch: every event of it is there (it was one transaction).
+            last = next(e for e in reversed(event_ids or []) if e is not None)
+            seq_found = await self.seq_of(session_id, last)
+            assert seq_found is not None
+            return seq_found
+        return seq
 
     async def _append_batch(
         self,
@@ -168,7 +237,11 @@ class JournalWriter:
         *,
         event_ids: list[str | None] | None,
         if_absent: bool = False,
-    ) -> int:
+    ) -> tuple[int, int]:
+        """Append ``events`` in one transaction under the session row's lock; (the last
+        seq, the time stamped on them). ``if_absent``: raise ``_AlreadyAppended`` (rolling
+        back) when an event id given is already in the journal; checked under the lock, so a
+        racing writer that got there first has committed and is seen."""
         n = len(events)
 
         async with self._factory() as db, db.begin():
@@ -189,12 +262,12 @@ class JournalWriter:
                 },
             )
             last_seq = result.scalar_one()
-            if if_absent and event_ids and event_ids[0] is not None:
+            if if_absent and (keys := [e for e in event_ids or [] if e is not None]):
                 # Under the session row's lock: a writer that got here first has committed.
                 taken = await db.execute(
-                    select(EventRow.seq).where(
-                        EventRow.session_id == session_id, EventRow.event_id == event_ids[0]
-                    )
+                    select(EventRow.seq)
+                    .where(EventRow.session_id == session_id, EventRow.event_id.in_(keys))
+                    .limit(1)
                 )
                 if taken.scalar_one_or_none() is not None:
                     raise _AlreadyAppended  # rolls the seq allocation back
@@ -222,7 +295,7 @@ class JournalWriter:
                 replied = replied or (isinstance(event, MessageEnd) and event.usage is not None)
             if index_update is not None or replied:
                 await self._touch_index(db, session_id, run_end=index_update, ts_ms=now_ms)
-        return int(last_seq)
+        return int(last_seq), now_ms
 
     async def append_in_session(
         self,

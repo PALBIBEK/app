@@ -19,7 +19,7 @@ from supervisor.db.engine import open_db
 from supervisor.harness import BudgetSpec
 from supervisor.journal.writer import JournalWriter
 from supervisor.policy.budget import BudgetTracker
-from supervisor.policy.budget.tracker import tenant_spend
+from supervisor.policy.budget.tracker import current_month, tenant_spend
 from supervisor.policy.errors import CostQuotaExceeded
 from supervisor.policy.quotas import TenantQuotaEnforcer
 from supervisor.policy.types import QuotaLimits
@@ -41,7 +41,8 @@ async def factory(tmp_path: Path) -> AsyncIterator[Factory]:
 
 
 class Clock:
-    month = "2026-10"
+    # This month: the quota enforcer reads the real one (a fixed month failed once it passed).
+    month = current_month()
 
     def __call__(self) -> str:
         return self.month
@@ -79,10 +80,10 @@ async def test_a_new_month_starts_at_zero(factory: Factory) -> None:
     tracker = _tracker(factory, clock)
     await tracker.record("a1", Decimal(5), 0)
     assert (await tracker.check("a1")).exceeded
-    clock.month = "2026-11"
+    clock.month = "2999-01"  # a later month than any real one
     assert not (await tracker.check("a1")).exceeded
     async with factory() as db:
-        assert await tenant_spend(db, "acme", "2026-10") == Decimal(5)
+        assert await tenant_spend(db, "acme", Clock.month) == Decimal(5)
 
 
 async def test_charges_recorded_at_once_all_count(factory: Factory) -> None:
