@@ -9,48 +9,19 @@ must land once.
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
-from collections.abc import AsyncIterator
-from pathlib import Path
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
 
 from supervisor.agent.events import MessageEnd, RunStart, ToolEnd
-from supervisor.db.engine import open_db
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter, keyed_event_id
+from tests.support.journal_db import Factory
 
 pytestmark = pytest.mark.asyncio
 
-type Factory = async_sessionmaker[AsyncSession]
-PG_URL = os.environ.get("SUPERVISOR_TEST_PG_URL", "")
 ROUNDS = 10
-
-
-@pytest_asyncio.fixture(
-    params=["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(not PG_URL, reason="no Postgres"))]
-)
-async def factory(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Factory]:
-    if request.param == "sqlite":
-        async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'j.db'}") as (_, made):
-            yield made
-        return
-    name = f"journal_{uuid.uuid4().hex[:10]}"
-    admin = create_async_engine(PG_URL, isolation_level="AUTOCOMMIT")
-    async with admin.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{name}"'))
-    try:
-        async with open_db(f"{PG_URL.rpartition('/')[0]}/{name}") as (_, made):
-            yield made
-    finally:
-        async with admin.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        await admin.dispose()
 
 
 async def _rows(factory: Factory, session_id: str) -> list[EventRow]:

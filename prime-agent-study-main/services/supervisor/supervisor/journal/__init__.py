@@ -44,6 +44,7 @@ from supervisor.journal.serde import (
     decode_event,
     encode_event,
     event_type_name,
+    jsonable,
 )
 from supervisor.journal.writer import JournalWriter, OversizedPayloadError
 
@@ -57,4 +58,5 @@ __all__ = [
     "decode_event",
     "encode_event",
     "event_type_name",
+    "jsonable",
 ]

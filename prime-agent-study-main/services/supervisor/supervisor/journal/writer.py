@@ -368,7 +368,7 @@ class JournalWriter:
 
     def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
         encoded = encode_event(event)
-        raw = json.dumps(encoded, separators=(",", ":"), default=str).encode()
+        raw = json.dumps(encoded, separators=(",", ":"), allow_nan=False).encode()  # plain JSON already
         if len(raw) <= self._blob_threshold:
             return encoded
         if self._blob_dir is None:

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import ToolEnd, ToolStart
 from supervisor.db.models import ToolOutboxRow
+from supervisor.journal.serde import jsonable
 from supervisor.journal.writer import JournalWriter
 from supervisor.seams import ToolResult
 
@@ -23,9 +24,10 @@ def idempotency_key(session_id: str, tool_call_id: str) -> str:
 
 
 def result_to_wire(result: ToolResult) -> dict[str, Any]:
+    """The result as the outbox stores it: plain JSON (``supervisor.journal.serde.jsonable``)."""
     if result.ok:
         payload = result.payload if isinstance(result.payload, dict) else {"value": result.payload}
-        return {"ok": True, "payload": payload, "is_error": False}
+        return {"ok": True, "payload": jsonable(payload), "is_error": False}
     return {
         "ok": False,
         "payload": {
@@ -135,7 +137,7 @@ class ToolOutbox:
                     tool_call_id=tool_call_id,
                     idempotency_key=key,
                     tool_name=tool_name,
-                    arguments=dict(arguments),
+                    arguments=jsonable(dict(arguments)),
                     status="pending",
                     result=None,
                 )
