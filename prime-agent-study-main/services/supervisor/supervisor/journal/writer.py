@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import AgentEvent, MessageEnd, RunEnd
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
+from supervisor.journal import snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
+from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import encode_event, event_type_name
 
 
@@ -61,6 +63,7 @@ class JournalWriter:
         self._factory = session_factory
         self._blobs: BlobStore | None = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
         self._blob_threshold = blob_threshold
+        self._reader = JournalReader(session_factory, blobs=self._blobs)  # a RunEnd's base
 
     @property
     def blobs(self) -> BlobStore | None:
@@ -252,7 +255,7 @@ class JournalWriter:
         # Large payloads go to the blob store first, outside the session's lock (they are
         # content-addressed: one left by a write that then fails is harmless, and erasing
         # deletes what no journal names).
-        payloads = [await self._store_payload(event) for event, _, _ in events]
+        payloads = [await self._store_payload(session_id, event) for event, _, _ in events]
 
         async with self._factory() as db, db.begin():
             # Serialize allocators under SQLite.
@@ -333,7 +336,7 @@ class JournalWriter:
         )
         seq = int(result.scalar_one())
         now_ms = int(time.time() * 1000)
-        payload = await self._store_payload(event)
+        payload = await self._store_payload(session_id, event)
         db.add(
             EventRow(
                 session_id=session_id,
@@ -375,8 +378,12 @@ class JournalWriter:
         await self._blobs.put(ref, data)
         return ref
 
-    async def _store_payload(self, event: AgentEvent) -> dict[str, Any]:
+    async def _store_payload(self, session_id: str, event: AgentEvent) -> dict[str, Any]:
         encoded = encode_event(event)
+        if isinstance(event, RunEnd):
+            # What it adds to the session's previous RunEnd (supervisor.journal.snapshots).
+            # Any committed RunEnd is a sound base, so a racing write costs only size.
+            encoded = snapshots.encode_run_end(encoded, await self._reader.latest_run_end(session_id))
         raw = json.dumps(encoded, separators=(",", ":"), allow_nan=False).encode()  # plain JSON already
         if len(raw) <= self._blob_threshold:
             return encoded
