@@ -21,7 +21,7 @@ from supervisor.session.tool_outbox import ToolOutbox
 from tests.support.journal_db import Factory
 
 SUPERVISOR = Path(__file__).resolve().parents[2] / "supervisor"
-_WRITES = {"append", "append_batch", "append_once", "write", "append_in_session"}
+_WRITES = {"append", "append_batch", "append_once", "write", "append_in_session", "append_missing"}
 # Writers allowed to call the journal writer: the one path itself, and the outbox,
 # which writes in its own transaction and announces once it commits.
 _ALLOWED = {

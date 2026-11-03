@@ -937,14 +937,11 @@ class SessionManager(UpkeepOps):
             for name, value in values.items():
                 setattr(nrow, name, value)
             await db.commit()
-        for env in events:
-            await self._writer.append(
-                new_id,
-                env.payload,
-                turn_id=env.turn_id,
-                trace_id=env.trace_id,
-                event_key=f"fork:{env.event_id}",
-            )
+        # History, not new events: nothing to publish (no one follows a session not yet
+        # made) or project (its runs' traces are the source's).
+        await self._writer.append_missing(
+            new_id, [(env.payload, env.turn_id, env.trace_id, f"fork:{env.event_id}") for env in events]
+        )
 
     def _register_hands(
         self,

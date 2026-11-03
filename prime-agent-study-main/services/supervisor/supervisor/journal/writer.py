@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +32,7 @@ def keyed_event_id(session_id: str, event_key: str) -> str:
 
 # Default: offload payloads larger than 64 KiB.
 _DEFAULT_BLOB_THRESHOLD = 64 * 1024
+_COPY_BATCH = 500  # events a copy writes per transaction, at most
 
 
 class OversizedPayloadError(RuntimeError):
@@ -210,6 +211,51 @@ class JournalWriter:
                 )
             ).scalar_one_or_none()
         return None if seq is None else int(seq)
+
+    async def append_missing(
+        self,
+        session_id: str,
+        events: Sequence[tuple[AgentEvent, str | None, str | None, str]],
+        *,
+        batch: int = _COPY_BATCH,
+    ) -> int:
+        """Append each of ``events`` (event, turn id, trace id, event key) not in the
+        journal yet, in order, a batch per transaction; how many it appended.
+
+        For copying a journal (a fork): retried, or racing another attempt, it carries on
+        where the journal is, and never appends a key twice. A batch ends after a
+        ``RunEnd``, so each stores as what it added to the one before
+        (``supervisor.journal.snapshots``)."""
+        keyed = [(event, turn, trace, keyed_event_id(session_id, key)) for event, turn, trace, key in events]
+        appended = 0
+        for _ in range(len(keyed) + 1):  # each round appends at least one batch or ends
+            present = await self._present(session_id, [k for *_, k in keyed])
+            todo = [e for e in keyed if e[3] not in present]
+            if not todo:
+                return appended
+            try:
+                for chunk in _batches(todo, batch):
+                    await _run_to_completion(
+                        self._append_batch(
+                            session_id, [(e, t, tr) for e, t, tr, _ in chunk], event_ids=[k for *_, k in chunk], if_absent=True
+                        )
+                    )
+                    appended += len(chunk)
+            except _AlreadyAppended:
+                continue  # another attempt wrote some of them: see which are left
+        raise RuntimeError(f"session {session_id}: copying made no progress")
+
+    async def _present(self, session_id: str, event_ids: list[str]) -> set[str]:
+        found: set[str] = set()
+        async with self._factory() as db:
+            for i in range(0, len(event_ids), 500):
+                rows = await db.execute(
+                    select(EventRow.event_id).where(
+                        EventRow.session_id == session_id, EventRow.event_id.in_(event_ids[i : i + 500])
+                    )
+                )
+                found.update(rows.scalars())
+        return found
 
     async def append_batch(
         self,
@@ -400,6 +446,22 @@ class JournalWriter:
         ref = blob_ref(raw)
         await self._blobs.put(ref, raw)
         return {"_type": event_type_name(event), "_blob_ref": ref}
+
+
+type _Keyed = tuple[AgentEvent, str | None, str | None, str]
+"""An event to append with its turn id, trace id and event id."""
+
+
+def _batches(items: Sequence[_Keyed], size: int) -> Iterator[list[_Keyed]]:
+    """``items`` in runs of at most ``size``, each ending after a ``RunEnd`` it holds."""
+    chunk: list[_Keyed] = []
+    for item in items:
+        chunk.append(item)
+        if len(chunk) >= size or isinstance(item[0], RunEnd):
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
 
 
 class _AlreadyAppended(Exception):
