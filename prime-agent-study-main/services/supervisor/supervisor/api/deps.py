@@ -16,6 +16,7 @@ from supervisor.journal.commands import (
     fingerprint,
 )
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.watch import JournalWatch
 from supervisor.seams.services import (
     AuthzService,
     GrantStore,
@@ -265,6 +266,11 @@ def get_session_factory(request: Request) -> async_sessionmaker:
 
 def get_reader(request: Request) -> JournalReader:
     return _state(request).reader
+
+
+def get_watch(request: Request) -> JournalWatch | None:
+    """The process's journal watch (``supervisor.journal.watch``), which event streams share."""
+    return getattr(_state(request), "watch", None)
 
 
 def get_commands(request: Request) -> CommandStore:

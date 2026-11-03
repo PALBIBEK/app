@@ -19,6 +19,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import PartialOutputRow
+from supervisor.journal.watch import notify
 
 __all__ = ["FLUSH_S", "Partial", "PartialOutputs", "PartialSink"]
 
@@ -53,11 +54,13 @@ class PartialOutputs:
                     updated_ms=int(time.time() * 1000),
                 )
             )
+            await notify(db, session_id)
             await db.commit()
 
     async def clear(self, session_id: str) -> None:
         async with self._factory() as db:
             await db.execute(delete(PartialOutputRow).where(PartialOutputRow.session_id == session_id))
+            await notify(db, session_id)
             await db.commit()
 
     async def get(self, session_id: str) -> Partial | None:

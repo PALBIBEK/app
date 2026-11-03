@@ -16,6 +16,7 @@ from supervisor.harness import HarnessCatalog
 from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.journal.commands import CommandStore
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.watch import JournalWatch
 from supervisor.journal.writer import JournalWriter
 from supervisor.memory.client import NotebookClient
 from supervisor.memory.platform import MemoryPlatform
@@ -64,6 +65,8 @@ class SupervisorState:
     workflows: SessionWorkflows | None = None
     # Live workers' heartbeats (supervisor.temporal.fleet): slots and load per worker.
     heartbeats: WorkerHeartbeats | None = None
+    # What wakes event streams when their session changes: one per process, shared.
+    watch: JournalWatch | None = None
 
 
 def build_supervisor(
@@ -176,4 +179,5 @@ def build_supervisor(
         writer=writer,
         memory=memory,
         heartbeats=WorkerHeartbeats(session_factory),
+        watch=JournalWatch(session_factory),
     )

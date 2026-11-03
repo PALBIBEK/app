@@ -22,6 +22,7 @@ from supervisor.api import deps
 from supervisor.api.wire import envelope_to_wire
 from supervisor.journal.partials import Partial, PartialOutputs
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.watch import JournalWatch
 from supervisor.session import Dropped, LiveSubscription, SessionManager
 from supervisor.temporal.contracts import CLOSED_STATUSES
 
@@ -140,6 +141,7 @@ async def iter_journal_sse(
     ended_check_secs: float = _ENDED_CHECK_SECS,
     max_events: int | None = None,
     partials: PartialOutputs | None = None,
+    watch: JournalWatch | None = None,
 ) -> AsyncIterator[str]:
     """Resumable SSE body that follows the journal, so it works for sessions running
     in any worker and from any API replica.
@@ -153,9 +155,25 @@ async def iter_journal_sse(
     ended is sent first), then ``SSE_END``, and the stream stops. With
     ``is_disconnected``, a client that went away stops the polling within a poll.
 
-    shortcut: polls the journal; switch to Postgres LISTEN/NOTIFY if poll load shows up.
+    With ``watch`` (the process's ``JournalWatch``), the stream reads only when its
+    session changed, and learns that from the one watcher every stream shares; without
+    it, it polls on its own every ``poll_secs`` (tests, a caller without one).
     """
     hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
+    if watch is not None:
+        async for frame in _watched_sse(
+            session_id=session_id,
+            cursor=cursor,
+            reader=reader,
+            watch=watch,
+            is_disconnected=is_disconnected,
+            ended_from_status=has_ended is not None,
+            heartbeat_secs=hb,
+            max_events=max_events,
+            partials=partials,
+        ):
+            yield frame
+        return
     emitted, idle, unchecked = 0, 0.0, ended_check_secs  # asks on the first quiet poll
     ending = False
     shown: tuple[str, int, int] | None = None  # the partial last sent: run, step, updated
@@ -188,6 +206,46 @@ async def iter_journal_sse(
         await asyncio.sleep(poll_secs)
         idle += poll_secs
         unchecked += poll_secs
+
+
+async def _watched_sse(
+    *,
+    session_id: str,
+    cursor: int,
+    reader: JournalReader,
+    watch: JournalWatch,
+    is_disconnected: Callable[[], Awaitable[bool]] | None,
+    ended_from_status: bool,
+    heartbeat_secs: float,
+    max_events: int | None,
+    partials: PartialOutputs | None,
+) -> AsyncIterator[str]:
+    """``iter_journal_sse`` woken by the shared watch: the journal is read when the
+    session's last seq passed the cursor, the partial reply when it grew, and the session
+    has ended when its status is a closed one (or it is gone)."""
+    emitted = 0
+    shown: tuple[str, int, int] | None = None
+    seen = await watch.changed(session_id, None, timeout=heartbeat_secs)
+    while is_disconnected is None or not await is_disconnected():
+        if seen.last_seq > cursor and (batch := await reader.read(session_id, since=cursor)):
+            for env in batch:
+                yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
+                cursor, emitted = env.seq, emitted + 1
+                if max_events is not None and emitted >= max_events:
+                    return
+            continue  # what was written while those were sent
+        if ended_from_status and (seen.status is None or seen.status in CLOSED_STATUSES):
+            yield SSE_END
+            return
+        if partials is not None and seen.partial_ms is not None:
+            partial = await _partial(partials, session_id)
+            if partial is not None and (key := (partial.run_id, partial.step, partial.updated_ms)) != shown:
+                shown = key
+                yield f"data: {_partial_wire(partial, cursor)}\n\n"
+        now = await watch.changed(session_id, seen, timeout=heartbeat_secs)
+        if now == seen:
+            yield _sse_comment("ping")
+        seen = now
 
 
 def stream_cursor(last_event_id: str | None, since: int | None) -> int:
@@ -237,6 +295,7 @@ async def stream_events(
                 is_disconnected=request.is_disconnected,
                 has_ended=has_ended,
                 partials=PartialOutputs(reader.session_factory),
+                watch=deps.get_watch(request),
             )
             if deps.get_workflows(request) is not None
             else iter_sse(session_id=session_id, cursor=cursor, manager=manager, reader=reader)
