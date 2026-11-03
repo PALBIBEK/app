@@ -80,8 +80,9 @@ class SessionRow(Base):
 class EventRow(Base):
     __tablename__ = "events"
     __table_args__ = (
-        # Idempotent appends look events up by their deterministic id.
-        Index("ix_events_session_event_id", "session_id", "event_id"),
+        # Idempotent appends look events up by their deterministic id, which is unique: a
+        # keyed write lands once (supervisor.journal.writer).
+        Index("uq_events_session_event_id", "session_id", "event_id", unique=True),
     )
 
     session_id: Mapped[str] = mapped_column(

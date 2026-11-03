@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -48,7 +46,7 @@ from supervisor.harness import (
 )
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
-from supervisor.journal.writer import JournalWriter, keyed_event_id
+from supervisor.journal.writer import JournalWriter
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
 from supervisor.policy.approvals import ApprovalBroker
@@ -431,26 +429,27 @@ class SessionManagerBase:
         turn_id: str | None,
         trace_id: str | None,
         event_key: str | None = None,
-        event_id: str | None = None,
-        ts_ms: int | None = None,
     ) -> int:
         """Journal one event and apply its effects; the single path every event takes.
 
         Workspace effects run before the append (files are synced before clients see
-        RunEnd); then the event is published live and projected into tracing. With
-        ``event_key`` the append is idempotent (retried workflow activities).
+        RunEnd); then the event is published live and projected into tracing, as it was
+        stored (its id and time are the row's). With ``event_key`` the append is idempotent
+        (retried workflow activities): an event already journalled is not published again.
         """
         await self._workspace_effects(
             session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
         )
-        seq = await self._writer.append(
+        written = await self._writer.write(
             session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
+        if not written.created:
+            return written.seq  # a retry: it was published and projected when it was written
         envelope = Envelope(
             session_id=session_id,
-            seq=seq,
-            event_id=event_id or uuid4().hex,
-            ts_ms=ts_ms if ts_ms is not None else int(time.time() * 1000),
+            seq=written.seq,
+            event_id=written.event_id,
+            ts_ms=written.ts_ms,
             turn_id=turn_id,
             trace_id=trace_id,
             payload=payload,
@@ -459,7 +458,7 @@ class SessionManagerBase:
         await self._project(session_id, envelope)
         if turn_id is not None and isinstance(payload, (RunStart, RunEnd)):
             self._record_trace(session_id, turn_id, ended=isinstance(payload, RunEnd))
-        return seq
+        return written.seq
 
     async def _record_once(
         self,
@@ -477,23 +476,23 @@ class SessionManagerBase:
         await self._workspace_effects(
             session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
         )
-        seq = await self._writer.append_once(
+        written = await self._writer.append_once(
             session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
         )
-        if seq is None:
+        if written is None:
             return None
         envelope = Envelope(
             session_id=session_id,
-            seq=seq,
-            event_id=keyed_event_id(session_id, event_key),
-            ts_ms=int(time.time() * 1000),
+            seq=written.seq,
+            event_id=written.event_id,
+            ts_ms=written.ts_ms,
             turn_id=turn_id,
             trace_id=trace_id,
             payload=payload,
         )
         self._live.publish(session_id, envelope)
         await self._project(session_id, envelope)
-        return seq
+        return written.seq
 
     def _trace_model_client(self, row: SessionRow) -> Any:
         """The session's own model client, for judging and summarising its runs."""

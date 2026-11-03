@@ -1058,8 +1058,6 @@ class SessionManager(UpkeepOps):
                     payload,
                     turn_id=envelope.turn_id,
                     trace_id=envelope.trace_id,
-                    event_id=envelope.event_id,
-                    ts_ms=envelope.ts_ms,
                 )
 
                 if isinstance(payload, RunStart):

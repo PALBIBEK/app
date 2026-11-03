@@ -108,14 +108,14 @@ async def test_send_produces_events_in_journal_and_live_queue(session_env) -> No
 async def test_journal_append_precedes_live_publish(session_env) -> None:
     m: SessionManager = session_env["manager"]
     order: list[str] = []
-    real_append = m._writer.append
+    real_write = m._writer.write
 
-    async def spy_append(*args, **kwargs):
-        seq = await real_append(*args, **kwargs)
-        order.append(f"journal:{seq}")
-        return seq
+    async def spy_write(*args, **kwargs):
+        written = await real_write(*args, **kwargs)
+        order.append(f"journal:{written.seq}")
+        return written
 
-    m._writer.append = spy_append  # type: ignore[method-assign]
+    m._writer.write = spy_write  # type: ignore[method-assign]
     sid = await m.create(tenant_id="t1", harness_version="kg-v1", runtime_name="echo")
     q = m.live_queue(sid)
     orig_put = q.put_nowait
