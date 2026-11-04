@@ -28,6 +28,7 @@ from supervisor.memory_service.notebooks.errors import (
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
+    RevisionOutOfRange,
 )
 from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
@@ -163,6 +164,17 @@ class NotebookClient:
         )
         return [wire.revision_in(r) for r in rows]
 
+    async def history(self, notebook_id: str, *, page: int = 5_000) -> list[Revision]:
+        """Every change, oldest first, read page by page (a page holds whole revisions)."""
+        out: list[Revision] = []
+        after = 0
+        while True:
+            rows = await self.revisions(notebook_id, after=after, limit=page)
+            out += rows
+            if len(rows) < page:
+                return out
+            after = rows[-1].revision
+
     async def capture(
         self,
         notebook_id: str,
@@ -274,6 +286,8 @@ def _error(response: httpx.Response) -> NotebookError:
         return MemoryFactsMissing(tuple(str(i) for i in detail.get("ids") or ()))
     if code == "RevisionConflict":
         return RevisionConflict(int(detail.get("expected", -1)), int(detail.get("actual", -1)))
+    if code == "RevisionOutOfRange":
+        return RevisionOutOfRange(int(detail.get("revision", -1)), int(detail.get("current", -1)))
     if response.status_code in (401, 403):
         return MemoryRefused(
             f"memory service refused the request ({response.status_code}): "

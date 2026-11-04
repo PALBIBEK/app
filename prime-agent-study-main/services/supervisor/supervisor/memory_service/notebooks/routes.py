@@ -21,6 +21,7 @@ from supervisor.memory_service.notebooks.errors import (
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
+    RevisionOutOfRange,
 )
 from supervisor.memory_service.notebooks.ops import NotebookOps
 from supervisor.memory_service.notebooks.types import Notebook
@@ -87,6 +88,8 @@ def _error(exc: NotebookError) -> HTTPException:
         status, detail["ids"] = 404, list(exc.ids)
     elif isinstance(exc, RevisionConflict):
         detail["expected"], detail["actual"] = exc.expected, exc.actual
+    elif isinstance(exc, RevisionOutOfRange):
+        status, detail["revision"], detail["current"] = 422, exc.revision, exc.current
     return HTTPException(status_code=status, detail=detail)
 
 
@@ -168,7 +171,10 @@ async def list_facts(
     """The live facts, or (``at_revision``) the facts as they were then."""
     await _owned(request, notebook_id)
     ops = _ops(request)
-    facts = await (ops.store.facts(notebook_id) if at_revision is None else ops.facts_at(notebook_id, at_revision))
+    try:
+        facts = await (ops.store.facts(notebook_id) if at_revision is None else ops.facts_at(notebook_id, at_revision))
+    except NotebookError as exc:
+        raise _error(exc) from exc
     return [wire.fact_out(f) for f in facts]
 
 
@@ -177,7 +183,7 @@ async def list_revisions(
     notebook_id: str,
     request: Request,
     after: int = Query(default=0, ge=0),
-    limit: int = Query(default=100_000, ge=1, le=100_000),
+    limit: int = Query(default=5_000, ge=1, le=100_000),
 ) -> list[dict[str, Any]]:
     await _owned(request, notebook_id)
     revisions = await _ops(request).store.revisions(notebook_id, after=after, limit=limit)

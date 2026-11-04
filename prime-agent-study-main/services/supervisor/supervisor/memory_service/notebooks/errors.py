@@ -41,6 +41,14 @@ class MemoryDisclosureDenied(NotebookError):
         )
 
 
+class RevisionOutOfRange(NotebookError):
+    """A revision the notebook has not reached (or below 0): nothing was read or changed."""
+
+    def __init__(self, revision: int, current: int) -> None:
+        super().__init__(f"no revision {revision}: this notebook has revisions 0 to {current}")
+        self.revision, self.current = revision, current
+
+
 class RevisionConflict(NotebookError):
     """The notebook changed since it was read; the stale change was not applied."""
 

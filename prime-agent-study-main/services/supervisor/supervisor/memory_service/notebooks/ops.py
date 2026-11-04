@@ -13,7 +13,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import replace
 
-from supervisor.memory_service.notebooks.errors import MemoryFactsMissing
+from supervisor.memory_service.notebooks.errors import MemoryFactsMissing, RevisionOutOfRange
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
     edited_text,
@@ -147,9 +147,11 @@ class NotebookOps:
         return await self.store.transact(notebook_id, run, author=author)
 
     async def history(self, notebook_id: str) -> list[Revision]:
-        return await self.store.revisions(notebook_id, limit=100_000)
+        return await self.store.history(notebook_id)
 
     async def facts_at(self, notebook_id: str, revision: int) -> list[Fact]:
+        """The facts as they were at ``revision`` (0, before any change, to the current one)."""
+        _in_range(revision, (await self.store.get(notebook_id)).revision)
         state = state_at(await self.history(notebook_id), revision)
         return sorted(state.values(), key=lambda f: int(f.id))
 
@@ -157,7 +159,8 @@ class NotebookOps:
         """Make the notebook's facts what they were at ``revision`` (as new revisions)."""
 
         async def run(tx: FactTx) -> None:
-            target = state_at(await self.store.revisions(notebook_id, limit=100_000), revision)
+            _in_range(revision, int(tx.notebook.revision))
+            target = state_at(await tx.history(), revision)
             current = {f.id: f for f in await tx.current()}
             await tx.remove([f for i, f in current.items() if i not in target])
             for fact_id, fact in target.items():
@@ -172,3 +175,8 @@ class NotebookOps:
                     await tx.update(fact_id, fact.text, floor)
 
         await self.store.transact(notebook_id, run, author=author)
+
+
+def _in_range(revision: int, current: int) -> None:
+    if not 0 <= revision <= current:
+        raise RevisionOutOfRange(revision, current)

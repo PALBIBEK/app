@@ -122,6 +122,40 @@ def bankable(notebook: NotebookRow, provenance: Provenance) -> bool:
     )
 
 
+async def _revisions(db: AsyncSession, notebook_id: str, *, after: int, limit: int) -> list[Revision]:
+    rows = list(
+        await db.scalars(
+            select(FactRevisionRow)
+            .where(FactRevisionRow.notebook_id == notebook_id, FactRevisionRow.revision > after)
+            .order_by(FactRevisionRow.revision, FactRevisionRow.id)
+            .limit(limit)
+        )
+    )
+    if len(rows) == limit:  # the page is full: finish its last revision
+        last = rows[-1]
+        rows += await db.scalars(
+            select(FactRevisionRow)
+            .where(
+                FactRevisionRow.notebook_id == notebook_id,
+                FactRevisionRow.revision == last.revision,
+                FactRevisionRow.id > last.id,
+            )
+            .order_by(FactRevisionRow.id)
+        )
+    return [_revision(r) for r in rows]
+
+
+async def _history(db: AsyncSession, notebook_id: str, *, page: int) -> list[Revision]:
+    out: list[Revision] = []
+    after = 0
+    while True:
+        rows = await _revisions(db, notebook_id, after=after, limit=page)
+        out += rows
+        if len(rows) < page:
+            return out
+        after = rows[-1].revision
+
+
 @dataclass(slots=True)
 class FactTx:
     """One notebook's facts inside one locked transaction."""
@@ -132,6 +166,10 @@ class FactTx:
     embedder: Embedder
     at: int = field(default_factory=now_ms)
     changed: bool = False
+
+    async def history(self) -> list[Revision]:
+        """Every change so far, read under this transaction's lock."""
+        return await _history(self.db, self.notebook.id, page=5_000)
 
     async def current(self) -> list[Fact]:
         rows = await self.db.scalars(
@@ -386,14 +424,17 @@ class NotebookStore:
     async def revisions(
         self, notebook_id: str, *, after: int = 0, limit: int = 500
     ) -> list[Revision]:
+        """The changes after revision ``after``: about ``limit`` rows, in whole revisions.
+
+        One revision can change many facts (a row each). A page never ends inside one, so
+        the next page is ``after=<last revision of this one>`` and nothing is skipped."""
         async with self._db() as db:
-            rows = await db.scalars(
-                select(FactRevisionRow)
-                .where(FactRevisionRow.notebook_id == notebook_id, FactRevisionRow.revision > after)
-                .order_by(FactRevisionRow.revision, FactRevisionRow.id)
-                .limit(limit)
-            )
-            return [_revision(r) for r in rows]
+            return await _revisions(db, notebook_id, after=after, limit=limit)
+
+    async def history(self, notebook_id: str, *, page: int = 5_000) -> list[Revision]:
+        """Every change to the notebook, oldest first (read in pages, never cut off)."""
+        async with self._db() as db:
+            return await _history(db, notebook_id, page=page)
 
     async def stats(self, notebook_id: str) -> NotebookStats:
         async with self._db() as db:
