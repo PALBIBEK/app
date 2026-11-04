@@ -40,21 +40,17 @@ class LeaseManager:
             return int(row.fence)
 
     async def assert_fence(self, session_id: str, fence: int | None) -> None:
-        """Reject stale writers. fence=None allowed only when no lease held/expired."""
-        now = int(time.time() * 1000)
+        """Reject stale writers early (the flush checks again, under its row lock)."""
         async with self._factory() as db:
             row = await db.get(MemorySessionRow, session_id)
             if row is None:
                 raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
-            active = (
-                row.lease_owner is not None
-                and row.lease_until_ms is not None
-                and row.lease_until_ms >= now
-            )
-            if not active:
-                return
-            if fence is None or int(fence) != int(row.fence):
-                raise StaleFence(
-                    f"STALE_FENCE: expected={row.fence} got={fence}",
-                    code="STALE_FENCE",
-                )
+            check_fence(row, fence)
+
+
+def check_fence(row: MemorySessionRow, fence: int | None) -> None:
+    """Reject a stale writer. fence=None is allowed only while no lease is held."""
+    now = int(time.time() * 1000)
+    active = row.lease_owner is not None and row.lease_until_ms is not None and row.lease_until_ms >= now
+    if active and (fence is None or int(fence) != int(row.fence)):
+        raise StaleFence(f"STALE_FENCE: expected={row.fence} got={fence}", code="STALE_FENCE")

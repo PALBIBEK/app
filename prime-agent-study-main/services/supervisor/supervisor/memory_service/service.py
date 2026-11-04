@@ -190,7 +190,7 @@ class MemoryService:
             if item is not None:
                 outbox_items.append(item)
         last = await self._store.flush_events(
-            session_id, batch, outbox_items=outbox_items or None
+            session_id, batch, outbox_items=outbox_items or None, fence=fence, fenced=True
         )
         buf.discard(len(batch))  # what was appended while this ran stays for the next flush
         # Off request path: enqueue extraction when turn/end + non-barren
