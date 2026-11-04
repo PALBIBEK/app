@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import ToolEnd, ToolStart
 from supervisor.db.models import ToolOutboxRow
+from supervisor.journal.secrets import mask
 from supervisor.journal.serde import jsonable
 from supervisor.journal.writer import JournalWriter, Written
 from supervisor.seams import ToolResult
@@ -142,7 +143,7 @@ class ToolOutbox:
                     tool_call_id=tool_call_id,
                     idempotency_key=key,
                     tool_name=tool_name,
-                    arguments=jsonable(dict(arguments)),
+                    arguments=mask(jsonable(dict(arguments))),  # kept: no credential (journal.secrets)
                     status="pending",
                     result=None,
                 )
@@ -161,7 +162,8 @@ class ToolOutbox:
     ) -> ToolResult:
         """Journal ToolEnd + mark outbox done (idempotent if already done)."""
         key = idempotency_key(session_id, tool_call_id)
-        wire = result_to_wire(result)
+        # Kept, and what a retried call is answered with: masked as the journal's ToolEnd is.
+        wire = mask(result_to_wire(result))
         # The same shape a turn's tool call journals: a direct invoke used to keep only a
         # dict payload, so a read's text (or any error) was journalled as {}.
         end_payload = {
