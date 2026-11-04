@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from supervisor.traces.render import run_text
 
 __all__ = [
     "JUDGE_SYSTEM",
+    "REFERENCE_JUDGE",
     "Judge",
     "Verdict",
     "delete_judge",
@@ -56,6 +58,34 @@ JUDGE_SYSTEM = (
     'say what is missing. Answer with JSON only: {"verdict": "pass" or "fail", "reason": '
     '"one sentence a person can act on"}.'
 )
+
+
+REFERENCE_JUDGE = "good answer"
+"""The built-in judge of a replay whose saved run has a good answer: does the run meet it."""
+REFERENCE_EVALUATOR = "reference:closed_qa@v1"
+REFERENCE_MODEL_ENV = "TRACE_REFERENCE_MODEL"
+"""The model that grades against a good answer, when set; otherwise the session's own."""
+
+# Braintrust autoevals' ClosedQA (templates/closed_q_a.yaml): the task, the submission and a
+# criterion, "Does the submission meet the criterion?" A saved good answer says what a good
+# answer does, which is a criterion. Asked for this module's verdict JSON, so an unusable
+# reply is ``unclear`` like any judge's.
+REFERENCE_SYSTEM = (
+    "You are assessing a submitted answer on a given task based on a criterion. Decide whether "
+    "the submission meets the criterion. Judge only what the submission shows. Answer with JSON "
+    'only: {"verdict": "pass" or "fail", "reason": "one sentence a person can act on"}.'
+)
+
+
+def reference_messages(trace: RunTrace, criterion: str) -> list[ChatMessage]:
+    data = (
+        "[BEGIN DATA]\n***\n"
+        f"[Task]: {trace.rollup.input or '(not recorded)'}\n***\n"
+        f"[Submission]: {trace.rollup.output or '(the run gave no answer)'}\n***\n"
+        f"[Criterion]: {criterion.strip()}\n***\n[END DATA]\n"
+        "Does the submission meet the criterion? Your verdict as JSON:"
+    )
+    return [ChatMessage(role="system", content=REFERENCE_SYSTEM), ChatMessage(role="user", content=data)]
 
 
 @dataclass(frozen=True)
@@ -201,8 +231,8 @@ async def delete_judge(factory: Factory, *, tenant_id: str, judge_id: str) -> bo
         return bool(getattr(gone, "rowcount", 0))
 
 
-def _ask(client: ModelGatewayClient, judge: Judge, trace: RunTrace) -> str:
-    completion = client.complete(judge_messages(judge, trace), [], model=judge.model, tool_choice="none")
+def _complete(client: ModelGatewayClient, messages: list[ChatMessage], model: str | None) -> str:
+    completion = client.complete(messages, [], model=model, tool_choice="none")
     return str(completion.message.content or "")
 
 
@@ -229,15 +259,21 @@ async def judge_run(
                 )
             ).scalars()
         ]
-        replay = await db.get(SessionEvaluationRow, session.id) is not None
+        replay = await db.get(SessionEvaluationRow, session.id)
+    asks: list[tuple[str, str, str | None, list[ChatMessage]]] = [
+        (judge.name, judge.evaluator, judge.model, judge_messages(judge, trace))
+        for judge in judges
+        if replay is not None or sampled(judge, trace.run_id)
+    ]
+    if replay is not None and replay.expected:
+        model = os.environ.get(REFERENCE_MODEL_ENV, "").strip() or None
+        asks.append((REFERENCE_JUDGE, REFERENCE_EVALUATOR, model, reference_messages(trace, replay.expected)))
     given: list[Verdict] = []
-    for judge in judges:
-        if not replay and not sampled(judge, trace.run_id):
-            continue
+    for name, evaluator, model, messages in asks:
         try:
-            reply = await asyncio.to_thread(_ask, client, judge, trace)
+            reply = await asyncio.to_thread(_complete, client, messages, model)
         except Exception:
-            logger.warning("judge %s could not be asked about run %s", judge.name, trace.run_id, exc_info=True)
+            logger.warning("judge %s could not be asked about run %s", name, trace.run_id, exc_info=True)
             continue
         verdict = parse_verdict(reply)
         async with factory() as db, db.begin():
@@ -246,15 +282,15 @@ async def judge_run(
                     TraceScoreRow.session_id == trace.session_id,
                     TraceScoreRow.run_id == trace.run_id,
                     TraceScoreRow.source == "judge",
-                    TraceScoreRow.name == judge.name,
+                    TraceScoreRow.name == name,
                 )
             )
             db.add(
                 TraceScoreRow(
                     id=str(uuid4()), tenant_id=session.tenant_id, session_id=trace.session_id, run_id=trace.run_id,
-                    span_id=None, name=judge.name, topic=judge.name, source="judge", label=verdict.label,
+                    span_id=None, name=name, topic=name, source="judge", label=verdict.label,
                     value={"pass": 1.0, "fail": 0.0}.get(verdict.label), reason=verdict.reason, comment=None,
-                    evaluator=judge.evaluator, principal_id=None, composition_id=composition_id,
+                    evaluator=evaluator, principal_id=None, composition_id=composition_id,
                     composition_digest=pins.get("composition_digest"), created_ms=int(time.time() * 1000),
                 )
             )

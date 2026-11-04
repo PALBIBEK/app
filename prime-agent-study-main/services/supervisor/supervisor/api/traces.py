@@ -212,6 +212,8 @@ async def delete_feedback(
 
 class EvaluationIn(BaseModel):
     experiment_id: str = Field(min_length=1, max_length=64)
+    expected: str | None = Field(default=None, max_length=4000)
+    """What a good answer does (the saved run's): the runs are also graded against it."""
 
 
 @router.put("/v1/sessions/{session_id}/evaluation", status_code=204)
@@ -226,9 +228,10 @@ async def mark_evaluation(
         row = await db.get(SessionEvaluationRow, session_id)
         if row is None:
             db.add(SessionEvaluationRow(session_id=session_id, tenant_id=tenant_id,
-                                        experiment_id=body.experiment_id, created_ms=int(time.time() * 1000)))
+                                        experiment_id=body.experiment_id, created_ms=int(time.time() * 1000),
+                                        expected=(body.expected or "").strip() or None))
         else:
-            row.experiment_id = body.experiment_id
+            row.experiment_id, row.expected = body.experiment_id, (body.expected or "").strip() or None
     return Response(status_code=204)
 
 

@@ -616,6 +616,8 @@ class SessionEvaluationRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
     experiment_id: Mapped[str] = mapped_column(String(64), nullable=False)
     created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The saved run's good answer: its runs are also graded against it (REFERENCE_JUDGE)."""
 
 
 class TraceJudgeRow(Base):

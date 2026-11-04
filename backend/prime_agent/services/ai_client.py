@@ -508,13 +508,16 @@ class AiClient:
             expected=(200,),
         )
 
-    async def mark_evaluation(self, identity: TenantPrincipal, ai_session_id: str, *, experiment_id: str) -> None:
-        """Mark a session as an experiment's replay: every enabled judge judges its runs."""
+    async def mark_evaluation(
+        self, identity: TenantPrincipal, ai_session_id: str, *, experiment_id: str, expected: str | None = None
+    ) -> None:
+        """Mark a session as an experiment's replay: every enabled judge judges its runs, and
+        with ``expected`` (the saved run's good answer) they are graded against it too."""
         await self._json_request(
             "PUT",
             f"/v1/sessions/{ai_session_id}/evaluation",
             identity,
-            json_body={"experiment_id": experiment_id},
+            json_body={"experiment_id": experiment_id, "expected": expected},
             expected=(204,),
             allow_empty=True,
         )
