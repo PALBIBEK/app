@@ -270,8 +270,9 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
         out.append(("model-gateway", uvicorn.Config("supervisor.gateway.app:app", host=settings.host, port=port)))
     if _flag("SERVE_MEMORY_SERVICE"):
         from supervisor.memory_service.app import create_app as memory_app
+        from supervisor.memory_service.db import database_url_from_env
 
-        url = os.environ.get("MEMORY_DATABASE_URL", "sqlite+aiosqlite:///./memory.db")
+        url = database_url_from_env()
         host = os.environ.get("MEMORY_HOST", settings.host)
         port = int(os.environ.get("MEMORY_PORT", "8092"))
         out.append(("memory-service", uvicorn.Config(memory_app(database_url=url), host=host, port=port)))

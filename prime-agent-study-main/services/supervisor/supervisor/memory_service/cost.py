@@ -2,28 +2,36 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
 from supervisor.memory_service.embed import Embedder, HashingEmbedder, content_hash
 from supervisor.memory_service.metrics import METRICS
 from supervisor.memory_service.types import SessionEvent
 
+EMBED_CACHE_SIZE = 20_000
+"""Vectors kept per process; the least recently used goes first."""
+
 
 class CachingEmbedder:
-    """Wraps an Embedder; cache by content hash (Phase 5 cost control)."""
+    """Wraps an Embedder; cache by content hash (Phase 5 cost control), bounded (LRU)."""
 
-    def __init__(self, inner: Embedder | None = None) -> None:
+    def __init__(self, inner: Embedder | None = None, *, size: int = EMBED_CACHE_SIZE) -> None:
         self._inner = inner or HashingEmbedder()
-        self._cache: dict[str, list[float]] = {}
+        self._cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._size = size
 
     def embed(self, text: str) -> list[float]:
         key = content_hash(text)
-        if key in self._cache:
+        if (vec := self._cache.get(key)) is not None:
+            self._cache.move_to_end(key)
             METRICS.inc("embed_cache_hits")
-            return self._cache[key]
+            return vec
         METRICS.inc("embed_cache_misses")
         vec = self._inner.embed(text)
         self._cache[key] = vec
+        if len(self._cache) > self._size:
+            self._cache.popitem(last=False)
         return vec
 
 
