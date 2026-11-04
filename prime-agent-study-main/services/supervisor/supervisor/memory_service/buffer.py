@@ -38,6 +38,11 @@ class WriteBehindBuffer:
         self._next_seq += 1
         return ev
 
+    def discard(self, n: int) -> None:
+        """Forget the first ``n`` pending events (a flush made them durable). Events appended
+        while that flush ran stay pending: ``drain`` would drop them too."""
+        self._pending = self._pending[n:]
+
     def drain(self) -> list[SessionEvent]:
         """Take pending events for flush. Buffer cleared."""
         batch = self._pending

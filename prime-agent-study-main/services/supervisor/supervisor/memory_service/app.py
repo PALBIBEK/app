@@ -22,6 +22,7 @@ from supervisor.memory_service.rate_limit import (
     rate_limit_key,
 )
 from supervisor.memory_service.service import MemoryService
+from supervisor.memory_service.store import SeqConflict
 from supervisor.memory_service.tenant import TenantMismatch, TenantRequired
 from supervisor.memory_service.types import (
     FormatUnsupported,
@@ -167,7 +168,7 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (SessionCorrupt, FormatUnsupported)):
         return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
-    if isinstance(exc, (StaleFence, LeaseHeld)):
+    if isinstance(exc, (StaleFence, LeaseHeld, SeqConflict)):
         return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (ScopeRequired, TenantRequired, ValueError)) and (
         "SCOPE" in str(exc) or "TENANT" in str(exc) or "actor" in str(exc)

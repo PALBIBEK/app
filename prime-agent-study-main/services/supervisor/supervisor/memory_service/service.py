@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -90,6 +91,7 @@ class MemoryService:
             self._factory, ObjectArchive(arch_root), hot_days=hot_days
         )
         self._buffers: dict[str, WriteBehindBuffer] = {}
+        self._flush_locks: dict[str, asyncio.Lock] = {}
         self._ready = False
         self._last_extracted_seq: dict[str, int] = {}
 
@@ -145,9 +147,17 @@ class MemoryService:
         return self._buf(session_id).pending_count
 
     async def flush(self, session_id: str, *, fence: int | None = None) -> int:
-        """Persist buffered events at a semantic checkpoint. Returns last durable seq."""
+        """Persist buffered events at a semantic checkpoint. Returns last durable seq.
+
+        One flush of a session at a time in this process: a second waits, then finds
+        what the first left (nothing, or what was appended meanwhile), instead of
+        writing the same batch again and failing on its seq."""
         if not self._ready:
             await self.startup()
+        async with self._flush_locks.setdefault(session_id, asyncio.Lock()):
+            return await self._flush(session_id, fence)
+
+    async def _flush(self, session_id: str, fence: int | None) -> int:
         await self._leases.assert_fence(session_id, fence)
         buf = self._buf(session_id)
         row = await self._store.get_session_row(session_id)
@@ -179,7 +189,7 @@ class MemoryService:
         last = await self._store.flush_events(
             session_id, batch, outbox_items=outbox_items or None
         )
-        buf.drain()
+        buf.discard(len(batch))  # what was appended while this ran stays for the next flush
         # Off request path: enqueue extraction when turn/end + non-barren
         try:
             if any(ev.type == "turn/end" for ev in batch):
