@@ -93,14 +93,40 @@ class MemoryService:
         self._buffers: dict[str, WriteBehindBuffer] = {}
         self._flush_locks: dict[str, asyncio.Lock] = {}
         self._ready = False
-        self._last_extracted_seq: dict[str, int] = {}
+        self._extraction_worker: asyncio.Task[None] | None = None
 
     async def startup(self) -> None:
         await init_db(self._engine)
         self._ready = True
 
     async def aclose(self) -> None:
+        await self.stop_extraction_worker()
         await self._engine.dispose()
+
+    def start_extraction_worker(self, *, interval_s: float = 5.0, limit: int = 50) -> None:
+        """Process extraction jobs in the background, every ``interval_s`` (until ``aclose``).
+
+        Replicas may each run one: a job is claimed before it runs."""
+        if self._extraction_worker is None or self._extraction_worker.done():
+            self._extraction_worker = asyncio.create_task(
+                self._extraction_loop(interval_s, limit), name="memory-extraction"
+            )
+
+    async def stop_extraction_worker(self) -> None:
+        task, self._extraction_worker = self._extraction_worker, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _extraction_loop(self, interval_s: float, limit: int) -> None:
+        while True:
+            try:
+                ran = await self.process_extraction_jobs(limit=limit)
+            except Exception:
+                logger.warning("extraction worker pass failed", exc_info=True)
+                ran = 0
+            if ran < limit:  # a full batch means more may be waiting: go again at once
+                await asyncio.sleep(interval_s)
 
     async def ping_db(self) -> bool:
         """Whether the database answers (the readiness probe)."""
@@ -199,10 +225,7 @@ class MemoryService:
                 if flush_batch_is_barren(batch):
                     METRICS.inc("extraction_jobs_skipped_barren")
                 else:
-                    prev = self._last_extracted_seq.get(session_id, -1)
-                    seq_from = prev + 1
-                    await self._extraction.enqueue(session_id, seq_from, last)
-                    self._last_extracted_seq[session_id] = last
+                    await self._extraction.enqueue_through(session_id, last)
         except Exception:  # extraction is off the request path; the flush itself succeeded
             logger.warning("enqueueing extraction failed session=%s", session_id, exc_info=True)
         return last
@@ -344,7 +367,7 @@ class MemoryService:
         return await self._retention.archive_session(session_id)
 
     async def metrics_snapshot(self) -> dict:
-        return METRICS.snapshot()
+        return {**METRICS.snapshot(), **await self._extraction.backlog()}
 
     async def report_recall_used(self, n: int = 1) -> None:
         METRICS.inc("recall_items_marked_used", n)

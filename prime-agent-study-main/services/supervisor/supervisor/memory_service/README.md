@@ -32,7 +32,7 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 |---|---|
 | write / supersede / get / forget | Supersede-only lineage; soft forget |
 | recall | Hybrid RRF + token budget; optional Tier 1 `memory/recall` log |
-| extraction | Async on `turn/end` flush; stingy heuristic; failures isolated |
+| extraction | Queued on `turn/end` flush (durable cursor: each job starts after the last); a background worker claims and runs jobs every `MEMORY_EXTRACTION_INTERVAL_S` (default 5, 0 = off); backlog in `/v1/metrics`; failures isolated |
 
 ### Notebooks (long-term memory)
 | Concern | Behavior |

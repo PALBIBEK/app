@@ -111,9 +111,10 @@ class ExtractionJobRow(Base):
     )
     seq_from: Mapped[int] = mapped_column(Integer, nullable=False)
     seq_to: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")  # pending | running | done | error
     created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class ForgetAuditRow(Base):

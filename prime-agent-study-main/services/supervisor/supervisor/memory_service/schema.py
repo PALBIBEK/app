@@ -59,6 +59,11 @@ def add_column(table: str, column: str, ddl_type: str) -> Callable[[Connection],
 MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (1, "baseline: the schema as created by metadata.create_all", lambda conn: None),
     (2, "outbox.claimed_at: an executor claims an item before running it", add_column("outbox", "claimed_at", "BIGINT")),
+    (
+        3,
+        "extraction_job.claimed_at_ms: a processor claims a job before running it",
+        add_column("extraction_job", "claimed_at_ms", "BIGINT"),
+    ),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""
 
