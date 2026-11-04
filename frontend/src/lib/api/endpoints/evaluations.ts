@@ -57,7 +57,7 @@ export const evaluationsAPI = {
     apiClient.get<ExperimentComparison>(`/traces/experiments/compare?a=${seg(a)}&b=${seg(b)}`),
 
   /** Learn a change from the agent's failing runs and measure it on a dataset; answers at once. */
-  propose: (agentId: string, body: { dataset_id: string; notes?: string | null }): Promise<Proposal> =>
+  propose: (agentId: string, body: { dataset_id: string; notes?: string | null; rounds?: number }): Promise<Proposal> =>
     apiClient.post<Proposal>(`/traces/agents/${seg(agentId)}/proposals`, body),
 
   proposals: (params: { agentId?: string; status?: string } = {}): Promise<Proposal[]> => {

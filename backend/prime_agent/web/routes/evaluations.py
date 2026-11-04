@@ -224,7 +224,7 @@ async def propose_change(agent_id: str, body: ProposalCreate, db: DbSession, cur
     service = _improver()
     try:
         row = await service.propose(user_id=current_user.id, agent_id=agent_id, dataset_id=body.dataset_id,
-                                    notes=body.notes, db=db)
+                                    notes=body.notes, rounds=body.rounds, db=db)
     except ImprovementNotFoundError as exc:
         raise _not_found() from exc
     start_improving(service, row.id, TenantPrincipal.from_user(current_user))

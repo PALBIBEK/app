@@ -78,10 +78,14 @@ class FakeSupervisor:
         self.published: list[tuple[str, dict]] = []
         self.sessions: dict[str, str] = {}  # ai session id -> harness version
         self.reflected: list[dict] = []
+        self.by_round: dict[int, str] = {}  # a search's round -> how its candidate's replays go
+        self.later: list[dict] = []  # replies to the reflections after the first, in order
 
     def _good(self, sid: str) -> bool:
-        candidate = re.search(r"-c[0-9a-f]{8}$", self.sessions.get(sid, "")) is not None  # h-<id>-c<tag>, not h-c…-r1
-        return (self.candidate if candidate else self.live) == "ok"
+        found = re.search(r"-c[0-9a-f]{8}(?:r(\d))?$", self.sessions.get(sid, ""))  # h-<id>-c<tag>[r<n>], not h-c…-r1
+        if found is None:
+            return self.live == "ok"
+        return self.by_round.get(int(found.group(1) or 1), self.candidate) == "ok"
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
@@ -99,7 +103,8 @@ class FakeSupervisor:
             return httpx.Response(200, json={"artifact_id": body["name"], "digest": f"sha256:{kind}{len(self.published)}"})
         if path == "/v1/traces/reflect":
             self.reflected.append(body)
-            return httpx.Response(200, json=self.reflection)
+            reply = self.later[len(self.reflected) - 2] if len(self.reflected) > 1 and self.later else self.reflection
+            return httpx.Response(200, json=reply)
         if path == "/v1/sessions" and method == "POST":
             sid = uuid4().hex
             self.sessions[sid] = body["harness_version"]
@@ -442,3 +447,72 @@ async def test_the_optimizer_never_reads_a_held_out_runs_conversation(db_session
         api.fake, api.user = fake, owner
         await _propose(api, db_session, agent, ds, started)
     assert fake.reflected[0]["exclude_sessions"] == ["ai-held"]
+
+
+def test_the_next_candidate_edits_a_version_on_the_pareto_front() -> None:
+    """GEPA's select_program_candidate_from_pareto_front: a version best on some saved run can
+    be picked; one that is best only where another version also is, and scores less, is not."""
+    import random
+
+    from prime_agent.services.improvement_service import pareto_parent
+
+    live = {"a": 5.0, "b": 5.0, "c": 5.0}
+    first = {"a": 10.0, "b": 5.0, "c": 5.0}  # best on a
+    second = {"a": 5.0, "b": 10.0, "c": 10.0}  # best on b and c
+    rng = random.Random(1)
+    drawn = {pareto_parent([live, first, second], set(), rng) for _ in range(200)}
+    assert drawn == {1, 2}, "live is on no front of its own"
+    # with held-out runs, only they decide the fronts (GEPA's valset)
+    assert {pareto_parent([live, first, second], {"a"}, rng) for _ in range(50)} == {1}
+    # a version tied on every front with a better one is dropped (remove_dominated_programs)
+    tied = {"a": 10.0, "b": 0.0, "c": 0.0}
+    assert {pareto_parent([live, first, second, tied], set(), rng) for _ in range(200)} == {1, 2}
+    assert pareto_parent([{"a": None}], set(), rng) == 0, "nothing finished: the live version"
+
+
+@pytest.mark.asyncio
+async def test_a_search_keeps_trying_and_offers_the_best_candidate_it_kept(db_session, owner, settings, monkeypatch):
+    fake = FakeSupervisor(candidate="ok")
+    fake.by_round = {1: "fail", 2: "ok"}  # the first change does not help; the second does
+    second = "Run the tests, and read every failure before answering."
+    fake.later = [{
+        "proposal": {"persona": "coder", "rationale": "Say to read failures.", "changed": ["rules"],
+                     "sections": [{"id": "intro", "text": "You are a coding agent in {cwd}."},
+                                  {"id": "rules", "text": second}],
+                     "edits": [{"action": "add", "section": "rules", "text": "read every failure", "reason": "r"}],
+                     "skipped": [], "expected_outcome": "fewer failing runs"},
+        "evidence": [],
+    }]
+    agent, ds = await _published_agent(db_session, owner, fake)
+    started: list = []
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        api.fake, api.user = fake, owner
+        p = await _propose(api, db_session, agent, ds, started, rounds=2)
+        assert p["status"] == "awaiting_approval", p
+        assert [(r["round"], r["parent"], r["kept"]) for r in p["rounds"]] == [(1, 0, False), (2, 0, True)]
+        assert p["rounds"][0]["why"].startswith("scored ") and "on the 2 saved runs it may learn from" in p["rounds"][0]["why"]
+        assert p["candidate_prompt"]["sections"][1]["text"] == second
+        assert p["rationale"] == "Say to read failures." and p["candidate"]["label"] == f"candidate {p['id'][:6]} round 2"
+        # the second reflection read what became of the first round
+        assert fake.reflected[1]["history"][-1]["outcome"] == "dropped in this search"
+        assert fake.reflected[1]["sections"][1]["text"] != FIXED, "its parent is the live version: the first was dropped"
+        approved = (await api.post(f"/api/v1/traces/proposals/{p['id']}/approve")).json()
+        assert approved["status"] == "approved"
+        await db_session.refresh(agent)
+        assert agent.harness_version.endswith(f"-c{p['id'].replace('-', '')[:8]}r2"), "the measured round-2 candidate"
+
+
+@pytest.mark.asyncio
+async def test_a_search_offers_the_first_change_when_later_ones_do_not_pass(db_session, owner, settings, monkeypatch):
+    fake = FakeSupervisor(candidate="ok")
+    fake.by_round = {1: "ok", 2: "fail"}
+    fake.later = [{"proposal": {"rationale": "nothing more", "changed": [], "sections": []}, "evidence": []}]
+    agent, ds = await _published_agent(db_session, owner, fake)
+    started: list = []
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        api.fake, api.user = fake, owner
+        p = await _propose(api, db_session, agent, ds, started, rounds=3)
+        assert p["status"] == "awaiting_approval" and len(p["rounds"]) == 1, "no more to change: the search stops"
+        assert p["candidate_prompt"]["sections"][1]["text"] == FIXED and p["max_rounds"] == 3
+        # round 2's reflection edited the kept first candidate (the only version on the front)
+        assert fake.reflected[1]["sections"][1]["text"] == FIXED

@@ -728,6 +728,26 @@ class EvaluationService:
             return None
         return round(sum(1 for s in scores if s == FULL_SCORE) / len(scores), 4)
 
+    async def item_scores(
+        self, *, identity: TenantPrincipal, user_id: str, experiment_id: str, db: AsyncSession
+    ) -> dict[str, float | None]:
+        """Each saved run's score in the experiment: its mean over trials (None: unfinished)."""
+        detail = await self.experiment(identity=identity, user_id=user_id, experiment_id=experiment_id, db=db)
+        by: dict[str, list[ExperimentItemResult]] = {}
+        for r in detail.results:
+            by.setdefault(r.item_id, []).append(r)
+        return {item_id: self._mean(trials) for item_id, trials in by.items()}
+
+    @staticmethod
+    async def held_out_items(db: AsyncSession, dataset_id: str) -> set[str]:
+        return set(
+            (
+                await db.execute(
+                    select(DatasetItem.id).where(DatasetItem.dataset_id == dataset_id, DatasetItem.held_out.is_(True))
+                )
+            ).scalars()
+        )
+
     async def compare(
         self, *, identity: TenantPrincipal, user_id: str, a_id: str, b_id: str, db: AsyncSession
     ) -> ExperimentComparison:
@@ -742,14 +762,7 @@ class EvaluationService:
             a_by.setdefault(r.item_id, []).append(r)
         for r in b.results:
             b_by.setdefault(r.item_id, []).append(r)
-        held = set(
-            (
-                await db.execute(
-                    select(DatasetItem.id).where(DatasetItem.dataset_id == a.experiment.dataset_id,
-                                                 DatasetItem.held_out.is_(True))
-                )
-            ).scalars()
-        )
+        held = await self.held_out_items(db, a.experiment.dataset_id)
         rows: list[ComparisonRow] = []
         for item_id in list(dict.fromkeys([*a_by, *b_by])):
             ta, tb = a_by.get(item_id, []), b_by.get(item_id, [])

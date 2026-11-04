@@ -188,6 +188,8 @@ class ProposalCreate(BaseModel):
     """The saved runs the candidate must not do worse on."""
     notes: str | None = Field(default=None, max_length=2000)
     """What you want addressed, in your words (optional)."""
+    rounds: int = Field(default=1, ge=1, le=3)
+    """Candidates to try, each built on the best so far (each replays the dataset once)."""
 
 
 class PromptSectionOut(BaseModel):
@@ -243,6 +245,20 @@ class PromptEdit(BaseModel):
     reason: str = ""
 
 
+class SearchRound(BaseModel):
+    """One candidate the search tried."""
+
+    round: int
+    parent: int
+    """The round whose candidate it edits (0: the live version)."""
+    rationale: str | None = None
+    edits: list[PromptEdit] = Field(default_factory=list)
+    experiment_id: str | None = None
+    kept: bool = False
+    """Better than its parent on the saved runs it may learn from (GEPA's acceptance)."""
+    why: str = ""
+
+
 class ProposalOut(BaseModel):
     id: str
     agent_id: str
@@ -258,6 +274,8 @@ class ProposalOut(BaseModel):
     edits: list[PromptEdit] = Field(default_factory=list)
     skipped_edits: list[str] = Field(default_factory=list)
     expected_outcome: str | None = None
+    max_rounds: int = 1
+    rounds: list[SearchRound] = Field(default_factory=list)
     gate: Gate | None = None
     release_version: int | None = None
     created_at: datetime

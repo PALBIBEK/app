@@ -10,7 +10,7 @@ import { useParams } from 'next/navigation';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { ExperimentStatsLine } from '@/components/traces/ExperimentStatsLine';
-import { EditList, GateResult, PROPOSAL_STATUS, PromptDiff, ProposalStatusPill } from '@/components/traces/Proposal';
+import { EditList, GateResult, PROPOSAL_STATUS, PromptDiff, ProposalStatusPill, SearchRounds } from '@/components/traces/Proposal';
 import { Button, Card, CardHeader, ErrorNote, LinkButton, PageHeader, SkeletonRows } from '@/components/ui';
 import { useDecideProposal, useProposal } from '@/lib/api/hooks/useEvaluations';
 
@@ -104,6 +104,7 @@ export default function ProposalPage(): JSX.Element {
               <Card>
                 <CardHeader title="What it changes" description={p.rationale ?? undefined} />
                 <div className="flex flex-col gap-4 border-t border-line-soft px-5 py-4">
+                  <SearchRounds rounds={p.rounds ?? []} />
                   <EditList edits={p.edits ?? []} skipped={p.skipped_edits ?? []} expected={p.expected_outcome} />
                   {p.candidate_prompt ? (
                     <PromptDiff base={p.base_prompt} next={p.candidate_prompt} />
