@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 
 import pytest
-from sqlalchemy import event, text, update
+from sqlalchemy import event, update
 
 from supervisor.agent.events import MessageEnd
 from supervisor.api.events import SSE_END, iter_journal_sse
@@ -62,7 +62,7 @@ async def test_many_streams_cost_one_query_a_round(factory: Factory) -> None:
     sessions = [f"s{i}" for i in range(20)]
     for sid in sessions:
         await writer.ensure_session(sid)
-    watch = JournalWatch(factory, poll_secs=0.05, listen=False)
+    watch = JournalWatch(factory, poll_secs=0.05)
     streams = [_stream(reader, watch, sid) for sid in sessions for _ in range(10)]  # 200 streams
     waits = [asyncio.ensure_future(s.__anext__()) for s in streams]
     await asyncio.sleep(0.3)  # all waiting on the watch
@@ -85,7 +85,7 @@ async def test_a_watched_stream_sends_events_partials_then_ends(factory: Factory
     await writer.ensure_session("s1")
     await _say(writer, "s1", "earlier")
     partials = PartialOutputs(factory)
-    watch = JournalWatch(factory, poll_secs=0.02, listen=False)
+    watch = JournalWatch(factory, poll_secs=0.02)
     frames: list[str] = []
 
     async def collect() -> None:
@@ -111,7 +111,7 @@ async def test_a_watched_stream_sends_events_partials_then_ends(factory: Factory
 
 async def test_an_erased_session_ends_its_stream(factory: Factory) -> None:
     reader = JournalReader(factory)
-    watch = JournalWatch(factory, poll_secs=0.02, listen=False)
+    watch = JournalWatch(factory, poll_secs=0.02)
     frames = [f async for f in _stream(reader, watch, "never-there")]
     assert frames == [SSE_END]
     await watch.close()
@@ -120,55 +120,41 @@ async def test_an_erased_session_ends_its_stream(factory: Factory) -> None:
 async def test_a_quiet_stream_pings(factory: Factory) -> None:
     writer, reader = JournalWriter(factory), JournalReader(factory)
     await writer.ensure_session("s1")
-    watch = JournalWatch(factory, poll_secs=0.02, listen=False)
+    watch = JournalWatch(factory, poll_secs=0.02)
     stream = iter_journal_sse(session_id="s1", cursor=-1, reader=reader, watch=watch, heartbeat_secs=0.1)
     assert await asyncio.wait_for(stream.__anext__(), timeout=2) == ": ping\n\n"
     await stream.aclose()  # type: ignore[attr-defined]  # an async generator
     await watch.close()
 
 
-async def test_on_postgres_a_write_wakes_its_streams_at_once(factory: Factory) -> None:
-    if factory.kw["bind"].dialect.name != "postgresql":
-        pytest.skip("notifications are Postgres's")
+async def test_a_write_wakes_its_streams_within_a_round(factory: Factory) -> None:
     writer = JournalWriter(factory)
     await writer.ensure_session("s1")
-    watch = JournalWatch(factory, poll_secs=60, backstop_secs=60)  # only a notification wakes it
+    watch = JournalWatch(factory)  # the deployed round: 150 ms
     seen = await watch.changed("s1", None, timeout=5)
-    assert watch.listening and seen == Seen(-1, "active", None)
+    assert seen == Seen(-1, "active", None)
     waiting = asyncio.ensure_future(watch.changed("s1", seen, timeout=30))
     await asyncio.sleep(0.2)
     started = time.monotonic()
     await _say(writer, "s1", "hello")
     now = await asyncio.wait_for(waiting, timeout=5)
-    assert now.last_seq == 0 and time.monotonic() - started < 2
-
+    assert now.last_seq == 0 and time.monotonic() - started < 0.5
     await PartialOutputs(factory).put("s1", "r1", 0, "Hi", "")
     now = await asyncio.wait_for(watch.changed("s1", now, timeout=30), timeout=5)
     assert now.partial_ms is not None
+    await _ended(factory)
+    assert (await asyncio.wait_for(watch.changed("s1", now, timeout=30), timeout=5)).status == "terminated"
     await watch.close()
-    assert not watch.listening
 
 
-async def test_when_its_connection_drops_it_polls_until_it_listens_again(factory: Factory) -> None:
-    if factory.kw["bind"].dialect.name != "postgresql":
-        pytest.skip("notifications are Postgres's")
+async def test_no_write_sends_a_notification(factory: Factory) -> None:
+    """A transaction that sends one takes a server-wide lock as it commits: notifying on
+    every write made every commit on the server wait its turn."""
     writer = JournalWriter(factory)
     await writer.ensure_session("s1")
-    watch = JournalWatch(factory, poll_secs=0.05, backstop_secs=0.2)
-    seen = await watch.changed("s1", None, timeout=5)
-    await asyncio.sleep(0.1)
-    assert watch.listening
-    async with factory() as db:  # the server ends the listening connection
-        await db.execute(
-            text(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database()"
-                " AND pid <> pg_backend_pid() AND (query LIKE 'LISTEN%' OR query = 'SELECT 1')"
-            )
-        )
-    await asyncio.sleep(0.5)
-    assert not watch.listening, "noticed within a round"
-    waiting = asyncio.ensure_future(watch.changed("s1", seen, timeout=30))
-    await asyncio.sleep(0.1)
-    await _say(writer, "s1", "still seen")
-    assert (await asyncio.wait_for(waiting, timeout=5)).last_seq == 0
-    await watch.close()
+    statements = _count_queries(factory)
+    await _say(writer, "s1", "hello")
+    await writer.append_batch("s1", [(MessageEnd(role="assistant", content=[]), "r1", None)] * 3)
+    await PartialOutputs(factory).put("s1", "r1", 0, "Hi", "")
+    await PartialOutputs(factory).clear("s1")
+    assert statements and not [q for q in statements if "notify" in q.lower()]
