@@ -4,6 +4,7 @@
 
 import { apiClient } from '../client';
 import type {
+  AddIssueResult,
   DatasetDetail,
   DatasetItem,
   DatasetSummary,
@@ -30,6 +31,14 @@ export const evaluationsAPI = {
   /** Save one of the user's runs to the dataset, with what a good answer does (optional). */
   addRun: (datasetId: string, body: { session_id: string; run_id: string; expected?: string | null }): Promise<DatasetItem> =>
     apiClient.post<DatasetItem>(`/traces/datasets/${seg(datasetId)}/items`, body),
+
+  /** Save an issue's latest runs (never an experiment's replays): what a fix is measured on. */
+  addIssue: (datasetId: string, issueKey: string): Promise<AddIssueResult> =>
+    apiClient.post<AddIssueResult>(`/traces/datasets/${seg(datasetId)}/issue`, { issue_key: issueKey }),
+
+  /** Hold a saved run out from the optimizer, or let it learn from it. */
+  setHeldOut: (datasetId: string, itemId: string, heldOut: boolean): Promise<DatasetItem> =>
+    apiClient.patch<DatasetItem>(`/traces/datasets/${seg(datasetId)}/items/${seg(itemId)}`, { held_out: heldOut }),
 
   deleteItem: (datasetId: string, itemId: string): Promise<void> =>
     apiClient.delete<void>(`/traces/datasets/${seg(datasetId)}/items/${seg(itemId)}`),

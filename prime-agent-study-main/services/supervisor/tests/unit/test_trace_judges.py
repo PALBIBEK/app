@@ -163,6 +163,32 @@ async def test_failures_group_into_issues_with_examples_and_versions(api: Api) -
     assert (await api.client.get("/v1/traces/issues", headers=BOB)).json()["issues"] == []
 
 
+async def test_an_issue_lists_all_its_runs_but_not_an_experiments_replays(api: Api) -> None:
+    """Saving an issue to a dataset takes its runs, every one (not the five examples), and none
+    that an experiment replayed: a replay is a measurement, not a failure to learn from."""
+    sid, replay = await api.session(), await api.session()
+    for i in range(7):
+        await api.run(sid, f"broke-{i}", f"attempt {i}", start=1_000 * (i + 1), tool_ok=False)
+    await api.run(replay, "again", "attempt 0", start=20_000, tool_ok=False)
+    await list_traces(api, ALICE)
+    marked = await api.client.put(f"/v1/sessions/{replay}/evaluation", json={"experiment_id": "exp-1"}, headers=ALICE)
+    assert marked.status_code == 204
+
+    listed = (await api.client.get("/v1/traces/issues", headers=ALICE)).json()["issues"]
+    assert (listed[0]["runs"], len(listed[0]["examples"])) == (8, 5), "the issues page still counts every run"
+    r = await api.client.get("/v1/traces/issues/runs", params={"key": listed[0]["key"]}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    issue = r.json()["issue"]
+    assert issue["runs"] == 7
+    assert [e["run_id"] for e in issue["examples"]] == [f"broke-{i}" for i in reversed(range(7))]
+    page = await api.client.get("/v1/traces/issues/runs", params={"key": listed[0]["key"], "limit": 2}, headers=ALICE)
+    assert [e["run_id"] for e in page.json()["issue"]["examples"]] == ["broke-6", "broke-5"]
+    assert (await api.client.get("/v1/traces/issues/runs", params={"key": "x:check:none:"},
+                                 headers=ALICE)).status_code == 404
+    assert (await api.client.get("/v1/traces/issues/runs", params={"key": listed[0]["key"]},
+                                 headers=BOB)).status_code == 404
+
+
 async def test_judges_are_set_up_over_the_api(api: Api) -> None:
     body = {"composition_id": "githi-v1", "name": "answers", "rubric": "Answers the question asked.", "sample_rate": 0.5}
     r = await api.client.put("/v1/traces/judges", json=body, headers=ALICE)

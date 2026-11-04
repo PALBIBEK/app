@@ -7,14 +7,18 @@
 3. **Measure.** The chosen dataset is replayed on the live version and on the candidate, back
    to back, each saved run several times (trials), as any experiment.
 4. **Gate.** The candidate is refused if it does worse on any saved run, answers fewer, fails
-   more checks or judges, passes every trial on fewer runs, or costs or takes much more.
-   Refused candidates never reach anyone's inbox.
+   more checks or judges, passes every trial on fewer runs, or costs or takes much more; and,
+   when some saved runs are held out, if it is better on none of them. Refused candidates
+   never reach anyone's inbox.
 5. **Approve.** One that passes waits in Approvals with its diff, its evidence and its
    results. Approving makes that exact candidate the next version; nothing is rebuilt.
 
-The optimizer can only change the prompt. It never sees the datasets it is measured on (the
-replays' sessions are excluded from its evidence), and cannot change a judge, a check or a
-dataset, so it cannot grade its own work.
+The optimizer can only change the prompt, and cannot change a judge, a check or a dataset, so
+it cannot grade its own work. It never reads an experiment's replays, nor the conversations of
+held-out saved runs: the runs it learns from are the agent's failures (a dataset saved from an
+issue holds some of them), and the held-out ones show whether a change fixes more than what it
+read. That is GEPA's split: reflective mutation reads minibatches of the train set, and a
+candidate is kept on its scores on a separate validation set (``gepa.api.optimize``).
 """
 
 from __future__ import annotations
@@ -81,16 +85,21 @@ def decide_gate(cmp: ExperimentComparison, *, max_cost_increase: float = 0.2, ma
     """Whether the candidate (``cmp.b``) may replace the live version (``cmp.a``).
 
     It passes only when every saved run finished and was judged on both, it did better on at least one and
-    worse on none, answered at least as many, failed no more checks or judges, passed every
+    worse on none (and better on at least one held-out run, when some are held out), answered at least as many, failed no more checks or judges, passed every
     trial on at least as many saved runs, and costs and takes no more per run than allowed.
     A change that improves nothing the runs show is not worth a person's time.
     """
     a, b = cmp.a.stats, cmp.b.stats
-    items = [GateItem(item_id=r.item_id, input=r.input, change=r.change) for r in cmp.rows]
+    items = [GateItem(item_id=r.item_id, input=r.input, change=r.change, held_out=r.held_out) for r in cmp.rows]
+    held = [r for r in cmp.rows if r.held_out]
+    held_better = sum(1 for r in held if r.change == "better")
+    held_worse = sum(1 for r in held if r.change == "worse")
     reasons: list[str] = []
     unknown = sum(1 for r in cmp.rows if r.change == "unknown")
     if not cmp.rows or a is None or b is None:
         return Gate(passed=False, reasons=["nothing was replayed"], better=0, worse=0, items=items)
+    gate = {"better": cmp.better, "worse": cmp.worse, "items": items, "held_out_better": held_better,
+            "held_out_worse": held_worse}
     if unknown:
         reasons.append(f"{unknown} saved run{'s' if unknown != 1 else ''} did not finish on both versions")
     unjudged = sum(1 for r in cmp.rows if r.change != "unknown" and _judges(r.a) != _judges(r.b))
@@ -100,6 +109,9 @@ def decide_gate(cmp: ExperimentComparison, *, max_cost_increase: float = 0.2, ma
         reasons.append(f"it did worse on {cmp.worse} of {len(cmp.rows)} saved runs")
     elif not cmp.better and not unknown:
         reasons.append(f"it did no better on any of {len(cmp.rows)} saved runs")
+    elif held and not held_better and not unknown:
+        # better only where it could have fitted: what it read, not what it will meet
+        reasons.append(f"it did no better on any of the {len(held)} held-out saved runs, only on runs it learnt from")
     if b.answered < a.answered:
         reasons.append(f"it answered {b.answered} where the live version answered {a.answered}")
     if b.checks_failed > a.checks_failed:
@@ -118,8 +130,9 @@ def decide_gate(cmp: ExperimentComparison, *, max_cost_increase: float = 0.2, ma
                        f"(at most {1 + max_time_increase:.1f}× allowed)")
     passed = not reasons
     if passed:
-        reasons.append(f"better on {cmp.better} and worse on none of {len(cmp.rows)} saved runs")
-    return Gate(passed=passed, reasons=reasons, better=cmp.better, worse=cmp.worse, items=items)
+        reasons.append(f"better on {cmp.better} and worse on none of {len(cmp.rows)} saved runs"
+                       + (f", {held_better} of the {len(held)} held out" if held else ", none of them held out"))
+    return Gate(passed=passed, reasons=reasons, **gate)
 
 
 def _prompt(manifest: dict[str, Any] | None) -> PromptOut | None:
@@ -238,15 +251,23 @@ class ImprovementService:
             )
         ).scalar_one_or_none()
 
-    async def _replay_sessions(self, db: AsyncSession, agent_id: str) -> list[str]:
-        """Supervisor ids of every session an experiment of this agent replayed in."""
-        rows = await db.execute(
+    async def _unseen_sessions(self, db: AsyncSession, agent_id: str) -> list[str]:
+        """Supervisor ids of the sessions the optimizer must not read: each held-out saved run's
+        (first, so a cap never drops them) and every one an experiment of this agent replayed in."""
+        held = await db.execute(
+            select(SessionLink.ai_session_id)
+            .join(DatasetItem, DatasetItem.source_session_id == SessionLink.id)
+            .join(Dataset, Dataset.id == DatasetItem.dataset_id)
+            .where(Dataset.harness_id == agent_id, DatasetItem.held_out.is_(True))
+        )
+        replays = await db.execute(
             select(SessionLink.ai_session_id)
             .join(ExperimentRun, ExperimentRun.session_id == SessionLink.id)
             .join(Experiment, Experiment.id == ExperimentRun.experiment_id)
             .where(Experiment.harness_id == agent_id)
         )
-        return [str(s) for s in rows.scalars().all() if s][:5000]
+        ids = [str(s) for s in [*held.scalars().all(), *replays.scalars().all()] if s]
+        return list(dict.fromkeys(ids))[:5000]
 
     async def _evidence(self, db: AsyncSession, user_id: str, raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The supervisor's evidence with product session ids (examples the user cannot open are dropped)."""
@@ -316,7 +337,7 @@ class ImprovementService:
                 "sections": [{"id": s.id, "text": s.text} for s in base.prompt.sections],
                 "notes": row.notes,
                 "since_ms": since,
-                "exclude_sessions": await self._replay_sessions(db, row.harness_id),
+                "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
             })
         except AiUpstreamError as exc:
             return await self._fail(db, row, f"could not learn from the traces: {exc}")

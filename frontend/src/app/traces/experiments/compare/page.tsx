@@ -81,7 +81,14 @@ function Comparison(): JSX.Element {
                     data-testid="comparison-row"
                     data-change={row.change}
                   >
-                    <p className="line-clamp-3 whitespace-pre-wrap text-[13.5px]">{row.input}</p>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <p className="line-clamp-3 whitespace-pre-wrap text-[13.5px]">{row.input}</p>
+                      {row.held_out ? (
+                        <span className="text-xs text-violet-800" data-testid="row-held-out">
+                          held out: a proposed change never read it
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="flex min-w-0 flex-col gap-1">
                       <ResultCell result={row.a} />
                       <PassRate rate={row.a_pass_rate} trials={row.a_trials.length} />

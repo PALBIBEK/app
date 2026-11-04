@@ -16,6 +16,8 @@ from prime_agent.config import get_settings
 from prime_agent.db.session import db as database
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.evaluation import (
+    AddIssueRequest,
+    AddIssueResult,
     AddRunRequest,
     DatasetCreate,
     DatasetDetail,
@@ -25,6 +27,7 @@ from prime_agent.schemas.evaluation import (
     ExperimentDetail,
     ExperimentOut,
     ExperimentStart,
+    ItemUpdate,
     ProposalCreate,
     ProposalDetail,
     ProposalOut,
@@ -107,6 +110,31 @@ async def add_run(dataset_id: str, body: AddRunRequest, db: DbSession, current_u
             run_id=body.run_id,
             expected=body.expected,
             db=db,
+        )
+    except EvaluationNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.post("/datasets/{dataset_id}/issue", response_model=AddIssueResult, status_code=201)
+async def add_issue(dataset_id: str, body: AddIssueRequest, db: DbSession, current_user: CurrentUser) -> AddIssueResult:
+    """Save an issue's latest runs to the dataset: the failures a fix is measured on."""
+    try:
+        return await _service().add_issue(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, dataset_id=dataset_id,
+            issue_key=body.issue_key, db=db,
+        )
+    except EvaluationNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.patch("/datasets/{dataset_id}/items/{item_id}", response_model=DatasetItemOut)
+async def update_item(
+    dataset_id: str, item_id: str, body: ItemUpdate, db: DbSession, current_user: CurrentUser
+) -> DatasetItemOut:
+    """Hold a saved run out from the optimizer, or let it learn from it."""
+    try:
+        return await _service().set_held_out(
+            user_id=current_user.id, dataset_id=dataset_id, item_id=item_id, held_out=body.held_out, db=db
         )
     except EvaluationNotFoundError as exc:
         raise _not_found() from exc

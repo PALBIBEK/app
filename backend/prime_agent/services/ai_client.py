@@ -1082,6 +1082,11 @@ class AiClient:
         payload = await self._json_request("GET", "/v1/traces/issues", identity, expected=(200,), params=params)
         return payload if isinstance(payload, dict) else {"issues": []}
 
+    async def trace_issue_runs(self, identity: TenantPrincipal, params: dict[str, Any]) -> dict[str, Any]:
+        """GET /v1/traces/issues/runs: one issue's runs, newest first, none an experiment's replay."""
+        payload = await self._json_request("GET", "/v1/traces/issues/runs", identity, expected=(200,), params=params)
+        return payload if isinstance(payload, dict) else {}
+
     async def reflect(self, identity: TenantPrincipal, body: dict[str, Any]) -> dict[str, Any]:
         """POST /v1/traces/reflect: a proposed prompt change from how the runs went wrong."""
         payload = await self._json_request(

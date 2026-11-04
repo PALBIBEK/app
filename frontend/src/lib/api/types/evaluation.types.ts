@@ -23,7 +23,18 @@ export interface DatasetItem {
   source_run_id: string | null;
   source_version: number | null;
   source_status: string | null;
+  /** Kept from the optimizer: its conversation is never evidence a change is learnt from. */
+  held_out: boolean;
   created_at: string;
+}
+
+/** What saving an issue's runs to a dataset did. */
+export interface AddIssueResult {
+  added: DatasetItem[];
+  /** Runs already saved, with no message to replay, or of a session you cannot open. */
+  skipped: number;
+  /** Runs not tried because the dataset filled up. */
+  left_out: number;
 }
 
 export interface ExperimentStats {
@@ -121,6 +132,7 @@ export interface ComparisonRow {
   /** Share of the saved run's trials that passed; null until all finished. */
   a_pass_rate: number | null;
   b_pass_rate: number | null;
+  held_out: boolean;
   change: 'better' | 'worse' | 'same' | 'unknown';
 }
 
@@ -170,7 +182,9 @@ export interface Gate {
   reasons: string[];
   better: number;
   worse: number;
-  items: { item_id: string; input: string; change: 'better' | 'worse' | 'same' | 'unknown' }[];
+  items: { item_id: string; input: string; change: 'better' | 'worse' | 'same' | 'unknown'; held_out?: boolean }[];
+  held_out_better?: number;
+  held_out_worse?: number;
 }
 
 export interface Proposal {

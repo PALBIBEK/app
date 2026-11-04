@@ -1,42 +1,40 @@
 'use client';
 
 /**
- * Save this run to one of the agent's datasets (or a new one), with what a good answer does:
- * the run is then replayed on later versions, so a fix is checked against it.
+ * Save runs to one of the agent's datasets (or a new one): a single run with what a good answer
+ * does (``SaveToDataset``), or every recent run of an issue (``SaveIssueToDataset``). The runs
+ * are then replayed on later versions, so a fix is checked against the failures it targets.
  */
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui';
-import { useAddRun, useCreateDataset, useDatasets } from '@/lib/api/hooks/useEvaluations';
-import type { RunTrace } from '@/lib/api/types/trace.types';
+import { useAddIssue, useAddRun, useCreateDataset, useDatasets } from '@/lib/api/hooks/useEvaluations';
+import type { Issue, RunTrace } from '@/lib/api/types/trace.types';
 
 const NEW = '__new__';
 
-export function SaveToDataset({ trace }: { trace: RunTrace }): JSX.Element | null {
-  const agentId = trace.agent_id ?? '';
-  const [open, setOpen] = useState(false);
-  const { data: datasets } = useDatasets(open ? agentId : undefined);
+interface DatasetFormProps {
+  agentId: string;
+  label: string;
+  /** Save to the chosen dataset (created first when it is a new one). */
+  save: (datasetId: string) => Promise<unknown>;
+  saving: boolean;
+  close: () => void;
+  children?: ReactNode;
+}
+
+function DatasetForm({ agentId, label, save, saving, close, children }: DatasetFormProps): JSX.Element {
+  const { data: datasets } = useDatasets(agentId);
   const [choice, setChoice] = useState('');
   const [name, setName] = useState('');
-  const [expected, setExpected] = useState('');
   const create = useCreateDataset(agentId);
-  const add = useAddRun();
-  if (!agentId) return null;
   const picked = choice || (datasets?.length ? datasets[0].id : NEW);
-  const busy = create.isPending || add.isPending;
-
-  if (!open) {
-    return (
-      <Button size="sm" onClick={() => setOpen(true)} data-testid="save-to-dataset">
-        Save to a dataset
-      </Button>
-    );
-  }
+  const busy = create.isPending || saving;
   return (
     <form
       className="flex w-full flex-col gap-2.5 rounded-lg border border-line bg-canvas p-3"
-      aria-label="Save this run to a dataset"
+      aria-label={label}
       onSubmit={async (e) => {
         e.preventDefault();
         let datasetId = picked;
@@ -44,9 +42,8 @@ export function SaveToDataset({ trace }: { trace: RunTrace }): JSX.Element | nul
           if (!name.trim()) return;
           datasetId = (await create.mutateAsync({ name: name.trim() })).id;
         }
-        await add.mutateAsync({ datasetId, session_id: trace.session_id, run_id: trace.run_id, expected: expected.trim() || null });
-        setOpen(false);
-        setExpected('');
+        await save(datasetId);
+        close();
       }}
     >
       <div className="flex flex-wrap gap-2.5">
@@ -68,18 +65,76 @@ export function SaveToDataset({ trace }: { trace: RunTrace }): JSX.Element | nul
           </label>
         ) : null}
       </div>
-      <label className="flex flex-col gap-1 text-[13px]">
-        <span className="text-ink-2">What a good answer does (optional)</span>
-        <textarea value={expected} onChange={(e) => setExpected(e.target.value)} rows={2} maxLength={4000} className="rounded-lg border border-line-strong bg-surface px-2.5 py-1.5" />
-      </label>
+      {children}
       <div className="flex gap-2">
         <Button type="submit" size="sm" variant="primary" disabled={busy || (picked === NEW && !name.trim())}>
           Save
         </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
+        <Button type="button" size="sm" variant="ghost" onClick={close}>
           Cancel
         </Button>
       </div>
     </form>
+  );
+}
+
+export function SaveToDataset({ trace }: { trace: RunTrace }): JSX.Element | null {
+  const agentId = trace.agent_id ?? '';
+  const [open, setOpen] = useState(false);
+  const [expected, setExpected] = useState('');
+  const add = useAddRun();
+  if (!agentId) return null;
+  if (!open) {
+    return (
+      <Button size="sm" onClick={() => setOpen(true)} data-testid="save-to-dataset">
+        Save to a dataset
+      </Button>
+    );
+  }
+  return (
+    <DatasetForm
+      agentId={agentId}
+      label="Save this run to a dataset"
+      saving={add.isPending}
+      close={() => {
+        setOpen(false);
+        setExpected('');
+      }}
+      save={(datasetId) =>
+        add.mutateAsync({ datasetId, session_id: trace.session_id, run_id: trace.run_id, expected: expected.trim() || null })
+      }
+    >
+      <label className="flex flex-col gap-1 text-[13px]">
+        <span className="text-ink-2">What a good answer does (optional)</span>
+        <textarea value={expected} onChange={(e) => setExpected(e.target.value)} rows={2} maxLength={4000} className="rounded-lg border border-line-strong bg-surface px-2.5 py-1.5" />
+      </label>
+    </DatasetForm>
+  );
+}
+
+export function SaveIssueToDataset({ issue }: { issue: Issue }): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const add = useAddIssue();
+  if (!issue.agent_id) return null;
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)} data-testid="save-issue-to-dataset">
+        Save its runs to a dataset
+      </Button>
+    );
+  }
+  return (
+    <DatasetForm
+      agentId={issue.agent_id}
+      label="Save this issue's runs to a dataset"
+      saving={add.isPending}
+      close={() => setOpen(false)}
+      save={(datasetId) => add.mutateAsync({ datasetId, issueKey: issue.key })}
+    >
+      <p className="text-xs text-ink-3">
+        Its latest runs are saved (never an experiment&rsquo;s replays). One saved run in three is held out: a proposed change
+        never reads it, so it shows whether the change fixes more than what it learnt from.
+      </p>
+    </DatasetForm>
   );
 }

@@ -80,6 +80,7 @@ class FakeSupervisor:
         self.judged_on_replays: list[str] = ["answers"]  # judges a marked session's runs get
         self.earlier: dict[str, str] = {}  # runs before the saved one (r1) in its conversation -> message
         self.posted: dict[str, list[str]] = {}  # ai session id -> the messages it was sent, in order
+        self.issues: dict[str, list[dict]] = {}  # issue key -> its runs, newest first
 
     def trace(self, sid: str, run_id: str) -> dict:
         digest = self.sessions.get(sid, V1)
@@ -105,6 +106,12 @@ class FakeSupervisor:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
+        if path == "/v1/traces/issues/runs":
+            key, limit = request.url.params["key"], int(request.url.params["limit"])
+            if key not in self.issues:
+                return httpx.Response(404, json={"detail": "no such issue"})
+            runs = self.issues[key]
+            return httpx.Response(200, json={"issue": {"key": key, "runs": len(runs), "examples": runs[:limit]}})
         if path == "/v1/sessions" and method == "POST":
             body = json.loads(request.content)
             self.created.append(body)
@@ -412,3 +419,49 @@ async def test_an_earlier_message_that_stops_for_an_approval_ends_the_replay(db_
     assert result["error"] == "earlier message 1 of 1: stopped for an approval: experiments never approve"
     assert [len(m) for m in fake.posted.values()] == [1], "the saved run itself was never sent"
     assert fake.ended, "its session is still ended"
+
+
+@pytest.mark.asyncio
+async def test_an_issues_runs_are_saved_and_every_third_saved_run_is_held_out(
+    db_session, owner, agent, settings, monkeypatch, make_user
+):
+    """The failures a fix is meant to fix become what it is measured on, and one saved run in
+    three is held out from the optimizer (a person can change which)."""
+    fake = FakeSupervisor({V1: "fail", V2: "ok"})
+    src = await _source_run(db_session, owner, agent)
+    key = "h-reviewer:check:finished:"
+    fake.issues[key] = [*({"session_id": "ai-src", "run_id": r} for r in ("r1", "r2", "r3", "r4")),
+                        {"session_id": "ai-someone-elses", "run_id": "r9"}]
+    async with _api(db_session, owner, settings, monkeypatch, fake, []) as api:
+        ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "from an issue"})).json()
+        one = await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
+        assert one.status_code == 201 and one.json()["held_out"] is False
+
+        saved = await api.post(f"/api/v1/traces/datasets/{ds['id']}/issue", json={"issue_key": key})
+        assert saved.status_code == 201, saved.text
+        body = saved.json()
+        assert [(i["source_run_id"], i["held_out"]) for i in body["added"]] == [("r2", False), ("r3", True), ("r4", False)]
+        assert (body["skipped"], body["left_out"]) == (2, 0), "r1 was already saved; r9 is not a session of the user's"
+
+        r4 = body["added"][2]["id"]
+        flipped = await api.patch(f"/api/v1/traces/datasets/{ds['id']}/items/{r4}", json={"held_out": True})
+        assert flipped.status_code == 200 and flipped.json()["held_out"] is True
+        items = (await api.get(f"/api/v1/traces/datasets/{ds['id']}")).json()["items"]
+        assert [i["source_run_id"] for i in items if i["held_out"]] == ["r3", "r4"]
+
+        other = await api.post(f"/api/v1/traces/datasets/{ds['id']}/issue", json={"issue_key": "h-other:check:finished:"})
+        assert other.status_code == 422 and other.json()["detail"]["error_code"] == "OTHER_AGENT"
+        gone = await api.post(f"/api/v1/traces/datasets/{ds['id']}/issue", json={"issue_key": "h-reviewer:judge:x:"})
+        assert gone.status_code == 404
+
+        monkeypatch.setattr("prime_agent.services.evaluation_service.MAX_ITEMS", 2)
+        small = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "small"})).json()
+        filled = (await api.post(f"/api/v1/traces/datasets/{small['id']}/issue", json={"issue_key": key})).json()
+        assert ([i["source_run_id"] for i in filled["added"]], filled["left_out"]) == (["r1", "r2"], 3)
+        full = await api.post(f"/api/v1/traces/datasets/{small['id']}/issue", json={"issue_key": key})
+        assert full.status_code == 409
+
+    stranger = await make_user(email="other@example.com", name="Other")
+    async with _api(db_session, stranger, settings, monkeypatch, fake, []) as api:
+        assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/issue", json={"issue_key": key})).status_code == 404
+        assert (await api.patch(f"/api/v1/traces/datasets/{ds['id']}/items/{r4}", json={"held_out": False})).status_code == 404

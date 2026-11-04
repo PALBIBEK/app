@@ -9,7 +9,7 @@ phases a candidate), each in a fresh session, so versions are compared on the sa
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from prime_agent.db import Base
@@ -60,6 +60,9 @@ class DatasetItem(Base):
     source_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     """How the saved run ended (``ok``, ``error`` …), for context."""
+    held_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    """Kept from the optimizer: its conversation is never evidence a change is learnt from, so
+    the gate can tell a change that generalises from one fitted to the runs it read."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
