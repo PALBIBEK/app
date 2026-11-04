@@ -136,7 +136,10 @@ def _start(chromium_path: str) -> str:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-dev-shm-usage",
-                *(["--no-sandbox"] if os.geteuid() == 0 else []),
+                # The sandbox it runs in is the isolation boundary (as Playwright's own
+                # launch assumes): Chromium's sandbox needs user namespaces, which Docker
+                # with no capabilities, and Ubuntu 24.04+ for unprivileged users, deny.
+                "--no-sandbox",
                 "about:blank",
             ],
             stdin=subprocess.DEVNULL,

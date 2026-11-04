@@ -119,3 +119,14 @@ async def test_the_shipped_tool_set_offers_browser_exec_as_implemented() -> None
     definition = {k: v for k, v in shipped["definitions"]["browser_exec"].items() if k != "digest"}
 
     assert definition == default_registry()["browser_exec"].definition()
+
+
+async def test_the_browser_tool_set_is_the_coding_tools_and_browser_exec() -> None:
+    """A tool added to the coding tools (and to the harness's recovery list) belongs in the
+    browser tool set too, or its composition is skipped at boot."""
+    sets = Path(__file__).resolve().parents[4] / "harness/tool_sets"
+    coding = json.loads((sets / "githi-coding-tools.json").read_text())["definitions"]
+    browser = json.loads((sets / "githi-browser-tools.json").read_text())["definitions"]
+
+    assert set(browser) == set(coding) | {"browser_exec"}
+    assert all(browser[name] == coding[name] for name in coding), "a coding tool's definition drifted"
