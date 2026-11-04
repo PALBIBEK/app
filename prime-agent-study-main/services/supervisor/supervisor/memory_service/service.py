@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from sqlalchemy import text
@@ -95,38 +96,53 @@ class MemoryService:
         self._buffers: dict[str, WriteBehindBuffer] = {}
         self._flush_locks: dict[str, asyncio.Lock] = {}
         self._ready = False
-        self._extraction_worker: asyncio.Task[None] | None = None
-        self._buffer_sweeper: asyncio.Task[None] | None = None
+        self._background: dict[str, asyncio.Task[None]] = {}
+        """Named background loops (extraction, buffer sweep, archiving), stopped by ``aclose``."""
 
     async def startup(self) -> None:
         await init_db(self._engine)
         self._ready = True
 
     async def aclose(self) -> None:
-        await self.stop_extraction_worker()
-        await self.stop_buffer_sweeper()
+        await self.stop_background()
         await self._engine.dispose()
 
-    def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
-        """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""
-        if self._buffer_sweeper is None or self._buffer_sweeper.done():
-            self._buffer_sweeper = asyncio.create_task(
-                self._sweep_loop(interval_s, idle_ms), name="memory-buffer-sweep"
-            )
+    @property
+    def background(self) -> tuple[str, ...]:
+        """The background loops running now."""
+        return tuple(name for name, task in self._background.items() if not task.done())
 
-    async def stop_buffer_sweeper(self) -> None:
-        task, self._buffer_sweeper = self._buffer_sweeper, None
-        if task is not None:
+    def _start(self, name: str, loop: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        task = self._background.get(name)
+        if task is None or task.done():
+            self._background[name] = asyncio.create_task(loop(), name=f"memory-{name}")
+
+    async def stop_background(self) -> None:
+        tasks, self._background = list(self._background.values()), {}
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _sweep_loop(self, interval_s: float, idle_ms: int) -> None:
+    async def _every(self, interval_s: float, what: str, step: Callable[[], Awaitable[object]]) -> None:
         while True:
             await asyncio.sleep(interval_s)
             try:
-                await self.sweep_buffers(idle_ms=idle_ms)
+                await step()
             except Exception:
-                logger.warning("buffer sweep failed", exc_info=True)
+                logger.warning("%s failed", what, exc_info=True)
+
+    def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
+        """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""
+        self._start(
+            "buffer-sweep", lambda: self._every(interval_s, "buffer sweep", lambda: self.sweep_buffers(idle_ms=idle_ms))
+        )
+
+    def start_archiver(self, *, interval_s: float = 3600.0, limit: int = 100) -> None:
+        """Run ``archive_cold_sessions`` every ``interval_s`` (until ``aclose``). Replicas may
+        each run one: archiving a session locks its row, and archiving it twice is a no-op."""
+        self._start(
+            "archive", lambda: self._every(interval_s, "archiving", lambda: self.archive_cold_sessions(limit=limit))
+        )
 
     async def sweep_buffers(self, *, idle_ms: int = BUFFER_IDLE_MS) -> dict[str, int]:
         """Bound what this replica holds in memory for sessions nobody is writing to.
@@ -169,16 +185,7 @@ class MemoryService:
         """Process extraction jobs in the background, every ``interval_s`` (until ``aclose``).
 
         Replicas may each run one: a job is claimed before it runs."""
-        if self._extraction_worker is None or self._extraction_worker.done():
-            self._extraction_worker = asyncio.create_task(
-                self._extraction_loop(interval_s, limit), name="memory-extraction"
-            )
-
-    async def stop_extraction_worker(self) -> None:
-        task, self._extraction_worker = self._extraction_worker, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        self._start("extraction", lambda: self._extraction_loop(interval_s, limit))
 
     async def _extraction_loop(self, interval_s: float, limit: int) -> None:
         while True:
@@ -431,6 +438,12 @@ class MemoryService:
         if not self._ready:
             await self.startup()
         return await self._retention.archive_session(session_id)
+
+    async def archive_cold_sessions(self, *, limit: int = 100) -> int:
+        """Archive up to ``limit`` sessions untouched for ``hot_days`` (``RetentionService``)."""
+        if not self._ready:
+            await self.startup()
+        return await self._retention.archive_cold(limit=limit)
 
     async def metrics_snapshot(self) -> dict:
         return {**METRICS.snapshot(), **await self._extraction.backlog()}

@@ -51,7 +51,7 @@ async def test_the_sweeper_runs_in_the_background(url: str) -> None:
         await asyncio.sleep(0.01)
     assert "gone" not in svc._buffers
     await svc.aclose()
-    assert svc._buffer_sweeper is None
+    assert svc.background == ()
 
 
 def test_a_full_buffer_refuses_appends_until_flushed() -> None:

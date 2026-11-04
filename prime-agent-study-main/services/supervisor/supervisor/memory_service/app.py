@@ -491,7 +491,8 @@ def create_app(
     background (``MEMORY_EXTRACTION_INTERVAL_S``, default 5; 0 turns the worker off, and
     jobs then wait for ``POST /v1/memory/extraction:process``).
 
-    The same setting runs the idle-buffer sweep (``MemoryService.sweep_buffers``). An
+    The same setting runs the idle-buffer sweep (``MemoryService.sweep_buffers``) and the
+    hourly archiving of sessions idle for 30 days (``archive_cold_sessions``). An
     in-memory SQLite database has neither: its one shared connection cannot carry a
     background transaction beside a request's."""
     interval = (
@@ -511,6 +512,7 @@ def create_app(
             if interval > 0:
                 svc.start_extraction_worker(interval_s=interval)
                 svc.start_buffer_sweeper()
+                svc.start_archiver()
             app.state.memory = svc
             owned = True
         else:

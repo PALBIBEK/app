@@ -54,7 +54,7 @@ which knows scopes and their members; this service never imports it.
 ### Ops (Phase 5)
 | Concern | Behavior |
 |---|---|
-| Archive | `POST /v1/sessions/{id}/archive` → JSONL; `load` rehydrates |
+| Archive | Hourly, a session whose newest event is older than `hot_days` (30) moves to its archive row (unless leased, or with extraction or outbox work pending); `POST /v1/sessions/{id}/archive` does one now; `load` rehydrates |
 | Erase | Audited `forget` + `erase_subject` (tenant+subject) |
 | Metrics | `GET /v1/metrics` |
 | Cost | Embed cache (LRU, 20,000 vectors per process); skip barren `turn/end` extraction |
