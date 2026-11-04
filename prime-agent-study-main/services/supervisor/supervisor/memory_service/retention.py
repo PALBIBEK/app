@@ -1,7 +1,14 @@
-"""Tier 1 retention — archive to object store; never silent drop; still loadable."""
+"""Tier 1 retention — archive out of the hot table; never silent drop; still loadable.
+
+The archive is a compressed row in the memory database (``memory_session_archive``),
+so any replica loads it. It used to be a JSONL file under the archiving replica's
+``archive_dir`` (``ObjectArchive``), and the events left the database: no other
+replica could load the session. Files from then are still read when there is no row.
+"""
 
 from __future__ import annotations
 
+import gzip
 import json
 import time
 from pathlib import Path
@@ -10,31 +17,18 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.metrics import METRICS
-from supervisor.memory_service.models import MemorySessionRow, SessionEventRow
+from supervisor.memory_service.models import MemorySessionRow, SessionArchiveRow, SessionEventRow
 from supervisor.memory_service.types import SessionEvent, SessionNotFound
 
 
 class ObjectArchive:
-    """Filesystem object store for archived session event JSONL."""
+    """Archives written as JSONL files by builds before the archive table: read only."""
 
     def __init__(self, root: Path | str) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, session_id: str) -> Path:
         return self.root / f"{session_id}.jsonl"
-
-    def write_events(self, session_id: str, events: list[SessionEvent]) -> Path:
-        path = self.path_for(session_id)
-        with path.open("w", encoding="utf-8") as f:
-            for ev in events:
-                f.write(
-                    json.dumps(
-                        {"type": ev.type, "seq": ev.seq, "time": ev.time, "data": ev.data}
-                    )
-                    + "\n"
-                )
-        return path
 
     def read_events(self, session_id: str) -> list[SessionEvent]:
         path = self.path_for(session_id)
@@ -65,7 +59,7 @@ class RetentionService:
     def __init__(
         self,
         factory: async_sessionmaker[AsyncSession],
-        archive: ObjectArchive,
+        archive: ObjectArchive | None = None,
         *,
         hot_days: int = 30,
     ) -> None:
@@ -74,35 +68,58 @@ class RetentionService:
         self.hot_days = hot_days
 
     async def archive_session(self, session_id: str) -> dict[str, int | str]:
-        """Move events to object store; keep session header; status=archived. Never delete header."""
-        async with self._factory() as db:
-            row = await db.get(MemorySessionRow, session_id)
+        """Move the session's events out of the hot table into its archive row (in the same
+        database, so every replica can load it), in one transaction; keep its header,
+        status=archived. Archiving again folds in what was written since."""
+        async with self._factory() as db, db.begin():
+            row = await db.get(MemorySessionRow, session_id, with_for_update=True)
             if row is None:
                 raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
-            result = await db.execute(
-                select(SessionEventRow)
-                .where(SessionEventRow.session_id == session_id)
-                .order_by(SessionEventRow.seq)
-            )
-            rows = list(result.scalars().all())
-            events = [
-                SessionEvent(type=r.type, seq=r.seq, time=r.time, data=r.data) for r in rows
-            ]
-            self._archive.write_events(session_id, events)
-            await db.execute(
-                delete(SessionEventRow).where(SessionEventRow.session_id == session_id)
-            )
+            events = await self._archived(db, session_id) + await self._hot(db, session_id)
+            existing = await db.get(SessionArchiveRow, session_id)
+            if existing is None:
+                existing = SessionArchiveRow(session_id=session_id)
+                db.add(existing)
+            existing.events = _pack(events)
+            existing.count = len(events)
+            existing.through_seq = events[-1].seq if events else -1
+            existing.archived_at = int(time.time() * 1000)
+            await db.execute(delete(SessionEventRow).where(SessionEventRow.session_id == session_id))
             row.status = "archived"
             row.closed_at = row.closed_at or int(time.time() * 1000)
-            # Keep last_seq so we know length; events live in archive
-            await db.commit()
         METRICS.inc("archive_sessions")
-        return {
-            "session_id": session_id,
-            "archived_events": len(events),
-            "archive_path": str(self._archive.path_for(session_id)),
-        }
+        return {"session_id": session_id, "archived_events": len(events), "archive": "database"}
 
     async def load_archived_events(self, session_id: str) -> list[SessionEvent]:
-        return self._archive.read_events(session_id)
+        """The archive, then whatever was written to the session after it was archived."""
+        async with self._factory() as db:
+            return await self._archived(db, session_id) + await self._hot(db, session_id)
 
+    async def _archived(self, db: AsyncSession, session_id: str) -> list[SessionEvent]:
+        row = await db.get(SessionArchiveRow, session_id)
+        if row is not None:
+            return _unpack(row.events)
+        if self._archive is not None and self._archive.exists(session_id):
+            return self._archive.read_events(session_id)  # archived by a build before the table
+        return []
+
+    @staticmethod
+    async def _hot(db: AsyncSession, session_id: str) -> list[SessionEvent]:
+        rows = await db.scalars(
+            select(SessionEventRow).where(SessionEventRow.session_id == session_id).order_by(SessionEventRow.seq)
+        )
+        return [SessionEvent(type=r.type, seq=r.seq, time=r.time, data=r.data) for r in rows]
+
+
+def _pack(events: list[SessionEvent]) -> bytes:
+    lines = (json.dumps({"type": e.type, "seq": e.seq, "time": e.time, "data": e.data}) for e in events)
+    return gzip.compress("\n".join(lines).encode())
+
+
+def _unpack(blob: bytes) -> list[SessionEvent]:
+    out: list[SessionEvent] = []
+    for line in gzip.decompress(blob).decode().splitlines():
+        if line.strip():
+            raw = json.loads(line)
+            out.append(SessionEvent(type=raw["type"], seq=int(raw["seq"]), time=int(raw["time"]), data=raw.get("data")))
+    return out
