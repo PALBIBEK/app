@@ -3,14 +3,17 @@ that repeated a token, used to put it in the journal, its backups and every clie
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import select
 
-from supervisor.agent.events import MessageEnd, RunEnd, ToolEnd, ToolStart
+from supervisor.agent.events import HandLost, MessageEnd, RunEnd, ToolEnd, ToolStart
 from supervisor.db.models import EventRow
 from supervisor.journal import snapshots
+from supervisor.journal.partials import PartialOutputs, PartialSink
 from supervisor.journal.reader import JournalReader
-from supervisor.journal.secrets import mask, mask_event, mask_text
+from supervisor.journal.secrets import mask, mask_bytes, mask_event, mask_text
 from supervisor.journal.writer import JournalWriter
 from tests.support.journal_db import Factory
 
@@ -88,3 +91,42 @@ async def test_the_journal_keeps_no_credential(factory: Factory) -> None:
         {"role": "user", "content": "use [redacted:github_token]"},
         {"role": "user", "content": "next"},
     ]
+
+
+def test_a_key_used_as_a_field_name_is_masked() -> None:
+    assert mask({OPENROUTER: "x", "plain": "y"}) == {"[redacted:openrouter_key]": "x", "plain": "y"}
+
+
+def test_logs_are_masked_and_other_bytes_kept() -> None:
+    logs = b"\xff\xfe binary\nOPENROUTER_API_KEY=" + OPENROUTER.encode() + b"\nexit 137\n"
+    masked = mask_bytes(logs)
+    assert OPENROUTER.encode() not in masked
+    assert masked.startswith(b"\xff\xfe binary\n") and masked.endswith(b"\nexit 137\n")
+    assert mask_bytes(b"\x00\x01 nothing here") == b"\x00\x01 nothing here"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_streamed_a_few_characters_at_a_time_never_shows_a_key(factory: Factory) -> None:
+    store = PartialOutputs(factory)
+    writer = JournalWriter(factory)
+    await writer.ensure_session("s1")
+    sink = PartialSink(store, "s1", "r1", 0)
+    reply = f"Here is the key you asked for: {OPENROUTER} and that is all."
+    shown: list[str] = []
+    for i in range(0, len(reply), 3):
+        sink.on_delta("text", reply[i : i + 3])
+        await sink._flush()
+        partial = await store.get("s1")
+        shown.append(partial.text if partial else "")
+    assert all(not any(OPENROUTER[:n] in s for n in range(12, len(OPENROUTER) + 1)) for s in shown), "never even part of it"
+    assert "[redacted:openrouter_key]" in shown[-1] and shown[-1].startswith("Here is the key")
+
+
+@pytest.mark.asyncio
+async def test_saved_logs_are_masked_when_read_even_if_stored_before(factory: Factory, tmp_path: Path) -> None:
+    writer, reader = JournalWriter(factory, blob_dir=tmp_path), JournalReader(factory, blob_dir=tmp_path)
+    await writer.ensure_session("s1")
+    ref = await writer.put_blob(f"TOKEN={GITHUB}\n".encode())  # as an older build saved them
+    assert ref is not None
+    await writer.append("s1", HandLost(hand_id="h", provider="docker", reason="gone", logs_ref=ref), turn_id=None, trace_id=None)
+    assert await reader.hand_logs("s1", ref) == b"TOKEN=[redacted:github_token]\n"

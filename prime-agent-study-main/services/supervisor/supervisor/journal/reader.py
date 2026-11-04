@@ -22,6 +22,7 @@ from supervisor.agent.events import (
 from supervisor.db.models import EventRow, SessionRow
 from supervisor.journal import snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs
+from supervisor.journal.secrets import mask_bytes
 from supervisor.journal.serde import decode_event
 from supervisor.journal.snapshots import MAX_CHAIN, Snapshot
 
@@ -65,7 +66,7 @@ class JournalReader:
         if not any(getattr(e.payload, "logs_ref", None) == ref for e in await self._envelopes(rows)):
             return None
         try:
-            return await self.read_blob(ref)
+            return mask_bytes(await self.read_blob(ref))  # those saved before logs were masked too
         except FileNotFoundError:
             return None
 
