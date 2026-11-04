@@ -24,6 +24,7 @@ from supervisor.agent.events import (
     MemoryRecall,
     ProjectContext,
     RunEnd,
+    SessionNotes,
     UnknownEvent,
 )
 from supervisor.api.schemas import WIRE_VERSION, WireEvent
@@ -37,6 +38,7 @@ _INTERNAL: Final[dict[type, frozenset[str]]] = {
     MemoryInjected: frozenset({"text", "shown"}),
     MemoryRecall: frozenset({"text"}),
     ProjectContext: frozenset({"text"}),
+    SessionNotes: frozenset({"notes"}),
     MemoryContext: frozenset({"audience"}),
 }
 """Fields of an event clients are not sent."""

@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from supervisor.api import deps
 from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow
+from supervisor.session.notes import composition_notes
 from supervisor.traces.issues import list_issues, review_queue
 from supervisor.traces.judges import (
     PREVIEW_RUNS,
@@ -507,7 +508,7 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
                                     composition_id=body.composition_id, since_ms=body.since_ms, limit=1,
                                     exclude_sessions=body.exclude_sessions, key=body.focus_issue)
         issues = [*focused, *(i for i in issues if i["key"] != body.focus_issue)][:8]
-    if not issues and not (body.notes or "").strip():
+    if not issues and not (body.notes or "").strip():  # session notes alone are not evidence
         raise HTTPException(status_code=409, detail={"error_code": "NO_EVIDENCE",
                                                      "message": "no failing runs to learn from yet"})
     client = await _composition_client(request, tenant_id, body.composition_id)
@@ -517,8 +518,10 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
     sections = [{"id": s.id, "text": s.text} for s in body.sections]
     learned = [{"id": n.id, "text": n.text} for n in body.learned]
     read, trajectories = await _trajectories(request, issues)
+    shared = await composition_notes(factory, deps.get_reader(request), tenant_id=tenant_id, principal_id=principal,
+                                     composition_id=body.composition_id, exclude_sessions=body.exclude_sessions)
     messages = reflect_messages(body.persona, sections, issues, body.notes,
-                                [h.model_dump() for h in body.history], learned, trajectories)
+                                [h.model_dump() for h in body.history], learned, trajectories, shared)
     model = (body.model or os.environ.get(REFLECT_MODEL_ENV, "")).strip() or None
 
     def ask() -> str:
@@ -539,7 +542,8 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
                       for e in i["examples"][:3]]}
         for i in issues
     ]
-    return {"proposal": proposal.out(), "evidence": evidence, "model": model, "read_in_full": read}
+    return {"proposal": proposal.out(), "evidence": evidence, "model": model, "read_in_full": read,
+            "session_notes": shared}
 
 
 async def _trajectories(

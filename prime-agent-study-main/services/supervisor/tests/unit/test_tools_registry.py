@@ -15,7 +15,7 @@ from supervisor.tools import (
     default_registry,
 )
 
-BUILTINS = {"bash", "echo", "edit", "git_commit", "grep", "ls", "read", "remember", "write"}
+BUILTINS = {"bash", "echo", "edit", "git_commit", "grep", "ls", "note_for_session", "read", "remember", "write"}
 
 
 class GreetArgs(ToolArgs):

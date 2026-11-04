@@ -57,6 +57,7 @@ __all__ = [
     "history_text",
     "parse_proposal",
     "reflect_messages",
+    "shared_notes_text",
     "trajectories_text",
     "trajectory_record",
 ]
@@ -204,6 +205,13 @@ def trajectories_text(records: list[dict[str, str]]) -> str:
     return "\n\n".join(blocks) if blocks else "None read."
 
 
+def shared_notes_text(notes: list[dict[str, object]]) -> str:
+    if not notes:
+        return "None."
+    return "\n".join(f"- {n['note']} (noted in {n['sessions']} session{'s' if n['sessions'] != 1 else ''})"
+                     for n in notes)
+
+
 def reflect_messages(
     persona: str,
     sections: list[dict[str, str]],
@@ -212,6 +220,7 @@ def reflect_messages(
     history: list[dict[str, Any]] | None = None,
     learned: list[dict[str, str]] | None = None,
     trajectories: list[dict[str, str]] | None = None,
+    shared: list[dict[str, object]] | None = None,
 ) -> list[ChatMessage]:
     prompt = json.dumps({"persona": persona, "sections": sections}, ensure_ascii=False, indent=1)
     kept = json.dumps(learned or [], ensure_ascii=False, indent=1)
@@ -219,6 +228,9 @@ def reflect_messages(
         f"The person's prompt (read only):\n{prompt}\n\nThe notes it has learnt (yours to edit):\n{kept}\n\n"
         f"How its runs went wrong:\n{evidence_text(issues)}\n\n"
         f"Some of those runs in full, step by step:\n{trajectories_text(trajectories or [])}\n\n"
+        "What the agent noted for itself in its own sessions (unverified: a lesson for one "
+        f"session may be wrong for others; keep one only where the evidence supports it):\n"
+        f"{shared_notes_text(shared or [])}\n\n"
         f"Changes proposed before, and what became of them:\n{history_text(history or [])}\n"
     )
     if notes and notes.strip():

@@ -41,6 +41,7 @@ from supervisor.agent.events import (
     ProjectContext,
     RunEnd,
     RunStart,
+    SessionNotes,
     SubagentEnd,
     SubagentNotice,
     SubagentStart,
@@ -93,6 +94,7 @@ from supervisor.session.children import (
     last_outcome,
     status_of,
 )
+from supervisor.session.notes import session_notes
 from supervisor.session.project_context import read_project_context
 from supervisor.session.tool_outbox import idempotency_key
 from supervisor.temporal.context_memory import PinnedContextMemory
@@ -352,6 +354,12 @@ SKIPPED_FOR_STEERING = (
 """pi's "Skipped due to queued user message": the rest of a round gives way to the user."""
 
 
+def _notes(run: list[Any]) -> list[str]:
+    """The session notes this run read as it began (none: empty)."""
+    found = [env.payload for env in run if isinstance(env.payload, SessionNotes)]
+    return list(found[-1].notes) if found else []
+
+
 def _project(run: list[Any]) -> list[tuple[str, str]]:
     """The project instructions this run read as it began (none: empty)."""
     found = [env.payload for env in run if isinstance(env.payload, ProjectContext)]
@@ -488,6 +496,10 @@ class GithiSteps:
             await self._record(
                 session_id, run_id, "project", ProjectContext(project.path, project.text, project.digest)
             )
+        # What the agent noted earlier in the session, read once here: every step of the run
+        # sees the same notes (a note made in this run applies from the next one).
+        if notes := await session_notes(self._reader, session_id):
+            await self._record(session_id, run_id, "notes", SessionNotes(notes))
         # Between turns: compact what this run carries over, per the pinned memory profile.
         compaction = await heartbeating(
             self._pinned.compact(
@@ -648,7 +660,7 @@ class GithiSteps:
                 and await self._pinned.over_limit(sid, history, run)
             ):
                 return StepResult(calls=[], final=False, kind=COMPACT)
-            chat = loop.messages_for_model(history, schemas, project=_project(run))
+            chat = loop.messages_for_model(history, schemas, project=_project(run), notes=_notes(run))
             files = self._manager.files
             row = await self._manager._get_session_row(sid)
             # A subagent works in its root's sandbox: its root's attachments and outputs.
