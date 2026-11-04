@@ -157,7 +157,7 @@ class NotebookMemory:
         return await self._store.clear(notebook_id, author=author)
 
     async def history(self, notebook_id: str) -> list[Revision]:
-        return await self._store.revisions(notebook_id, limit=100_000)
+        return await self._store.history(notebook_id)
 
     async def facts_at(self, notebook_id: str, revision: int) -> list[Fact]:
         return await self._store.facts_at(notebook_id, revision)

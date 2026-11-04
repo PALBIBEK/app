@@ -43,6 +43,7 @@ from supervisor.memory_service.notebooks.errors import (
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
+    RevisionOutOfRange,
 )
 from supervisor.memory_service.notebooks.types import Edit, Fact, Notebook
 from supervisor.seams.services import Principal
@@ -73,6 +74,8 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RevisionOutOfRange as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except MemoryDisclosureDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (MemoryUnavailable, MemoryRefused, MemoryServiceNotConfigured) as exc:
