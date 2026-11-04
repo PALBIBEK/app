@@ -24,6 +24,7 @@ import httpx
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     MemoryFactsMissing,
+    MemoryLimitExceeded,
     NotebookError,
     NotebookExists,
     NotebookNotFound,
@@ -286,6 +287,10 @@ def _error(response: httpx.Response) -> NotebookError:
         return MemoryFactsMissing(tuple(str(i) for i in detail.get("ids") or ()))
     if code == "RevisionConflict":
         return RevisionConflict(int(detail.get("expected", -1)), int(detail.get("actual", -1)))
+    if code == "MemoryLimitExceeded":
+        return MemoryLimitExceeded(
+            str(detail.get("what", "")), int(detail.get("limit", -1)), int(detail.get("got", -1))
+        )
     if code == "RevisionOutOfRange":
         return RevisionOutOfRange(int(detail.get("revision", -1)), int(detail.get("current", -1)))
     if response.status_code in (401, 403):

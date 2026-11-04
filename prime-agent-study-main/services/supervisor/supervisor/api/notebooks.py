@@ -40,6 +40,7 @@ from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
+    MemoryLimitExceeded,
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
@@ -74,7 +75,7 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RevisionOutOfRange as exc:
+    except (RevisionOutOfRange, MemoryLimitExceeded) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except MemoryDisclosureDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

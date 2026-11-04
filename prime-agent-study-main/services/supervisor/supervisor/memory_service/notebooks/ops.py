@@ -13,7 +13,16 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import replace
 
-from supervisor.memory_service.notebooks.errors import MemoryFactsMissing, RevisionOutOfRange
+from supervisor.memory_service.limits import (
+    MAX_FACT_CHARS,
+    MAX_FACTS_PER_CAPTURE,
+    MAX_FACTS_PER_NOTEBOOK,
+)
+from supervisor.memory_service.notebooks.errors import (
+    MemoryFactsMissing,
+    MemoryLimitExceeded,
+    RevisionOutOfRange,
+)
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
     edited_text,
@@ -83,6 +92,8 @@ class NotebookOps:
         lines = clean_captured(facts)
         if not lines:
             return 0
+        _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(lines))
+        _within_length(lines)
         notebook = await self.store.get(notebook_id)
         provenance = capture_provenance(notebook.home, context)
 
@@ -99,6 +110,7 @@ class NotebookOps:
                         await tx.update(duplicate.id, duplicate.text, merged)
                         existing[key] = replace(duplicate, provenance=merged)
                     continue
+                _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
                 fact_id = await tx.insert(text, provenance)
                 existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, author)
                 added += 1
@@ -114,6 +126,8 @@ class NotebookOps:
         author: str | None = None,
         context: CaptureMetadata | None = None,
     ) -> None:
+        _within("edits in one call", MAX_FACTS_PER_CAPTURE, len(edits))
+        _within_length([e.text for e in edits])
         notebook = await self.store.get(notebook_id)
         # Editing from a conversation exposes the fact to that conversation's sources.
         exposure = capture_provenance(notebook.home, context) if context else None
@@ -175,6 +189,16 @@ class NotebookOps:
                     await tx.update(fact_id, fact.text, floor)
 
         await self.store.transact(notebook_id, run, author=author)
+
+
+def _within(what: str, limit: int, got: int) -> None:
+    if got > limit:
+        raise MemoryLimitExceeded(what, limit, got)
+
+
+def _within_length(texts: Sequence[str]) -> None:
+    longest = max((len(t) for t in texts), default=0)
+    _within("characters in a fact", MAX_FACT_CHARS, longest)
 
 
 def _in_range(revision: int, current: int) -> None:
