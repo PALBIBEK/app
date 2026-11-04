@@ -30,6 +30,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.memory.client import (
     MemoryRefused,
+    MemoryRequestInvalid,
     MemoryServiceNotConfigured,
     MemoryUnavailable,
     UnavailableNotebooks,
@@ -75,7 +76,7 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RevisionOutOfRange, MemoryLimitExceeded) as exc:
+    except (RevisionOutOfRange, MemoryLimitExceeded, MemoryRequestInvalid) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except MemoryDisclosureDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

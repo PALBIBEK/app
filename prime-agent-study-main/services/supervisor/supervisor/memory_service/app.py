@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -41,6 +43,7 @@ from supervisor.memory_service.types import (
     StaleFence,
 )
 
+logger = logging.getLogger(__name__)
 
 class ScopeIn(BaseModel):
     tenant: str
@@ -191,7 +194,12 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail={"code": "SCOPE_REQUIRED", "message": str(exc)})
     if isinstance(exc, TenantMismatch):
         return HTTPException(status_code=403, detail={"code": exc.code, "message": str(exc)})
-    return HTTPException(status_code=500, detail={"code": "INTERNAL", "message": str(exc)})
+    # Unexpected: the details (SQL, values) go to the log, never to the caller.
+    ref = uuid.uuid4().hex[:12]
+    logger.error("memory service internal error ref=%s", ref, exc_info=exc)
+    return HTTPException(
+        status_code=500, detail={"code": "INTERNAL", "message": f"internal error (ref {ref})"}
+    )
 
 
 router = APIRouter()
