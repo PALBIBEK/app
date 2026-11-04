@@ -298,3 +298,40 @@ async def test_judges_belong_to_the_users_published_agent(db_session, owner, age
     stranger = await make_user(email="stranger5@example.com", name="S")
     async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
         assert (await api.get(base)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_judge_is_checked_against_people_and_a_rubric_is_tried_first(
+    db_session, owner, agent, settings, monkeypatch, make_user
+):
+    link = await _link(db_session, owner, agent, "ai-1", V2)
+    asked: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/judges/agreement":
+            assert request.url.params["composition_id"] == "h-reviewer"
+            return httpx.Response(200, json={"judges": [{"name": "answers", "runs": 4, "agreement": 0.5, "kappa": 0.0,
+                                                         "passed_but_marked_bad": 2, "failed_but_marked_good": 0}]})
+        if request.url.path == "/v1/traces/judges/preview":
+            asked.append(json.loads(request.content))
+            return httpx.Response(200, json={"runs": [
+                {"session_id": "ai-1", "run_id": "r1", "input": "fix it", "verdict": "fail", "reason": "no why",
+                 "people": "bad"},
+                {"session_id": "ai-someone-elses", "run_id": "r9", "input": "x", "verdict": "pass", "reason": "ok",
+                 "people": None},
+            ]})
+        return httpx.Response(404)
+
+    base = f"/api/v1/traces/agents/{agent.id}/judges"
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        (judge,) = (await api.get(f"{base}/agreement")).json()["judges"]
+        assert (judge["agreement"], judge["kappa"], judge["passed_but_marked_bad"]) == (0.5, 0.0, 2)
+        tried = await api.post(f"{base}/preview", json={"rubric": "Says what it changed and why.", "runs": 3})
+        assert tried.status_code == 200, tried.text
+        assert [(r["session_id"], r["verdict"], r["people"]) for r in tried.json()["runs"]] == [(link.id, "fail", "bad")]
+        assert asked == [{"rubric": "Says what it changed and why.", "model": None, "runs": 3, "composition_id": "h-reviewer"}]
+
+    stranger = await make_user(email="stranger6@example.com", name="S")
+    async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
+        assert (await api.get(f"{base}/agreement")).status_code == 404
+        assert (await api.post(f"{base}/preview", json={"rubric": "Says what it changed."})).status_code == 404

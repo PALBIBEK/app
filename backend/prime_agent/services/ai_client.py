@@ -1105,6 +1105,21 @@ class AiClient:
         payload = await self._json_request("PUT", "/v1/traces/judges", identity, json_body=body, expected=(200,))
         return payload if isinstance(payload, dict) else {}
 
+    async def judge_agreement(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
+        """GET /v1/traces/judges/agreement: each judge against people's good/bad on the same runs."""
+        payload = await self._json_request(
+            "GET", "/v1/traces/judges/agreement", identity, expected=(200,), params={"composition_id": composition_id}
+        )
+        return payload if isinstance(payload, dict) else {"judges": []}
+
+    async def judge_preview(self, identity: TenantPrincipal, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/traces/judges/preview: a rubric tried on recent runs, keeping nothing."""
+        payload = await self._json_request(
+            "POST", "/v1/traces/judges/preview", identity, json_body=body, expected=(200,),
+            timeout=LONG_CALL_TIMEOUT_S,  # one model call per run tried
+        )
+        return payload if isinstance(payload, dict) else {"runs": []}
+
     async def delete_judge(self, identity: TenantPrincipal, judge_id: str) -> None:
         await self._json_request(
             "DELETE", f"/v1/traces/judges/{quote(judge_id, safe='')}", identity, expected=(204,), allow_empty=True

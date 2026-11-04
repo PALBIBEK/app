@@ -183,3 +183,41 @@ class JudgeRequest(BaseModel):
 class JudgesResponse(BaseModel):
     agent_id: str
     judges: list[Judge]
+
+
+class JudgeAgreement(BaseModel):
+    """How a judge's verdicts agree with people's good/bad on the same runs."""
+
+    name: str
+    runs: int
+    agreement: float | None = None
+    kappa: float | None = None
+    """Cohen's kappa: agreement beyond chance (1 perfect, 0 chance); None when undefined."""
+    passed_but_marked_bad: int
+    failed_but_marked_good: int
+
+
+class JudgeAgreementResponse(BaseModel):
+    agent_id: str
+    judges: list[JudgeAgreement]
+
+
+class JudgePreviewRequest(BaseModel):
+    rubric: str = Field(min_length=10, max_length=4000)
+    model: str | None = Field(default=None, max_length=255)
+    runs: int = Field(default=5, ge=1, le=5)
+
+
+class JudgePreviewRun(BaseModel):
+    session_id: str
+    """The product's session id."""
+    run_id: str
+    input: str | None = None
+    verdict: str
+    reason: str
+    people: str | None = None
+    """What people said of the run: ``good``, ``bad``, or nothing."""
+
+
+class JudgePreviewResponse(BaseModel):
+    runs: list[JudgePreviewRun]

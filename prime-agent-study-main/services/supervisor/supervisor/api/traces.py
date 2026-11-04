@@ -20,7 +20,14 @@ from sqlalchemy import select
 from supervisor.api import deps
 from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow
 from supervisor.traces.issues import list_issues
-from supervisor.traces.judges import delete_judge, list_judges, save_judge
+from supervisor.traces.judges import (
+    PREVIEW_RUNS,
+    agreement,
+    delete_judge,
+    list_judges,
+    preview,
+    save_judge,
+)
 from supervisor.traces.model import RunStatus
 from supervisor.traces.reflect import (
     REFLECT_MODEL_ENV,
@@ -372,6 +379,85 @@ class ReflectIn(BaseModel):
     """The changes proposed before, oldest first: so a refused one is not proposed again."""
 
 
+async def _composition_client(request: Request, tenant_id: str, composition_id: str) -> Any:
+    """A model client through the composition's newest session (its key and budget), or None."""
+    async with deps.get_session_factory(request)() as db:
+        newest = (
+            await db.execute(
+                select(SessionRow)
+                .join(RunTraceRow, RunTraceRow.session_id == SessionRow.id)
+                .where(RunTraceRow.tenant_id == tenant_id, RunTraceRow.composition_id == composition_id)
+                .order_by(RunTraceRow.started_ms.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if newest is None:
+        return None
+    try:
+        return deps.get_manager(request).session_model_client(newest.id, newest)
+    except Exception:  # noqa: BLE001 — a session that cannot bind a client is the same as none
+        return None
+
+
+@router.get("/v1/traces/judges/agreement")
+async def judges_agreement(
+    request: Request,
+    composition_id: str = Query(min_length=1, max_length=255),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """How each judge's verdicts agree with people's good/bad on the same runs."""
+    found = await agreement(deps.get_session_factory(request), tenant_id=tenant_id,
+                            principal_id=deps.request_principal_id(request, tenant_id), composition_id=composition_id)
+    return {"judges": found}
+
+
+class PreviewIn(BaseModel):
+    composition_id: str = Field(min_length=1, max_length=255)
+    rubric: str = Field(min_length=10, max_length=4000)
+    model: str | None = Field(default=None, max_length=255)
+    runs: int = Field(default=PREVIEW_RUNS, ge=1, le=PREVIEW_RUNS)
+
+
+@router.post("/v1/traces/judges/preview")
+async def judges_preview(body: PreviewIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
+    """A rubric tried on the latest finished runs, keeping nothing: each verdict beside what
+    people said of the run, if they did. Replays are left out."""
+    factory, reader = deps.get_session_factory(request), deps.get_reader(request)
+    principal = deps.request_principal_id(request, tenant_id)
+    items, _ = await list_runs(
+        factory, reader, tenant_id=tenant_id, principal_id=principal,
+        filters=TraceFilter(statuses=(), session_id=None, composition_id=body.composition_id,
+                            composition_digest=None, with_errors=False, with_denials=False, failing_checks=False,
+                            feedback=None, text=None, since_ms=None, before_ms=None),
+        limit=50,
+    )
+    async with factory() as db:
+        replays = set((await db.execute(select(SessionEvaluationRow.session_id))).scalars())
+        traces = []
+        for item in items:
+            if item["session_id"] in replays:
+                continue
+            row = await db.get(SessionRow, item["session_id"])
+            trace = await load_run(factory, reader, row, item["run_id"]) if row is not None else None
+            if trace is not None and trace.rollup.status.finished:
+                traces.append(trace)
+            if len(traces) == body.runs:
+                break
+    if not traces:
+        raise HTTPException(status_code=409, detail={"error_code": "NO_RUNS", "message": "no finished runs to try it on"})
+    client = await _composition_client(request, tenant_id, body.composition_id)
+    if client is None:
+        raise HTTPException(status_code=409, detail={"error_code": "NO_MODEL",
+                                                     "message": "the agent has no session to ask a model through yet"})
+    tried = await preview(body.rubric, traces, client, (body.model or "").strip() or None)
+    out = []
+    for t, v in tried:
+        people = [s["label"] for s in await run_scores(factory, t.session_id, t.run_id) if s["source"] == "person"]
+        out.append({"session_id": t.session_id, "run_id": t.run_id, "input": t.rollup.input, "verdict": v.label,
+                    "reason": v.reason, "people": people[-1] if people else None})
+    return {"runs": out}
+
+
 @router.post("/v1/traces/reflect")
 async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
     """Read how the composition's runs went wrong, and what became of earlier changes, and
@@ -389,22 +475,7 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
     if not issues and not (body.notes or "").strip():
         raise HTTPException(status_code=409, detail={"error_code": "NO_EVIDENCE",
                                                      "message": "no failing runs to learn from yet"})
-    async with factory() as db:
-        newest = (
-            await db.execute(
-                select(SessionRow)
-                .join(RunTraceRow, RunTraceRow.session_id == SessionRow.id)
-                .where(RunTraceRow.tenant_id == tenant_id, RunTraceRow.composition_id == body.composition_id)
-                .order_by(RunTraceRow.started_ms.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-    client = None
-    if newest is not None:
-        try:
-            client = deps.get_manager(request).session_model_client(newest.id, newest)
-        except Exception:  # noqa: BLE001 — a session that cannot bind a client is the same as none
-            client = None
+    client = await _composition_client(request, tenant_id, body.composition_id)
     if client is None:
         raise HTTPException(status_code=409, detail={"error_code": "NO_MODEL",
                                                      "message": "the agent has no session to ask a model through yet"})

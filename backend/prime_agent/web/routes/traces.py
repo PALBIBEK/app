@@ -16,6 +16,9 @@ from prime_agent.schemas.trace import (
     FeedbackRequest,
     IssuesResponse,
     Judge,
+    JudgeAgreementResponse,
+    JudgePreviewRequest,
+    JudgePreviewResponse,
     JudgeRequest,
     JudgesResponse,
     RunTraceResponse,
@@ -225,6 +228,31 @@ async def save_judge(agent_id: str, body: JudgeRequest, db: DbSession, current_u
             agent_id=agent_id,
             body=body,
             db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.get("/agents/{agent_id}/judges/agreement", response_model=JudgeAgreementResponse)
+async def judge_agreement(agent_id: str, db: DbSession, current_user: CurrentUser) -> JudgeAgreementResponse:
+    """How each judge's verdicts agree with people's good/bad on the same runs."""
+    try:
+        return await _service().judge_agreement(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, agent_id=agent_id, db=db
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.post("/agents/{agent_id}/judges/preview", response_model=JudgePreviewResponse)
+async def judge_preview(
+    agent_id: str, body: JudgePreviewRequest, db: DbSession, current_user: CurrentUser
+) -> JudgePreviewResponse:
+    """Try a rubric on the agent's latest finished runs before saving it; nothing is kept."""
+    try:
+        return await _service().judge_preview(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, agent_id=agent_id,
+            body=body, db=db,
         )
     except TraceNotFoundError as exc:
         raise _not_found() from exc

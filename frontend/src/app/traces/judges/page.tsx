@@ -4,16 +4,19 @@
  * Judges: rubrics a model applies to an agent's finished runs. A person writes what a good
  * run looks like; after each run, on the share of runs chosen, the judge passes or fails it
  * with a reason. Changing a rubric makes a new version, so earlier verdicts keep their meaning.
+ * Each judge shows how often it agrees with people, and a rubric can be tried on recent runs
+ * before it is saved.
  */
 
 import { useEffect, useState } from 'react';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { AgreementLine, PreviewResults } from '@/components/traces/JudgeCalibration';
 import { TracesNav } from '@/components/traces/TracesNav';
 import { Button, Card, EmptyState, ErrorNote, PageHeader, Select, SkeletonRows } from '@/components/ui';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
-import { useDeleteJudge, useJudges, useSaveJudge } from '@/lib/api/hooks/useTraces';
-import type { Judge } from '@/lib/api/types/trace.types';
+import { useDeleteJudge, useJudgeAgreement, useJudges, usePreviewJudge, useSaveJudge } from '@/lib/api/hooks/useTraces';
+import type { Judge, JudgeAgreement } from '@/lib/api/types/trace.types';
 import { formatStamp } from '@/lib/utils';
 
 const EXAMPLE = 'Answers the question that was asked. Changes only the files it needed to, and says which.';
@@ -24,6 +27,7 @@ function JudgeForm({ agentId, editing, onDone }: { agentId: string; editing: Jud
   const [share, setShare] = useState(String(Math.round((editing?.sample_rate ?? 1) * 100)));
   const [model, setModel] = useState(editing?.model ?? '');
   const save = useSaveJudge(agentId);
+  const tryIt = usePreviewJudge(agentId);
   const pct = Number(share);
   const valid = name.trim().length > 0 && rubric.trim().length >= 10 && pct >= 0 && pct <= 100;
   return (
@@ -63,7 +67,7 @@ function JudgeForm({ agentId, editing, onDone }: { agentId: string; editing: Jud
           />
         </label>
         <label className="flex min-w-0 flex-[1_1_220px] flex-col gap-1 text-sm">
-          <span className="text-ink-2">Model (blank: the agent&rsquo;s own)</span>
+          <span className="text-ink-2">Model (blank: the default judge model)</span>
           <input
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -83,7 +87,25 @@ function JudgeForm({ agentId, editing, onDone }: { agentId: string; editing: Jud
           className="rounded-lg border border-line-strong bg-surface px-3 py-2 text-[14px]"
         />
       </label>
-      <div className="flex items-center gap-2">
+      <p className="text-xs text-ink-3">
+        A model other than the agent&rsquo;s grades more fairly: a model tends to favour answers like its own.
+      </p>
+      {tryIt.data ? (
+        tryIt.data.runs.length ? (
+          <PreviewResults runs={tryIt.data.runs} />
+        ) : (
+          <p className="text-sm text-ink-3">No recent runs you can open to try it on.</p>
+        )
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          disabled={rubric.trim().length < 10 || tryIt.isPending}
+          onClick={() => tryIt.mutate({ rubric: rubric.trim(), model: model.trim() || null })}
+          data-testid="try-rubric"
+        >
+          {tryIt.isPending ? 'Trying…' : 'Try on recent runs'}
+        </Button>
         <Button type="submit" variant="primary" disabled={!valid || save.isPending}>
           {editing ? 'Save as a new version' : 'Add judge'}
         </Button>
@@ -96,7 +118,17 @@ function JudgeForm({ agentId, editing, onDone }: { agentId: string; editing: Jud
   );
 }
 
-function JudgeRow({ agentId, judge, onEdit }: { agentId: string; judge: Judge; onEdit: () => void }): JSX.Element {
+function JudgeRow({
+  agentId,
+  judge,
+  agreement,
+  onEdit,
+}: {
+  agentId: string;
+  judge: Judge;
+  agreement: JudgeAgreement | undefined;
+  onEdit: () => void;
+}): JSX.Element {
   const save = useSaveJudge(agentId);
   const remove = useDeleteJudge(agentId);
   return (
@@ -105,7 +137,7 @@ function JudgeRow({ agentId, judge, onEdit }: { agentId: string; judge: Judge; o
         <span className="font-semibold">{judge.name}</span>
         <span className="rounded-md bg-violet-50 px-1.5 py-px font-mono text-xs text-violet-800">v{judge.version}</span>
         <span className="text-xs text-ink-3">
-          {Math.round(judge.sample_rate * 100)}% of runs · {judge.model ?? "the agent's model"} · changed {formatStamp(judge.updated_ms)}
+          {Math.round(judge.sample_rate * 100)}% of runs · {judge.model ?? 'the default judge model'} · changed {formatStamp(judge.updated_ms)}
         </span>
         <span className="flex-1" />
         <Button
@@ -126,6 +158,7 @@ function JudgeRow({ agentId, judge, onEdit }: { agentId: string; judge: Judge; o
         </Button>
       </div>
       <p className="whitespace-pre-wrap text-[13.5px] text-ink-2">{judge.rubric}</p>
+      <AgreementLine agreement={agreement} />
     </li>
   );
 }
@@ -138,6 +171,7 @@ export default function JudgesPage(): JSX.Element {
     if (!agent && published.length) setAgent(published[0].id);
   }, [agent, published]);
   const { data, isLoading, error, refetch } = useJudges(agent || undefined);
+  const { data: agreed } = useJudgeAgreement(agent || undefined);
   const [editing, setEditing] = useState<Judge | 'new' | null>(null);
   useEffect(() => setEditing(null), [agent]);
 
@@ -175,7 +209,13 @@ export default function JudgesPage(): JSX.Element {
                       <JudgeForm agentId={agent} editing={j} onDone={() => setEditing(null)} />
                     </li>
                   ) : (
-                    <JudgeRow key={j.id} agentId={agent} judge={j} onEdit={() => setEditing(j)} />
+                    <JudgeRow
+                      key={j.id}
+                      agentId={agent}
+                      judge={j}
+                      agreement={agreed?.judges.find((a) => a.name === j.name)}
+                      onEdit={() => setEditing(j)}
+                    />
                   ),
                 )}
                 <li className="px-5 py-4">

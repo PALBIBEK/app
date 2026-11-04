@@ -8,7 +8,9 @@ import type {
   AgentQuality,
   Issue,
   Judge,
+  JudgeAgreement,
   JudgeInput,
+  JudgePreviewRun,
   RawEvent,
   RunTrace,
   SessionTraces,
@@ -78,6 +80,14 @@ export const tracesAPI = {
 
   saveJudge: (agentId: string, body: JudgeInput): Promise<Judge> =>
     apiClient.put<Judge>(`/traces/agents/${seg(agentId)}/judges`, body),
+
+  /** Each judge against people's good/bad on the same runs. */
+  judgeAgreement: (agentId: string): Promise<{ agent_id: string; judges: JudgeAgreement[] }> =>
+    apiClient.get<{ agent_id: string; judges: JudgeAgreement[] }>(`/traces/agents/${seg(agentId)}/judges/agreement`),
+
+  /** A rubric tried on the agent's latest finished runs; nothing is kept. */
+  previewJudge: (agentId: string, body: { rubric: string; model?: string | null; runs?: number }): Promise<{ runs: JudgePreviewRun[] }> =>
+    apiClient.post<{ runs: JudgePreviewRun[] }>(`/traces/agents/${seg(agentId)}/judges/preview`, body),
 
   deleteJudge: (agentId: string, judgeId: string): Promise<void> =>
     apiClient.delete<void>(`/traces/agents/${seg(agentId)}/judges/${seg(judgeId)}`),

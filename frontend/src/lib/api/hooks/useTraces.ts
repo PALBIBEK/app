@@ -25,6 +25,7 @@ export const traceKeys = {
   agentVersions: (agentId: string) => [...traceKeys.all, 'agent-versions', agentId] as const,
   issues: (agentId: string) => [...traceKeys.all, 'issues', agentId] as const,
   judges: (agentId: string) => [...traceKeys.all, 'judges', agentId] as const,
+  agreement: (agentId: string) => [...traceKeys.all, 'judges', agentId, 'agreement'] as const,
 };
 
 /** The user's runs, newest first, a page at a time. */
@@ -140,6 +141,23 @@ export function useJudges(agentId: string | undefined) {
     queryKey: traceKeys.judges(agentId ?? ''),
     queryFn: () => tracesAPI.judges(agentId!),
     enabled: isAuthenticated && !!agentId,
+  });
+}
+
+export function useJudgeAgreement(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: traceKeys.agreement(agentId ?? ''),
+    queryFn: () => tracesAPI.judgeAgreement(agentId!),
+    enabled: isAuthenticated && !!agentId,
+    staleTime: 30_000,
+  });
+}
+
+export function usePreviewJudge(agentId: string) {
+  return useMutation({
+    mutationFn: (body: { rubric: string; model?: string | null }) => tracesAPI.previewJudge(agentId, body),
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not try the rubric'),
   });
 }
 
