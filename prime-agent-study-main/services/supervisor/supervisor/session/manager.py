@@ -59,6 +59,7 @@ from supervisor.memory.client import (
 from supervisor.models import model_router
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
+from supervisor.sandbox.network import check_network
 from supervisor.sandbox.resolve import load_pinned_sandbox_profile, resolve_sandbox_create
 from supervisor.seams import (
     build_runtime_seams,
@@ -1019,12 +1020,15 @@ class SessionManager(UpkeepOps):
             labels["supervisor.tenant_id"] = tenant_id
         if sandbox_profile is not None and getattr(sandbox_profile, "runner", None):
             labels["supervisor.runner"] = sandbox_profile.runner
+        network = getattr(sandbox_profile, "network", None)
+        check_network(provider.name, network)  # a profile never runs looser than it reads
         return HandRecipe(
             provider=provider,
             image=digest,
             labels=labels,
             start=getattr(sandbox_profile, "start", None),
             idle_stop_s=getattr(sandbox_profile, "idle_stop_s", None),
+            network=network,
         )
 
     def _start_fanout(self, session_id: str, runtime: Any) -> None:

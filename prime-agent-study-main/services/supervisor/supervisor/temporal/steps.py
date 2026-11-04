@@ -1243,7 +1243,7 @@ class GithiSteps:
             runtime.loop().run_tool(
                 invocation,
                 tenant_id=row.tenant_id,
-                env=await self._manager.tool_env(sid),
+                env=await self._manager.tool_env(sid, tool=call["name"]),
                 workspace=self._manager.hand_workspace(hand.key) if named and hand.key else None,
                 stop=stop,
             )

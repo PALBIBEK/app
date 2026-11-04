@@ -24,6 +24,7 @@ from enum import StrEnum, auto
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
     from supervisor.sandbox.backup import BackupArea, BackupResult
     from supervisor.sandbox.layers import LayerManifest, MaterializationResult
     from supervisor.sandbox.staging import StagedBlob, StageOutResult
@@ -743,6 +744,7 @@ class SandboxProvider(ABC):
         workdir: str = "/workspace",
         env: dict[str, str] | None = None,
         labels: dict[str, str] | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
         """Provision a fresh sandbox.
 
@@ -751,6 +753,8 @@ class SandboxProvider(ABC):
             workdir: Initial working directory.
             env: Environment variables (will be sanitized).
             labels: Metadata labels for tracking.
+            network: What it may reach (``supervisor.sandbox.network``); a provider that
+                cannot enforce it raises ``NetworkNotEnforceable``. None: its default.
 
         Returns:
             Ready-to-use Sandbox instance.

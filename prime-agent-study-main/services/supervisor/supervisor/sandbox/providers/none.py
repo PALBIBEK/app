@@ -20,6 +20,11 @@ Usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
+
 from supervisor.sandbox.base import (
     ExecResult,
     ProcessHandle,
@@ -31,6 +36,7 @@ from supervisor.sandbox.base import (
     SandboxStatus,
     SnapshotUnsupported,
 )
+from supervisor.sandbox.network import check_network
 
 
 class NoProcessSupport(SandboxError):
@@ -160,7 +166,9 @@ class NoneProvider(SandboxProvider):
         workdir: str = "/workspace",
         env: dict[str, str] | None = None,
         labels: dict[str, str] | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
+        check_network(self.name, network)  # enforces none: any network named is refused
         # Ignore all parameters - none sandbox has no configuration
         return NoneSandbox()
 

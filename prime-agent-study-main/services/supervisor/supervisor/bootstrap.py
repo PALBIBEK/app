@@ -61,6 +61,7 @@ async def bootstrap_supervisor(
     """Build fully wired supervisor state for production or integration tests."""
     settings.require_auth_configured()
     # A half-set or invalid MODEL_GATEWAY_* configuration fails boot, not a turn.
+    from supervisor.hands.browser import browser_providers_from_env
     from supervisor.models import model_router
     from supervisor.models.browser import BrowserAccess
 
@@ -187,4 +188,5 @@ async def bootstrap_supervisor(
         virtual_key_client=vk_client,
         workspace_store=workspace_store,
         browser=BrowserAccess.from_env(os.environ),
+        browsers=browser_providers_from_env(os.environ),
     )

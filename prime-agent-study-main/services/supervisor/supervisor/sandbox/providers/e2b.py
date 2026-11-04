@@ -15,6 +15,11 @@ Operators must allow DNS + model-gateway egress in E2B policy. See
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
+
 import asyncio
 import importlib.util
 import logging
@@ -42,6 +47,7 @@ from supervisor.sandbox.layers import (
     MaterializationResult,
     create_exec_layers,
 )
+from supervisor.sandbox.network import check_network, e2b_network
 from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.sandbox.staging import (
     BlobStagingConfig,
@@ -565,9 +571,11 @@ class E2BProvider(SandboxProvider):
         labels: dict[str, str] | None = None,
         actor_id: str | None = None,
         scope_id: str | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
         if not image:
             raise ValueError("e2b requires template digest/id")
+        check_network(self.name, network)
         sdk = self._sdk()
         create = getattr(sdk, "create", None)
         if create is None:
@@ -577,6 +585,7 @@ class E2BProvider(SandboxProvider):
             template=image,
             metadata=labels or {},
             envs=cleaned,
+            **e2b_network(network),
         )
         sid = str(getattr(handle, "sandbox_id", None) or getattr(handle, "id", ""))
         info = SandboxInfo(

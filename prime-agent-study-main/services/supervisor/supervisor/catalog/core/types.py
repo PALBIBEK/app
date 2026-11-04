@@ -26,6 +26,8 @@ __all__ = [
     "DigestRef",
     "FileEffects",
     "MemoryProfile",
+    "NetworkAccess",
+    "NetworkMode",
     "PlugBindings",
     "PromptPack",
     "PromptSection",
@@ -92,6 +94,32 @@ class FileEffects(StrEnum):
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
     DANGER_FULL_ACCESS = "danger_full_access"
+
+
+class NetworkMode(StrEnum):
+    """What a sandbox may reach on the network."""
+
+    NONE = "none"
+    """Nothing (``local_docker``'s default)."""
+    OPEN = "open"
+    """Anywhere: a browser for the open web."""
+    ALLOW = "allow"
+    """Only the named hosts (a remote browser's endpoint, say), over TLS."""
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkAccess:
+    """A sandbox profile's network: ``mode``, and for ``allow`` the hosts it may reach.
+
+    Enforced by the sandbox's provider, never by the code inside it; a provider that
+    cannot enforce it refuses the profile at publish (``catalog.services.publish_checks``)
+    and the sandbox at create, so a profile never runs looser than it says."""
+
+    mode: NetworkMode
+    hosts: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"mode": self.mode.value, **({"hosts": list(self.hosts)} if self.hosts else {})}
 
 
 class ApprovalDefault(StrEnum):
@@ -365,6 +393,12 @@ class SandboxProfile:
     idle_stop_s: int | None = None
     """Stop a sandbox idle this long (saved first; the next tool call restores it); ``0``
     never. ``None``: the deployment's ``SANDBOX_IDLE_STOP_S``."""
+    network: NetworkAccess | None = None
+    """What the sandbox may reach; ``None``: the provider's default (none, for
+    ``local_docker``; the platform's policy, for ``e2b``)."""
+    browser: str | None = None
+    """Where ``browser_exec`` finds its browser (``supervisor.hands.browser``'s providers);
+    ``None``: a Chromium in the sandbox itself."""
 
     def body_for_digest(self) -> dict[str, Any]:
         """Canonical content body for hashing."""
@@ -388,6 +422,10 @@ class SandboxProfile:
             body["start"] = self.start
         if self.idle_stop_s is not None:
             body["idle_stop_s"] = self.idle_stop_s
+        if self.network is not None:
+            body["network"] = self.network.to_dict()
+        if self.browser is not None:
+            body["browser"] = self.browser
         return body
 
 

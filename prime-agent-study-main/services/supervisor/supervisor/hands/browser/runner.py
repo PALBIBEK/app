@@ -79,10 +79,14 @@ def ask(op: str, **fields: Any) -> dict[str, Any]:
 def _hello() -> dict[str, Any]:
     """The daemon's greeting (the browser's endpoint and generation), starting it if none
     answers: detached, untagged, so the call's end or a stop leaves it running."""
-    try:
-        return ask("hello")
-    except OSError:
-        pass
+    if why := os.environ.get("GITHI_BROWSER_ERROR"):
+        raise RuntimeError(why)  # the session's browser provider could not serve this call
+    with contextlib.suppress(OSError):
+        hello = ask("hello")
+        if hello["endpoint"] == os.environ.get("GITHI_BROWSER_CDP", hello["endpoint"]):
+            return hello
+        ask("shutdown")  # a daemon on another remote browser: start one on this one
+        time.sleep(0.2)
     env = {k: v for k, v in os.environ.items() if k != DAEMON.RUN_TAG_VAR}
     subprocess.Popen(
         [sys.executable, str(Path(__file__).with_name("daemon.py"))],

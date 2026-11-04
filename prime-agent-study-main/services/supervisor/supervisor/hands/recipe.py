@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
     from supervisor.sandbox.base import Sandbox, SandboxProvider
 
 
@@ -26,6 +27,8 @@ class HandRecipe:
     """``with_run`` / ``on_first_tool`` (the sandbox profile's); None: the deployment default."""
     idle_stop_s: int | None = None
     """Stop after this long idle (0: never); None: the deployment default."""
+    network: NetworkAccess | None = None
+    """What the sandbox may reach (the profile's); None: the provider's default."""
 
     @property
     def provider_name(self) -> str:
@@ -36,7 +39,10 @@ class HandRecipe:
         await self.provider.preflight(image=self.image)
 
     async def build(self) -> Sandbox:
-        return await self.provider.create(image=self.image, labels=dict(self.labels) or None)
+        labels = dict(self.labels) or None
+        if self.network is None:  # as before profiles named a network (providers of tests too)
+            return await self.provider.create(image=self.image, labels=labels)
+        return await self.provider.create(image=self.image, labels=labels, network=self.network)
 
     async def adopt(self, session_id: str) -> Sandbox | None:
         """The sandbox a dead worker left for ``session_id``, if it survived (F21)."""

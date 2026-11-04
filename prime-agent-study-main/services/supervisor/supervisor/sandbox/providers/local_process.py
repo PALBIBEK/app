@@ -52,9 +52,11 @@ from supervisor.sandbox.base import (
     SnapshotUnsupported,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.network import check_network
 from supervisor.sandbox.security.env import sanitize_sandbox_env
 
 if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
     from supervisor.seams.services import WorkspaceTreeIO
     from supervisor.seams.services.workspace_hydrator import WorkspaceHydrator
     from supervisor.seams.services.workspace_store import WorkspaceSyncReport
@@ -366,7 +368,9 @@ class LocalProcessProvider(SandboxProvider):
         workdir: str = "/workspace",
         env: dict[str, str] | None = None,
         labels: dict[str, str] | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
+        check_network(self.name, network)  # enforces none: any network named is refused
         # Image/env/workdir are ignored for local_process
         sandbox_id = uuid4().hex
         root = self._base / sandbox_id

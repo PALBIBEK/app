@@ -14,9 +14,10 @@ from supervisor.agent.events import (
     ToolEnd,
     ToolStart,
 )
-from supervisor.catalog import SessionPins
+from supervisor.catalog import SandboxProfile, SessionPins
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
+from supervisor.hands.browser import BROWSER_ERROR_ENV, BROWSER_TOOLS, BrowserUnreachable
 from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key, take_hand
 from supervisor.hands.leases import Borrower
 from supervisor.models.browser import BrowserAccess, BrowserGrant
@@ -202,17 +203,34 @@ class ToolOps(ApprovalOps):
                 logger.warning("observing sandbox failed hand=%s", key, exc_info=True)
         return result
 
-    async def tool_env(self, session_id: str) -> dict[str, str]:
-        """What this turn's commands may hold: the browse runner's model access, if any.
+    async def tool_env(self, session_id: str, tool: str | None = None) -> dict[str, str]:
+        """What a call's commands may hold: the browse runner's model access, and for a
+        ``browser_exec`` call how to reach the session's browser.
 
         A fresh browser capability per turn (an hour long), bound to the session,
         its owner and its model; only for a sandbox profile that asks for it
         (``browser_model``), never for strict sessions or without a model.
         """
-        if self._browser is None:
-            return {}
         row = await self._get_session_row(session_id)
         profile = self._sandbox_profile_for_row(row)
+        env = await self._browser_env(session_id, profile) if tool in BROWSER_TOOLS else {}
+        return {**env, **self._model_access_env(session_id, row, profile)}
+
+    async def _browser_env(self, session_id: str, profile: SandboxProfile | None) -> dict[str, str]:
+        """How the runner reaches the session's browser (the profile's provider); why not,
+        for the runner to report, when the provider cannot serve it."""
+        name = (profile.browser if profile is not None else None) or "sandbox-chromium"
+        provider = self._browsers.get(name)
+        if provider is None:
+            return {BROWSER_ERROR_ENV: f"this deployment has no {name!r} browser provider configured"}
+        try:
+            return dict(await provider.env(session_id, profile.network if profile is not None else None))
+        except BrowserUnreachable as exc:
+            return {BROWSER_ERROR_ENV: str(exc)}
+
+    def _model_access_env(self, session_id: str, row: SessionRow, profile: SandboxProfile | None) -> dict[str, str]:
+        if self._browser is None:
+            return {}
         model = self.session_model(row)
         if not model or profile is None or not profile.browser_model or self.strict_posture(row):
             return {}

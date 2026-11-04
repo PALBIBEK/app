@@ -9,6 +9,11 @@ gone, which makes the next tool call a workspace reset like any other.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
+
 import base64
 import hashlib
 import time
@@ -25,6 +30,7 @@ from supervisor.sandbox.base import (
     SandboxProvider,
     SnapshotUnsupported,
 )
+from supervisor.sandbox.network import check_network
 
 __all__ = ["LABEL_RUNNER", "LABEL_TENANT", "RunnerProvider", "RunnerSandbox"]
 
@@ -197,7 +203,9 @@ class RunnerProvider(SandboxProvider):
         workdir: str = "/workspace",
         env: dict[str, str] | None = None,
         labels: dict[str, str] | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
+        check_network(self.name, network)  # enforces none: any network named is refused
         del image, workdir, env  # the runner's machine is the image; its directory the workdir
         labels = labels or {}
         tenant, runner, key = labels.get(LABEL_TENANT), labels.get(LABEL_RUNNER), labels.get(LABEL_SESSION)
