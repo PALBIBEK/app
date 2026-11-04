@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -20,6 +21,7 @@ from supervisor.memory_service.limits import (
 )
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
+    InvalidExpiry,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     RevisionOutOfRange,
@@ -89,12 +91,15 @@ class NotebookOps:
         author: str | None = None,
         context: CaptureMetadata | None = None,
     ) -> int:
-        """Add ``facts``; a repeat adds no text but may tighten what is known about it."""
+        """Add ``facts``; a repeat adds no text but may tighten what is known about it.
+
+        ``context.expires_on`` makes the captured facts time-bound (a repeat too)."""
         lines = clean_captured(facts)
         if not lines:
             return 0
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(lines))
         _within_length(lines)
+        expires_on = _expiry(context.expires_on if context else None) or None
         notebook = await self.store.get(notebook_id)
         provenance = capture_provenance(notebook.home, context)
 
@@ -109,11 +114,13 @@ class NotebookOps:
                     )
                     if not merged.same_as(duplicate.provenance):
                         await tx.update(duplicate.id, duplicate.text, merged)
-                        existing[key] = replace(duplicate, provenance=merged)
+                        duplicate = existing[key] = replace(duplicate, provenance=merged)
+                    if expires_on is not None and duplicate.expires_on != expires_on:
+                        await tx.set_expiry(duplicate, expires_on)
                     continue
                 _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
-                fact_id = await tx.insert(text, provenance)
-                existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, author)
+                fact_id = await tx.insert(text, provenance, expires_on=expires_on)
+                existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, author, expires_on)
                 added += 1
             return added
 
@@ -131,6 +138,7 @@ class NotebookOps:
         _within_length([e.text for e in edits])
         if blank := [e.id for e in edits if not edited_text(e.text)]:
             raise EmptyFact(blank)
+        expiry = _expiry(context.expires_on if context else None)  # None: keep; "": clear
         notebook = await self.store.get(notebook_id)
         # Editing from a conversation exposes the fact to that conversation's sources.
         exposure = capture_provenance(notebook.home, context) if context else None
@@ -144,6 +152,8 @@ class NotebookOps:
                     else fact.provenance
                 )
                 await tx.update(fact.id, edited_text(edit.text), provenance)
+                if expiry is not None and fact.expires_on != (expiry or None):
+                    await tx.set_expiry(replace(fact, text=edited_text(edit.text), provenance=provenance), expiry or None)
 
         await self.store.transact(notebook_id, run, author=author)
 
@@ -202,6 +212,16 @@ def _within(what: str, limit: int, got: int) -> None:
 def _within_length(texts: Sequence[str]) -> None:
     longest = max((len(t) for t in texts), default=0)
     _within("characters in a fact", MAX_FACT_CHARS, longest)
+
+
+def _expiry(value: str | None) -> str | None:
+    """A day as YYYY-MM-DD (mem0's _normalize_expiration_date); "" (clear) and None pass."""
+    if value is None or value == "":
+        return value
+    try:
+        return date.fromisoformat(value.strip()).isoformat()
+    except ValueError as exc:
+        raise InvalidExpiry(value) from exc
 
 
 def _in_range(revision: int, current: int) -> None:

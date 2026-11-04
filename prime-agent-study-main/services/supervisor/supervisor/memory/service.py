@@ -15,6 +15,7 @@ from supervisor.memory.client import NotebookClient, UnavailableNotebooks
 from supervisor.memory_service.notebooks.rank import ranked_candidates
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
+    current,
     query_facts,
     render_facts,
 )
@@ -134,10 +135,10 @@ class NotebookMemory:
     async def query(
         self, notebook_id: str, q: str, limit: int = 20, context: RecallContext | None = None
     ) -> list[str]:
-        return query_facts(await self._store.facts(notebook_id), q, limit)
+        return query_facts(current(await self._store.facts(notebook_id)), q, limit)
 
     async def read(self, notebook_id: str) -> str:
-        return render_facts(await self._store.facts(notebook_id))
+        return render_facts(current(await self._store.facts(notebook_id)))
 
     async def facts(self, notebook_id: str) -> list[Fact]:
         return await self._store.facts(notebook_id)

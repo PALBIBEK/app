@@ -62,7 +62,14 @@ def dates(fact: Fact) -> str:
     (mem0 keeps both, created_at and updated_at, on every memory): an edited fact must not
     look as old as the text it replaced."""
     created, updated = date_str(fact.created_at), date_str(fact.updated_at or fact.created_at)
-    return created if updated <= created else f"{created}, updated {updated}"
+    out = created if updated <= created else f"{created}, updated {updated}"
+    # Graphiti gives a fact its valid range; a time-bound fact shows when it ends.
+    return f"{out}, until {fact.expires_on}" if fact.expires_on else out
+
+
+def current(facts: Iterable[Fact], today: str | None = None) -> list[Fact]:
+    """The facts not past their expiry: what the agent recalls, searches and reads."""
+    return [f for f in facts if not f.expired(today)]
 
 
 def render_facts(facts: Iterable[Fact]) -> str:

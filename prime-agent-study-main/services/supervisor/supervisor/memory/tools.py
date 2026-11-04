@@ -20,6 +20,7 @@ from supervisor.memory.disclosure import Audience
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
+    InvalidExpiry,
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     MemoryLimitExceeded,
@@ -56,7 +57,11 @@ _MEMORY_DESCRIPTION: Final = (
     'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a '
     "contradicting one, and delete what is wrong or stale. Ids come from search or read; an edit "
     "or delete that names any id not in this conversation's notebook changes nothing and says "
-    "which ids were bad."
+    "which ids were bad. "
+    "`expires` (add or edit, YYYY-MM-DD) marks the facts of that call time-bound: after that day "
+    "they are no longer recalled, searched or read. Use it only for an ongoing state that ends "
+    'then ("is on leave until 2026-12-20", "works on the migration until 2027-01-15"), not for a '
+    'deadline or a plan ("ships v2 by March"); on edit, "never" removes an expiry.'
 )
 
 _HISTORY_DESCRIPTION: Final = (
@@ -122,6 +127,11 @@ MEMORY_SCHEMA: Final[dict[str, Any]] = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "delete only: ids of the facts to forget.",
+                },
+                "expires": {
+                    "type": "string",
+                    "description": "add/edit only: the day (YYYY-MM-DD) these facts stop being true; "
+                    'on edit, "never" removes an expiry.',
                 },
             },
             "required": ["action"],
@@ -208,6 +218,14 @@ SESSIONS_SCHEMA: Final[dict[str, Any]] = {
 UNAVAILABLE: Final = "[memory isn't available in this conversation]"
 
 
+def _expires(args: Mapping[str, Any], *, editing: bool) -> str | None:
+    """The call's ``expires``: a day, or (on edit) "never" to clear it ("" to the service)."""
+    value = str(args.get("expires") or "").strip()
+    if not value:
+        return None
+    return "" if editing and value.lower() == "never" else value
+
+
 def _limit(args: Mapping[str, Any], default: int = 20) -> int:
     """The model's ``limit``, within 1..MAX_RESULTS; anything unusable is the default."""
     try:
@@ -276,6 +294,7 @@ class TurnMemory:
                 MemoryRequestInvalid,
                 NotebookArchived,
                 EmptyFact,
+                InvalidExpiry,
             ) as exc:
                 return ToolOutput(f"[error] {exc}", True)
             except (MemoryUnavailable, MemoryRefused) as exc:
@@ -335,6 +354,7 @@ class TurnMemory:
                         source=audience.target,
                         session_id=self.session_id,
                         inherited=self.dependencies,
+                        expires_on=_expires(args, editing=False),
                     ),
                 )
                 if not added:
@@ -356,6 +376,7 @@ class TurnMemory:
                         source=audience.target,
                         session_id=self.session_id,
                         inherited=self.dependencies,
+                        expires_on=_expires(args, editing=True),
                     ),
                 )
                 return ToolOutput(f"Updated {len(facts)} fact{'' if len(facts) == 1 else 's'}.")

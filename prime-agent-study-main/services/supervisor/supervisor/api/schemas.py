@@ -253,6 +253,9 @@ class FactOut(BaseModel):
     author: str | None
     created_at: int
     updated_at: int
+    expires_on: str | None = None
+    """YYYY-MM-DD: after it the agent no longer recalls, searches or reads the fact."""
+    expired: bool = False
 
 
 class FactsAdd(BaseModel):

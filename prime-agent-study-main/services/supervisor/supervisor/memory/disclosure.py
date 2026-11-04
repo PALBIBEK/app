@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 from supervisor.memory.service import MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
-from supervisor.memory_service.notebooks.render import parse_fact_id, query_facts, render_facts
+from supervisor.memory_service.notebooks.render import (
+    current,
+    parse_fact_id,
+    query_facts,
+    render_facts,
+)
 from supervisor.memory_service.notebooks.types import (
     Candidate,
     CaptureMetadata,
@@ -194,10 +199,10 @@ class DisclosedMemory(MemoryView):
         if not self._base.manages:
             narrow = await self._policy().narrow(await self._home_of(notebook_id))
             return await self._base.query(notebook_id, q, limit, context) if narrow else []
-        return query_facts(await self._visible(notebook_id), q, limit)
+        return query_facts(current(await self._visible(notebook_id)), q, limit)
 
     async def read(self, notebook_id: str) -> str:
-        return render_facts(await self._visible(notebook_id))
+        return render_facts(current(await self._visible(notebook_id)))
 
     async def facts(self, notebook_id: str) -> list[Fact]:
         return await self._visible(notebook_id)

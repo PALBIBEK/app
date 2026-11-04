@@ -96,6 +96,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
         ),
     ),
     (5, "memory_item.embedding: re-embedded at 1024 buckets, stopwords left out", _reembed),
+    (6, "memory_facts.expires_on: a time-bound fact stops being recalled after it", add_column("memory_facts", "expires_on", "TEXT")),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""
 

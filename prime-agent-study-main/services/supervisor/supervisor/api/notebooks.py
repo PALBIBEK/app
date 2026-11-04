@@ -40,6 +40,7 @@ from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
+    InvalidExpiry,
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     MemoryLimitExceeded,
@@ -78,7 +79,7 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RevisionOutOfRange, MemoryLimitExceeded, MemoryRequestInvalid, EmptyFact) as exc:
+    except (RevisionOutOfRange, MemoryLimitExceeded, MemoryRequestInvalid, EmptyFact, InvalidExpiry) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NotebookArchived as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -128,6 +129,8 @@ def _fact(fact: Fact) -> FactOut:
         author=fact.author,
         created_at=fact.created_at,
         updated_at=fact.updated_at,
+        expires_on=fact.expires_on,
+        expired=fact.expired(),
     )
 
 

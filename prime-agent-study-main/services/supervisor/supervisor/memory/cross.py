@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from supervisor.memory.service import MemoryService
-from supervisor.memory_service.notebooks.render import fact_line
+from supervisor.memory_service.notebooks.render import current, fact_line
 from supervisor.memory_service.notebooks.types import RECALL_MAX_CHARS, Provenance, RecallContext
 
 
@@ -99,5 +99,5 @@ async def search_across(
 async def read_notebook(memory: MemoryService, notebook_id: str) -> str:
     """Fact lines with ids (so the agent can edit), or the provider's rendering."""
     if memory.manages:
-        return "\n".join(fact_line(f) for f in await memory.facts(notebook_id))
+        return "\n".join(fact_line(f) for f in current(await memory.facts(notebook_id)))
     return await memory.read(notebook_id)
