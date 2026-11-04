@@ -40,12 +40,19 @@ from supervisor.memory.disclosure import Audience
 from supervisor.memory.extraction import Exchange, extract_facts
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
+from supervisor.memory.resolution import resolve
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
+from supervisor.memory_service.notebooks.errors import (
+    MemoryDisclosureDenied,
+    MemoryFactsMissing,
+    NotebookArchived,
+)
 from supervisor.memory_service.notebooks.types import (
     UNTRACKED,
     Provenance,
     RecallContext,
+    Sensitivity,
     personal_source,
 )
 
@@ -338,20 +345,55 @@ class SessionMemory:
                 runs.extend(run)
         if not exchanges:
             return 0
-        extracted = await extract_facts(await self._one_shot_for(session_id), exchanges)
+        one_shot = await self._one_shot_for(session_id)
+        extracted = await extract_facts(one_shot, exchanges)
         if not extracted.facts:
             return 0
+        # Resolve against what the notebook holds (supervisor.memory.resolution): a
+        # duplicate is not added; a fact the new ones make false is retired after them.
+        resolution = await resolve(one_shot, extracted.facts, await scope.view.facts(binding.writable))
+        facts = [extracted.facts[i] for i in resolution.add]
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
+        added = 0
+        if facts:
+            added = await self._capture_facts(
+                scope, binding.writable, session_id, facts, extracted.sensitivity, runs, exchanges, key
+            )
+        await self._retire(scope, binding.writable, session_id, resolution.retire)
+        return added
+
+    async def _retire(self, scope: Scope, notebook: str, session_id: str, ids: Sequence[str]) -> None:
+        """Delete facts a capture made false (history keeps them); best effort, after the
+        capture, so a failure leaves both facts rather than neither."""
+        if not ids:
+            return
+        try:
+            await scope.view.delete(notebook, list(ids), author=scope.audience.actor)
+        except (MemoryFactsMissing, MemoryDisclosureDenied, NotebookArchived) as exc:
+            # Already gone (a retried capture), not this audience's to change, or archived.
+            logger.info("session %s: contradicted facts not retired: %s", session_id, exc)
+
+    async def _capture_facts(
+        self,
+        scope: Scope,
+        notebook: str,
+        session_id: str,
+        facts: Sequence[str],
+        sensitivity: Sensitivity,
+        runs: Sequence[Envelope],
+        exchanges: Sequence[Exchange],
+        key: str,
+    ) -> int:
         return await scope.view.capture(
-            binding.writable,
-            extracted.facts,
+            notebook,
+            list(facts),
             author=scope.audience.actor,
             context=CaptureContext(
                 mode="automatic",
                 actor=scope.audience.actor,
                 source=scope.audience.target,
                 session_id=session_id,
-                sensitivity=extracted.sensitivity,
+                sensitivity=sensitivity,
                 # Everything these turns could have drawn on (QM captureDependencies).
                 inherited=dependencies(runs),
                 input="\n\n".join(x.input for x in exchanges),

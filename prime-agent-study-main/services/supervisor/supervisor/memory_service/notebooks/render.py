@@ -57,13 +57,21 @@ def bullets(body: str) -> list[str]:
     ]
 
 
+def dates(fact: Fact) -> str:
+    """When the fact was first remembered, and when it last changed if on a later day
+    (mem0 keeps both, created_at and updated_at, on every memory): an edited fact must not
+    look as old as the text it replaced."""
+    created, updated = date_str(fact.created_at), date_str(fact.updated_at or fact.created_at)
+    return created if updated <= created else f"{created}, updated {updated}"
+
+
 def render_facts(facts: Iterable[Fact]) -> str:
-    return "\n".join(f"- ({date_str(f.created_at)}) {f.text}" for f in facts)
+    return "\n".join(f"- ({dates(f)}) {f.text}" for f in facts)
 
 
 def fact_line(fact: Fact) -> str:
     """The form tools show: ids let the agent edit or delete a fact."""
-    return f"#{fact.id} ({date_str(fact.created_at)}) {fact.text}"
+    return f"#{fact.id} ({dates(fact)}) {fact.text}"
 
 
 def parse_fact_id(value: str) -> str:
