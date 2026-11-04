@@ -173,6 +173,9 @@ class Proposal(Base):
     """The gate's decision: passed, and why, item by item."""
     release_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """The version it became, once approved."""
+    watch: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """After approval, how its version does live against the one before it
+    (``services.release_watch_service``): watching, held, rolled back or superseded."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

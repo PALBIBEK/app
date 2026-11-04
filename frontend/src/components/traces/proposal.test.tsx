@@ -5,7 +5,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { EditList, GateResult, PromptDiff, ProposalStatusPill, SearchRounds } from './Proposal';
+import { EditList, GateResult, PromptDiff, ProposalStatusPill, SearchRounds, WatchLine } from './Proposal';
 
 afterEach(cleanup);
 
@@ -113,5 +113,21 @@ describe('SearchRounds', () => {
       <SearchRounds rounds={[{ round: 1, parent: 0, rationale: null, edits: [], experiment_id: null, kept: false, why: '' }]} />,
     );
     expect(container.textContent).toBe('');
+  });
+});
+
+describe('WatchLine', () => {
+  it('says a change was rolled back, and why', () => {
+    render(
+      <WatchLine
+        watch={{
+          status: 'rolled_back', previous_version: 1, checks: 0, failed_checks: 2, seen_runs: 24, rolled_back_to: 3,
+          note: '50% of its live runs failed, against 10% on v1: v1 is live again as v3',
+        }}
+      />,
+    );
+    expect(screen.getByTestId('release-watch').textContent).toBe(
+      'Rolled back against v1: 50% of its live runs failed, against 10% on v1: v1 is live again as v3.',
+    );
   });
 });

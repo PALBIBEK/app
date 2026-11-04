@@ -186,3 +186,12 @@ async def test_versions_are_compared_on_their_finished_runs(api: Api) -> None:
 
     other = await api.client.get("/v1/traces/versions", params={"composition_id": "githi-v1"}, headers=BOB)
     assert other.json()["versions"] == []
+
+    # an experiment's replays are measurements: left out when only live use counts
+    await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "e"}, headers=ALICE)
+    live = await api.client.get("/v1/traces/versions", params={"composition_id": "githi-v1", "exclude_replays": "true"},
+                                headers=ALICE)
+    assert live.json()["versions"] == []
+    (every,) = (await api.client.get("/v1/traces/versions", params={"composition_id": "githi-v1"},
+                                     headers=ALICE)).json()["versions"]
+    assert every["runs"] == 2

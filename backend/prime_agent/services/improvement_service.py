@@ -55,6 +55,7 @@ from prime_agent.schemas.evaluation import (
     PromptSectionOut,
     ProposalDetail,
     ProposalOut,
+    ReleaseWatch,
     SearchRound,
 )
 from prime_agent.schemas.harness_manifest import HarnessManifest, PromptSpec, manifest_body
@@ -254,6 +255,7 @@ class ImprovementService:
             expected_outcome=row.expected_outcome, max_rounds=row.max_rounds or 1,
             rounds=[SearchRound.model_validate(r) for r in row.rounds or []],
             gate=Gate.model_validate(row.gate) if row.gate else None, release_version=row.release_version,
+            watch=ReleaseWatch.model_validate(row.watch) if row.watch else None,
             created_at=row.created_at, decided_at=row.decided_at,
         )
 
@@ -663,6 +665,8 @@ class ImprovementService:
             else:
                 draft.manifest = row.candidate_manifest
         row.status, row.release_version, row.decided_at = "approved", published.release.version, _now()
+        row.watch = {"status": "watching", "previous_version": live.version, "checks": 0, "failed_checks": 0,
+                     "seen_runs": 0, "note": "watching it live against the version before it"}
         await db.commit()
         return await self._out(row, db)
 

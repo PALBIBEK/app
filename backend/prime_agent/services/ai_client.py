@@ -1070,11 +1070,13 @@ class AiClient:
             params={"span_id": span_id} if span_id else None,
         )
 
-    async def trace_versions(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
-        """GET /v1/traces/versions: how each version of a composition did."""
-        payload = await self._json_request(
-            "GET", "/v1/traces/versions", identity, expected=(200,), params={"composition_id": composition_id}
-        )
+    async def trace_versions(
+        self, identity: TenantPrincipal, composition_id: str, *, live_only: bool = False
+    ) -> dict[str, Any]:
+        """GET /v1/traces/versions: how each version of a composition did (``live_only``: an
+        experiment's replays left out)."""
+        params = {"composition_id": composition_id, **({"exclude_replays": "true"} if live_only else {})}
+        payload = await self._json_request("GET", "/v1/traces/versions", identity, expected=(200,), params=params)
         return payload if isinstance(payload, dict) else {"versions": []}
 
     async def trace_issues(self, identity: TenantPrincipal, params: dict[str, Any]) -> dict[str, Any]:

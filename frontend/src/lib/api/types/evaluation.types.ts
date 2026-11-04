@@ -196,6 +196,18 @@ export interface PromptEdit {
   reason: string;
 }
 
+/** How an approved change does live against the version before it. */
+export interface ReleaseWatch {
+  status: 'watching' | 'held' | 'rolled_back' | 'superseded' | 'ended' | string;
+  previous_version: number | null;
+  checks: number;
+  failed_checks: number;
+  seen_runs: number;
+  note: string | null;
+  /** The version that made the previous one live again. */
+  rolled_back_to: number | null;
+}
+
 export interface SearchRound {
   round: number;
   /** The round whose candidate it edits (0: the live version). */
@@ -233,6 +245,7 @@ export interface Proposal {
   rounds: SearchRound[];
   gate: Gate | null;
   release_version: number | null;
+  watch?: ReleaseWatch | null;
   created_at: string;
   decided_at: string | null;
 }

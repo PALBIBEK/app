@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from prime_agent.config import get_settings
 from prime_agent.db.session import db as database_session
 from prime_agent.services.auto_improve_service import AutoImprover
+from prime_agent.services.release_watch_service import ReleaseWatcher
 from prime_agent.web.body_limit import LimitRequestBody, request_limit
 from prime_agent.web.middlewares import (
     LoggingMiddleware,
@@ -108,13 +109,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await database_session.migrate()
 
     # Agents that propose a change by themselves are checked in the background.
-    auto_improve: asyncio.Task[None] | None = None
-    if settings.auto_improve_interval_s > 0 and database_session._session_factory is not None:  # noqa: SLF001
-        auto_improve = asyncio.create_task(
-            AutoImprover.from_settings(settings).run_forever(
-                database_session._session_factory, evaluations.start_improving  # noqa: SLF001
-            )
-        )
+    # and an approved change is watched live, rolled back if it does worse than before.
+    background: list[asyncio.Task[None]] = []
+    factory = database_session._session_factory  # noqa: SLF001 - the app's one session factory
+    if factory is not None:
+        if settings.auto_improve_interval_s > 0:
+            background.append(asyncio.create_task(
+                AutoImprover.from_settings(settings).run_forever(factory, evaluations.start_improving)
+            ))
+        if settings.watch_interval_s > 0:
+            background.append(asyncio.create_task(ReleaseWatcher.from_settings(settings).run_forever(factory)))
 
     logger.info("Application startup complete")
 
@@ -122,10 +126,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("Application shutdown initiated")
-    if auto_improve is not None:
-        auto_improve.cancel()
+    for task in background:
+        task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await auto_improve
+            await task
 
     # Dispose database connections
     await database_session.dispose()

@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     improvement_max_time_increase: float = Field(default=0.5, ge=0)
     # How often the API checks agents that propose changes by themselves (AutoImprove); 0: never.
     auto_improve_interval_s: float = Field(default=300.0, ge=0)
+    # After an approved change goes live (services.release_watch_service): each check needs
+    # this many new live runs; a check fails when the share of failing (or marked-wrong) runs
+    # is more than ``watch_margin`` above the previous version's; this many failed checks roll
+    # it back, this many passed ones end the watch. Checked every ``watch_interval_s`` (0: never).
+    watch_interval_s: float = Field(default=300.0, ge=0)
+    watch_min_runs: int = Field(default=10, ge=1)
+    watch_margin: float = Field(default=0.1, ge=0, le=1)
+    watch_threshold: int = Field(default=2, ge=1)
+    watch_checks: int = Field(default=3, ge=1)
     refresh_token_expire_days: int = 7
     refresh_cookie_name: str = "prime_agent_refresh"
     refresh_cookie_secure: bool = False

@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, case, delete, func, select
+from sqlalchemy import and_, case, delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.db.models import RunTraceRow, SessionRow, TraceScoreRow
+from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow, TraceScoreRow
 from supervisor.session.access import session_visibility
 from supervisor.traces.checks import CHECKS_VERSION, run_checks
 from supervisor.traces.model import RunTrace
@@ -177,9 +177,10 @@ async def run_scores(factory: Factory, session_id: str, run_id: str) -> list[dic
 
 
 async def version_quality(
-    factory: Factory, *, tenant_id: str, principal_id: str | None, composition_id: str
+    factory: Factory, *, tenant_id: str, principal_id: str | None, composition_id: str, exclude_replays: bool = False
 ) -> list[dict[str, Any]]:
-    """For each version of a composition the caller ran: how its finished runs went."""
+    """For each version of a composition the caller ran: how its finished runs went
+    (``exclude_replays``: an experiment's replays left out, so a version is judged on live use)."""
     finished = RunTraceRow.status.notin_(("running", "awaiting_approval"))
     query = (
         select(
@@ -205,6 +206,8 @@ async def version_quality(
         .group_by(RunTraceRow.composition_digest)
         .order_by(func.max(RunTraceRow.started_ms).desc())
     )
+    if exclude_replays:
+        query = query.where(~exists().where(SessionEvaluationRow.session_id == RunTraceRow.session_id))
     async with factory() as db:
         rows = (await db.execute(query)).all()
     return [
