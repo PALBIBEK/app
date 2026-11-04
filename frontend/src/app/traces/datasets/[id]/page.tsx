@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { ExperimentStatsLine } from '@/components/traces/ExperimentStatsLine';
 import { Button, Card, CardHeader, EmptyState, ErrorNote, LinkButton, PageHeader, Select, SkeletonRows, StatusPill, type StatusKind } from '@/components/ui';
-import { useDataset, useDeleteItem, useStartExperiment } from '@/lib/api/hooks/useEvaluations';
+import { useDataset, useDeleteItem, useSetHeldOut, useStartExperiment } from '@/lib/api/hooks/useEvaluations';
 import { useReleases } from '@/lib/api/hooks/useManifest';
 import type { ExperimentStatus } from '@/lib/api/types/evaluation.types';
 import { runStatus } from '@/lib/traces/format';
@@ -34,6 +34,7 @@ export default function DatasetPage(): JSX.Element {
   const [version, setVersion] = useState('');
   const start = useStartExperiment(id);
   const remove = useDeleteItem(id);
+  const holdOut = useSetHeldOut(id);
   const [picked, setPicked] = useState<string[]>([]);
   const running = data?.experiments.some((e) => e.status === 'queued' || e.status === 'running');
   const toggle = (expId: string): void =>
@@ -122,7 +123,7 @@ export default function DatasetPage(): JSX.Element {
             </Card>
 
             <Card>
-              <CardHeader title="Saved runs" description="Save more from any run's trace page." />
+              <CardHeader title="Saved runs" description="Save more from any run's trace page, or an issue's runs from Issues." />
               {data.items.length ? (
                 <ol className="divide-y divide-line-soft border-t border-line-soft" data-testid="dataset-items">
                   {data.items.map((item, n) => (
@@ -137,6 +138,11 @@ export default function DatasetPage(): JSX.Element {
                         ) : null}
                         {item.expected ? <p className="text-[13px] text-ink-2">Good answer: {item.expected}</p> : null}
                         <div className="flex flex-wrap gap-x-3 text-xs text-ink-3">
+                          {item.held_out ? (
+                            <span className="font-medium text-violet-800" data-testid="item-held-out">
+                              held out: a proposed change never reads it
+                            </span>
+                          ) : null}
                           {item.source_version != null ? <span>from v{item.source_version}</span> : null}
                           {item.source_status ? <span>{runStatus(item.source_status).label.toLowerCase()} then</span> : null}
                           {item.source_session_id && item.source_run_id ? (
@@ -146,6 +152,15 @@ export default function DatasetPage(): JSX.Element {
                           ) : null}
                         </div>
                       </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={holdOut.isPending}
+                        onClick={() => holdOut.mutate({ itemId: item.id, heldOut: !item.held_out })}
+                        aria-label={`${item.held_out ? 'Let changes learn from' : 'Hold out'} run ${n + 1}`}
+                      >
+                        {item.held_out ? 'Learn from it' : 'Hold out'}
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => remove.mutate(item.id)} aria-label={`Remove run ${n + 1}`}>
                         Remove
                       </Button>

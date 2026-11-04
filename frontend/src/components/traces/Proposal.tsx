@@ -72,6 +72,11 @@ export function GateResult({ gate }: { gate: Gate }): JSX.Element {
           {gate.items.map((i) => (
             <li key={i.item_id} className="flex items-center gap-3 px-3 py-2">
               <span className="line-clamp-1 flex-1 text-[13px]">{i.input}</span>
+              {i.held_out ? (
+                <span className="text-xs text-violet-800" title="A proposed change never reads this run" data-testid="gate-held-out">
+                  held out
+                </span>
+              ) : null}
               <span className={cn('rounded-full px-2 py-px text-xs', CHANGE[i.change] ?? CHANGE.unknown)}>
                 {i.change === 'unknown' ? 'not finished' : i.change}
               </span>

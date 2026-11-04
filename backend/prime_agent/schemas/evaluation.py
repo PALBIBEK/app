@@ -34,7 +34,25 @@ class DatasetItemOut(BaseModel):
     source_run_id: str | None = None
     source_version: int | None = None
     source_status: str | None = None
+    held_out: bool = False
+    """Kept from the optimizer (its conversation is never evidence a change is learnt from)."""
     created_at: datetime
+
+
+class AddIssueRequest(BaseModel):
+    issue_key: str = Field(min_length=3, max_length=600)
+
+
+class AddIssueResult(BaseModel):
+    added: list[DatasetItemOut]
+    skipped: int
+    """Runs already saved, with no message to replay, or of a session you cannot open."""
+    left_out: int = 0
+    """Runs not tried because the dataset filled up."""
+
+
+class ItemUpdate(BaseModel):
+    held_out: bool
 
 
 class ExperimentStats(BaseModel):
@@ -149,6 +167,7 @@ class ComparisonRow(BaseModel):
     a_pass_rate: float | None = None
     b_pass_rate: float | None = None
     """Share of the item's trials that passed; None until every trial finished."""
+    held_out: bool = False
     change: str
     """``better``, ``worse``, ``same`` or ``unknown`` (b against a, on mean score over trials)."""
 
@@ -201,6 +220,7 @@ class GateItem(BaseModel):
     input: str
     change: str
     """``better``, ``worse``, ``same`` or ``unknown`` (did not finish)."""
+    held_out: bool = False
 
 
 class Gate(BaseModel):
@@ -210,6 +230,8 @@ class Gate(BaseModel):
     better: int
     worse: int
     items: list[GateItem] = Field(default_factory=list)
+    held_out_better: int = 0
+    held_out_worse: int = 0
 
 
 class ProposalOut(BaseModel):

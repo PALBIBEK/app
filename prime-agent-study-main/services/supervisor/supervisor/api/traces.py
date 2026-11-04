@@ -271,6 +271,31 @@ async def trace_issues(
     return {"issues": issues}
 
 
+@router.get("/v1/traces/issues/runs")
+async def trace_issue_runs(
+    request: Request,
+    key: str = Query(min_length=3, max_length=600),
+    since_ms: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """One issue's runs, newest first (none of them an experiment's replay): what a person
+    saves to a dataset to measure a fix on."""
+    found = await list_issues(
+        deps.get_session_factory(request),
+        tenant_id=tenant_id,
+        principal_id=deps.request_principal_id(request, tenant_id),
+        since_ms=since_ms,
+        limit=1,
+        exclude_replays=True,
+        key=key,
+        examples=limit,
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="no such issue")
+    return {"issue": found[0]}
+
+
 class JudgeIn(BaseModel):
     composition_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.-]*$")

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
@@ -16,12 +17,13 @@ from prime_agent import config
 from prime_agent.config import Settings, get_settings
 from prime_agent.db.models.evaluation import Dataset, DatasetItem
 from prime_agent.db.models.harness_release import HarnessDraft
+from prime_agent.db.models.session_link import SessionLink
 from prime_agent.main import create_app
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient
+from prime_agent.services.evaluation_service import DEFAULT_TRIALS
 from prime_agent.services.harness_publish_service import HarnessPublisher, artifact_prefix, releases
 from prime_agent.services.harness_service import HarnessService
-from prime_agent.services.evaluation_service import DEFAULT_TRIALS
 from prime_agent.services.improvement_service import ImprovementService
 from prime_agent.web.dependencies import get_current_user, get_db
 
@@ -375,3 +377,50 @@ def test_a_candidate_that_costs_or_takes_much_more_per_run_is_refused() -> None:
     slow = gate(0.10, 3000)
     assert not slow.passed and "a run takes 3.0× as long as the live version's (at most 1.5× allowed)" in slow.reasons
     assert gate(0.25, 3000, max_cost_increase=2.0, max_time_increase=2.0).passed, "the owner may allow more"
+
+
+def test_a_candidate_better_only_on_runs_it_learnt_from_is_refused() -> None:
+    """GEPA keeps candidates on a held-out validation set, not on the minibatches it reflected on."""
+    from datetime import UTC, datetime
+
+    from prime_agent.schemas.evaluation import ComparisonRow, ExperimentComparison, ExperimentOut, ExperimentStats
+    from prime_agent.services.improvement_service import decide_gate
+
+    stats = ExperimentStats(items=3, finished=3, answered=3, failed=0, needs_approval=0, checks_failed=0,
+                            judge_pass=0, judge_fail=0)
+    exp = ExperimentOut(id="e", dataset_id="d", label="x", status="done", created_at=datetime.now(UTC), stats=stats)
+
+    def gate(held_change: str):  # type: ignore[no-untyped-def]
+        rows = [ComparisonRow(item_id="i1", input="a", change="better"), ComparisonRow(item_id="i2", input="b", change="same"),
+                ComparisonRow(item_id="i3", input="c", change=held_change, held_out=True)]
+        better = sum(1 for r in rows if r.change == "better")
+        return decide_gate(ExperimentComparison(a=exp, b=exp, rows=rows, better=better, worse=0))
+
+    fitted = gate("same")
+    assert not fitted.passed
+    assert fitted.reasons == ["it did no better on any of the 1 held-out saved runs, only on runs it learnt from"]
+    general = gate("better")
+    assert general.passed and (general.held_out_better, general.held_out_worse) == (1, 0)
+    assert general.reasons == ["better on 2 and worse on none of 3 saved runs, 1 of the 1 held out"]
+    assert [i.held_out for i in general.items] == [False, False, True]
+
+
+@pytest.mark.asyncio
+async def test_the_optimizer_never_reads_a_held_out_runs_conversation(db_session, owner, settings, monkeypatch):
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+    for ai_id, held in (("ai-learn", False), ("ai-held", True)):
+        link = SessionLink(id=str(uuid4()), user_id=owner.id, harness_id=agent.id, ai_session_id=ai_id, tenant_id=owner.id,
+                           harness_version="x", runtime="githi", composition_id=agent.composition_id,
+                           composition_digest=agent.composition_digest, status="active",
+                           created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+        db_session.add(link)
+        await db_session.flush()
+        db_session.add(DatasetItem(dataset_id=ds.id, input=f"from {ai_id}", source_session_id=link.id, source_run_id="r1",
+                                   held_out=held))
+    await db_session.commit()
+    started: list = []
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        api.fake, api.user = fake, owner
+        await _propose(api, db_session, agent, ds, started)
+    assert fake.reflected[0]["exclude_sessions"] == ["ai-held"]

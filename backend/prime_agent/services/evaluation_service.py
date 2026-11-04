@@ -8,6 +8,11 @@ same as any run's), one item after another, and ends each session when its run i
 An experiment never approves anything: a run that stops for an approval is recorded as
 ``needs_approval`` and cancelled, so replaying a dataset cannot run a tool nobody allowed.
 Results are read back from the runs' traces, so they are exactly what the run pages show.
+
+Every third saved run is *held out* (a person can change which): an optimizer never reads its
+conversation, so a change is also measured on runs it could not have fitted. GEPA keeps the
+same split: candidates are proposed from a train set and selected on a separate validation
+set, whose scores it calls held-out (``gepa.api.optimize``, ``trainset``/``valset``).
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from prime_agent.db.models.harness_release import HarnessRelease
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.evaluation import (
+    AddIssueResult,
     ComparisonRow,
     DatasetDetail,
     DatasetItemOut,
@@ -46,7 +52,7 @@ from prime_agent.schemas.evaluation import (
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 
-__all__ = ["MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
+__all__ = ["HELD_OUT_EVERY", "MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
 
 _ENDED: dict[str, Callable[[float], str]] = {
     "needs_approval": lambda _t: "stopped for an approval: experiments never approve",
@@ -70,6 +76,10 @@ logger = logging.getLogger(__name__)
 
 MAX_ITEMS = 50
 """Items a dataset holds: an experiment replays them one by one."""
+HELD_OUT_EVERY = 3
+"""One saved run in this many is held out from the optimizer as it is saved (``_save``)."""
+ISSUE_RUNS = 25
+"""Runs of an issue saved at once, newest first."""
 ITEM_TIMEOUT_S = 300.0
 """How long one replayed run may take before it is cancelled and recorded as timed out."""
 STARTUP_TIMEOUT_S = 120.0
@@ -208,10 +218,8 @@ class EvaluationService:
         """Save one of the user's runs: its message in full with the earlier messages of its
         conversation (at most MAX_HISTORY, the latest), how it ended, its version."""
         dataset = await self._dataset(db, user_id, dataset_id)
-        count = int((await db.execute(select(func.count()).where(DatasetItem.dataset_id == dataset_id))).scalar_one())
-        if count >= MAX_ITEMS:
-            raise HTTPException(status_code=409, detail={"error_code": "DATASET_FULL",
-                                                         "message": f"a dataset holds at most {MAX_ITEMS} runs"})
+        if await self._count(db, dataset_id) >= MAX_ITEMS:
+            raise self._full()
         try:
             trace = await self._traces.run(identity=identity, user_id=user_id, session_id=session_id, run_id=run_id, db=db)
         except TraceNotFoundError as exc:
@@ -219,22 +227,124 @@ class EvaluationService:
         if trace.agent_id != dataset.harness_id:
             raise HTTPException(status_code=422, detail={"error_code": "OTHER_AGENT",
                                                          "message": "that run is of another agent than the dataset's"})
+        item = await self._item(identity, user_id, dataset_id, session_id, run_id, trace, expected, db)
+        if item is None:
+            raise HTTPException(status_code=422, detail={"error_code": "NO_INPUT", "message": "that run has no message to replay"})
+        if not await self._save(db, item):
+            raise HTTPException(status_code=409, detail={"error_code": "ALREADY_SAVED",
+                                                         "message": "that run is already in this dataset"})
+        return DatasetItemOut.model_validate(item, from_attributes=True)
+
+    async def add_issue(
+        self, *, identity: TenantPrincipal, user_id: str, dataset_id: str, issue_key: str, db: AsyncSession
+    ) -> AddIssueResult:
+        """Save an issue's latest runs (at most ISSUE_RUNS, never an experiment's replays): the
+        failures a fix is meant to fix become what it is measured on. Runs already saved, or
+        with no message to replay, are skipped and counted; once the dataset is full, the rest
+        are left out and counted."""
+        dataset = await self._dataset(db, user_id, dataset_id)
+        room = MAX_ITEMS - await self._count(db, dataset_id)
+        if room <= 0:
+            raise self._full()
+        agent = await self._agent(db, user_id, dataset.harness_id)
+        if not agent.composition_id or not issue_key.startswith(f"{agent.composition_id}:"):
+            raise HTTPException(status_code=422, detail={"error_code": "OTHER_AGENT",
+                                                         "message": "that issue is of another agent than the dataset's"})
+        try:
+            found = await self._client.trace_issue_runs(identity, {"key": issue_key, "limit": str(ISSUE_RUNS)})
+        except AiUpstreamError as exc:
+            if exc.status_code == 404:
+                raise EvaluationNotFoundError() from exc
+            raise HTTPException(status_code=exc.status_code or 503,
+                                detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)}) from exc
+        examples = [e for e in (found.get("issue") or {}).get("examples") or [] if isinstance(e, dict)]
+        links = dict(
+            (
+                await db.execute(
+                    select(SessionLink.ai_session_id, SessionLink.id).where(
+                        SessionLink.user_id == user_id,
+                        SessionLink.ai_session_id.in_({str(e.get("session_id")) for e in examples}),
+                    )
+                )
+            ).all()
+        ) if examples else {}
+        added: list[DatasetItemOut] = []
+        skipped = 0
+        for n, e in enumerate(examples):
+            if len(added) == room:
+                return AddIssueResult(added=added, skipped=skipped, left_out=len(examples) - n)
+            session_id, run_id = links.get(str(e.get("session_id"))), str(e.get("run_id") or "")
+            if session_id is None or not run_id:  # a session the user has no link to
+                skipped += 1
+                continue
+            try:
+                trace = await self._traces.run(identity=identity, user_id=user_id, session_id=session_id,
+                                               run_id=run_id, db=db)
+            except TraceNotFoundError:
+                skipped += 1
+                continue
+            item = await self._item(identity, user_id, dataset_id, session_id, run_id, trace, None, db)
+            if trace.agent_id != dataset.harness_id or item is None or not await self._save(db, item):
+                skipped += 1
+                continue
+            added.append(DatasetItemOut.model_validate(item, from_attributes=True))
+        return AddIssueResult(added=added, skipped=skipped)
+
+    async def set_held_out(
+        self, *, user_id: str, dataset_id: str, item_id: str, held_out: bool, db: AsyncSession
+    ) -> DatasetItemOut:
+        await self._dataset(db, user_id, dataset_id)
+        item = (
+            await db.execute(select(DatasetItem).where(DatasetItem.id == item_id, DatasetItem.dataset_id == dataset_id))
+        ).scalar_one_or_none()
+        if item is None:
+            raise EvaluationNotFoundError()
+        item.held_out = held_out
+        await db.commit()
+        await db.refresh(item)
+        return DatasetItemOut.model_validate(item, from_attributes=True)
+
+    @staticmethod
+    async def _count(db: AsyncSession, dataset_id: str) -> int:
+        return int((await db.execute(select(func.count()).where(DatasetItem.dataset_id == dataset_id))).scalar_one())
+
+    @staticmethod
+    def _full() -> HTTPException:
+        return HTTPException(status_code=409, detail={"error_code": "DATASET_FULL",
+                                                      "message": f"a dataset holds at most {MAX_ITEMS} runs"})
+
+    async def _item(
+        self, identity: TenantPrincipal, user_id: str, dataset_id: str, session_id: str, run_id: str, trace: Any,
+        expected: str | None, db: AsyncSession,
+    ) -> DatasetItem | None:
+        """The item that saves this run; None when it has no message to replay."""
         ask = await self._full_input(identity, user_id, session_id, run_id, trace, db)
         if not ask:
-            raise HTTPException(status_code=422, detail={"error_code": "NO_INPUT", "message": "that run has no message to replay"})
+            return None
         history = await self._history(identity, user_id, session_id, run_id, db)
-        item = DatasetItem(dataset_id=dataset_id, input=str(ask), history=history or None,
+        return DatasetItem(dataset_id=dataset_id, input=str(ask), history=history or None,
                            expected=(expected or "").strip() or None,
                            source_session_id=session_id, source_run_id=run_id, source_version=trace.version,
                            source_status=str(trace.rollup.get("status") or "") or None)
+
+    @staticmethod
+    async def _save(db: AsyncSession, item: DatasetItem) -> bool:
+        """Add the item, holding it out when it is the dataset's next HELD_OUT_EVERY-th (systematic,
+        so a small dataset holds some out too); False when that run is already saved."""
+        counted = (
+            await db.execute(
+                select(func.count(), func.count().filter(DatasetItem.held_out.is_(True)))
+                .where(DatasetItem.dataset_id == item.dataset_id)
+            )
+        ).one()
+        item.held_out = (int(counted[0]) + 1) // HELD_OUT_EVERY > int(counted[1])
         try:
-            async with db.begin_nested():
+            async with db.begin_nested():  # a clash undoes this insert only
                 db.add(item)
             await db.commit()
-        except IntegrityError as exc:
-            raise HTTPException(status_code=409, detail={"error_code": "ALREADY_SAVED",
-                                                         "message": "that run is already in this dataset"}) from exc
-        return DatasetItemOut.model_validate(item, from_attributes=True)
+        except IntegrityError:
+            return False
+        return True
 
     async def _full_input(
         self, identity: TenantPrincipal, user_id: str, session_id: str, run_id: str, trace: Any, db: AsyncSession
@@ -632,6 +742,14 @@ class EvaluationService:
             a_by.setdefault(r.item_id, []).append(r)
         for r in b.results:
             b_by.setdefault(r.item_id, []).append(r)
+        held = set(
+            (
+                await db.execute(
+                    select(DatasetItem.id).where(DatasetItem.dataset_id == a.experiment.dataset_id,
+                                                 DatasetItem.held_out.is_(True))
+                )
+            ).scalars()
+        )
         rows: list[ComparisonRow] = []
         for item_id in list(dict.fromkeys([*a_by, *b_by])):
             ta, tb = a_by.get(item_id, []), b_by.get(item_id, [])
@@ -640,7 +758,7 @@ class EvaluationService:
             either = (ta or tb)[0] if ta or tb else None
             rows.append(ComparisonRow(item_id=item_id, input=either.input if either else "", a=ta[0] if ta else None,
                                       b=tb[0] if tb else None, a_trials=ta, b_trials=tb, a_pass_rate=self._pass_rate(ta),
-                                      b_pass_rate=self._pass_rate(tb), change=change))
+                                      b_pass_rate=self._pass_rate(tb), held_out=item_id in held, change=change))
         return ExperimentComparison(
             a=a.experiment, b=b.experiment, rows=rows,
             better=sum(1 for r in rows if r.change == "better"), worse=sum(1 for r in rows if r.change == "worse"),

@@ -40,6 +40,25 @@ describe('GateResult', () => {
     expect(screen.getByTestId('gate').textContent).toContain('Refused: it did worse on 1 of 2 saved runs.');
     expect(screen.getByText('worse')).toBeTruthy();
   });
+
+  it('marks the saved runs a change never read', () => {
+    render(
+      <GateResult
+        gate={{
+          passed: false,
+          reasons: ['it did no better on any of the 1 held-out saved runs, only on runs it learnt from'],
+          better: 1,
+          worse: 0,
+          items: [
+            { item_id: 'a', input: 'fix it', change: 'better' },
+            { item_id: 'b', input: 'add a flag', change: 'same', held_out: true },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getAllByTestId('gate-held-out')).toHaveLength(1);
+    expect(screen.getByTestId('gate').textContent).toContain('only on runs it learnt from');
+  });
 });
 
 describe('ProposalStatusPill', () => {

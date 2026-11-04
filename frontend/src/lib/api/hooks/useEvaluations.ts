@@ -91,6 +91,31 @@ export function useAddRun() {
   });
 }
 
+export function useAddIssue() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ datasetId, issueKey }: { datasetId: string; issueKey: string }) => evaluationsAPI.addIssue(datasetId, issueKey),
+    onSuccess: (r) => {
+      const others = [
+        r.skipped ? `${r.skipped} already saved or not replayable` : '',
+        r.left_out ? `${r.left_out} left out: the dataset is full` : '',
+      ].filter(Boolean);
+      toast.success(`Saved ${r.added.length} run${r.added.length === 1 ? '' : 's'}${others.length ? ` (${others.join('; ')})` : ''}`);
+      void client.invalidateQueries({ queryKey: evaluationKeys.all });
+    },
+    onError: (err) => toast.error(message(err, 'Could not save the runs')),
+  });
+}
+
+export function useSetHeldOut(datasetId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ itemId, heldOut }: { itemId: string; heldOut: boolean }) => evaluationsAPI.setHeldOut(datasetId, itemId, heldOut),
+    onSuccess: () => void client.invalidateQueries({ queryKey: evaluationKeys.dataset(datasetId) }),
+    onError: (err) => toast.error(message(err, 'Could not change the saved run')),
+  });
+}
+
 export function useDeleteItem(datasetId: string) {
   const client = useQueryClient();
   return useMutation({
