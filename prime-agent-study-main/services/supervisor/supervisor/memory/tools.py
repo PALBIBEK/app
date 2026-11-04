@@ -221,6 +221,14 @@ class TurnMemory:
     dependencies: tuple[Provenance, ...] | None = None
     sessions: SessionsTool | None = None
     labels: Mapping[str, str] = field(default_factory=dict)
+    # Reads ``events`` and ``dependencies`` the first time a call needs them: the session's
+    # visible journal, which most steps (and every schema listing) never look at.
+    load: Callable[[], Awaitable[tuple[Sequence[Envelope], tuple[Provenance, ...]]]] | None = None
+
+    async def _loaded(self) -> None:
+        if self.load is not None:
+            self.events, self.dependencies = await self.load()
+            self.load = None
 
     def schemas(self) -> list[dict[str, Any]]:
         out = [HISTORY_SCHEMA]
@@ -234,6 +242,8 @@ class TurnMemory:
         return name in {s["function"]["name"] for s in self.schemas()}
 
     async def call(self, name: str, args: Mapping[str, Any]) -> ToolOutput:
+        if name in (HISTORY_TOOL, MEMORY_TOOL):
+            await self._loaded()
         if name == HISTORY_TOOL:
             return self._history(args)
         if name == SESSIONS_TOOL and self.sessions is not None:

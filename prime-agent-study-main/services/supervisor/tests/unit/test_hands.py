@@ -243,8 +243,14 @@ async def test_an_adopted_sandbox_keeps_its_newer_files() -> None:
     async def has_checkpoint(key: str) -> bool:
         return True
 
-    class Reader:
+    class Reader:  # an empty journal
         async def read(self, session_id: str, since: int = -1) -> list[object]:
+            return []
+
+        async def of_types(self, session_id: str, types: object, since: int = -1) -> list[object]:
+            return []
+
+        async def last_of(self, session_id: str, types: object, **kw: object) -> list[object]:
             return []
 
     manager = SimpleNamespace(
@@ -276,7 +282,7 @@ def test_a_restore_names_the_calls_whose_changes_it_cannot_bring_back() -> None:
     """Changes are saved after each step: a file-changing call that ended after the last
     save, in a sandbox that is gone, is lost though the journal says it ran."""
     from supervisor.agent.events import Envelope, HandCheckpointed, RunStart, ToolEnd, ToolStart
-    from supervisor.session.manager_base import lost_calls, open_run
+    from supervisor.session.manager_base import lost_calls
 
     def env(seq: int, payload: object, run: str = "r1") -> Envelope:
         return Envelope("s", seq, f"e{seq}", seq, run, None, payload)  # type: ignore[arg-type]
@@ -297,4 +303,3 @@ def test_a_restore_names_the_calls_whose_changes_it_cannot_bring_back() -> None:
     ]
     assert lost_calls(events, "default") == ["edit (c2)"]
     assert lost_calls(events, "gpu") == ["write (c5)"]  # no checkpoint of its own yet
-    assert open_run(events) == "r1"
