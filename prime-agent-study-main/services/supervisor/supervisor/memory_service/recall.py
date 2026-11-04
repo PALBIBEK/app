@@ -1,13 +1,14 @@
-"""Hybrid recall — vector + lexical + recency + confidence → RRF → token pack."""
+"""Hybrid recall: relevance (vector + lexical) gated, then weighted with recency and confidence; token pack."""
 
 from __future__ import annotations
 
-import math
 import re
 import time
+from typing import Final
 
 from supervisor.memory_service.bank import MemoryBank, _row_to_item
 from supervisor.memory_service.embed import Embedder, HashingEmbedder, cosine
+from supervisor.memory_service.models import MemoryItemRow
 from supervisor.memory_service.tier2_types import (
     MemoryItem,
     RecallResult,
@@ -34,8 +35,28 @@ def lexical_score(query: str, content: str) -> float:
     return overlap / len(qt) + 0.5 * (exact / max(1, len(qt)))
 
 
-def rrf(rank: int, k: int = 60) -> float:
-    return 1.0 / (k + rank)
+# Ranking, after the systems that do this in production (see the PR for the code read):
+# - mem0 (mem0/memory/main.py, mem0/utils/scoring.py ``score_and_rank``): a candidate
+#   whose semantic similarity is below ``threshold`` (default 0.1) is excluded before any
+#   other signal can lift it; relevance is the semantic and keyword scores added and
+#   divided by the maximum possible, so it lies in [0, 1].
+# - Generative Agents (reverie/.../retrieve.py ``new_retrieve``): recency, relevance and
+#   importance are each min-max normalized over the candidates to [0, 1] and combined with
+#   weights [0.5, 3, 2]; importance here is the item's confidence.
+# - LangChain ``TimeWeightedVectorStoreRetriever``: recency is (1 - decay_rate) ** hours
+#   since the item, decay_rate 0.01.
+MIN_SEMANTIC: Final = 0.1
+RECENCY_DECAY: Final = 0.01
+W_RECENCY, W_RELEVANCE, W_IMPORTANCE = 0.5, 3.0, 2.0
+_LEXICAL_MAX: Final = 1.5  # lexical_score's maximum (all terms overlap and all are exact)
+
+
+def _normalized(values: dict[str, float]) -> dict[str, float]:
+    """Min-max to [0, 1]; all equal is 0.5 each (Generative Agents' normalize_dict_floats)."""
+    low, high = min(values.values()), max(values.values())
+    if high == low:
+        return dict.fromkeys(values, 0.5)
+    return {k: (v - low) / (high - low) for k, v in values.items()}
 
 
 class HybridRecall:
@@ -47,6 +68,38 @@ class HybridRecall:
         self._bank = bank
         self._embedder = embedder or HashingEmbedder()
 
+    def rank(self, rows: list[MemoryItemRow], query: str, *, now_ms: int) -> list[tuple[MemoryItemRow, float]]:
+        """Items related to ``query``, best first, with their scores.
+
+        Unrelated items (semantic similarity below MIN_SEMANTIC) are not returned at all:
+        a recall with nothing relevant is empty, not padded with whatever is newest."""
+        q_emb = self._embedder.embed(query)
+        relevance: dict[str, float] = {}
+        related: dict[str, MemoryItemRow] = {}
+        for row in rows:
+            semantic = cosine(q_emb, list(row.embedding or []))
+            if semantic < MIN_SEMANTIC:
+                continue
+            keyword = min(lexical_score(query, row.content) / _LEXICAL_MAX, 1.0)
+            relevance[row.id] = (semantic + keyword) / 2.0
+            related[row.id] = row
+        if not related:
+            return []
+        recency = _normalized(
+            {
+                i: (1.0 - RECENCY_DECAY) ** (max(0, now_ms - r.valid_from_ms) / 3_600_000)
+                for i, r in related.items()
+            }
+        )
+        importance = _normalized({i: float(r.confidence) for i, r in related.items()})
+        relevant = _normalized(relevance)
+        scored = [
+            (row, W_RECENCY * recency[i] + W_RELEVANCE * relevant[i] + W_IMPORTANCE * importance[i])
+            for i, row in related.items()
+        ]
+        scored.sort(key=lambda pair: (-pair[1], -pair[0].valid_from_ms))
+        return scored
+
     async def recall(
         self,
         scope: Scope,
@@ -54,54 +107,14 @@ class HybridRecall:
         budget: TokenBudget,
     ) -> RecallResult:
         actives = await self._bank.list_active(scope)
-        if not actives:
-            return RecallResult(items=(), item_ids=(), tokens_used=0)
-
-        q_emb = self._embedder.embed(query)
-        now = int(time.time() * 1000)
-
-        # Rank lists
-        by_vec = sorted(
-            actives,
-            key=lambda r: cosine(q_emb, list(r.embedding or [])),
-            reverse=True,
-        )
-        by_lex = sorted(
-            actives,
-            key=lambda r: lexical_score(query, r.content),
-            reverse=True,
-        )
-        by_recency = sorted(actives, key=lambda r: r.valid_from_ms, reverse=True)
-        by_conf = sorted(actives, key=lambda r: float(r.confidence), reverse=True)
-
-        scores: dict[str, float] = {r.id: 0.0 for r in actives}
-        for rank, row in enumerate(by_vec, start=1):
-            scores[row.id] += rrf(rank)
-        for rank, row in enumerate(by_lex, start=1):
-            scores[row.id] += rrf(rank)
-        for rank, row in enumerate(by_recency, start=1):
-            scores[row.id] += 0.5 * rrf(rank)
-        for rank, row in enumerate(by_conf, start=1):
-            scores[row.id] += 0.5 * rrf(rank)
-
-        # Soft recency boost for very new items
-        for row in actives:
-            age_h = max(0.0, (now - row.valid_from_ms) / 3_600_000)
-            scores[row.id] += 0.05 * math.exp(-age_h / 24.0)
-
-        ranked = sorted(actives, key=lambda r: scores[r.id], reverse=True)
+        ranked = self.rank(actives, query, now_ms=int(time.time() * 1000))
         packed: list[MemoryItem] = []
         tokens = 0
-        for row in ranked:
+        for row, _score in ranked:
             cost = estimate_tokens(row.content)
-            if tokens + cost > budget.max_tokens and packed:
-                break
-            if tokens + cost > budget.max_tokens and not packed and cost > budget.max_tokens:
-                continue  # a single row larger than the whole budget is skipped
+            if tokens + cost > budget.max_tokens:
+                continue  # all or nothing per item; a smaller one further down may still fit
             packed.append(_row_to_item(row))
             tokens += cost
-            if tokens >= budget.max_tokens:
-                break
-
         ids = tuple(i.id for i in packed)
         return RecallResult(items=tuple(packed), item_ids=ids, tokens_used=tokens)

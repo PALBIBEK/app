@@ -7,9 +7,15 @@ import math
 import re
 from typing import Protocol, runtime_checkable
 
+from supervisor.memory_service.text import STOPWORDS
+
 _TOKEN = re.compile(r"[a-z0-9_./:-]+", re.IGNORECASE)
 
-EMBED_DIM = 64
+EMBED_DIM = 1024
+"""Buckets of the hashing trick. scikit-learn's HashingVectorizer (default 2**20 features)
+notes that "small numbers of features are likely to cause hash collisions"; at 64 two
+unrelated texts often shared buckets, so their similarity was noise above any sensible
+relevance floor. Stored vectors of another size are re-embedded by schema migration 5."""
 
 
 @runtime_checkable
@@ -25,7 +31,7 @@ class HashingEmbedder:
 
     def embed(self, text: str) -> list[float]:
         vec = [0.0] * self.dim
-        tokens = _TOKEN.findall(text.lower())
+        tokens = [t for t in _TOKEN.findall(text.lower()) if t not in STOPWORDS]
         if not tokens:
             return vec
         for tok in tokens:

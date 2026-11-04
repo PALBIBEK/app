@@ -21,6 +21,7 @@ from typing import Final
 
 from supervisor.memory_service.notebooks.render import candidate
 from supervisor.memory_service.notebooks.types import Candidate, Fact
+from supervisor.memory_service.text import STOPWORDS
 
 FLOOR: Final = 0.2
 """The score of a fact that matches nothing (and of every fact without a query)."""
@@ -32,16 +33,13 @@ _CURRENT: Final = "current message:"
 
 _WORD = re.compile(r"\w+")
 _ROLE = re.compile(r"^(?:user|assistant):\s*", re.IGNORECASE)
-_STOP: Final = frozenset(
-    ["a", "about", "above", "after", "again", "all", "am", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you", "your", "yours", "yourself", "yourselves", "let", "lets", "please", "ok", "okay", "yes", "also", "get", "got", "one"]
-)
 
 
 def terms(text: str) -> list[str]:
     """Content words, case-folded, with a plural's s dropped (so "peanuts" meets "peanut")."""
     out = []
     for word in _WORD.findall(unicodedata.normalize("NFKC", text).casefold()):
-        if word in _STOP or (len(word) < 2 and not word.isdigit()):
+        if word in STOPWORDS or (len(word) < 2 and not word.isdigit()):
             continue
         if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
             word = word[:-1]
