@@ -80,6 +80,8 @@ class Experiment(Base):
     composition_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     """``queued``, ``running``, ``done``, ``failed`` or ``cancelled``."""
+    trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    """Times each item is replayed: one answer per item measures noise (evaluation_service)."""
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -92,7 +94,7 @@ class ExperimentRun(Base):
     """One item of the dataset, replayed in a fresh session."""
 
     __tablename__ = "trace_experiment_runs"
-    __table_args__ = (UniqueConstraint("experiment_id", "item_id", name="uq_trace_experiment_runs_item"),)
+    __table_args__ = (UniqueConstraint("experiment_id", "item_id", "trial", name="uq_trace_experiment_runs_trial"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
     experiment_id: Mapped[str] = mapped_column(
@@ -102,6 +104,8 @@ class ExperimentRun(Base):
         String(36), ForeignKey("trace_dataset_items.id", ondelete="CASCADE"), nullable=False
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    trial: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    """Which replay of the item (0-based) of the experiment's ``trials``."""
     session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     """The product session it ran in (a session link the user owns)."""
     run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -48,6 +48,12 @@ from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 
 __all__ = ["MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
 
+DEFAULT_TRIALS = 3
+"""Replays of each saved run. One answer per item compares versions on noise; Anthropic's
+guide to agent evals runs several trials per task (its worked example: three)."""
+FULL_SCORE = 10
+"""A replay's score with no failed check or judge (``_score``)."""
+
 REFERENCE_JUDGE = "good answer"
 """The supervisor's built-in judge of a replay against its saved good answer
 (``supervisor.traces.judges.REFERENCE_JUDGE``)."""
@@ -270,8 +276,11 @@ class EvaluationService:
                    composition_id=release.composition_id, composition_digest=release.composition_digest,
                    release_version=release.version)
 
-    async def create_experiment(self, *, user_id: str, dataset_id: str, pin: Pin, db: AsyncSession) -> Experiment:
-        """An experiment queued for every item of the dataset (``run_experiment`` replays it)."""
+    async def create_experiment(
+        self, *, user_id: str, dataset_id: str, pin: Pin, db: AsyncSession, trials: int = DEFAULT_TRIALS
+    ) -> Experiment:
+        """An experiment queued for every item of the dataset, ``trials`` times each
+        (``run_experiment`` replays it)."""
         dataset = await self._dataset(db, user_id, dataset_id)
         items = (
             await db.execute(select(DatasetItem).where(DatasetItem.dataset_id == dataset_id).order_by(DatasetItem.created_at.asc()))
@@ -286,11 +295,13 @@ class EvaluationService:
                                                          "message": "an experiment on this dataset is still running"})
         exp = Experiment(dataset_id=dataset_id, user_id=user_id, harness_id=dataset.harness_id, label=pin.label,
                          release_version=pin.release_version, harness_version=pin.harness_version, runtime=pin.runtime,
-                         composition_id=pin.composition_id, composition_digest=pin.composition_digest, status="queued")
+                         composition_id=pin.composition_id, composition_digest=pin.composition_digest, status="queued",
+                         trials=trials)
         db.add(exp)
         await db.flush()
-        for n, item in enumerate(items):
-            db.add(ExperimentRun(experiment_id=exp.id, item_id=item.id, position=n, status="pending"))
+        for trial in range(trials):  # a round of every item, then the next: a cut-off run still covers all
+            for n, item in enumerate(items):
+                db.add(ExperimentRun(experiment_id=exp.id, item_id=item.id, position=n, trial=trial, status="pending"))
         await db.commit()
         return exp
 
@@ -423,7 +434,11 @@ class EvaluationService:
             exp.status, exp.started_at, exp.heartbeat_at = "running", exp.started_at or _now(), _now()
             await db.commit()
             runs = (
-                await db.execute(select(ExperimentRun).where(ExperimentRun.experiment_id == experiment_id).order_by(ExperimentRun.position.asc()))
+                await db.execute(
+                    select(ExperimentRun)
+                    .where(ExperimentRun.experiment_id == experiment_id)
+                    .order_by(ExperimentRun.trial.asc(), ExperimentRun.position.asc())
+                )
             ).scalars().all()
             try:
                 for run in runs:
@@ -461,12 +476,13 @@ class EvaluationService:
                 select(ExperimentRun, DatasetItem)
                 .join(DatasetItem, DatasetItem.id == ExperimentRun.item_id)
                 .where(ExperimentRun.experiment_id == exp.id)
-                .order_by(ExperimentRun.position.asc())
+                .order_by(ExperimentRun.position.asc(), ExperimentRun.trial.asc())
             )
         ).all()
         out: list[ExperimentItemResult] = []
         for run, item in rows:
-            result = ExperimentItemResult(item_id=item.id, position=run.position, input=item.input, expected=item.expected,
+            result = ExperimentItemResult(item_id=item.id, position=run.position, trial=run.trial, input=item.input,
+                                          expected=item.expected,
                                           status=run.status, error=run.error, session_id=run.session_id, run_id=run.run_id)
             if run.session_id and run.run_id and run.status in ("done", "needs_approval", "timed_out"):
                 try:
@@ -488,13 +504,17 @@ class EvaluationService:
             out.append(result)
         return out
 
-    @staticmethod
-    def _stats(results: list[ExperimentItemResult]) -> ExperimentStats:
+    @classmethod
+    def _stats(cls, results: list[ExperimentItemResult]) -> ExperimentStats:
         finished = [r for r in results if r.status in ("done", "needs_approval", "timed_out", "failed")]
+        by_item: dict[str, list[bool]] = {}
+        for r in results:
+            by_item.setdefault(r.item_id, []).append(cls._score(r) == FULL_SCORE)
         costs = [r.cost for r in results if r.cost is not None]
         times = [r.duration_ms for r in results if r.duration_ms is not None]
         return ExperimentStats(
-            items=len(results),
+            items=len(by_item),
+            runs=len(results),
             finished=len(finished),
             answered=sum(1 for r in results if r.run_status == "ok"),
             failed=sum(1 for r in results if r.status in ("failed", "timed_out") or r.run_status in ("error", "budget_exceeded", "interrupted")),
@@ -504,6 +524,10 @@ class EvaluationService:
             judge_fail=sum(1 for r in results for v in r.verdicts if v.source == "judge" and v.label == "fail"),
             avg_cost=round(sum(costs) / len(costs), 6) if costs else None,
             avg_duration_ms=round(sum(times) / len(times)) if times else None,
+            trials=max((r.trial for r in results), default=0) + 1,
+            passed=sum(passes.count(True) for passes in by_item.values()),
+            pass_all=sum(1 for passes in by_item.values() if passes and all(passes)),
+            pass_any=sum(1 for passes in by_item.values() if any(passes)),
         )
 
     def _exp_out(self, exp: Experiment, results: list[ExperimentItemResult]) -> ExperimentOut:
@@ -530,7 +554,22 @@ class EvaluationService:
         if r.status in ("failed", "timed_out", "needs_approval") or r.run_status != "ok":
             return 0
         fails = sum(1 for v in r.verdicts if v.label == "fail")
-        return 10 - min(fails, 9)
+        return FULL_SCORE - min(fails, FULL_SCORE - 1)
+
+    @classmethod
+    def _mean(cls, trials: list[ExperimentItemResult]) -> float | None:
+        """An item's score over its trials; None until every trial finished."""
+        scores = [cls._score(r) for r in trials]
+        if not scores or any(s is None for s in scores):
+            return None
+        return sum(s for s in scores if s is not None) / len(scores)
+
+    @classmethod
+    def _pass_rate(cls, trials: list[ExperimentItemResult]) -> float | None:
+        scores = [cls._score(r) for r in trials]
+        if not scores or any(s is None for s in scores):
+            return None
+        return round(sum(1 for s in scores if s == FULL_SCORE) / len(scores), 4)
 
     async def compare(
         self, *, identity: TenantPrincipal, user_id: str, a_id: str, b_id: str, db: AsyncSession
@@ -540,15 +579,21 @@ class EvaluationService:
         if a.experiment.dataset_id != b.experiment.dataset_id:
             raise HTTPException(status_code=422, detail={"error_code": "DIFFERENT_DATASETS",
                                                          "message": "compare experiments of the same dataset"})
-        a_by = {r.item_id: r for r in a.results}
-        b_by = {r.item_id: r for r in b.results}
+        a_by: dict[str, list[ExperimentItemResult]] = {}
+        b_by: dict[str, list[ExperimentItemResult]] = {}
+        for r in a.results:
+            a_by.setdefault(r.item_id, []).append(r)
+        for r in b.results:
+            b_by.setdefault(r.item_id, []).append(r)
         rows: list[ComparisonRow] = []
         for item_id in list(dict.fromkeys([*a_by, *b_by])):
-            ra, rb = a_by.get(item_id), b_by.get(item_id)
-            sa, sb = self._score(ra), self._score(rb)
+            ta, tb = a_by.get(item_id, []), b_by.get(item_id, [])
+            sa, sb = self._mean(ta), self._mean(tb)
             change = "unknown" if sa is None or sb is None else "better" if sb > sa else "worse" if sb < sa else "same"
-            either = ra or rb
-            rows.append(ComparisonRow(item_id=item_id, input=either.input if either else "", a=ra, b=rb, change=change))
+            either = (ta or tb)[0] if ta or tb else None
+            rows.append(ComparisonRow(item_id=item_id, input=either.input if either else "", a=ta[0] if ta else None,
+                                      b=tb[0] if tb else None, a_trials=ta, b_trials=tb, a_pass_rate=self._pass_rate(ta),
+                                      b_pass_rate=self._pass_rate(tb), change=change))
         return ExperimentComparison(
             a=a.experiment, b=b.experiment, rows=rows,
             better=sum(1 for r in rows if r.change == "better"), worse=sum(1 for r in rows if r.change == "worse"),

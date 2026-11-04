@@ -36,6 +36,16 @@ export interface ExperimentStats {
   judge_fail: number;
   avg_cost: number | null;
   avg_duration_ms: number | null;
+  /** Replays of each saved run. */
+  trials: number;
+  /** Replays in all (items × trials). */
+  runs: number;
+  /** Replays that answered with no failed check or judge. */
+  passed: number;
+  /** Saved runs that passed every trial (pass^k: consistency). */
+  pass_all: number;
+  /** Saved runs that passed at least one trial (pass@k). */
+  pass_any: number;
 }
 
 export type ExperimentStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
@@ -74,6 +84,8 @@ export interface Verdict {
 export interface ExperimentItemResult {
   item_id: string;
   position: number;
+  /** Which replay of the saved run (0-based). */
+  trial: number;
   input: string;
   expected: string | null;
   /** How the replay went: done, needs_approval, timed_out, failed, pending, running. */
@@ -100,6 +112,11 @@ export interface ComparisonRow {
   input: string;
   a: ExperimentItemResult | null;
   b: ExperimentItemResult | null;
+  a_trials: ExperimentItemResult[];
+  b_trials: ExperimentItemResult[];
+  /** Share of the saved run's trials that passed; null until all finished. */
+  a_pass_rate: number | null;
+  b_pass_rate: number | null;
   change: 'better' | 'worse' | 'same' | 'unknown';
 }
 

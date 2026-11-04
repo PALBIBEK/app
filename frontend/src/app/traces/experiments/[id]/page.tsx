@@ -57,10 +57,13 @@ export default function ExperimentPage(): JSX.Element {
           <Card>
             <ol className="divide-y divide-line-soft" data-testid="experiment-results">
               {data?.results.map((r) => (
-                <li key={r.item_id} className="grid gap-x-6 gap-y-2 px-5 py-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <li key={`${r.item_id}:${r.trial}`} className="grid gap-x-6 gap-y-2 px-5 py-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" data-testid="experiment-result">
                   <div className="flex min-w-0 gap-3">
                     <span className="tabular w-6 flex-none text-right font-mono text-sm text-ink-3">{r.position + 1}</span>
                     <div className="flex min-w-0 flex-col gap-1">
+                      {(data.experiment.stats?.trials ?? 1) > 1 ? (
+                        <span className="text-xs text-ink-3" data-testid="trial">trial {r.trial + 1} of {data.experiment.stats?.trials}</span>
+                      ) : null}
                       <p className="line-clamp-3 whitespace-pre-wrap">{r.input}</p>
                       {r.expected ? <p className="text-[12.5px] text-ink-3">Good answer: {r.expected}</p> : null}
                     </div>

@@ -47,7 +47,13 @@ from prime_agent.schemas.evaluation import (
 )
 from prime_agent.schemas.harness_manifest import HarnessManifest, PromptSpec, manifest_body
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
-from prime_agent.services.evaluation_service import ITEM_TIMEOUT_S, EvaluationService, Pin, SessionFactory
+from prime_agent.services.evaluation_service import (
+    DEFAULT_TRIALS,
+    ITEM_TIMEOUT_S,
+    EvaluationService,
+    Pin,
+    SessionFactory,
+)
 from prime_agent.services.harness_publish_service import HarnessPublisher, PublishError
 
 __all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate"]
@@ -99,6 +105,8 @@ def decide_gate(cmp: ExperimentComparison) -> Gate:
         reasons.append(f"{b.checks_failed} runs failed checks, against {a.checks_failed}")
     if b.judge_fail > a.judge_fail:
         reasons.append(f"judges failed it {b.judge_fail} times, against {a.judge_fail}")
+    if b.pass_all < a.pass_all:  # pass^k: consistency, what a person relies on
+        reasons.append(f"it passed every trial on {b.pass_all} saved runs, against {a.pass_all}")
     passed = not reasons
     if passed:
         reasons.append(f"better on {cmp.better} and worse on none of {len(cmp.rows)} saved runs")
@@ -384,7 +392,8 @@ class ImprovementService:
         candidates = (
             await db.execute(
                 select(Experiment).where(Experiment.dataset_id == dataset_id, Experiment.status == "done",
-                                         Experiment.composition_digest == live.composition_digest)
+                                         Experiment.composition_digest == live.composition_digest,
+                                         Experiment.trials == DEFAULT_TRIALS)
                 .order_by(Experiment.created_at.desc()).limit(5)
             )
         ).scalars().all()
