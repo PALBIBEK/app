@@ -25,6 +25,7 @@ from supervisor.memory_service.rate_limit import (
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.store import SeqConflict
 from supervisor.memory_service.tenant import TenantMismatch, TenantRequired
+from supervisor.memory_service.tier2_types import ItemNotFound, ItemSuperseded
 from supervisor.memory_service.types import (
     FormatUnsupported,
     LeaseHeld,
@@ -165,8 +166,10 @@ async def _guard(request: Request) -> None:
 def _map_error(exc: Exception) -> HTTPException:
     if isinstance(exc, HTTPException):  # already an answer (a tenant check, say): keep it
         return exc
-    if isinstance(exc, SessionNotFound):
+    if isinstance(exc, (SessionNotFound, ItemNotFound)):
         return HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, ItemSuperseded):
+        return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (SessionCorrupt, FormatUnsupported)):
         return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (StaleFence, LeaseHeld, SeqConflict)):

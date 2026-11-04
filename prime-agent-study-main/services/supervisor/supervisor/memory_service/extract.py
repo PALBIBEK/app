@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.bank import MemoryBank
 from supervisor.memory_service.models import ExtractionJobRow, MemorySessionRow, SessionEventRow
-from supervisor.memory_service.tier2_types import NewMemoryItem
+from supervisor.memory_service.tier2_types import ItemSuperseded, NewMemoryItem
 from supervisor.memory_service.types import Scope
 
 
@@ -247,7 +247,10 @@ class ExtractionQueue:
                 kept += 1
             elif cand.kind == "correction" or cand.confidence >= float(dup.confidence):
                 if dup.content.strip().lower() != cand.content.strip().lower():
-                    await self._bank.supersede(dup.id, new_item, scope)
+                    try:
+                        await self._bank.supersede(dup.id, new_item, scope)
+                    except ItemSuperseded:
+                        continue  # superseded meanwhile: a newer version already stands
                     kept += 1
 
         await self._finish(job.id, "done", None)
