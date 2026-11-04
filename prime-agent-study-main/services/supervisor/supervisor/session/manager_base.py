@@ -45,7 +45,7 @@ from supervisor.harness import (
     manifest_from_dict,
 )
 from supervisor.journal.reader import JournalReader
-from supervisor.journal.secrets import mask_event
+from supervisor.journal.secrets import mask_bytes, mask_event
 from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import JournalWriter, Written
 from supervisor.memory.platform import MemoryPlatform
@@ -841,6 +841,7 @@ class _HandHooks:
         session_id, hand = split_key(key)
         ref = None
         if logs:
+            logs = mask_bytes(logs)  # an env dump lands here (supervisor.journal.secrets)
             try:
                 ref = await self._m._writer.put_blob(logs)
             except Exception:

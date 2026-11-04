@@ -18,7 +18,7 @@ from typing import Any, Final
 
 from supervisor.journal.serde import decode_event, encode_event
 
-__all__ = ["mask", "mask_event", "mask_text"]
+__all__ = ["mask", "mask_bytes", "mask_event", "mask_streaming", "mask_text"]
 
 _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     (
@@ -81,9 +81,27 @@ def mask(value: Any) -> Any:
         items = [mask(v) for v in value]
         return value if all(a is b for a, b in zip(items, value, strict=True)) else items
     if isinstance(value, dict):
-        fields = {k: mask(v) for k, v in value.items()}
-        return value if all(fields[k] is value[k] for k in value) else fields
+        fields = [(mask(k) if isinstance(k, str) else k, mask(v)) for k, v in value.items()]
+        unchanged = all(k is k0 and v is v0 for (k, v), (k0, v0) in zip(fields, value.items(), strict=True))
+        return value if unchanged else dict(fields)
     return value
+
+
+def mask_bytes(data: bytes) -> bytes:
+    """``data`` (a sandbox's logs: text, mostly) with every credential in it replaced; bytes
+    that are not UTF-8 pass through as they were."""
+    text = data.decode("utf-8", errors="surrogateescape")
+    masked = mask_text(text)
+    return data if masked == text else masked.encode("utf-8", errors="surrogateescape")
+
+
+def mask_streaming(text: str) -> str:
+    """What may be shown of ``text`` while it is still being written: masked, without its
+    last unfinished word. A credential arrives a few characters at a time, and until it is
+    whole it may not look like one (``sk-or-v1-ab`` is not yet a key); the word is shown
+    once it ends, or in the message the reply is journalled as."""
+    end = max(text.rfind(" "), text.rfind("\n"), text.rfind("\t"))
+    return mask_text(text[: end + 1])
 
 
 def mask_event[E](event: E) -> E:

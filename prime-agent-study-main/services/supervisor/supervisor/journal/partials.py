@@ -19,6 +19,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import PartialOutputRow
+from supervisor.journal.secrets import mask_streaming
 from supervisor.journal.watch import notify
 
 __all__ = ["FLUSH_S", "Partial", "PartialOutputs", "PartialSink"]
@@ -96,6 +97,8 @@ class PartialSink:
             if self._version == self._written:
                 return
             version, text, thinking = self._version, "".join(self._text), "".join(self._thinking)
+        # Shown to every client as it is written: no credential, not even half of one.
+        text, thinking = mask_streaming(text), mask_streaming(thinking)
         try:
             await self._store.put(self._session_id, self._run_id, self._step, text, thinking)
             self._written = version
