@@ -146,6 +146,8 @@ jobs:
       - name: Install
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: pip install -e ".[dev,postgres,s3]"
+      - name: Browser runtime (the browser code mode's tests run Chromium as its sandbox image does)
+        run: pip install "playwright==1.56.0" && python -m playwright install --with-deps chromium
       - name: Temporal CLI (the supervisor's workflow tests start a dev server)
         run: |
           curl -sSf https://temporal.download/cli.sh | sh

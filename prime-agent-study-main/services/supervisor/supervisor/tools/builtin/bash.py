@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Final
 
 from pydantic import Field
@@ -10,15 +9,12 @@ from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
 from supervisor.tools.registry import tool
 from supervisor.tools.spec import ToolClass
+from supervisor.tools.spill import spill
 from supervisor.tools.truncate import truncate_tail
 
 _GRACE_S: Final = 2.0
 """Kept back from the call's budget so the command is killed (and its partial
 output returned) before the tool call itself times out."""
-OUTPUT_DIR: Final = ".githi/output"
-"""Where a command's full output is kept when the result shows only part of it (pi
-saves it to a temp file; here it is the workspace, so ``read`` and ``grep`` reach it)."""
-MAX_SPILL_BYTES: Final = 8 * 1024 * 1024
 
 
 class BashArgs(ToolArgs):
@@ -73,8 +69,8 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         }
         if shown.last_line_partial:
             payload["truncation"]["line_bytes"] = len(raw.rstrip("\n").rsplit("\n", 1)[-1].encode("utf-8"))
-        if spill := await _spill(ctx, raw.encode("utf-8")):
-            payload["full_output"] = spill
+        if kept := await spill(ctx, raw.encode("utf-8"), kind="bash"):
+            payload["full_output"] = kept
     if result.stopped:
         payload["stopped"] = True
     if result.timed_out:
@@ -84,15 +80,3 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         payload["timeout_capped_to"] = ceiling
     return payload
 
-
-async def _spill(ctx: ToolContext, full: bytes | None) -> str | None:
-    """Keep a cut command's whole output in the workspace; its path, or None."""
-    if not full:
-        return None
-    name = f"{OUTPUT_DIR}/bash-{hashlib.sha256(full).hexdigest()[:12]}.log"
-    data = full if len(full) <= MAX_SPILL_BYTES else full[:MAX_SPILL_BYTES] + b"\n[... output past 8 MiB not kept]\n"
-    try:
-        await ctx.workspace.write_bytes(name, data)
-    except Exception:  # noqa: BLE001 — the command's result stands without its copy
-        return None
-    return name

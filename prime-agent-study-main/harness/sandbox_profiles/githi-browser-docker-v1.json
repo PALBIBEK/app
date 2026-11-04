@@ -1,0 +1,12 @@
+{
+  "approval_default": "ask",
+  "digest": "sha256:db1d0b645903274c0c6e4fccc6fda07a529a4fbe2af7c8ce4e8f9732ffce5287",
+  "file_effects": "workspace_write",
+  "image_digest": "mcr.microsoft.com/playwright/python:v1.56.0-noble",
+  "name": "githi-browser-docker-v1",
+  "protocol_version": 1,
+  "provider": "local_docker",
+  "semver": "1.0.0",
+  "status": "offered",
+  "sticky_eligible": true
+}

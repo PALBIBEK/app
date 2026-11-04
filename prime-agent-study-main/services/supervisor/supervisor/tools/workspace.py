@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LOGICAL_ROOT",
+    "STDERR_SEPARATOR",
     "CommandResult",
     "Entry",
     "HostWorkspace",
@@ -294,8 +295,12 @@ async def _wait_or_stop(
             return "stopped"
 
 
+STDERR_SEPARATOR: Final = b"\n[stderr]\n"
+"""Between stdout and stderr in a cut command's ``CommandResult.full``."""
+
+
 def _full(out: bytes, err: bytes) -> bytes:
-    return out + (b"\n[stderr]\n" + err if err else b"")
+    return out + (STDERR_SEPARATOR + err if err else b"")
 
 
 def _clip(raw: bytes) -> tuple[str, bool]:
