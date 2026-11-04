@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from supervisor.memory_service.notebooks.types import Candidate, Fact
 
 _SPACE = re.compile(r"\s+")
-_BULLET = re.compile(r"^[-*]\s+")
+_BULLET = re.compile(r"^[-*](?:\s+|$)")  # a bullet, or a bare one
 _DATED = re.compile(r"^\((\d{4}-\d\d-\d\d)\)\s*")
 _SAID_IN = re.compile(r"\s+\(said in ([^)]+)\)\s*$", re.IGNORECASE)
 
@@ -27,7 +28,7 @@ def clean_captured(facts: Iterable[str]) -> list[str]:
     """
     out: list[str] = []
     for raw in facts:
-        text = _SPACE.sub(" ", raw).strip()
+        text = _SPACE.sub(" ", unicodedata.normalize("NFC", raw)).strip()
         text = _BULLET.sub("", text)
         text = _DATED.sub(lambda m: f"on {m.group(1)}: ", text)
         text = _SAID_IN.sub(lambda m: f" [claimed source: {m.group(1)}]", text)
@@ -37,11 +38,14 @@ def clean_captured(facts: Iterable[str]) -> list[str]:
 
 
 def edited_text(text: str) -> str:
-    return _DATED.sub("", _BULLET.sub("", _SPACE.sub(" ", text).strip()))
+    text = _SPACE.sub(" ", unicodedata.normalize("NFC", text)).strip()
+    return _DATED.sub("", _BULLET.sub("", text)).strip()
 
 
 def normalize(text: str) -> str:
-    return text.strip().lower()
+    """The key two facts are the same fact by: compatibility-composed Unicode, case
+    folded, whitespace collapsed ("Zürich" typed either way, "ß" and "ss" alike)."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
 def bullets(body: str) -> list[str]:

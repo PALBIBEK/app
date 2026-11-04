@@ -19,6 +19,7 @@ from supervisor.memory_service.limits import (
     MAX_FACTS_PER_NOTEBOOK,
 )
 from supervisor.memory_service.notebooks.errors import (
+    EmptyFact,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     RevisionOutOfRange,
@@ -128,6 +129,8 @@ class NotebookOps:
     ) -> None:
         _within("edits in one call", MAX_FACTS_PER_CAPTURE, len(edits))
         _within_length([e.text for e in edits])
+        if blank := [e.id for e in edits if not edited_text(e.text)]:
+            raise EmptyFact(blank)
         notebook = await self.store.get(notebook_id)
         # Editing from a conversation exposes the fact to that conversation's sources.
         exposure = capture_provenance(notebook.home, context) if context else None

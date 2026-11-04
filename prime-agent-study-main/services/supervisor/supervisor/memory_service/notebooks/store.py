@@ -29,6 +29,7 @@ from supervisor.memory_service.cost import CachingEmbedder
 from supervisor.memory_service.embed import Embedder, content_hash
 from supervisor.memory_service.models import MemoryItemRow
 from supervisor.memory_service.notebooks.errors import (
+    NotebookArchived,
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
@@ -113,10 +114,12 @@ def _columns(provenance: Provenance) -> dict[str, object]:
 
 
 def bankable(notebook: NotebookRow, provenance: Provenance) -> bool:
-    """Whether a fact may sit in the bank, whose recall applies no audience rules."""
+    """Whether a fact may sit in the bank, whose recall applies no audience rules (an
+    archived notebook's facts do not: archiving takes them out of recall)."""
     home = personal_source(notebook.owner_principal_id)
     return (
-        provenance.sensitivity is Sensitivity.ORDINARY
+        notebook.archived_at is None
+        and provenance.sensitivity is Sensitivity.ORDINARY
         and not provenance.source_unknown
         and set(provenance.sources) <= {home}
     )
@@ -250,6 +253,12 @@ class FactTx:
 
     # --- the semantic bank ------------------------------------------------------------
 
+    async def reindex(self) -> None:
+        """Make every live fact's bank item what ``bankable`` now says (after an archive
+        or unarchive). Not a change to the facts: no revision."""
+        for fact in await self.current():
+            await self._index(int(fact.id), fact.text, fact.provenance)
+
     async def _unindex(self, fact_id: int) -> None:
         link = await self.db.get(FactItemRow, fact_id)
         if link is None:
@@ -367,13 +376,29 @@ class NotebookStore:
             return [_notebook(r) for r in await db.scalars(query.order_by(NotebookRow.created_at))]
 
     async def set_archived(self, notebook_id: str, archived: bool) -> Notebook:
+        """Archive (read-only, out of bank recall) or unarchive (its facts indexed again)."""
         async with self._db() as db:
-            row = await db.get(NotebookRow, notebook_id)
-            if row is None:
-                raise NotebookNotFound(notebook_id)
-            row.archived_at = now_ms() if archived else None
+            row = await self._lock(db, notebook_id)
+            if (row.archived_at is not None) != archived:
+                row.archived_at = now_ms() if archived else None
+                await FactTx(db, row, None, self._embedder).reindex()
             await db.commit()
             return _notebook(row)
+
+    @staticmethod
+    async def _lock(db: AsyncSession, notebook_id: str) -> NotebookRow:
+        """The notebook row, locked for this transaction by a no-op write (portable)."""
+        locked = await db.scalar(
+            update(NotebookRow)
+            .where(NotebookRow.id == notebook_id)
+            .values(revision=NotebookRow.revision)
+            .returning(NotebookRow.id)
+        )
+        if locked is None:
+            raise NotebookNotFound(notebook_id)
+        notebook = await db.get(NotebookRow, notebook_id, populate_existing=True)
+        assert notebook is not None
+        return notebook
 
     async def mark_tidied(self, notebook_id: str, at: int) -> None:
         async with self._db() as db:
@@ -404,16 +429,9 @@ class NotebookStore:
         """Run ``fn`` on the notebook's facts atomically; ``expect_revision`` refuses stale."""
         async with self._db() as db:
             # Lock by writing: portable, and taken before any read the change depends on.
-            locked = await db.scalar(
-                update(NotebookRow)
-                .where(NotebookRow.id == notebook_id)
-                .values(revision=NotebookRow.revision)
-                .returning(NotebookRow.id)
-            )
-            if locked is None:
-                raise NotebookNotFound(notebook_id)
-            notebook = await db.get(NotebookRow, notebook_id, populate_existing=True)
-            assert notebook is not None
+            notebook = await self._lock(db, notebook_id)
+            if notebook.archived_at is not None:
+                raise NotebookArchived(notebook_id)
             if expect_revision is not None and int(notebook.revision) != expect_revision:
                 raise RevisionConflict(expect_revision, int(notebook.revision))
             tx = FactTx(db, notebook, author, self._embedder)
