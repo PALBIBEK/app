@@ -332,10 +332,12 @@ class TraceService:
         return harness
 
     async def issues(
-        self, *, identity: TenantPrincipal, user_id: str, agent_id: str | None, since_ms: int | None, db: AsyncSession
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str | None, since_ms: int | None, db: AsyncSession,
+        live_only: bool = False,
     ) -> IssuesResponse:
-        """The user's failures grouped into issues, named by agent, version and session."""
-        params: dict[str, Any] = {}
+        """The user's failures grouped into issues, named by agent, version and session
+        (``live_only``: an experiment's replays left out)."""
+        params: dict[str, Any] = {"exclude_replays": "true"} if live_only else {}
         if agent_id:
             harness = await self._owned_agent(db, user_id, agent_id)
             if not harness.composition_id:

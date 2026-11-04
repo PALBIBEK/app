@@ -176,3 +176,37 @@ class Proposal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AutoImprove(Base):
+    """An agent's standing order to propose a change by itself when its failures pile up.
+
+    Prime Agent's auto-refine (``pa-core/src/session_engine/auto_refine_trigger.rs``) is the
+    model: gates first (on, a count since the last attempt, a cooldown that every attempt
+    stamps, never two at once), then the refinement. Here the count is failing runs of the
+    agent's biggest issue since the last attempt, and the refinement is a proposal: drafted,
+    measured on ``dataset_id`` (with that issue's runs saved to it first) and gated, so a
+    person still approves anything that goes live.
+    """
+
+    __tablename__ = "trace_auto_improve"
+
+    harness_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("harnesses.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("trace_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    min_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    """Failing runs of one issue since the last attempt that start one."""
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=360)
+    """Least time between attempts, whatever each one came to."""
+    rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_proposal_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """What the last check found, in a sentence (started one, or why not)."""
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)

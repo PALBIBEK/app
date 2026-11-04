@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { PROPOSAL_STATUS, ProposalStatusPill } from '@/components/traces/Proposal';
+import { AutoImproveCard } from '@/components/traces/AutoImproveCard';
 import { TracesNav } from '@/components/traces/TracesNav';
 import { Button, Card, CardHeader, EmptyState, ErrorNote, PageHeader, Select, SkeletonRows } from '@/components/ui';
 import { useDatasets, usePropose, useProposals } from '@/lib/api/hooks/useEvaluations';
@@ -126,6 +127,8 @@ export default function ImprovePage(): JSX.Element {
                 </div>
               </form>
             </Card>
+
+            <AutoImproveCard agentId={agent} datasets={usable} />
 
             <Card>
               <CardHeader title="Changes" />

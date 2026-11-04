@@ -11,6 +11,8 @@ References:
 - Production-Ready FastAPI Project Structure (2026 Guide)
 - PHASE2-BACKEND-ROADMAP.md
 """
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from prime_agent.config import get_settings
 from prime_agent.db.session import db as database_session
+from prime_agent.services.auto_improve_service import AutoImprover
 from prime_agent.web.body_limit import LimitRequestBody, request_limit
 from prime_agent.web.middlewares import (
     LoggingMiddleware,
@@ -104,12 +107,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Every environment: the migrations, applied once however many replicas start together.
     await database_session.migrate()
 
+    # Agents that propose a change by themselves are checked in the background.
+    auto_improve: asyncio.Task[None] | None = None
+    if settings.auto_improve_interval_s > 0 and database_session._session_factory is not None:  # noqa: SLF001
+        auto_improve = asyncio.create_task(
+            AutoImprover.from_settings(settings).run_forever(
+                database_session._session_factory, evaluations.start_improving  # noqa: SLF001
+            )
+        )
+
     logger.info("Application startup complete")
 
     yield  # Application runs here
 
     # Shutdown
     logger.info("Application shutdown initiated")
+    if auto_improve is not None:
+        auto_improve.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await auto_improve
 
     # Dispose database connections
     await database_session.dispose()

@@ -264,9 +264,11 @@ async def trace_issues(
     composition_id: str | None = Query(default=None, max_length=255),
     since_ms: int | None = None,
     limit: int = Query(default=30, ge=1, le=100),
+    exclude_replays: bool = False,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> dict[str, Any]:
-    """The ways the caller's runs go wrong, grouped and counted, with the latest examples."""
+    """The ways the caller's runs go wrong, grouped and counted, with the latest examples.
+    ``exclude_replays``: only live traffic (an experiment's replays are measurements)."""
     issues = await list_issues(
         deps.get_session_factory(request),
         tenant_id=tenant_id,
@@ -274,6 +276,7 @@ async def trace_issues(
         composition_id=composition_id,
         since_ms=since_ms,
         limit=limit,
+        exclude_replays=exclude_replays,
     )
     return {"issues": issues}
 

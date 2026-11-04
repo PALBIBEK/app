@@ -244,3 +244,22 @@ export interface ProposalDetail extends Proposal {
   baseline: Experiment | null;
   candidate: Experiment | null;
 }
+
+/** Proposing a change by itself when the agent's biggest issue keeps growing. */
+export interface AutoImproveInput {
+  dataset_id: string;
+  enabled: boolean;
+  /** Failing runs of one issue since the last attempt that start one. */
+  min_runs: number;
+  /** Least time between attempts. */
+  cooldown_minutes: number;
+  rounds: number;
+}
+
+export interface AutoImprove extends AutoImproveInput {
+  agent_id: string;
+  last_attempt_at: string | null;
+  last_proposal_id: string | null;
+  /** What the last check found, in a sentence. */
+  last_note: string | null;
+}

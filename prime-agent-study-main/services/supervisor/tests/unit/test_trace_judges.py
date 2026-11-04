@@ -185,6 +185,8 @@ async def test_an_issue_lists_all_its_runs_but_not_an_experiments_replays(api: A
 
     listed = (await api.client.get("/v1/traces/issues", headers=ALICE)).json()["issues"]
     assert (listed[0]["runs"], len(listed[0]["examples"])) == (8, 5), "the issues page still counts every run"
+    live = (await api.client.get("/v1/traces/issues", params={"exclude_replays": "true"}, headers=ALICE)).json()
+    assert live["issues"][0]["runs"] == 7, "live traffic only"
     r = await api.client.get("/v1/traces/issues/runs", params={"key": listed[0]["key"]}, headers=ALICE)
     assert r.status_code == 200, r.text
     issue = r.json()["issue"]
