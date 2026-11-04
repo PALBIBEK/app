@@ -477,6 +477,12 @@ class MemoryService:
             await self.startup()
         return await self._extraction.process_pending(limit=limit)
 
+    async def retry_failed_extraction_jobs(self) -> int:
+        """Queue the jobs that used up their runs again (after fixing what failed them)."""
+        if not self._ready:
+            await self.startup()
+        return await self._extraction.retry_failed()
+
 
 
     async def inject_corrupt_gap_for_test(self, session_id: str) -> None:

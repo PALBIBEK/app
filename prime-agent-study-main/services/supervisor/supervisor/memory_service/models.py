@@ -115,6 +115,10 @@ class ExtractionJobRow(Base):
     created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     claimed_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    """Runs started (counted at claim, so a run that crashes its process counts too)."""
+    retry_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """A pending job that failed waits until then (backoff)."""
 
 
 class ForgetAuditRow(Base):

@@ -14,6 +14,7 @@ class MemoryMetrics:
     extraction_jobs_done: int = 0
     extraction_items_kept: int = 0
     extraction_jobs_skipped_barren: int = 0
+    extraction_job_failures: int = 0
     bank_writes: int = 0
     bank_supersessions: int = 0
     bank_forgets: int = 0
@@ -57,6 +58,7 @@ class MemoryMetrics:
                 "extraction_jobs_done": self.extraction_jobs_done,
                 "extraction_items_kept": self.extraction_items_kept,
                 "extraction_jobs_skipped_barren": self.extraction_jobs_skipped_barren,
+                "extraction_job_failures": self.extraction_job_failures,
                 "bank_writes": self.bank_writes,
                 "bank_supersessions": self.bank_supersessions,
                 "bank_forgets": self.bank_forgets,
