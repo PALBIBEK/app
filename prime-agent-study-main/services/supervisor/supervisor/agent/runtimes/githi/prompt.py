@@ -8,6 +8,8 @@ narrows how the model may work costs more than the tokens it saves. So the promp
   tool definitions, so a line only has to jog recognition);
 * ``<rules>``: the few rules the offered tools bring (use ``edit`` for precise changes,
   ``write`` only for new files …) and pi's two standing ones;
+* ``<session_notes>``: what the agent noted for itself earlier in the session
+  (``note_for_session``), when it noted anything;
 * ``<cwd>``: where the agent works.
 
 It is built only from the pinned prompt and the offered tools, so it is identical from
@@ -125,10 +127,11 @@ def system_prompt(
     *,
     cwd: str = PROJECT_ROOT,
     project: Sequence[tuple[str, str]] = (),
+    notes: Sequence[str] = (),
 ) -> str:
     """The pinned prompt, then the offered tools, their rules, the project's own
-    instructions (``AGENTS.md`` and the like: ``project`` is (path, text) pairs), and
-    the working directory, in pi's order."""
+    instructions (``AGENTS.md`` and the like: ``project`` is (path, text) pairs), the
+    agent's notes from earlier in the session, and the working directory, in pi's order."""
     tools = in_pi_order(tools)
     names = [n for n in (_name(t) for t in tools) if n]
     sections = [pinned.strip()] if pinned.strip() else []
@@ -142,5 +145,8 @@ def system_prompt(
     sections.append(f"<rules>\n{rules}\n</rules>")
     if project:
         sections.append(f"<project_context>\n{_project_context(project)}\n</project_context>")
+    if notes:
+        kept = "\n".join(f"- {n}" for n in notes)
+        sections.append(f"<session_notes>\nWhat you noted earlier in this session:\n{kept}\n</session_notes>")
     sections.append(f"<cwd>\n{cwd}\n</cwd>")
     return "\n\n".join(sections)

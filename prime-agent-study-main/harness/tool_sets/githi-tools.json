@@ -143,6 +143,24 @@
       },
       "tool_class": "pure"
     },
+    "note_for_session": {
+      "description": "Keep a lesson for the rest of this session: it is in your instructions from the next run on.",
+      "digest": "sha256:05c025485cdd835c1c3f2af3c4f46cc6d1dc22e4abcc8c52213ae23c522704d2",
+      "name": "note_for_session",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "The lesson, as an instruction to yourself (e.g. \"Run tests with make test, not pytest\")",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
     "read": {
       "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
       "digest": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
@@ -215,7 +233,7 @@
   },
   "name": "githi-tools",
   "protocol_version": 1,
-  "semver": "1.3.0",
+  "semver": "1.4.0",
   "status": "offered",
   "tools": {
     "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
@@ -223,6 +241,7 @@
     "find": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
     "grep": "sha256:131c8e915889645d50128c9dbebeee4d29496be58c45bf7d25b6c28a4b4abf3c",
     "ls": "sha256:0d1463d45c60c0d0b77bd3fe9f8eb2388777fb861c2f77ac741ffe01c179e0a9",
+    "note_for_session": "sha256:05c025485cdd835c1c3f2af3c4f46cc6d1dc22e4abcc8c52213ae23c522704d2",
     "read": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
     "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
     "write": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a"

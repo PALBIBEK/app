@@ -1,0 +1,272 @@
+{
+  "definitions": {
+    "bash": {
+      "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+      "digest": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
+      "name": "bash",
+      "parameters": {
+        "properties": {
+          "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "tool_class": "non_atomic"
+    },
+    "echo": {
+      "description": "Echo text (dev / smoke tool)",
+      "digest": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
+      "name": "echo",
+      "parameters": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "edit": {
+      "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+      "digest": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
+      "name": "edit",
+      "parameters": {
+        "properties": {
+          "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+              "properties": {
+                "newText": {
+                  "description": "Replacement text for this targeted edit.",
+                  "type": "string"
+                },
+                "oldText": {
+                  "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
+    "find": {
+      "description": "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first).",
+      "digest": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
+      "name": "find",
+      "parameters": {
+        "properties": {
+          "limit": {
+            "description": "Maximum number of results (default: 1000)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Directory to search in (default: current directory)",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "git_commit": {
+      "description": "Stage every change in the workspace and create a git commit.",
+      "digest": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
+      "name": "git_commit",
+      "parameters": {
+        "properties": {
+          "message": {
+            "description": "Commit message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "grep": {
+      "description": "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 50KB (whichever is hit first). Long lines are truncated to 500 chars.",
+      "digest": "sha256:131c8e915889645d50128c9dbebeee4d29496be58c45bf7d25b6c28a4b4abf3c",
+      "name": "grep",
+      "parameters": {
+        "properties": {
+          "context": {
+            "description": "Number of lines to show before and after each match (default: 0)",
+            "type": "integer"
+          },
+          "glob": {
+            "description": "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'",
+            "type": "string"
+          },
+          "ignoreCase": {
+            "description": "Case-insensitive search (default: false)",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Maximum number of matches to return (default: 100)",
+            "type": "integer"
+          },
+          "literal": {
+            "description": "Treat pattern as literal string instead of regex (default: false)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Directory or file to search (default: current directory)",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Search pattern (regex or literal string)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "ls": {
+      "description": "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
+      "digest": "sha256:0d1463d45c60c0d0b77bd3fe9f8eb2388777fb861c2f77ac741ffe01c179e0a9",
+      "name": "ls",
+      "parameters": {
+        "properties": {
+          "limit": {
+            "description": "Maximum number of entries to return (default: 500)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Directory to list (default: current directory)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "read": {
+      "description": "Read the contents of a file. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+      "digest": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
+      "name": "read",
+      "parameters": {
+        "properties": {
+          "limit": {
+            "description": "Maximum number of lines to read",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
+    "remember": {
+      "description": "Store a durable fact in long-term memory (append-only, safe to retry).",
+      "digest": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+      "name": "remember",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Fact or note to remember",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    },
+    "write": {
+      "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+      "digest": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a",
+      "name": "write",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "tool_class": "idempotent"
+    }
+  },
+  "name": "githi-coding-tools",
+  "protocol_version": 1,
+  "semver": "1.3.0",
+  "status": "offered",
+  "tools": {
+    "bash": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
+    "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
+    "edit": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
+    "find": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
+    "git_commit": "sha256:ad7285e70ff9378ba62093b6622f40b9d93ad5bf36cb4cb6eb0a7b646f1a0ac1",
+    "grep": "sha256:131c8e915889645d50128c9dbebeee4d29496be58c45bf7d25b6c28a4b4abf3c",
+    "ls": "sha256:0d1463d45c60c0d0b77bd3fe9f8eb2388777fb861c2f77ac741ffe01c179e0a9",
+    "read": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
+    "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
+    "write": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a"
+  }
+}

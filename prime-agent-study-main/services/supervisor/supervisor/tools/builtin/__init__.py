@@ -12,6 +12,7 @@ from supervisor.tools.builtin import (  # noqa: F401 — imported to register
     git_commit,
     grep,
     ls,
+    note_for_session,
     read,
     remember,
     write,

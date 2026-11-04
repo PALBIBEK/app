@@ -136,6 +136,7 @@ class AgentLoop:
         tools: list[dict[str, Any]] | None = None,
         *,
         project: Sequence[tuple[str, str]] = (),
+        notes: Sequence[str] = (),
     ) -> list[ChatMessage]:
         """The conversation as the model sees it, led by the system prompt: the pinned
         prompt pack, the tools this run offers, the project's instructions, and the
@@ -145,7 +146,7 @@ class AgentLoop:
         if assembler is None:
             return chat
         pinned = assembler.assemble(PromptBindings(cwd=WORKSPACE, include_persona=False)).text
-        prompt = system_prompt(pinned, tools or [], project=project)
+        prompt = system_prompt(pinned, tools or [], project=project, notes=notes)
         return [ChatMessage(role="system", content=prompt), *chat]
 
     @property

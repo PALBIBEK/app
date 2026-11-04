@@ -15,6 +15,7 @@ tools:
   write: { class: idempotent }
   echo: { class: pure }
   remember: { class: idempotent }
+  note_for_session: { class: idempotent }
 recovery:
   default: fail
   by_tool_class:

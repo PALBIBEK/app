@@ -397,6 +397,16 @@ class ProjectContext:
 
 
 @dataclass(frozen=True)
+class SessionNotes:
+    """The lessons the agent noted earlier in its session (``note_for_session``), read as the
+    run began; githi puts them in the system prompt. Recorded so a replayed run sees the
+    notes it saw, whatever was noted since."""
+
+    notes: list[str]
+    category: EventCategory = field(default=EventCategory.CONTEXT, repr=False)
+
+
+@dataclass(frozen=True)
 class WorkspaceRestored:
     """A hand's new sandbox was filled from its last checkpoint, and calls that changed
     files after that checkpoint ended before it was taken: their changes are gone.
@@ -480,6 +490,7 @@ AgentEvent = (
     | HandStopped
     | ModelRetry
     | ProjectContext
+    | SessionNotes
     | WorkspaceRestored
     | SubagentNotice
     | ErrorEvent
