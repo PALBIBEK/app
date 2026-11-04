@@ -24,7 +24,6 @@ from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.secrets import mask
 from supervisor.journal.serde import encode_event, event_type_name
-from supervisor.journal.watch import notify
 
 
 def keyed_event_id(session_id: str, event_key: str) -> str:
@@ -356,7 +355,6 @@ class JournalWriter:
                 active = active or index.active(event)
             if active:
                 await self._touch_index(db, session_id, messages=in_chat, title=title, ts_ms=now_ms)
-            await notify(db, session_id)  # delivered on commit (supervisor.journal.watch)
         return int(last_seq), now_ms
 
     async def append_in_session(
@@ -400,7 +398,6 @@ class JournalWriter:
                 trace_id=trace_id,
             )
         )
-        await notify(db, session_id)  # delivered when the caller commits
         return Written(seq, event_id, now_ms, created=True)
 
     async def _touch_index(
