@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from sqlalchemy import text
@@ -17,6 +18,7 @@ from supervisor.memory_service.embed import Embedder
 from supervisor.memory_service.erase import EraseService
 from supervisor.memory_service.extract import ExtractionQueue, Extractor
 from supervisor.memory_service.leases import LeaseManager
+from supervisor.memory_service.limits import BUFFER_IDLE_MS
 from supervisor.memory_service.metrics import METRICS
 from supervisor.memory_service.notebooks.ops import NotebookOps
 from supervisor.memory_service.notebooks.store import NotebookStore
@@ -94,6 +96,7 @@ class MemoryService:
         self._flush_locks: dict[str, asyncio.Lock] = {}
         self._ready = False
         self._extraction_worker: asyncio.Task[None] | None = None
+        self._buffer_sweeper: asyncio.Task[None] | None = None
 
     async def startup(self) -> None:
         await init_db(self._engine)
@@ -101,7 +104,66 @@ class MemoryService:
 
     async def aclose(self) -> None:
         await self.stop_extraction_worker()
+        await self.stop_buffer_sweeper()
         await self._engine.dispose()
+
+    def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
+        """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""
+        if self._buffer_sweeper is None or self._buffer_sweeper.done():
+            self._buffer_sweeper = asyncio.create_task(
+                self._sweep_loop(interval_s, idle_ms), name="memory-buffer-sweep"
+            )
+
+    async def stop_buffer_sweeper(self) -> None:
+        task, self._buffer_sweeper = self._buffer_sweeper, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _sweep_loop(self, interval_s: float, idle_ms: int) -> None:
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self.sweep_buffers(idle_ms=idle_ms)
+            except Exception:
+                logger.warning("buffer sweep failed", exc_info=True)
+
+    async def sweep_buffers(self, *, idle_ms: int = BUFFER_IDLE_MS) -> dict[str, int]:
+        """Bound what this replica holds in memory for sessions nobody is writing to.
+
+        A buffer untouched for ``idle_ms``: its events are flushed (a checkpoint the
+        writer never reached is still better than losing them), then the buffer is
+        dropped; a buffer whose session does not exist (or was erased) is dropped with
+        its events. A session leased to a live writer is left to that writer."""
+        cutoff = int(time.time() * 1000) - idle_ms
+        out = {"flushed": 0, "dropped": 0}
+        for session_id, buf in list(self._buffers.items()):
+            lock = self._flush_locks.get(session_id)
+            if buf.touched_ms > cutoff or (lock is not None and lock.locked()):
+                continue
+            if buf.pending_count:
+                try:
+                    await self.flush(session_id)
+                    out["flushed"] += 1
+                except SessionNotFound:
+                    pass  # nothing to keep them in
+                except StaleFence:
+                    continue  # its lease holder flushes it
+                except Exception:
+                    logger.warning("sweep could not flush session=%s", session_id, exc_info=True)
+                    continue
+            if self._buffers.get(session_id) is buf and (buf.pending_count == 0 or not await self._exists(session_id)):
+                del self._buffers[session_id]
+                self._flush_locks.pop(session_id, None)
+                out["dropped"] += 1
+        return out
+
+    async def _exists(self, session_id: str) -> bool:
+        try:
+            row = await self._store.get_session_row(session_id)
+        except SessionNotFound:
+            return False
+        return row.status != "erased"
 
     def start_extraction_worker(self, *, interval_s: float = 5.0, limit: int = 50) -> None:
         """Process extraction jobs in the background, every ``interval_s`` (until ``aclose``).
@@ -171,6 +233,10 @@ class MemoryService:
 
     def pending_count(self, session_id: str) -> int:
         return self._buf(session_id).pending_count
+
+    def buffer_room(self, session_id: str) -> int:
+        """How many more events the session's buffer takes before a flush."""
+        return self._buf(session_id).room()
 
     async def flush(self, session_id: str, *, fence: int | None = None) -> int:
         """Persist buffered events at a semantic checkpoint. Returns last durable seq.

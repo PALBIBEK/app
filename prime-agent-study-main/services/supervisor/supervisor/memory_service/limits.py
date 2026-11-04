@@ -16,6 +16,10 @@ MAX_FACTS_PER_NOTEBOOK: Final = 5_000
 MAX_ITEM_CHARS: Final = 8_000
 """A bank item's content (extraction keeps 400; written items get more room)."""
 MAX_RECALL_TOKENS: Final = 32_000
+MAX_PENDING_EVENTS: Final = 10_000
+"""Unflushed events one session may hold in a replica's memory (flushes are checkpoints)."""
+BUFFER_IDLE_MS: Final = 10 * 60_000
+"""A buffer untouched this long is flushed by the sweep, or dropped if its session is gone."""
 
 _ESCAPED_NUL: Final = re.compile(rb"(?<!\\)(?:\\\\)*\\u0000")
 """A NUL inside a JSON string: an odd run of backslashes before ``u0000``. JSON cannot

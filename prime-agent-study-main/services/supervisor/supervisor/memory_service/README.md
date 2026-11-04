@@ -22,7 +22,9 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 |---|---|
 | Scope | Required `{tenant, subject, namespace}` |
 | Append | Sync in-memory buffer (no I/O) |
-| Flush | Durable at semantic checkpoints only (no timers) |
+| Flush | Durable at semantic checkpoints; events between checkpoints live only in one replica's memory, so a crash or deploy loses them (at most `MAX_PENDING_EVENTS` = 10,000 per session; a full buffer refuses appends with `BUFFER_FULL` until flushed) |
+| Idle buffers | Swept every minute: a buffer untouched for 10 minutes is flushed, or dropped if its session does not exist; the seq an append returns is provisional until its flush |
+| Sessions | A duplicate `session_id` is `SESSION_EXISTS` (409); a fork point outside `-1..last_seq` is `INVALID_REQUEST` (422) |
 | Load | Repairs open tool calls; never truncates; rejects corrupt gaps / unknown format |
 | Outbox | `tool/call` with `side_effect: true` enqueued in same flush txn |
 | Lease | Fenced owner; stale fence rejected on flush |

@@ -28,12 +28,15 @@ from supervisor.memory_service.store import SeqConflict
 from supervisor.memory_service.tenant import TenantMismatch, TenantRequired
 from supervisor.memory_service.tier2_types import ItemNotFound, ItemSuperseded
 from supervisor.memory_service.types import (
+    BufferFull,
     FormatUnsupported,
+    InvalidRequest,
     LeaseHeld,
     LogicalSession,
     Scope,
     ScopeRequired,
     SessionCorrupt,
+    SessionExists,
     SessionNotFound,
     StaleFence,
 )
@@ -174,8 +177,10 @@ def _map_error(exc: Exception) -> HTTPException:
         return exc
     if isinstance(exc, (SessionNotFound, ItemNotFound)):
         return HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)})
-    if isinstance(exc, ItemSuperseded):
+    if isinstance(exc, (ItemSuperseded, SessionExists, BufferFull)):
         return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, InvalidRequest):
+        return HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (SessionCorrupt, FormatUnsupported)):
         return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     if isinstance(exc, (StaleFence, LeaseHeld, SeqConflict)):
@@ -227,6 +232,8 @@ async def buffer_events(
 ) -> dict[str, Any]:
     await _own_session(request, session_id)
     svc = _svc(request)
+    if len(body.events) > svc.buffer_room(session_id):  # all of the batch, or none of it
+        raise _map_error(BufferFull(f"BUFFER_FULL: no room for {len(body.events)} more events; flush first"))
     seqs: list[int] = []
     for ev in body.events:
         written = svc.append(session_id, ev.type, ev.data, time_ms=ev.time)
@@ -472,7 +479,8 @@ def create_app(
     background (``MEMORY_EXTRACTION_INTERVAL_S``, default 5; 0 turns the worker off, and
     jobs then wait for ``POST /v1/memory/extraction:process``).
 
-    An in-memory SQLite database has no worker: its one shared connection cannot carry a
+    The same setting runs the idle-buffer sweep (``MemoryService.sweep_buffers``). An
+    in-memory SQLite database has neither: its one shared connection cannot carry a
     background transaction beside a request's."""
     interval = (
         float(os.environ.get("MEMORY_EXTRACTION_INTERVAL_S", "5"))
@@ -490,6 +498,7 @@ def create_app(
             await svc.startup()
             if interval > 0:
                 svc.start_extraction_worker(interval_s=interval)
+                svc.start_buffer_sweeper()
             app.state.memory = svc
             owned = True
         else:

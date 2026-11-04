@@ -93,6 +93,22 @@ class FormatUnsupported(MemoryError):
     code = "FORMAT_UNSUPPORTED"
 
 
+class SessionExists(MemoryError):
+    code = "SESSION_EXISTS"
+
+
+class BufferFull(MemoryError):
+    """A session has as many unflushed events as a buffer holds: flush before appending."""
+
+    code = "BUFFER_FULL"
+
+
+class InvalidRequest(MemoryError):
+    """The request names something out of range (a seq past the end, say)."""
+
+    code = "INVALID_REQUEST"
+
+
 class StaleFence(MemoryError):
     code = "STALE_FENCE"
 
