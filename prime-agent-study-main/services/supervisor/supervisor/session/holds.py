@@ -4,8 +4,11 @@ A worker takes the hold when it creates, forks or adopts a session. A worker tha
 it (adopted away while it was frozen or cut off) can wake up still holding the session's
 old sandbox; its writes must then be refused, or its checkpoints would overwrite the new
 worker's and its tool results would describe a sandbox that no longer serves
-(pi-temporal's fence). A writer checks before each write, so one that stalls between its
-check and its write can still land that one write.
+(pi-temporal's fence). A tool call's start and end carry a ``Fence``: checked in the
+journal write's own transaction, so a takeover and that write never interleave. A
+checkpoint's files go to the workspace store, outside that transaction: it checks before
+each file, so a writer that stalls between its check and its write can still land that
+one file (the new worker's first checkpoint saves every file again).
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionRow
+from supervisor.journal.writer import Fence
 
 __all__ = ["SessionHolds"]
 
@@ -43,3 +47,8 @@ class SessionHolds:
                 await db.execute(select(SessionRow.holder).where(SessionRow.id == session_id))
             ).scalar_one_or_none()
         return holder is None or holder == self.holder
+
+    def fence(self, session_id: str) -> Fence | None:
+        """What a journal write takes to be refused once ``session_id`` moves; None outside
+        a worker."""
+        return None if self.holder is None else Fence(session_id, self.holder)

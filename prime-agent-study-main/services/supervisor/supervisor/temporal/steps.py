@@ -84,7 +84,7 @@ from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
 from supervisor.seams.interfaces.tool_provider import needs_workspace
-from supervisor.session import SessionManager, SessionMoved
+from supervisor.session import SessionManager
 from supervisor.session.children import (
     PARENT_ONLY_TOOLS,
     SUBAGENT_BRIEF,
@@ -977,15 +977,16 @@ class GithiSteps:
         call, step, assistant = await self._located(sid, run_id, call_id)
         if activity.in_activity() and activity.is_cancelled():
             raise asyncio.CancelledError  # stopped before it started: the stop answers it
-        await self._still_held(hands)
         # The start is the claim (pi-temporal's dispatch claim): taken atomically, so a
         # call closed unrun never starts late, and a retried attempt of a call that did
         # start runs again only as its recovery class allows (Temporal retries it or not).
+        # Fenced: a worker that lost the session's hands does not start it.
         if not await self._claim(
             sid,
             run_id,
             f"{call_id}:start",
             ToolStart(tool_call_id=call_id, tool_name=call["name"], args=call["arguments"]),
+            fenced_by=hands,
         ):
             start = await self._keyed(sid, run_id, f"{call_id}:start")
             if getattr(start, "not_run", False):
@@ -1030,8 +1031,7 @@ class GithiSteps:
                 result, is_error = await self._run_in_hand(
                     sid, run_id, call_id, call, args, hand, runtime, provider, started
                 )
-        await self._still_held(hands)  # a result of a sandbox that no longer serves is refused
-        if not await self._claim(
+        if not await self._claim(  # fenced: a result of a sandbox that no longer serves is refused
             sid,
             run_id,
             f"{call_id}:end",
@@ -1042,6 +1042,7 @@ class GithiSteps:
                 is_error=is_error,
                 duration_ms=int((time.monotonic() - started) * 1000),
             ),
+            fenced_by=hands,
         ):
             # A closer answered it first (a stop, a lost worker): its answer stands, so
             # the call has one result.
@@ -1422,15 +1423,20 @@ class GithiSteps:
             session_id, event, turn_id=run_id, trace_id=trace_id, event_key=f"{run_id}:{key}"
         )
 
-    async def _still_held(self, session_id: str) -> None:
-        """Raise SessionMoved once another worker holds the session (supervisor.session.holds)."""
-        if not await self._manager.holds.held(session_id):
-            raise SessionMoved(f"session {session_id} is held by another worker now")
-
-    async def _claim(self, session_id: str, run_id: str, key: str, event: Any) -> bool:
-        """Journal ``event`` under ``key`` if no event holds it yet; whether this one won."""
+    async def _claim(
+        self, session_id: str, run_id: str, key: str, event: Any, *, fenced_by: str | None = None
+    ) -> bool:
+        """Journal ``event`` under ``key`` if no event holds it yet; whether this one won.
+        ``fenced_by``: a session whose hands this worker must still hold, checked in the
+        write's transaction; SessionMoved, writing nothing, once it does not."""
+        fence = None if fenced_by is None else self._manager.holds.fence(fenced_by)
         seq = await self._manager._record_once(
-            session_id, event, turn_id=run_id, trace_id=None, event_key=f"{run_id}:{key}"
+            session_id,
+            event,
+            turn_id=run_id,
+            trace_id=None,
+            event_key=f"{run_id}:{key}",
+            fence=fence,
         )
         return seq is not None
 

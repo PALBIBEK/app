@@ -50,6 +50,22 @@ class Written:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class Fence:
+    """Only ``holder`` may append: the write is refused once another worker holds
+    ``session_id`` (the session whose sandbox serves the one written). Checked inside the
+    append's transaction under a share lock on that session's row, which a takeover
+    (``SessionHolds.take``, an update of the row) waits for: a write and a takeover are
+    ordered, never interleaved (pi-temporal's fence)."""
+
+    session_id: str
+    holder: str
+
+
+class FencedOut(Exception):
+    """An append's fence was crossed: another worker holds the session now."""
+
+
 class JournalWriter:
     def __init__(
         self,
@@ -182,11 +198,13 @@ class JournalWriter:
         turn_id: str | None,
         trace_id: str | None,
         event_key: str,
+        fence: Fence | None = None,
     ) -> Written | None:
         """Append under ``event_key`` only if nothing holds that key yet: where it was
         written, or None when another writer already did. Atomic: the check runs inside the append's
         transaction, after the session row's lock, so of two writers racing for one key
         exactly one wins (a claim: who may run a tool call, who closes it unrun).
+        ``fence``: raise ``FencedOut`` (writing nothing) once its holder lost the session.
         """
         event_id = keyed_event_id(session_id, event_key)
         if await self.seq_of(session_id, event_id) is not None:
@@ -194,7 +212,11 @@ class JournalWriter:
         try:
             seq, ts_ms = await _run_to_completion(
                 self._append_batch(
-                    session_id, [(event, turn_id, trace_id)], event_ids=[event_id], if_absent=True
+                    session_id,
+                    [(event, turn_id, trace_id)],
+                    event_ids=[event_id],
+                    if_absent=True,
+                    fence=fence,
                 )
             )
         except _AlreadyAppended:
@@ -293,11 +315,13 @@ class JournalWriter:
         *,
         event_ids: list[str | None] | None,
         if_absent: bool = False,
+        fence: Fence | None = None,
     ) -> tuple[int, int]:
         """Append ``events`` in one transaction under the session row's lock; (the last
         seq, the time stamped on them). ``if_absent``: raise ``_AlreadyAppended`` (rolling
         back) when an event id given is already in the journal; checked under the lock, so a
-        racing writer that got there first has committed and is seen."""
+        racing writer that got there first has committed and is seen. ``fence``: raise
+        ``FencedOut`` (rolling back) once its holder lost the session."""
         n = len(events)
         # Large payloads go to the blob store first, outside the session's lock (they are
         # content-addressed: one left by a write that then fails is harmless, and erasing
@@ -322,6 +346,8 @@ class JournalWriter:
                 },
             )
             last_seq = result.scalar_one()
+            if fence is not None:
+                await _check_fence(db, fence)
             if if_absent and (keys := [e for e in event_ids or [] if e is not None]):
                 # Under the session row's lock: a writer that got here first has committed.
                 taken = await db.execute(
@@ -467,6 +493,20 @@ def _batches(items: Sequence[_Keyed], size: int) -> Iterator[list[_Keyed]]:
             chunk = []
     if chunk:
         yield chunk
+
+
+async def _check_fence(db: AsyncSession, fence: Fence) -> None:
+    """Raise FencedOut unless ``fence.holder`` still holds its session. A session no worker
+    has taken yet (made before holds existed) is held by whoever serves it."""
+    holder = (
+        await db.execute(
+            select(SessionRow.holder)
+            .where(SessionRow.id == fence.session_id)
+            .with_for_update(read=True)
+        )
+    ).scalar_one_or_none()
+    if holder is not None and holder != fence.holder:
+        raise FencedOut(f"session {fence.session_id} is held by {holder}, not {fence.holder}")
 
 
 class _AlreadyAppended(Exception):
