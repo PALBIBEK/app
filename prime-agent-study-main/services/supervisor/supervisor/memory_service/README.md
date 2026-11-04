@@ -34,7 +34,7 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 |---|---|
 | write / supersede / get / forget | Supersede-only lineage; soft forget |
 | recall | Items below 0.1 semantic similarity are excluded (mem0); the rest rank by 3×relevance + 0.5×recency + 2×confidence, each min-max normalized (Generative Agents), recency `0.99^hours` (LangChain); all-or-nothing token packing; optional Tier 1 `memory/recall` log |
-| extraction | Queued on `turn/end` flush (durable cursor: each job starts after the last); a background worker claims and runs jobs every `MEMORY_EXTRACTION_INTERVAL_S` (default 5, 0 = off); a failed run is retried after 30 s, 1, 2, 4 min (5 runs), then the job is `error` until `POST /v1/memory/extraction:retry_failed`; backlog and failures in `/v1/metrics` |
+| extraction | A model states the facts worth keeping (QM's prompt, as the supervisor uses for notebooks): any OpenAI-compatible endpoint, normally the model gateway, set by `MEMORY_EXTRACTION_URL` (`…/v1`), `MEMORY_EXTRACTION_MODEL`, `MEMORY_EXTRACTION_TOKEN`; without them nothing is extracted or queued. Only facts labelled `ordinary` reach the bank. Queued on `turn/end` flush (durable cursor: each job starts after the last); a background worker claims and runs jobs every `MEMORY_EXTRACTION_INTERVAL_S` (default 5, 0 = off); a failed run is retried after 30 s, 1, 2, 4 min (5 runs), then the job is `error` until `POST /v1/memory/extraction:retry_failed`; backlog and failures in `/v1/metrics` |
 
 ### Notebooks (long-term memory)
 | Concern | Behavior |

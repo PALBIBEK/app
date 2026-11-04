@@ -13,12 +13,13 @@ from supervisor.memory_service.extract import CLAIM_TIMEOUT_MS
 from supervisor.memory_service.models import ExtractionJobRow
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.types import Scope
+from tests.support.memory_extraction import scripted_extractor
 
 SC = Scope("t1", "user:alice", "agent")
 
 
 async def _svc(url: str) -> MemoryService:
-    svc = MemoryService(database_url=url)
+    svc = MemoryService(database_url=url, extractor=scripted_extractor())
     await svc.startup()
     return svc
 
@@ -100,7 +101,7 @@ class _Flaky:
     def __init__(self, failures: int) -> None:
         self.failures, self.runs = failures, 0
 
-    def extract(self, events: list[object]) -> list[object]:
+    async def extract(self, events: object) -> list[object]:
         self.runs += 1
         if self.runs <= self.failures:
             raise RuntimeError(f"model gateway timed out (run {self.runs})")

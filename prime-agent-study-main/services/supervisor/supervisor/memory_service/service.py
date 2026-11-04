@@ -84,6 +84,11 @@ class MemoryService:
         self._outbox = Outbox(self._factory)
         self._embedder = embedder or CachingEmbedder()
         self._bank = MemoryBank(self._factory, self._embedder)
+        if extractor is None:
+            from supervisor.memory_service.model_extractor import ModelExtractor
+
+            extractor = ModelExtractor.from_env()
+        self._extractor = extractor
         self._extraction = ExtractionQueue(self._factory, self._bank, extractor)
         self._recall = HybridRecall(self._bank, self._embedder)
         self._erase = EraseService(self._factory)
@@ -105,6 +110,8 @@ class MemoryService:
 
     async def aclose(self) -> None:
         await self.stop_background()
+        if (close := getattr(self._extractor, "aclose", None)) is not None:
+            await close()
         await self._engine.dispose()
 
     @property
@@ -294,7 +301,7 @@ class MemoryService:
         buf.discard(len(batch))  # what was appended while this ran stays for the next flush
         # Off request path: enqueue extraction when turn/end + non-barren
         try:
-            if any(ev.type == "turn/end" for ev in batch):
+            if self._extraction.enabled and any(ev.type == "turn/end" for ev in batch):
                 if flush_batch_is_barren(batch):
                     METRICS.inc("extraction_jobs_skipped_barren")
                 else:

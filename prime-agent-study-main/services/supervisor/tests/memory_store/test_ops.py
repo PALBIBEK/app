@@ -17,6 +17,7 @@ from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.tenant import TenantRequired, require_tenant
 from supervisor.memory_service.tier2_types import ForgetSelector, NewMemoryItem, TokenBudget
 from supervisor.memory_service.types import Scope, SessionEvent
+from tests.support.memory_extraction import scripted_extractor
 
 
 @pytest.fixture
@@ -36,6 +37,7 @@ async def svc(tmp_path: Path):
     s = MemoryService(
         database_url="sqlite+aiosqlite:///:memory:",
         archive_dir=str(tmp_path / "archive"),
+        extractor=scripted_extractor(),
     )
     await s.startup()
     yield s
