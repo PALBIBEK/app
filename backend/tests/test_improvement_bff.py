@@ -516,3 +516,82 @@ async def test_a_search_offers_the_first_change_when_later_ones_do_not_pass(db_s
         assert p["candidate_prompt"]["sections"][1]["text"] == FIXED and p["max_rounds"] == 3
         # round 2's reflection edited the kept first candidate (the only version on the front)
         assert fake.reflected[1]["sections"][1]["text"] == FIXED
+
+
+@pytest.mark.asyncio
+async def test_an_agent_proposes_a_change_by_itself_when_an_issue_keeps_growing(
+    db_session, owner, settings, monkeypatch, make_user
+):
+    """Prime Agent's auto-refine gates, in order: on; not while one runs; a cooldown every
+    attempt stamps; enough failing runs since the last attempt (live traffic only)."""
+    from datetime import timedelta
+
+    from prime_agent.db.models.evaluation import AutoImprove, Proposal
+    from prime_agent.services.auto_improve_service import AutoImprover
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+    link = SessionLink(id=str(uuid4()), user_id=owner.id, harness_id=agent.id, ai_session_id="ai-live", tenant_id=owner.id,
+                       harness_version="x", runtime="githi", composition_id=agent.composition_id,
+                       composition_digest=agent.composition_digest, status="active",
+                       created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+    db_session.add(link)
+    await db_session.commit()
+    failing = {"runs": 2}
+    asked: list[dict] = []
+    plain = fake.__call__
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/issues":
+            asked.append(dict(request.url.params))
+            return httpx.Response(200, json={"issues": [{
+                "key": f"{agent.composition_id}:check:tests_after_change:", "composition_id": agent.composition_id,
+                "title": "Tests failing after a change", "source": "check", "name": "tests_after_change", "topic": None,
+                "runs": failing["runs"], "last_seen_ms": 1, "versions": [],
+                "examples": [{"session_id": "ai-live", "run_id": "r1", "input": "fix it"}]}]})
+        if request.url.path == "/v1/traces/issues/runs":
+            return httpx.Response(200, json={"issue": {"examples": [{"session_id": "ai-live", "run_id": "r1"}]}})
+        return plain(request)
+
+    started: list[str] = []
+    auto = AutoImprover(config.get_settings(), client=AiClient(config.get_settings(), transport=httpx.MockTransport(handler)))
+    tick = lambda: auto.tick(_same(db_session), lambda service, pid, identity: started.append(pid))  # noqa: E731
+
+    async with _api(db_session, owner, fake, monkeypatch, []) as api:
+        assert (await api.get(f"/api/v1/traces/agents/{agent.id}/auto-improve")).json() is None
+        r = await api.put(f"/api/v1/traces/agents/{agent.id}/auto-improve",
+                          json={"dataset_id": ds.id, "min_runs": 3, "cooldown_minutes": 60})
+        assert r.status_code == 200, r.text
+        assert (r.json()["enabled"], r.json()["min_runs"], r.json()["last_attempt_at"]) == (True, 3, None)
+
+        assert await tick() == [], "2 failing runs: below 3"
+        row = await db_session.get(AutoImprove, agent.id)
+        assert row.last_attempt_at is None, "not enough evidence stamps nothing"
+        assert "failed 2 runs since the last attempt; a change is proposed at 3" in row.last_note
+        assert asked[-1]["exclude_replays"] == "true" and "since_ms" in asked[-1]
+
+        failing["runs"] = 4
+        (pid,) = await tick()
+        assert started == [pid]
+        proposal = await db_session.get(Proposal, pid)
+        assert proposal.notes.startswith("Started automatically: “Tests failing after a change” failed 4 runs")
+        row = await db_session.get(AutoImprove, agent.id)
+        assert row.last_attempt_at is not None and row.last_proposal_id == pid and "started a change" in row.last_note
+
+        assert await tick() == [], "one round at a time"
+        proposal.status = "refused"
+        await db_session.commit()
+        assert await tick() == [], "the cooldown: every attempt stamps it"
+        row.last_attempt_at = datetime.now(UTC) - timedelta(minutes=61)
+        await db_session.commit()
+        assert len(await tick()) == 1, "after the cooldown, the next attempt"
+
+        row.enabled = False
+        await db_session.commit()
+        assert await tick() == []
+
+    stranger = await make_user(email="stranger-auto@example.com", name="S")
+    async with _api(db_session, stranger, fake, monkeypatch, []) as api:
+        assert (await api.get(f"/api/v1/traces/agents/{agent.id}/auto-improve")).status_code == 404
+        put = await api.put(f"/api/v1/traces/agents/{agent.id}/auto-improve", json={"dataset_id": ds.id})
+        assert put.status_code == 404

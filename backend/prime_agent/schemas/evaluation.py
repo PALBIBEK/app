@@ -288,3 +288,21 @@ class ProposalDetail(ProposalOut):
     evidence: list[Evidence] = Field(default_factory=list)
     baseline: ExperimentOut | None = None
     candidate: ExperimentOut | None = None
+
+
+class AutoImproveIn(BaseModel):
+    dataset_id: str = Field(min_length=1, max_length=36)
+    """Where the issue's runs are saved, and what the change is measured on."""
+    enabled: bool = True
+    min_runs: int = Field(default=5, ge=2, le=500)
+    """Failing runs of one issue since the last attempt that start one."""
+    cooldown_minutes: int = Field(default=360, ge=20, le=60 * 24 * 30)
+    """Least time between attempts (Prime Agent's auto-refine cooldown is 20 minutes)."""
+    rounds: int = Field(default=1, ge=1, le=3)
+
+
+class AutoImproveOut(AutoImproveIn):
+    agent_id: str
+    last_attempt_at: datetime | None = None
+    last_proposal_id: str | None = None
+    last_note: str | None = None

@@ -7,7 +7,7 @@ from prime_agent.db import Base
 
 from .auth_throttle import AuthThrottle
 from .environment import Environment
-from .evaluation import Dataset, DatasetItem, Experiment, ExperimentRun, Proposal
+from .evaluation import AutoImprove, Dataset, DatasetItem, Experiment, ExperimentRun, Proposal
 from .harness import Harness
 from .harness_release import HarnessDraft, HarnessRelease
 from .refresh_token import RefreshToken
@@ -17,6 +17,7 @@ from .user import User
 
 __all__ = [
     "AuthThrottle",
+    "AutoImprove",
     "Base",
     "Dataset",
     "DatasetItem",

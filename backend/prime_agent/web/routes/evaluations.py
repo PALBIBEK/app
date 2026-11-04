@@ -19,6 +19,8 @@ from prime_agent.schemas.evaluation import (
     AddIssueRequest,
     AddIssueResult,
     AddRunRequest,
+    AutoImproveIn,
+    AutoImproveOut,
     DatasetCreate,
     DatasetDetail,
     DatasetItemOut,
@@ -32,6 +34,7 @@ from prime_agent.schemas.evaluation import (
     ProposalDetail,
     ProposalOut,
 )
+from prime_agent.services.auto_improve_service import AutoImprover
 from prime_agent.services.evaluation_service import EvaluationNotFoundError, EvaluationService
 from prime_agent.services.improvement_service import ImprovementNotFoundError, ImprovementService
 from prime_agent.web.dependencies import CurrentUser, DbSession
@@ -229,6 +232,28 @@ async def propose_change(agent_id: str, body: ProposalCreate, db: DbSession, cur
         raise _not_found() from exc
     start_improving(service, row.id, TenantPrincipal.from_user(current_user))
     return (await service.list_proposals(user_id=current_user.id, db=db, agent_id=agent_id))[0]
+
+
+@router.get("/agents/{agent_id}/auto-improve", response_model=AutoImproveOut | None)
+async def get_auto_improve(agent_id: str, db: DbSession, current_user: CurrentUser) -> AutoImproveOut | None:
+    """Whether the agent proposes changes by itself, and what its last check found."""
+    try:
+        return await AutoImprover.from_settings(get_settings()).get(user_id=current_user.id, agent_id=agent_id, db=db)
+    except EvaluationNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.put("/agents/{agent_id}/auto-improve", response_model=AutoImproveOut)
+async def save_auto_improve(
+    agent_id: str, body: AutoImproveIn, db: DbSession, current_user: CurrentUser
+) -> AutoImproveOut:
+    """Turn on (or change, or off) proposing a change by itself when an issue keeps growing."""
+    try:
+        return await AutoImprover.from_settings(get_settings()).save(
+            user_id=current_user.id, agent_id=agent_id, body=body, db=db
+        )
+    except EvaluationNotFoundError as exc:
+        raise _not_found() from exc
 
 
 @router.get("/proposals", response_model=list[ProposalOut])

@@ -5,6 +5,8 @@
 import { apiClient } from '../client';
 import type {
   AddIssueResult,
+  AutoImprove,
+  AutoImproveInput,
   DatasetDetail,
   DatasetItem,
   DatasetSummary,
@@ -67,6 +69,12 @@ export const evaluationsAPI = {
     const qs = q.toString();
     return apiClient.get<Proposal[]>(`/traces/proposals${qs ? `?${qs}` : ''}`);
   },
+
+  autoImprove: (agentId: string): Promise<AutoImprove | null> =>
+    apiClient.get<AutoImprove | null>(`/traces/agents/${seg(agentId)}/auto-improve`),
+
+  saveAutoImprove: (agentId: string, body: AutoImproveInput): Promise<AutoImprove> =>
+    apiClient.put<AutoImprove>(`/traces/agents/${seg(agentId)}/auto-improve`, body),
 
   proposal: (id: string): Promise<ProposalDetail> => apiClient.get<ProposalDetail>(`/traces/proposals/${seg(id)}`),
 

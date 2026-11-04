@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     # a candidate may cost, and take, than the live version's before the gate refuses it.
     improvement_max_cost_increase: float = Field(default=0.2, ge=0)
     improvement_max_time_increase: float = Field(default=0.5, ge=0)
+    # How often the API checks agents that propose changes by themselves (AutoImprove); 0: never.
+    auto_improve_interval_s: float = Field(default=300.0, ge=0)
     refresh_token_expire_days: int = 7
     refresh_cookie_name: str = "prime_agent_refresh"
     refresh_cookie_secure: bool = False

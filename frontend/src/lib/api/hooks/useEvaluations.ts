@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '@/lib/store/authStore';
 
 import { evaluationsAPI } from '../endpoints/evaluations';
-import type { ExperimentStatus, ProposalStatus } from '../types/evaluation.types';
+import type { AutoImproveInput, ExperimentStatus, ProposalStatus } from '../types/evaluation.types';
 
 const GOING: readonly ExperimentStatus[] = ['queued', 'running'];
 const REFRESH_MS = 3000;
@@ -23,6 +23,7 @@ export const evaluationKeys = {
   compare: (a: string, b: string) => [...evaluationKeys.all, 'compare', a, b] as const,
   proposals: (agentId?: string, status?: string) => [...evaluationKeys.all, 'proposals', agentId ?? '', status ?? ''] as const,
   proposal: (id: string) => [...evaluationKeys.all, 'proposal', id] as const,
+  autoImprove: (agentId: string) => [...evaluationKeys.all, 'auto-improve', agentId] as const,
 };
 
 function message(err: unknown, fallback: string): string {
@@ -159,6 +160,27 @@ export function useProposal(id: string | undefined) {
     queryFn: () => evaluationsAPI.proposal(id!),
     enabled: isAuthenticated && !!id,
     refetchInterval: (q) => (q.state.data && WORKING.includes(q.state.data.status) ? REFRESH_MS : false),
+  });
+}
+
+export function useAutoImprove(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: evaluationKeys.autoImprove(agentId ?? ''),
+    queryFn: () => evaluationsAPI.autoImprove(agentId!),
+    enabled: isAuthenticated && !!agentId,
+  });
+}
+
+export function useSaveAutoImprove(agentId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AutoImproveInput) => evaluationsAPI.saveAutoImprove(agentId, body),
+    onSuccess: (saved) => {
+      toast.success(saved.enabled ? 'It will propose changes by itself' : 'It will not propose changes by itself');
+      void client.invalidateQueries({ queryKey: evaluationKeys.autoImprove(agentId) });
+    },
+    onError: (err) => toast.error(message(err, 'Could not save the setting')),
   });
 }
 
