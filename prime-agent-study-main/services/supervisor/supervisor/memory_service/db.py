@@ -13,8 +13,6 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from supervisor.memory_service.models import Base
-
 
 def make_engine(database_url: str = "sqlite+aiosqlite:///:memory:") -> AsyncEngine:
     kwargs: dict = {"echo": False}
@@ -30,10 +28,10 @@ def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession
 
 
 async def init_db(engine: AsyncEngine) -> None:
-    import supervisor.memory_service.notebooks.models  # noqa: F401 — their tables join Base
+    """Create, migrate and check the schema (``supervisor.memory_service.schema``)."""
+    from supervisor.memory_service.schema import migrate
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await migrate(engine)
 
 
 @asynccontextmanager
