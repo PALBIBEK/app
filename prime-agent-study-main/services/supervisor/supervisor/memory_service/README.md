@@ -57,7 +57,8 @@ which knows scopes and their members; this service never imports it.
 | Archive | `POST /v1/sessions/{id}/archive` → JSONL; `load` rehydrates |
 | Erase | Audited `forget` + `erase_subject` (tenant+subject) |
 | Metrics | `GET /v1/metrics` |
-| Cost | Embed cache; skip barren `turn/end` extraction |
+| Cost | Embed cache (LRU, 20,000 vectors per process); skip barren `turn/end` extraction |
+| Database | `MEMORY_DATABASE_URL`; unset falls back to `./memory.db` locally only: with `ENV` production or staging it must be set, and in production it must not be SQLite (unless `MEMORY_ALLOW_SQLITE=1`) |
 | Tenant | `TenantGate`; Postgres `rls_postgres.sql` |
 
 ## Limits
