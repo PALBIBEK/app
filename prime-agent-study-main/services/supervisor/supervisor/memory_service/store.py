@@ -7,15 +7,18 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.leases import check_fence
 from supervisor.memory_service.models import MemorySessionRow, OutboxRow, SessionEventRow
 from supervisor.memory_service.types import (
     FORMAT_VERSION,
+    InvalidRequest,
     MemoryError,
     Scope,
     SessionEvent,
+    SessionExists,
     SessionHandle,
     SessionNotFound,
     SessionSummary,
@@ -42,6 +45,8 @@ class DurableStore:
         sid = session_id or str(uuid.uuid4())
         now = int(time.time() * 1000)
         async with self._factory() as db:
+            if session_id is not None and await db.get(MemorySessionRow, sid) is not None:
+                raise SessionExists(f"SESSION_EXISTS: {sid}")
             db.add(
                 MemorySessionRow(
                     id=sid,
@@ -60,7 +65,10 @@ class DurableStore:
                     fence=0,
                 )
             )
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError as exc:  # lost a race to create the same id
+                raise SessionExists(f"SESSION_EXISTS: {sid}") from exc
         return SessionHandle(id=sid, scope=scope, format_version=format_version)
 
     async def get_session_row(self, session_id: str) -> MemorySessionRow:
@@ -157,6 +165,11 @@ class DurableStore:
         new_id: str | None = None,
     ) -> SessionHandle:
         row = await self.get_session_row(session_id)
+        if at_seq is not None and not -1 <= at_seq <= row.last_seq:
+            raise InvalidRequest(
+                f"INVALID_REQUEST: fork at seq {at_seq}; the session has seqs 0 to {row.last_seq} "
+                "(-1 forks before the first event)"
+            )
         events = await self.load_events(session_id)
         if at_seq is None:
             sliced = events
