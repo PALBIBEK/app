@@ -163,9 +163,13 @@ async def test_handover_race_subscribe_before_replay(env) -> None:
         await env.manager._writer.append(sid, RunStart(), turn_id=None, trace_id=None)
 
     real_read = env.reader.read
+    raced: list[int] = []
 
-    async def slow_read(session_id: str, *, since: int = -1):
+    async def slow_read(session_id: str, *, since: int = -1, limit: int | None = None):
         await asyncio.sleep(0)
+        if raced:  # the replay reads in pages: events land live during the first read
+            return await real_read(session_id, since=since, limit=limit)
+        raced.append(since)
         for i in range(5, 10):
             env.manager._live.publish(
                 session_id,
@@ -179,7 +183,7 @@ async def test_handover_race_subscribe_before_replay(env) -> None:
                     payload=RunStart(),
                 ),
             )
-        return await real_read(session_id, since=since)
+        return await real_read(session_id, since=since, limit=limit)
 
     env.reader.read = slow_read  # type: ignore[method-assign]
     events, _ = await _collect(env, sid, max_events=10)

@@ -43,16 +43,14 @@ class JournalReader:
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
         return self._factory
 
-    async def read(self, session_id: str, *, since: int = -1) -> list[Envelope]:
-        """Return envelopes with seq > since (exclusive), in order."""
+    async def read(self, session_id: str, *, since: int = -1, limit: int | None = None) -> list[Envelope]:
+        """Return envelopes with seq > since (exclusive), in order; with ``limit``, at most
+        that many (a page: read the next one from the last seq of this)."""
+        query = select(EventRow).where(EventRow.session_id == session_id, EventRow.seq > since)
+        if limit is not None:
+            query = query.limit(limit)
         async with self._factory() as db:
-            rows = (
-                await db.execute(
-                    select(EventRow)
-                    .where(EventRow.session_id == session_id, EventRow.seq > since)
-                    .order_by(EventRow.seq.asc())
-                )
-            ).scalars().all()
+            rows = (await db.execute(query.order_by(EventRow.seq.asc()))).scalars().all()
         return await self._envelopes(rows)
 
     async def hand_logs(self, session_id: str, ref: str) -> bytes | None:
