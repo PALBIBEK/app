@@ -5,7 +5,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { GateResult, PromptDiff, ProposalStatusPill } from './Proposal';
+import { EditList, GateResult, PromptDiff, ProposalStatusPill } from './Proposal';
 
 afterEach(cleanup);
 
@@ -65,5 +65,29 @@ describe('ProposalStatusPill', () => {
   it('names where the change stands', () => {
     render(<ProposalStatusPill status="awaiting_approval" />);
     expect(screen.getByText('Waiting for you')).toBeTruthy();
+  });
+});
+
+describe('EditList', () => {
+  it('lists each edit with why, what it expects, and what could not be applied', () => {
+    render(
+      <EditList
+        edits={[
+          { action: 'add', section: 'tools', text: 'Read the error first.', old: null, reason: 'bash calls repeated' },
+          { action: 'replace', section: 'role', text: 'You fix code, carefully.', old: 'You fix code.', reason: '' },
+        ]}
+        skipped={["edit 3: unknown action 'delete'"]}
+        expected="fewer repeated calls"
+      />,
+    );
+    const edits = screen.getAllByTestId('edit').map((e) => e.textContent);
+    expect(edits).toEqual(['Adds to tools · bash calls repeatedRead the error first.', 'Changes roleYou fix code, carefully.']);
+    expect(screen.getByText('fewer repeated calls')).toBeTruthy();
+    expect(screen.getByTestId('skipped-edits').textContent).toBe("Not applied: edit 3: unknown action 'delete'.");
+  });
+
+  it('shows nothing for a proposal made before edits were itemized', () => {
+    const { container } = render(<EditList edits={[]} skipped={[]} expected={null} />);
+    expect(container.textContent).toBe('');
   });
 });

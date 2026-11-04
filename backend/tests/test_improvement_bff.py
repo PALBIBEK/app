@@ -66,7 +66,11 @@ class FakeSupervisor:
             "proposal": {"persona": "coder", "rationale": "Runs answer before testing; say to test first.",
                          "changed": ["rules"],
                          "sections": [{"id": "intro", "text": "You are a coding agent in {cwd}."},
-                                      {"id": "rules", "text": FIXED}]},
+                                      {"id": "rules", "text": FIXED}],
+                         "edits": [{"action": "replace", "section": "rules", "old": "x", "text": FIXED,
+                                    "reason": "tests fail after changes"}],
+                         "skipped": ["edit 2: unknown action 'delete'"],
+                         "expected_outcome": "runs test before answering"},
             "evidence": [{"key": "k", "title": "Tests failing after a change", "runs": 3,
                           "examples": [{"session_id": "ai-src", "run_id": "r0", "input": "fix the parser",
                                         "summary": "Changed parser.py; answered.", "reason": "tests failed"}]}],
@@ -193,6 +197,10 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         assert p["status"] == "awaiting_approval", p
         assert p["gate"]["passed"] and p["gate"]["better"] == 2 and p["gate"]["worse"] == 0
         assert p["changed"] == ["rules"] and p["rationale"].startswith("Runs answer before testing")
+        assert [(e["action"], e["section"], e["reason"]) for e in p["edits"]] == [
+            ("replace", "rules", "tests fail after changes")]
+        assert p["skipped_edits"] == ["edit 2: unknown action 'delete'"]
+        assert p["expected_outcome"] == "runs test before answering"
         assert p["candidate_prompt"]["sections"][1]["text"] == FIXED
         assert p["base_prompt"]["sections"][1]["text"] != FIXED
         assert p["evidence"][0]["title"] == "Tests failing after a change"
@@ -202,6 +210,7 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         # the reflection read the live prompt and the person's note, never the replays
         (asked,) = fake.reflected
         assert asked["notes"] == "it skips the tests" and asked["exclude_sessions"] == []
+        assert asked["history"] == [], "the first change: nothing was proposed before"
         # the candidate is published under its own name, and is not live
         hv = [b["harness_version"] for k, b in fake.published if k == "harness_version"]
         assert hv == [f"{artifact_prefix(agent.id)}-r1", f"{artifact_prefix(agent.id)}-c{p['id'].replace('-', '')[:8]}"]
@@ -231,6 +240,10 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         await _propose(api, db_session, agent, ds, started)
         # 2 saved runs, each replayed DEFAULT_TRIALS times, on the live version and the candidate
         assert len(fake.reflected[1]["exclude_sessions"]) == 2 * DEFAULT_TRIALS * 2
+        # and it reads what became of the first: approved, with what it changed
+        (past,) = fake.reflected[1]["history"]
+        assert past["outcome"] == "approved" and past["why"][0] == "a person approved it: it became v2"
+        assert past["edits"] == [{"action": "replace", "section": "rules", "text": FIXED}]
 
 
 @pytest.mark.asyncio
@@ -254,6 +267,11 @@ async def test_a_change_that_does_not_do_better_is_refused_and_cannot_be_approve
         inbox = (await api.get("/api/v1/traces/proposals", params={"status_filter": "awaiting_approval"})).json()
         assert inbox == []  # a refused change never reaches anyone
         assert (await api.post(f"/api/v1/traces/proposals/{p['id']}/reject")).json()["status"] == "rejected"
+        # the next reflection reads why: so it does not propose the same change again
+        await _propose(api, db_session, agent, ds, started)
+        (past,) = fake.reflected[1]["history"]
+        assert past["outcome"] == "rejected" and f"the gate refused it: {why}" in past["why"]
+        assert not any("passed the gate" in w for w in past["why"])
     assert len(await releases(agent.id, db_session)) == 1
 
 
