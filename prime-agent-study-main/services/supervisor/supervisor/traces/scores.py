@@ -20,6 +20,7 @@ from sqlalchemy import and_, case, delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow, TraceScoreRow
+from supervisor.obs.evaluations import emit_evaluation
 from supervisor.session.access import session_visibility
 from supervisor.traces.checks import CHECKS_VERSION, run_checks
 from supervisor.traces.model import RunTrace
@@ -142,7 +143,10 @@ async def set_feedback(
         db.add(row)
         await db.flush()
         await _recount_feedback(db, session.id, run_id)
-        return score_out(row)
+        out = score_out(row)
+    emit_evaluation(session_id=session.id, run_id=run_id, name=FEEDBACK, label=out["label"], value=out["value"],
+                    explanation=out["comment"], source="person", evaluator="person")
+    return out
 
 
 async def clear_feedback(

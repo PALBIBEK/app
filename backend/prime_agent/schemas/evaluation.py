@@ -190,6 +190,8 @@ class ProposalCreate(BaseModel):
     """What you want addressed, in your words (optional)."""
     rounds: int = Field(default=1, ge=1, le=3)
     """Candidates to try, each built on the best so far (each replays the dataset once)."""
+    issue_key: str | None = Field(default=None, min_length=3, max_length=600)
+    """Start from an issue: its runs are saved to the dataset, and the change is for it."""
 
 
 class PromptSectionOut(BaseModel):
@@ -289,6 +291,7 @@ class ProposalOut(BaseModel):
     status: str
     error: str | None = None
     notes: str | None = None
+    issue_key: str | None = None
     base_version: int
     rationale: str | None = None
     changed: list[str] = Field(default_factory=list)

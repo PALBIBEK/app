@@ -11,6 +11,7 @@ import type {
   JudgeAgreement,
   JudgeInput,
   JudgePreviewRun,
+  ReviewRun,
   RawEvent,
   RunTrace,
   SessionTraces,
@@ -80,6 +81,10 @@ export const tracesAPI = {
 
   saveJudge: (agentId: string, body: JudgeInput): Promise<Judge> =>
     apiClient.put<Judge>(`/traces/agents/${seg(agentId)}/judges`, body),
+
+  /** Runs a person should mark: where the agent's automatic verdicts are least to be trusted. */
+  review: (agentId: string): Promise<{ agent_id: string; runs: ReviewRun[] }> =>
+    apiClient.get<{ agent_id: string; runs: ReviewRun[] }>(`/traces/agents/${seg(agentId)}/review`),
 
   /** Each judge against people's good/bad on the same runs. */
   judgeAgreement: (agentId: string): Promise<{ agent_id: string; judges: JudgeAgreement[] }> =>

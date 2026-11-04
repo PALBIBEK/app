@@ -1107,6 +1107,13 @@ class AiClient:
         payload = await self._json_request("PUT", "/v1/traces/judges", identity, json_body=body, expected=(200,))
         return payload if isinstance(payload, dict) else {}
 
+    async def trace_review(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
+        """GET /v1/traces/review: runs a person should mark (verdicts least to be trusted)."""
+        payload = await self._json_request(
+            "GET", "/v1/traces/review", identity, expected=(200,), params={"composition_id": composition_id}
+        )
+        return payload if isinstance(payload, dict) else {"runs": []}
+
     async def judge_agreement(self, identity: TenantPrincipal, composition_id: str) -> dict[str, Any]:
         """GET /v1/traces/judges/agreement: each judge against people's good/bad on the same runs."""
         payload = await self._json_request(

@@ -21,6 +21,7 @@ from prime_agent.schemas.trace import (
     JudgePreviewResponse,
     JudgeRequest,
     JudgesResponse,
+    ReviewResponse,
     RunTraceResponse,
     SessionTracesResponse,
     TraceListResponse,
@@ -228,6 +229,17 @@ async def save_judge(agent_id: str, body: JudgeRequest, db: DbSession, current_u
             agent_id=agent_id,
             body=body,
             db=db,
+        )
+    except TraceNotFoundError as exc:
+        raise _not_found() from exc
+
+
+@router.get("/agents/{agent_id}/review", response_model=ReviewResponse)
+async def review_queue(agent_id: str, db: DbSession, current_user: CurrentUser) -> ReviewResponse:
+    """The agent's runs a person should mark: where its automatic verdicts are least to be trusted."""
+    try:
+        return await _service().review(
+            identity=TenantPrincipal.from_user(current_user), user_id=current_user.id, agent_id=agent_id, db=db
         )
     except TraceNotFoundError as exc:
         raise _not_found() from exc

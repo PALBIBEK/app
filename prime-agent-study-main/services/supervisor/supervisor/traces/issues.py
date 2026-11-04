@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow, TraceScoreRow
 from supervisor.session.access import session_visibility
 
-__all__ = ["EXAMPLES", "SCAN_LIMIT", "issue_key", "issue_title", "list_issues"]
+__all__ = ["EXAMPLES", "REVIEW_REASONS", "SCAN_LIMIT", "issue_key", "issue_title", "list_issues", "review_queue"]
 
 SCAN_LIMIT = 5_000
 """Failing verdicts read per listing, newest first; older ones fall out of the counts."""
@@ -140,3 +140,75 @@ async def list_issues(
         }
         for i in ranked
     ]
+
+
+REVIEW_REASONS = {
+    "unclear": "a judge could not decide",
+    "judges_disagree": "judges disagree",
+    "checks_disagree": "a judge passed what a check failed",
+}
+
+
+async def review_queue(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    tenant_id: str,
+    principal_id: str | None,
+    composition_id: str,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Runs a person should mark, the newest first: where the automatic verdicts are least to
+    be trusted (a judge said ``unclear``, judges disagree, or a judge passed a run a check
+    failed) and nobody has marked the run yet. Marking it (good or bad) takes it off the queue,
+    as an annotation queue item is completed once scored (Langfuse ``AnnotationQueueItem``:
+    ``PENDING`` until ``completedAt``); and each mark is what ``judges.agreement`` measures the
+    judges against. An experiment's replays are left out."""
+    query = (
+        select(TraceScoreRow.session_id, TraceScoreRow.run_id, TraceScoreRow.source, TraceScoreRow.name,
+               TraceScoreRow.label, TraceScoreRow.reason, RunTraceRow.started_ms, RunTraceRow.input_preview,
+               RunTraceRow.summary)
+        .join(RunTraceRow, and_(RunTraceRow.session_id == TraceScoreRow.session_id,
+                                RunTraceRow.run_id == TraceScoreRow.run_id))
+        .join(SessionRow, SessionRow.id == TraceScoreRow.session_id)
+        .where(SessionRow.tenant_id == tenant_id, session_visibility(tenant_id, principal_id),
+               TraceScoreRow.composition_id == composition_id,
+               ~exists().where(SessionEvaluationRow.session_id == TraceScoreRow.session_id))
+        .order_by(RunTraceRow.started_ms.desc())
+        .limit(SCAN_LIMIT)
+    )
+    async with factory() as db:
+        found = (await db.execute(query)).all()
+    runs: dict[tuple[str, str], dict[str, Any]] = {}
+    for session_id, run_id, source, name, label, reason, started_ms, ask, summary in found:
+        run = runs.setdefault((session_id, run_id), {
+            "session_id": session_id, "run_id": run_id, "started_ms": started_ms, "input": ask,
+            "summary": summary, "marked": False, "judges": {}, "checks_failed": [],
+        })
+        if source == "person":
+            run["marked"] = True
+        elif source == "judge":
+            run["judges"][name] = (label, reason)
+        elif source == "check" and label == "fail":
+            run["checks_failed"].append(name)
+    out: list[dict[str, Any]] = []
+    for run in runs.values():
+        if run["marked"] or not run["judges"]:
+            continue
+        labels = {label for label, _ in run["judges"].values()}
+        why = (
+            "unclear" if "unclear" in labels
+            else "judges_disagree" if {"pass", "fail"} <= labels
+            else "checks_disagree" if labels == {"pass"} and run["checks_failed"]
+            else None
+        )
+        if why is None:
+            continue
+        out.append({
+            "session_id": run["session_id"], "run_id": run["run_id"], "started_ms": run["started_ms"],
+            "input": run["input"], "summary": run["summary"], "why": why, "says": REVIEW_REASONS[why],
+            "verdicts": [{"name": n, "label": label, "reason": reason} for n, (label, reason) in sorted(run["judges"].items())],
+            "checks_failed": sorted(run["checks_failed"]),
+        })
+        if len(out) == limit:
+            break
+    return out

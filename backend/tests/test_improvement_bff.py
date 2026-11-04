@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from prime_agent import config
 from prime_agent.config import Settings, get_settings
@@ -21,7 +22,7 @@ from prime_agent.db.models.session_link import SessionLink
 from prime_agent.main import create_app
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient
-from prime_agent.services.evaluation_service import DEFAULT_TRIALS
+from prime_agent.services.evaluation_service import DEFAULT_TRIALS, EvaluationService
 from prime_agent.services.harness_publish_service import HarnessPublisher, artifact_prefix, releases
 from prime_agent.services.harness_service import HarnessService
 from prime_agent.services.improvement_service import ImprovementService
@@ -684,3 +685,38 @@ async def test_a_change_no_worse_live_is_held_and_a_newer_release_ends_the_watch
     assert await watcher.tick(_same(db_session)) == []
     await db_session.refresh(row)
     assert row.watch["status"] == "superseded" and row.watch["note"] == "v3 was released after it"
+
+
+@pytest.mark.asyncio
+async def test_a_change_can_start_from_an_issue(db_session, owner, settings, monkeypatch):
+    """The issue's runs join the dataset, and the reflection reads that issue first."""
+    from prime_agent.db.models.evaluation import DatasetItem as Item
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+    key = f"{agent.composition_id}:check:tests_after_change:"
+    plain = fake.__call__
+    listed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/issues/runs":
+            listed.append(request.url.params["key"])
+            return httpx.Response(200, json={"issue": {"examples": []}})
+        return plain(request)
+
+    started: list = []
+    monkeypatch.setattr("prime_agent.web.routes.evaluations.EvaluationService.from_settings",
+                        lambda s=None: EvaluationService(config.get_settings(),
+                                                         client=AiClient(config.get_settings(), transport=httpx.MockTransport(handler))))
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        api.fake, api.user = fake, owner
+        other = await api.post(f"/api/v1/traces/agents/{agent.id}/proposals",
+                               json={"dataset_id": ds.id, "issue_key": "someone-else:check:x:"})
+        assert other.status_code == 422, "an issue of another agent"
+        r = await api.post(f"/api/v1/traces/agents/{agent.id}/proposals", json={"dataset_id": ds.id, "issue_key": key})
+        assert r.status_code == 202, r.text
+        assert r.json()["issue_key"] == key and listed == [key]
+        service = ImprovementService(config.get_settings(), client=AiClient(config.get_settings(), transport=httpx.MockTransport(handler)))
+        await service.run(r.json()["id"], identity=TenantPrincipal.from_user(owner), session_factory=_same(db_session), poll_s=0)
+    assert fake.reflected[-1]["focus_issue"] == key
+    assert len((await db_session.execute(select(Item).where(Item.dataset_id == ds.id))).scalars().all()) == 2

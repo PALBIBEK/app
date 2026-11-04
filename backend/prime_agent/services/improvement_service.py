@@ -252,6 +252,7 @@ class ImprovementService:
         return ProposalOut(
             id=row.id, agent_id=row.harness_id, agent_name=agent.name if agent else None, dataset_id=row.dataset_id,
             dataset_name=dataset.name if dataset else None, status=row.status, error=row.error, notes=row.notes,
+            issue_key=row.issue_key,
             base_version=row.base_version, rationale=row.rationale, changed=list(row.changed or []),
             edits=list(row.edits or []), skipped_edits=list(row.skipped_edits or []),
             expected_outcome=row.expected_outcome, max_rounds=row.max_rounds or 1,
@@ -297,7 +298,8 @@ class ImprovementService:
     # --- proposing ------------------------------------------------------------------
 
     async def propose(
-        self, *, user_id: str, agent_id: str, dataset_id: str, notes: str | None, db: AsyncSession, rounds: int = 1
+        self, *, user_id: str, agent_id: str, dataset_id: str, notes: str | None, db: AsyncSession, rounds: int = 1,
+        issue_key: str | None = None,
     ) -> Proposal:
         """A proposal queued for the agent (``run`` drafts, measures and gates it)."""
         agent = (
@@ -321,7 +323,7 @@ class ImprovementService:
             raise HTTPException(status_code=409, detail={"error_code": "NO_SUCH_VERSION", "message": "publish the agent first"})
         row = Proposal(user_id=user_id, harness_id=agent_id, dataset_id=dataset_id, status="drafting",
                        notes=(notes or "").strip() or None, base_version=live.version, base_manifest=live.manifest,
-                       max_rounds=rounds)
+                       max_rounds=rounds, issue_key=issue_key)
         db.add(row)
         await db.commit()
         return row
@@ -472,6 +474,7 @@ class ImprovementService:
                     "sections": [{"id": s.id, "text": s.text} for s in parent.manifest.prompt.sections],
                     "learned": [{"id": n.id, "text": n.text} for n in parent.manifest.prompt.learned or []],
                     "notes": row.notes,
+                    "focus_issue": row.issue_key,
                     "since_ms": since,
                     "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
                     "history": [*history, *(_round_feedback(r) for r in rounds)][-HISTORY:],

@@ -185,6 +185,33 @@ class JudgesResponse(BaseModel):
     judges: list[Judge]
 
 
+class ReviewVerdict(BaseModel):
+    name: str
+    label: str
+    reason: str | None = None
+
+
+class ReviewRun(BaseModel):
+    """A run a person should mark: why its automatic verdicts are not to be trusted."""
+
+    session_id: str
+    """The product's session id."""
+    run_id: str
+    started_ms: int | None = None
+    input: str | None = None
+    summary: str | None = None
+    why: str
+    """``unclear``, ``judges_disagree`` or ``checks_disagree``."""
+    says: str
+    verdicts: list[ReviewVerdict] = Field(default_factory=list)
+    checks_failed: list[str] = Field(default_factory=list)
+
+
+class ReviewResponse(BaseModel):
+    agent_id: str
+    runs: list[ReviewRun]
+
+
 class JudgeAgreement(BaseModel):
     """How a judge's verdicts agree with people's good/bad on the same runs."""
 

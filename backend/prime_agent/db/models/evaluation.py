@@ -149,6 +149,8 @@ class Proposal(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     """What the person asked to be addressed, if anything."""
+    issue_key: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    """The issue the change is for, when it was started from one: the reflection reads it first."""
     base_version: Mapped[int] = mapped_column(Integer, nullable=False)
     base_manifest: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False)
     candidate_manifest: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)

@@ -327,3 +327,34 @@ async def test_a_rubric_is_tried_on_recent_runs_before_it_is_saved(api: Api, mon
     assert [(x["run_id"], x["verdict"], x["people"]) for x in runs] == [("r2", "fail", "bad"), ("r1", "fail", None)]
     async with api.factory() as db:  # a preview keeps nothing
         assert (await db.execute(select(TraceScoreRow).where(TraceScoreRow.source == "judge"))).first() is None
+
+
+async def test_runs_a_person_should_mark_wait_in_a_review_queue(api: Api) -> None:
+    """Where automatic verdicts are least to be trusted, until a person marks the run
+    (Langfuse's annotation queue: an item is pending until it is scored)."""
+    sid, replay = await api.session(), await api.session()
+    reader = JournalReader(api.factory)
+    await save_judge(api.factory, tenant_id="t1", composition_id="githi-v1", name="answers",
+                     rubric="Answers the question that was asked.", sample_rate=1.0, model=None,
+                     enabled=True, created_by="alice")
+    replies = {"unsure": "no idea", "fine-but-broke": '{"verdict": "pass", "reason": "fine"}',
+               "fine": '{"verdict": "pass", "reason": "fine"}', "marked": "no idea"}
+    for n, (run, reply) in enumerate(replies.items()):
+        await api.run(sid, run, f"ask {run}", start=1_000 * (n + 1), tool_ok=run != "fine-but-broke")
+        await after_run(api.factory, reader, sid, run, lambda s, r=reply: FakeModelGatewayClient(assistant_text=r))
+    await api.run(replay, "x", "a replay", start=9_000)
+    await api.client.put(f"/v1/sessions/{replay}/evaluation", json={"experiment_id": "e"}, headers=ALICE)
+    await after_run(api.factory, reader, replay, "x", lambda s: FakeModelGatewayClient(assistant_text="no idea"))
+    await api.client.put(f"/v1/sessions/{sid}/runs/marked/feedback", json={"good": True}, headers=ALICE)
+
+    r = await api.client.get("/v1/traces/review", params={"composition_id": "githi-v1"}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    queue = r.json()["runs"]
+    assert [(q["run_id"], q["why"]) for q in queue] == [("fine-but-broke", "checks_disagree"), ("unsure", "unclear")]
+    assert queue[0]["says"] == "a judge passed what a check failed" and queue[0]["checks_failed"] == ["tool_errors"]
+
+    await api.client.put(f"/v1/sessions/{sid}/runs/unsure/feedback", json={"good": False}, headers=ALICE)
+    after = (await api.client.get("/v1/traces/review", params={"composition_id": "githi-v1"}, headers=ALICE)).json()
+    assert [q["run_id"] for q in after["runs"]] == ["fine-but-broke"], "marked: off the queue"
+    assert (await api.client.get("/v1/traces/review", params={"composition_id": "githi-v1"},
+                                 headers=BOB)).json()["runs"] == []

@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionRow
 from supervisor.journal.reader import JournalReader
+from supervisor.obs.evaluations import emit_evaluation
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
+from supervisor.traces.checks import CHECKS_VERSION, run_checks
 from supervisor.traces.judges import judge_run
 from supervisor.traces.model import RunTrace
 from supervisor.traces.store import load_run, set_model_summary
@@ -61,6 +63,10 @@ async def after_run(
         return None
     if trace is None or not trace.rollup.status.finished:
         return trace
+    for check in run_checks(trace):  # once per finished run: the journal ends it once
+        emit_evaluation(session_id=session_id, run_id=run_id, name=check.name, label=check.label,
+                        value=1.0 if check.passed else 0.0, explanation=check.reason, source="check",
+                        evaluator=CHECKS_VERSION)
     client = None
     try:
         client = client_for(session)

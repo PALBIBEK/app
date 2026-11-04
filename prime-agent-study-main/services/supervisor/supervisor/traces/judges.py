@@ -36,6 +36,7 @@ from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionEvaluationRow, SessionRow, TraceJudgeRow, TraceScoreRow
+from supervisor.obs.evaluations import emit_evaluation
 from supervisor.seams.core.types import ChatMessage
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.session.access import session_visibility
@@ -312,6 +313,9 @@ async def judge_run(
                     composition_digest=pins.get("composition_digest"), created_ms=int(time.time() * 1000),
                 )
             )
+        emit_evaluation(session_id=trace.session_id, run_id=trace.run_id, name=name, label=verdict.label,
+                        value={"pass": 1.0, "fail": 0.0}.get(verdict.label), explanation=verdict.reason,
+                        source="judge", evaluator=evaluator)
         given.append(verdict)
     return given
 

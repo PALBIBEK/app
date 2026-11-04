@@ -238,6 +238,19 @@ export interface Judge {
   updated_ms: number;
 }
 
+/** A run a person should mark: why its automatic verdicts are not to be trusted. */
+export interface ReviewRun {
+  session_id: string;
+  run_id: string;
+  started_ms: number | null;
+  input: string | null;
+  summary: string | null;
+  why: 'unclear' | 'judges_disagree' | 'checks_disagree' | string;
+  says: string;
+  verdicts: { name: string; label: string; reason: string | null }[];
+  checks_failed: string[];
+}
+
 /** How a judge's verdicts agree with people's good/bad on the same runs. */
 export interface JudgeAgreement {
   name: string;

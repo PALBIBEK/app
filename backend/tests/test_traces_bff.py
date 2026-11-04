@@ -335,3 +335,26 @@ async def test_a_judge_is_checked_against_people_and_a_rubric_is_tried_first(
     async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
         assert (await api.get(f"{base}/agreement")).status_code == 404
         assert (await api.post(f"{base}/preview", json={"rubric": "Says what it changed."})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_the_review_queue_is_the_users_runs_to_mark(db_session, owner, agent, settings, monkeypatch, make_user):
+    link = await _link(db_session, owner, agent, "ai-1", V2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/traces/review" and request.url.params["composition_id"] == "h-reviewer"
+        return httpx.Response(200, json={"runs": [
+            {"session_id": "ai-1", "run_id": "r1", "started_ms": 1, "input": "fix it", "summary": "Answered.",
+             "why": "unclear", "says": "a judge could not decide",
+             "verdicts": [{"name": "answers", "label": "unclear", "reason": "no verdict"}], "checks_failed": []},
+            {"session_id": "ai-someone-elses", "run_id": "r9", "why": "unclear", "says": "a judge could not decide"},
+        ]})
+
+    async with _api(db_session, owner, settings, monkeypatch, handler) as api:
+        r = await api.get(f"/api/v1/traces/agents/{agent.id}/review")
+        assert r.status_code == 200, r.text
+        assert [(x["session_id"], x["why"], x["verdicts"][0]["label"]) for x in r.json()["runs"]] == [
+            (link.id, "unclear", "unclear")]
+    stranger = await make_user(email="stranger7@example.com", name="S")
+    async with _api(db_session, stranger, settings, monkeypatch, handler) as api:
+        assert (await api.get(f"/api/v1/traces/agents/{agent.id}/review")).status_code == 404
