@@ -106,7 +106,7 @@ class HybridRecall:
         query: str,
         budget: TokenBudget,
     ) -> RecallResult:
-        actives = await self._bank.list_active(scope)
+        actives = await self._bank.candidates(scope, self._embedder.embed(query))
         ranked = self.rank(actives, query, now_ms=int(time.time() * 1000))
         packed: list[MemoryItem] = []
         tokens = 0

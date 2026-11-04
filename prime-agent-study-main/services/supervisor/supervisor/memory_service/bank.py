@@ -8,6 +8,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from supervisor.memory_service import vector_search
 from supervisor.memory_service.cost import CachingEmbedder
 from supervisor.memory_service.embed import Embedder, content_hash
 from supervisor.memory_service.metrics import METRICS
@@ -140,6 +141,17 @@ class MemoryBank:
                 r.forgotten = 1
             await db.commit()
             return len(rows)
+
+    async def candidates(self, scope: Scope, query_vector: list[float]) -> list[MemoryItemRow]:
+        """The items recall ranks: on Postgres with pgvector the nearest CANDIDATES of the
+        scope (``vector_search``), elsewhere every live item."""
+        async with self._factory() as db:
+            if await vector_search.available(db):
+                rows = await vector_search.nearest(db, scope, query_vector)
+                for r in rows:
+                    db.expunge(r)
+                return rows
+        return await self.list_active(scope)
 
     async def list_active(self, scope: Scope) -> list[MemoryItemRow]:
         async with self._factory() as db:
