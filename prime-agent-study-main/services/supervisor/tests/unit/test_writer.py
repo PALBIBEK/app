@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.agent.events import MessageEnd, RunEnd, RunStart, ToolStart, TurnStart
 from supervisor.db.engine import open_db
-from supervisor.db.models import EventRow
-from supervisor.journal.writer import JournalWriter, OversizedPayloadError, Written
+from supervisor.db.models import EventRow, SessionRow
+from supervisor.journal.writer import (
+    Fence,
+    FencedOut,
+    JournalWriter,
+    OversizedPayloadError,
+    Written,
+    keyed_event_id,
+)
 
 
 @pytest.fixture
@@ -244,3 +254,35 @@ async def test_a_claim_under_one_key_is_won_once(tmp_path: Path) -> None:
             rows = (await db.execute(select(EventRow).where(EventRow.session_id == "s1"))).scalars().all()
         assert [r.type for r in rows] == ["ToolStart"]
         assert await claim(False) is None, "a later claim loses too"
+
+
+@pytest.mark.asyncio
+async def test_a_fenced_claim_and_a_takeover_never_interleave(tmp_path: Path) -> None:
+    """A fenced append checks its holder inside its own transaction: one that races a
+    takeover waits for it, then is refused, and writes nothing (pi-temporal's fence)."""
+    async with open_db(f"sqlite+aiosqlite:///{tmp_path / 'fence.db'}") as (_engine, factory):
+        w = JournalWriter(factory, blob_dir=tmp_path / "blobs")
+        await w.ensure_session("s1", runtime="echo")
+
+        async def hold(holder: str, db: AsyncSession) -> None:
+            await db.execute(update(SessionRow).where(SessionRow.id == "s1").values(holder=holder))
+
+        def claim(key: str) -> Coroutine[Any, Any, Written | None]:
+            start = ToolStart(tool_call_id=key, tool_name="write", args={})
+            return w.append_once(
+                "s1", start, turn_id="t1", trace_id=None, event_key=key, fence=Fence("s1", "old")
+            )
+
+        async with factory() as db, db.begin():
+            await hold("old", db)
+        assert await claim("c1") is not None, "the holder writes"
+        async with factory() as db, db.begin():
+            await hold("new", db)  # a takeover, not committed yet
+            racing = asyncio.create_task(claim("c2"))
+            await asyncio.sleep(0.3)
+            assert not racing.done(), "the claim did not wait for the takeover"
+        with pytest.raises(FencedOut):
+            await racing
+        async with factory() as db:
+            ids = (await db.execute(select(EventRow.event_id).where(EventRow.session_id == "s1"))).scalars().all()
+        assert keyed_event_id("s1", "c2") not in ids, "the refused claim was written"

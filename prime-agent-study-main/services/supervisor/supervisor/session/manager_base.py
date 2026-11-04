@@ -47,7 +47,7 @@ from supervisor.harness import (
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.secrets import mask_bytes, mask_event
 from supervisor.journal.serde import type_name_of
-from supervisor.journal.writer import JournalWriter, Written
+from supervisor.journal.writer import Fence, FencedOut, JournalWriter, Written
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.models.browser import BrowserAccess
 from supervisor.policy.approvals import ApprovalBroker
@@ -74,6 +74,7 @@ from supervisor.seams.services import (
 from supervisor.seams.services.virtual_keys import MintedVirtualKey
 from supervisor.session.errors import (
     SessionAwaitingApproval,
+    SessionMoved,
     SessionNotFound,
     SessionTerminated,
 )
@@ -456,17 +457,27 @@ class SessionManagerBase:
         turn_id: str | None,
         trace_id: str | None,
         event_key: str,
+        fence: Fence | None = None,
     ) -> int | None:
         """Journal ``payload`` under ``event_key`` only if no event holds the key yet (an
         atomic claim); its seq, or None when another writer holds it (a tool call's start,
         and its end, which the call and a closer may race to write). Its workspace effects
-        run first, as ``_record``'s do: harmless if the claim is lost."""
+        run first, as ``_record``'s do: harmless if the claim is lost. ``fence``: raise
+        SessionMoved, writing nothing, once this worker lost the session it names."""
         await self._workspace_effects(
             session_id, payload, trace_id=trace_id, turn_id=turn_id, event_key=event_key
         )
-        written = await self._writer.append_once(
-            session_id, payload, turn_id=turn_id, trace_id=trace_id, event_key=event_key
-        )
+        try:
+            written = await self._writer.append_once(
+                session_id,
+                payload,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                event_key=event_key,
+                fence=fence,
+            )
+        except FencedOut as moved:
+            raise SessionMoved(str(moved)) from moved
         if written is None:
             return None
         await self._announce(session_id, payload, written, turn_id=turn_id, trace_id=trace_id)
