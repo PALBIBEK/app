@@ -225,12 +225,20 @@ async def propose_change(agent_id: str, body: ProposalCreate, db: DbSession, cur
     passes waits in Approvals.
     """
     service = _improver()
+    identity = TenantPrincipal.from_user(current_user)
     try:
+        if body.issue_key:  # the issue's runs join the dataset first: the change is measured on them
+            try:
+                await _service().add_issue(identity=identity, user_id=current_user.id, dataset_id=body.dataset_id,
+                                           issue_key=body.issue_key, db=db)
+            except HTTPException as exc:
+                if exc.status_code != 409:  # a full dataset still measures the change on what it holds
+                    raise
         row = await service.propose(user_id=current_user.id, agent_id=agent_id, dataset_id=body.dataset_id,
-                                    notes=body.notes, rounds=body.rounds, db=db)
-    except ImprovementNotFoundError as exc:
+                                    notes=body.notes, rounds=body.rounds, issue_key=body.issue_key, db=db)
+    except (ImprovementNotFoundError, EvaluationNotFoundError) as exc:
         raise _not_found() from exc
-    start_improving(service, row.id, TenantPrincipal.from_user(current_user))
+    start_improving(service, row.id, identity)
     return (await service.list_proposals(user_id=current_user.id, db=db, agent_id=agent_id))[0]
 
 

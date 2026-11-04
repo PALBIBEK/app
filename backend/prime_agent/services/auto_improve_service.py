@@ -178,7 +178,7 @@ class AutoImprover:
         try:
             proposal = await self._improver.propose(
                 user_id=user.id, agent_id=agent_id, dataset_id=row.dataset_id, rounds=row.rounds, db=db,
-                notes=f"Started automatically: {note}. Fix what makes these runs fail.",
+                notes=f"Started automatically: {note}. Fix what makes these runs fail.", issue_key=top.key,
             )
         except (HTTPException, ImprovementNotFoundError) as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else "the agent or dataset is gone"

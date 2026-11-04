@@ -132,6 +132,14 @@ async def test_reflecting_on_failing_runs_proposes_a_change(api: Api, monkeypatc
     assert out["evidence"][0]["examples"][0]["run_id"] == "r2"
     assert "fix the tests" in model.asked[0][1].content
 
+    # a change for one issue reads it first, wherever it ranks
+    await api.client.put(f"/v1/sessions/{sid}/runs/r1/feedback", json={"good": False}, headers=ALICE)
+    ranked = (await api.client.get("/v1/traces/issues", headers=ALICE)).json()["issues"]
+    assert [i["title"] for i in ranked][:2] == ["bash calls failed", "Marked wrong by people"]
+    focused = await api.client.post("/v1/traces/reflect", json=body | {"focus_issue": ranked[1]["key"]}, headers=ALICE)
+    assert focused.status_code == 200, focused.text
+    assert [e["title"] for e in focused.json()["evidence"]][:2] == ["Marked wrong by people", "bash calls failed"]
+
     # an experiment's replays are never evidence: the optimizer must not see what grades it
     r = await api.client.post("/v1/traces/reflect", json=body | {"exclude_sessions": [sid]}, headers=ALICE)
     assert r.status_code == 409

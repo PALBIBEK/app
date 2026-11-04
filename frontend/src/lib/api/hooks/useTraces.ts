@@ -26,6 +26,7 @@ export const traceKeys = {
   issues: (agentId: string) => [...traceKeys.all, 'issues', agentId] as const,
   judges: (agentId: string) => [...traceKeys.all, 'judges', agentId] as const,
   agreement: (agentId: string) => [...traceKeys.all, 'judges', agentId, 'agreement'] as const,
+  review: (agentId: string) => [...traceKeys.all, 'review', agentId] as const,
 };
 
 /** The user's runs, newest first, a page at a time. */
@@ -110,6 +111,8 @@ export function useFeedback(sessionId: string, runId: string) {
       void client.invalidateQueries({ queryKey: traceKeys.run(sessionId, runId) });
       void client.invalidateQueries({ queryKey: [...traceKeys.all, 'list'] });
       void client.invalidateQueries({ queryKey: [...traceKeys.all, 'agent-versions'] });
+      void client.invalidateQueries({ queryKey: [...traceKeys.all, 'review'] });
+      void client.invalidateQueries({ queryKey: [...traceKeys.all, 'judges'] });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not save that'),
   });
@@ -140,6 +143,15 @@ export function useJudges(agentId: string | undefined) {
   return useQuery({
     queryKey: traceKeys.judges(agentId ?? ''),
     queryFn: () => tracesAPI.judges(agentId!),
+    enabled: isAuthenticated && !!agentId,
+  });
+}
+
+export function useReviewQueue(agentId: string | undefined) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return useQuery({
+    queryKey: traceKeys.review(agentId ?? ''),
+    queryFn: () => tracesAPI.review(agentId!),
     enabled: isAuthenticated && !!agentId,
   });
 }

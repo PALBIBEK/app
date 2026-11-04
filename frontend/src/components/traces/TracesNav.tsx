@@ -1,7 +1,8 @@
 'use client';
 
-/** The views of traces: every run, the issues they add up to, the judges, the datasets of
- * saved runs that versions are compared on, and the changes learned from them. */
+/** The views of traces: every run, the issues they add up to, the runs to mark by hand, the
+ * judges, the datasets of saved runs that versions are compared on, and the changes learned
+ * from them. */
 
 import Link from 'next/link';
 
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils';
 const VIEWS = [
   { href: '/traces', label: 'Runs' },
   { href: '/traces/issues', label: 'Issues' },
+  { href: '/traces/review', label: 'Review' },
   { href: '/traces/judges', label: 'Judges' },
   { href: '/traces/datasets', label: 'Datasets' },
   { href: '/traces/improve', label: 'Improve' },

@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from supervisor.api import deps
 from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow
-from supervisor.traces.issues import list_issues
+from supervisor.traces.issues import list_issues, review_queue
 from supervisor.traces.judges import (
     PREVIEW_RUNS,
     agreement,
@@ -285,6 +285,20 @@ async def trace_issues(
     return {"issues": issues}
 
 
+@router.get("/v1/traces/review")
+async def trace_review(
+    request: Request,
+    composition_id: str = Query(min_length=1, max_length=255),
+    limit: int = Query(default=30, ge=1, le=100),
+    tenant_id: str = Depends(deps.current_tenant),
+) -> dict[str, Any]:
+    """Runs a person should mark: where the automatic verdicts are least to be trusted."""
+    runs = await review_queue(deps.get_session_factory(request), tenant_id=tenant_id,
+                              principal_id=deps.request_principal_id(request, tenant_id),
+                              composition_id=composition_id, limit=limit)
+    return {"runs": runs}
+
+
 @router.get("/v1/traces/issues/runs")
 async def trace_issue_runs(
     request: Request,
@@ -385,6 +399,8 @@ class ReflectIn(BaseModel):
     exclude_sessions: list[str] = Field(default_factory=list, max_length=5000)
     """Sessions that are not evidence: the replays a candidate is measured on, so the
     reflection never sees what it will be graded on."""
+    focus_issue: str | None = Field(default=None, max_length=600)
+    """An issue the change is for (its key): read first, wherever it ranks."""
     history: list[PastChangeIn] = Field(default_factory=list, max_length=20)
     """The changes proposed before, oldest first: so a refused one is not proposed again."""
 
@@ -482,6 +498,11 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
     issues = await list_issues(factory, tenant_id=tenant_id, principal_id=principal,
                                composition_id=body.composition_id, since_ms=body.since_ms, limit=8,
                                exclude_sessions=body.exclude_sessions)
+    if body.focus_issue:
+        focused = await list_issues(factory, tenant_id=tenant_id, principal_id=principal,
+                                    composition_id=body.composition_id, since_ms=body.since_ms, limit=1,
+                                    exclude_sessions=body.exclude_sessions, key=body.focus_issue)
+        issues = [*focused, *(i for i in issues if i["key"] != body.focus_issue)][:8]
     if not issues and not (body.notes or "").strip():
         raise HTTPException(status_code=409, detail={"error_code": "NO_EVIDENCE",
                                                      "message": "no failing runs to learn from yet"})

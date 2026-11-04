@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 _projector: ProjectorHub | None = None
 _provider: Any = None
 _shared_sink: SpanSink | None = None
+_log_provider: Any = None
 _default_tenant: str = "default"
 _default_harness_id: str = "unknown"
 _default_harness_version: str = "unknown"
@@ -229,8 +230,8 @@ def force_flush_tracing(timeout_millis: int = 10000) -> bool:
 
 
 def shutdown_tracing() -> None:
-    """Flush/shutdown TracerProvider if one was created."""
-    global _provider, _projector, _shared_sink
+    """Flush/shutdown the TracerProvider (and the LoggerProvider beside it) if created."""
+    global _provider, _projector, _shared_sink, _log_provider
     if _provider is not None:
         try:
             force_flush_tracing()
@@ -238,6 +239,12 @@ def shutdown_tracing() -> None:
         except Exception:
             logger.exception("tracer provider shutdown failed")
         _provider = None
+    if _log_provider is not None:
+        try:
+            _log_provider.shutdown()  # flushes the batch of events first
+        except Exception:
+            logger.exception("logger provider shutdown failed")
+        _log_provider = None
     _projector = None
     _shared_sink = None
 
@@ -277,9 +284,26 @@ def _build_otlp_sink(service_name: str) -> SpanSink:
     )
     trace.set_tracer_provider(provider)
     _provider = provider
+    _setup_logs(endpoint, resource)
     tracer = trace.get_tracer("yal-supervisor")
     logger.info("OTLP exporter configured endpoint=%s sample_ratio=%s", endpoint, sample_ratio)
     return OtlpBridgeSink(tracer)
+
+
+def _setup_logs(endpoint: str, resource: object) -> None:
+    """Events (``supervisor.obs.evaluations``) go out over the Logs API to the same collector
+    as the spans; without this the API's no-op provider drops them."""
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+    global _log_provider
+
+    provider = LoggerProvider(resource=resource)  # type: ignore[arg-type]
+    provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint, timeout=5)))
+    set_logger_provider(provider)
+    _log_provider = provider
 
 
 def make_inmemory_otlp_projector(

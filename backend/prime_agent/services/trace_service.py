@@ -32,6 +32,8 @@ from prime_agent.schemas.trace import (
     JudgePreviewRun,
     JudgeRequest,
     JudgesResponse,
+    ReviewResponse,
+    ReviewRun,
     RunSummary,
     RunTraceResponse,
     SessionTracesResponse,
@@ -437,6 +439,38 @@ class TraceService:
             raise _upstream(exc) from exc
         return Judge.model_validate(raw)
 
+    async def review(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, db: AsyncSession
+    ) -> ReviewResponse:
+        """The agent's runs a person should mark, the ones in sessions the user can open."""
+        harness = await self._owned_agent(db, user_id, agent_id)
+        if not harness.composition_id:
+            return ReviewResponse(agent_id=agent_id, runs=[])
+        try:
+            raw = await self._client.trace_review(identity, harness.composition_id)
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        runs = [r for r in raw.get("runs", []) if isinstance(r, dict)]
+        links = await self._links(db, user_id, {str(r.get("session_id")) for r in runs})
+        return ReviewResponse(agent_id=agent_id, runs=[
+            ReviewRun.model_validate({**r, "session_id": links[str(r["session_id"])]})
+            for r in runs if str(r.get("session_id")) in links
+        ])
+
+    @staticmethod
+    async def _links(db: AsyncSession, user_id: str, ai_ids: set[str]) -> dict[str, str]:
+        """Supervisor session id -> the user's product session id, for those the user has."""
+        if not ai_ids:
+            return {}
+        return dict(
+            (
+                await db.execute(
+                    select(SessionLink.ai_session_id, SessionLink.id)
+                    .where(SessionLink.user_id == user_id, SessionLink.ai_session_id.in_(ai_ids))
+                )
+            ).all()
+        )
+
     async def judge_agreement(
         self, *, identity: TenantPrincipal, user_id: str, agent_id: str, db: AsyncSession
     ) -> JudgeAgreementResponse:
@@ -468,15 +502,7 @@ class TraceService:
         except AiUpstreamError as exc:
             raise _upstream(exc) from exc
         runs = [r for r in raw.get("runs", []) if isinstance(r, dict)]
-        ids = {str(r.get("session_id")) for r in runs}
-        links = dict(
-            (
-                await db.execute(
-                    select(SessionLink.ai_session_id, SessionLink.id)
-                    .where(SessionLink.user_id == user_id, SessionLink.ai_session_id.in_(ids))
-                )
-            ).all()
-        ) if ids else {}
+        links = await self._links(db, user_id, {str(r.get("session_id")) for r in runs})
         return JudgePreviewResponse(runs=[
             JudgePreviewRun.model_validate({**r, "session_id": links[str(r["session_id"])]})
             for r in runs if str(r.get("session_id")) in links

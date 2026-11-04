@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
-import { SaveIssueToDataset } from '@/components/traces/SaveToDataset';
+import { ProposeFromIssue, SaveIssueToDataset } from '@/components/traces/SaveToDataset';
 import { TracesNav } from '@/components/traces/TracesNav';
 import { Card, EmptyState, ErrorNote, PageHeader, Select, SkeletonRows } from '@/components/ui';
 import { useHarnesses } from '@/lib/api/hooks/useHarnesses';
@@ -62,8 +62,9 @@ function IssueCard({ issue }: { issue: Issue }): JSX.Element {
           </li>
         ))}
       </ul>
-      <div className="flex">
+      <div className="flex flex-wrap items-start gap-2">
         <SaveIssueToDataset issue={issue} />
+        <ProposeFromIssue issue={issue} />
       </div>
     </Card>
   );
