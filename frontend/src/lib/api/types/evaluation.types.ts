@@ -15,6 +15,8 @@ export interface DatasetSummary {
 export interface DatasetItem {
   id: string;
   input: string;
+  /** Earlier messages of its conversation, replayed before `input`. */
+  history: string[];
   /** What a good answer does, in a person's words. */
   expected: string | null;
   source_session_id: string | null;
@@ -86,6 +88,8 @@ export interface ExperimentItemResult {
   position: number;
   /** Which replay of the saved run (0-based). */
   trial: number;
+  /** Messages replayed: the earlier ones of the conversation, then the saved run's. */
+  turns: number;
   input: string;
   expected: string | null;
   /** How the replay went: done, needs_approval, timed_out, failed, pending, running. */

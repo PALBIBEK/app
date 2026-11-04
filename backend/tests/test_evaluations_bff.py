@@ -78,6 +78,8 @@ class FakeSupervisor:
         self.created: list[dict] = []
         self.marked: dict[str, dict] = {}  # ai session id -> its evaluation mark (experiment, good answer)
         self.judged_on_replays: list[str] = ["answers"]  # judges a marked session's runs get
+        self.earlier: dict[str, str] = {}  # runs before the saved one (r1) in its conversation -> message
+        self.posted: dict[str, list[str]] = {}  # ai session id -> the messages it was sent, in order
 
     def trace(self, sid: str, run_id: str) -> dict:
         digest = self.sessions.get(sid, V1)
@@ -116,14 +118,21 @@ class FakeSupervisor:
         if path.endswith("/startup"):
             return httpx.Response(200, json={"status": "ready", "worker_available": True})
         if path.endswith("/messages"):
-            return httpx.Response(202, json={"turn_id": f"run-{sid[:6]}", "status": "accepted"})
+            sent = self.posted.setdefault(sid, [])
+            sent.append(json.loads(request.content).get("text", ""))
+            return httpx.Response(202, json={"turn_id": f"run-{sid[:6]}-{len(sent)}", "status": "accepted"})
         if "/runs/" in path and path.endswith("/cancel"):
             self.cancelled.append(sid)
             return httpx.Response(200, json={"status": "cancelled"})
         if "/runs/" in path and path.endswith("/trace"):
             return httpx.Response(200, json=self.trace(sid, path.split("/")[5]))
         if "/runs/" in path and "/trace/spans/" in path:
-            return httpx.Response(200, json={"id": "root", "detail": {"input": "fix the test, the full message"}})
+            asked = self.earlier.get(path.split("/")[5], "fix the test, the full message")
+            return httpx.Response(200, json={"id": "root", "detail": {"input": asked}})
+        if path.endswith("/traces") and sid == "ai-src":  # the saved runs' conversation, oldest first
+            runs = [*self.earlier, "r1"]
+            return httpx.Response(200, json={"status": "active", "items": [
+                {"run_id": r, "trace_id": "t" * 32, "status": "ok", "started_ms": n} for n, r in enumerate(runs)]})
         if "/runs/" in path:
             if self.outcome.get(self.sessions.get(sid, "")) == "approval":
                 return httpx.Response(202, json={"status": "requires_action", "pending_approval_id": "ap1"})
@@ -351,3 +360,55 @@ async def test_each_saved_run_is_replayed_several_times_and_compared_on_its_tria
         assert (len(row["a_trials"]), len(row["b_trials"])) == (3, 3)
         assert (row["a_pass_rate"], row["b_pass_rate"], row["change"]) == (1.0, 0.6667, "worse")
     assert len(fake.created) == 6 and len(fake.ended) == 6, "a fresh session for every trial"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_is_replayed_after_the_messages_before_it(db_session, owner, agent, settings, monkeypatch):
+    """A saved run that answered a follow-up is measured where it happened: the conversation's
+    earlier messages are sent first, one at a time, each answered before the next."""
+    fake = FakeSupervisor({V2: "ok"})
+    fake.earlier = {"r0": "set up the repo first"}
+    launched: list = []
+    src = await _source_run(db_session, owner, agent)
+
+    @asynccontextmanager
+    async def same_session():
+        yield db_session
+
+    async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
+        ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "follow-ups"})).json()
+        item = await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
+        assert item.status_code == 201, item.text
+        assert item.json()["history"] == ["set up the repo first"]
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
+        svc, exp_id, identity = launched[-1]
+        await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
+        (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
+    (sent,) = fake.posted.values()
+    assert sent == ["set up the repo first", "fix the test, the full message"], "in order, the saved run's last"
+    assert (result["status"], result["turns"]) == ("done", 2)
+    assert result["run_id"].endswith("-2"), "the result is the saved run's replay, not the setup's"
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_message_that_stops_for_an_approval_ends_the_replay(db_session, owner, agent, settings, monkeypatch):
+    fake = FakeSupervisor({V2: "approval"})
+    fake.earlier = {"r0": "set up the repo first"}
+    launched: list = []
+    src = await _source_run(db_session, owner, agent)
+
+    @asynccontextmanager
+    async def same_session():
+        yield db_session
+
+    async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
+        ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "follow-ups"})).json()
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
+        svc, exp_id, identity = launched[-1]
+        await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
+        (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
+    assert result["status"] == "needs_approval"
+    assert result["error"] == "earlier message 1 of 1: stopped for an approval: experiments never approve"
+    assert [len(m) for m in fake.posted.values()] == [1], "the saved run itself was never sent"
+    assert fake.ended, "its session is still ended"

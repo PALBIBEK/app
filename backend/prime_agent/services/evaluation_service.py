@@ -48,6 +48,14 @@ from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 
 __all__ = ["MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
 
+_ENDED: dict[str, Callable[[float], str]] = {
+    "needs_approval": lambda _t: "stopped for an approval: experiments never approve",
+    "timed_out": lambda t: f"no answer in {int(t)} s",
+}
+"""Why a replayed run that did not finish stopped, as the result says it."""
+
+MAX_HISTORY = 10
+"""Earlier messages of a conversation kept with a saved run (the latest ones)."""
 DEFAULT_TRIALS = 3
 """Replays of each saved run. One answer per item compares versions on noise; Anthropic's
 guide to agent evals runs several trials per task (its worked example: three)."""
@@ -197,7 +205,8 @@ class EvaluationService:
         expected: str | None,
         db: AsyncSession,
     ) -> DatasetItemOut:
-        """Save one of the user's runs: its first message in full, how it ended, its version."""
+        """Save one of the user's runs: its message in full with the earlier messages of its
+        conversation (at most MAX_HISTORY, the latest), how it ended, its version."""
         dataset = await self._dataset(db, user_id, dataset_id)
         count = int((await db.execute(select(func.count()).where(DatasetItem.dataset_id == dataset_id))).scalar_one())
         if count >= MAX_ITEMS:
@@ -210,16 +219,12 @@ class EvaluationService:
         if trace.agent_id != dataset.harness_id:
             raise HTTPException(status_code=422, detail={"error_code": "OTHER_AGENT",
                                                          "message": "that run is of another agent than the dataset's"})
-        root = next((s for s in trace.spans if s.get("parent_id") is None), None)
-        ask: str | None = None
-        if root is not None:
-            span = await self._traces.span(identity=identity, user_id=user_id, session_id=session_id, run_id=run_id,
-                                           span_id=str(root["id"]), db=db)
-            ask = (span.get("detail") or {}).get("input")
-        ask = ask or trace.rollup.get("input")
+        ask = await self._full_input(identity, user_id, session_id, run_id, trace, db)
         if not ask:
             raise HTTPException(status_code=422, detail={"error_code": "NO_INPUT", "message": "that run has no message to replay"})
-        item = DatasetItem(dataset_id=dataset_id, input=str(ask), expected=(expected or "").strip() or None,
+        history = await self._history(identity, user_id, session_id, run_id, db)
+        item = DatasetItem(dataset_id=dataset_id, input=str(ask), history=history or None,
+                           expected=(expected or "").strip() or None,
                            source_session_id=session_id, source_run_id=run_id, source_version=trace.version,
                            source_status=str(trace.rollup.get("status") or "") or None)
         try:
@@ -230,6 +235,33 @@ class EvaluationService:
             raise HTTPException(status_code=409, detail={"error_code": "ALREADY_SAVED",
                                                          "message": "that run is already in this dataset"}) from exc
         return DatasetItemOut.model_validate(item, from_attributes=True)
+
+    async def _full_input(
+        self, identity: TenantPrincipal, user_id: str, session_id: str, run_id: str, trace: Any, db: AsyncSession
+    ) -> str | None:
+        """A run's message in full (its root span's detail; the rollup keeps only the start)."""
+        root = next((s for s in trace.spans if s.get("parent_id") is None), None)
+        ask: str | None = None
+        if root is not None:
+            span = await self._traces.span(identity=identity, user_id=user_id, session_id=session_id, run_id=run_id,
+                                           span_id=str(root["id"]), db=db)
+            ask = (span.get("detail") or {}).get("input")
+        return str(ask or trace.rollup.get("input") or "") or None
+
+    async def _history(
+        self, identity: TenantPrincipal, user_id: str, session_id: str, run_id: str, db: AsyncSession
+    ) -> list[str]:
+        """The messages of the conversation before ``run_id``, oldest first, the latest MAX_HISTORY."""
+        runs = (await self._traces.session_runs(identity=identity, user_id=user_id, session_id=session_id, db=db)).items
+        ids = [r.run_id for r in runs]
+        if run_id not in ids:
+            return []
+        out: list[str] = []
+        for earlier in ids[: ids.index(run_id)][-MAX_HISTORY:]:
+            trace = await self._traces.run(identity=identity, user_id=user_id, session_id=session_id, run_id=earlier, db=db)
+            if text := await self._full_input(identity, user_id, session_id, earlier, trace, db):
+                out.append(text)
+        return out
 
     async def delete_item(self, *, user_id: str, dataset_id: str, item_id: str, db: AsyncSession) -> None:
         await self._dataset(db, user_id, dataset_id)
@@ -386,26 +418,22 @@ class EvaluationService:
             await self._wait_ready(identity, ai_session_id)
             # Judged by every enabled judge, not on a sample: both versions alike.
             await self._client.mark_evaluation(identity, ai_session_id, experiment_id=exp.id, expected=item.expected)
+            # The conversation up to the saved run, one message at a time, each answered first:
+            # the saved run is measured where it happened, not as a first message.
+            for n, earlier in enumerate(item.history or [], 1):
+                posted = await self._client.post_message(identity, ai_session_id, text=str(earlier), command_id=str(uuid4()))
+                ended = await self._await_run(identity, ai_session_id, str(posted.get("turn_id") or ""), poll_s, timeout_s)
+                if ended != "done":
+                    run.status, run.error = ended, f"earlier message {n} of {len(item.history or [])}: " + _ENDED[ended](timeout_s)
+                    return
             posted = await self._client.post_message(identity, ai_session_id, text=item.input, command_id=str(uuid4()))
             run.run_id = str(posted.get("turn_id") or "")
             await db.commit()
-            deadline = asyncio.get_running_loop().time() + timeout_s
-            while True:
-                state = await self._client.get_run(identity, ai_session_id, run.run_id)
-                status = str(state.get("status") or "")
-                if status in ("completed", "failed", "cancelled", "incomplete"):
-                    run.status = "done"
-                    await self._wait_judged(identity, exp, link, run, db, poll_s=poll_s, graded=bool(item.expected))
-                    break
-                if status == "requires_action" or state.get("pending_approval_id"):
-                    await self._client.cancel_run(identity, ai_session_id, run.run_id)
-                    run.status, run.error = "needs_approval", "stopped for an approval: experiments never approve"
-                    break
-                if asyncio.get_running_loop().time() > deadline:
-                    await self._client.cancel_run(identity, ai_session_id, run.run_id)
-                    run.status, run.error = "timed_out", f"no answer in {int(timeout_s)} s"
-                    break
-                await asyncio.sleep(poll_s)
+            run.status = await self._await_run(identity, ai_session_id, run.run_id, poll_s, timeout_s)
+            if run.status == "done":
+                await self._wait_judged(identity, exp, link, run, db, poll_s=poll_s, graded=bool(item.expected))
+            else:
+                run.error = _ENDED[run.status](timeout_s)
         finally:
             try:
                 await self._client.terminate_session(identity, ai_session_id)
@@ -414,6 +442,25 @@ class EvaluationService:
                 logger.warning("could not end experiment session %s", ai_session_id)
             run.finished_at = _now()
             await db.commit()
+
+    async def _await_run(
+        self, identity: TenantPrincipal, ai_session_id: str, run_id: str, poll_s: float, timeout_s: float
+    ) -> str:
+        """Until the run ends: ``done``; or ``needs_approval`` / ``timed_out``, the run cancelled
+        (an experiment never approves, and never waits for ever)."""
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        while True:
+            state = await self._client.get_run(identity, ai_session_id, run_id)
+            status = str(state.get("status") or "")
+            if status in ("completed", "failed", "cancelled", "incomplete"):
+                return "done"
+            if status == "requires_action" or state.get("pending_approval_id"):
+                await self._client.cancel_run(identity, ai_session_id, run_id)
+                return "needs_approval"
+            if asyncio.get_running_loop().time() > deadline:
+                await self._client.cancel_run(identity, ai_session_id, run_id)
+                return "timed_out"
+            await asyncio.sleep(poll_s)
 
     async def run_experiment(
         self,
@@ -482,7 +529,7 @@ class EvaluationService:
         out: list[ExperimentItemResult] = []
         for run, item in rows:
             result = ExperimentItemResult(item_id=item.id, position=run.position, trial=run.trial, input=item.input,
-                                          expected=item.expected,
+                                          turns=len(item.history or []) + 1, expected=item.expected,
                                           status=run.status, error=run.error, session_id=run.session_id, run_id=run.run_id)
             if run.session_id and run.run_id and run.status in ("done", "needs_approval", "timed_out"):
                 try:

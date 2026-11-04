@@ -50,6 +50,9 @@ class DatasetItem(Base):
         String(36), ForeignKey("trace_datasets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     input: Mapped[str] = mapped_column(Text, nullable=False)
+    history: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """The messages the person sent earlier in the conversation, in order: replayed first, so
+    the saved run is measured where it happened (not as a first message)."""
     expected: Mapped[str | None] = mapped_column(Text, nullable=True)
     """What a good answer does, in a person's words (a judge's rubric can read it)."""
     source_session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
