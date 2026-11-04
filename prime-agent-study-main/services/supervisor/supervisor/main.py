@@ -102,16 +102,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     cfg.reaper_interval_s,
                 )
 
-    retention_task: asyncio.Task[None] | None = None
-    retention_stop = asyncio.Event()
-    if state is not None and (retention := Retention.from_env()) is not None:
-        sweeper = RetentionSweeper(
-            state.reader.session_factory, retention, erase=lambda sid: end_and_erase(state, sid)
-        )
-        retention_task = asyncio.create_task(
-            run_retention_loop(sweeper, retention.sweep_s, retention_stop), name="session-retention"
-        )
-        logger.info("session retention: ended sessions are erased after %d days", retention.days)
+    retention = _start_retention(state)
+    blob_sweep = _start_blob_sweep(state)
 
     # The server (uvicorn) owns SIGTERM and runs the shutdown path below when it
     # receives it. Capture its handler so ours can mark the service as draining
@@ -138,10 +130,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    if retention_task is not None:
-        retention_stop.set()
-        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
-            await asyncio.wait_for(retention_task, timeout=10)
+    for background in (retention, blob_sweep):
+        if background is not None:
+            await _stop_loop(*background)
     if span_reaper_task is not None:
         span_reaper_stop.set()
         try:
@@ -171,6 +162,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             shutdown_tracing()
         except Exception:
             logger.exception("tracing shutdown failed")
+
+
+def _start_retention(state: SupervisorState | None) -> tuple[asyncio.Task[None], asyncio.Event] | None:
+    """Erase ended sessions past ``SESSION_RETENTION_DAYS`` (``supervisor.session.retention``)."""
+    if state is None or (retention := Retention.from_env()) is None:
+        return None
+    stop = asyncio.Event()
+    sweeper = RetentionSweeper(state.reader.session_factory, retention, erase=lambda sid: end_and_erase(state, sid))
+    task = asyncio.create_task(run_retention_loop(sweeper, retention.sweep_s, stop), name="session-retention")
+    logger.info("session retention: ended sessions are erased after %d days", retention.days)
+    return task, stop
+
+
+def _start_blob_sweep(state: SupervisorState | None) -> tuple[asyncio.Task[None], asyncio.Event] | None:
+    """Delete, hourly, the blobs no journal event names (a write that failed after storing
+    one) once they are a day old (``supervisor.journal.blobrefs``)."""
+    if state is None or state.reader.blobs is None:
+        return None
+    from supervisor.journal.blobrefs import BlobSweeper, run_blob_sweep_loop
+
+    stop = asyncio.Event()
+    sweeper = BlobSweeper(state.reader.session_factory, state.reader.blobs)
+    return asyncio.create_task(run_blob_sweep_loop(sweeper, 3600.0, stop), name="journal-blob-sweep"), stop
+
+
+async def _stop_loop(task: asyncio.Task[None], stop: asyncio.Event) -> None:
+    stop.set()
+    with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+        await asyncio.wait_for(task, timeout=10)
 
 
 async def _reject_nul_in_url(request: Request, call_next: Any) -> Any:

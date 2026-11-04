@@ -117,6 +117,8 @@ class ToolOutbox:
             # Crash mid-flight: ToolStart already journaled; re-execute once.
             return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
+        start = ToolStart(tool_call_id=tool_call_id, tool_name=tool_name, args=dict(arguments))
+        prepared = await self._writer.prepare(session_id, start)  # outside the transaction
         async with self._factory() as db, db.begin():
             again = (
                 await db.execute(
@@ -134,8 +136,9 @@ class ToolOutbox:
             if again is not None and again.status == "pending":
                 return BeginOutcome(action="execute", tool_call_id=tool_call_id)
 
-            start = ToolStart(tool_call_id=tool_call_id, tool_name=tool_name, args=dict(arguments))
-            written = await self._writer.append_in_session(db, session_id, start, turn_id=None, trace_id=trace_id)
+            written = await self._writer.append_in_session(
+                db, session_id, start, prepared=prepared, turn_id=None, trace_id=trace_id
+            )
             db.add(
                 ToolOutboxRow(
                     id=uuid4().hex,
@@ -173,6 +176,8 @@ class ToolOutbox:
             "code": result.code,
         }
         is_error = bool(wire.get("is_error"))
+        end = ToolEnd(tool_call_id=tool_call_id, tool_name=tool_name, result=end_payload, is_error=is_error)
+        prepared = await self._writer.prepare(session_id, end)  # outside the transaction
 
         async with self._factory() as db, db.begin():
             row = (
@@ -185,8 +190,9 @@ class ToolOutbox:
             if row is not None and row.status == "done" and row.result is not None:
                 return wire_to_result(row.result)
 
-            end = ToolEnd(tool_call_id=tool_call_id, tool_name=tool_name, result=end_payload, is_error=is_error)
-            written = await self._writer.append_in_session(db, session_id, end, turn_id=None, trace_id=trace_id)
+            written = await self._writer.append_in_session(
+                db, session_id, end, prepared=prepared, turn_id=None, trace_id=trace_id
+            )
             if row is None:
                 # Should not happen in normal path; still record completion.
                 db.add(

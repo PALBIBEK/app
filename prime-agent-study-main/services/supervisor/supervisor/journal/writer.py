@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import AgentEvent, RunEnd
 from supervisor.db.models import EventRow, SessionIndexRow, SessionRow
-from supervisor.journal import index, snapshots
+from supervisor.journal import blobrefs, index, snapshots
 from supervisor.journal.blobs import BlobStore, LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.secrets import mask
@@ -349,6 +349,7 @@ class JournalWriter:
                         trace_id=trace_id,
                     )
                 )
+                blobrefs.add_refs(db, session_id, seq, payload)  # the blobs it names, with it
                 if index.in_chat(event):
                     in_chat += 1
                     title = title or index.title_of(event)
@@ -363,11 +364,14 @@ class JournalWriter:
         session_id: str,
         event: AgentEvent,
         *,
+        prepared: dict[str, Any],
         turn_id: str | None,
         trace_id: str | None,
     ) -> Written:
         """Append one event inside an open transaction (caller owns begin/commit); where it
-        is once that commits."""
+        is once that commits. ``prepared``: ``prepare(session_id, event)``, made before the
+        transaction began: preparing may store a blob, and records it in a transaction of
+        its own (which, inside the caller's, would wait for it on SQLite)."""
         await db.execute(
             text("SELECT id FROM sessions WHERE id = :id"),
             {"id": session_id},
@@ -384,7 +388,7 @@ class JournalWriter:
         )
         seq = int(result.scalar_one())
         now_ms = int(time.time() * 1000)
-        payload = await self._store_payload(session_id, event)
+        payload = prepared
         event_id = uuid4().hex
         db.add(
             EventRow(
@@ -398,6 +402,7 @@ class JournalWriter:
                 trace_id=trace_id,
             )
         )
+        blobrefs.add_refs(db, session_id, seq, payload)
         return Written(seq, event_id, now_ms, created=True)
 
     async def _touch_index(
@@ -421,8 +426,14 @@ class JournalWriter:
         if self._blobs is None:
             return None
         ref = blob_ref(data)
+        await blobrefs.kept(self._factory, ref)  # recorded first: see supervisor.journal.blobrefs
         await self._blobs.put(ref, data)
         return ref
+
+    async def prepare(self, session_id: str, event: AgentEvent) -> dict[str, Any]:
+        """``event`` as ``append_in_session`` stores it (masked; large payloads in the blob
+        store; a RunEnd as a delta): made before the caller's transaction begins."""
+        return await self._store_payload(session_id, event)
 
     async def _store_payload(self, session_id: str, event: AgentEvent) -> dict[str, Any]:
         encoded = mask(encode_event(event))  # no credential is kept (supervisor.journal.secrets)
@@ -438,8 +449,7 @@ class JournalWriter:
                 f"payload {len(raw)} bytes exceeds threshold {self._blob_threshold} "
                 "and no blob store configured"
             )
-        ref = blob_ref(raw)
-        await self._blobs.put(ref, raw)
+        ref = await self.put_blob(raw)
         return {"_type": event_type_name(event), "_blob_ref": ref}
 
 

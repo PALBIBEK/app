@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from supervisor import scrub_cli
 from supervisor.agent.events import HandLost, MessageEnd, RunEnd, ToolEnd
-from supervisor.db.models import EventRow, SessionIndexRow, ToolOutboxRow
+from supervisor.db.models import EventRow, JournalBlobRefRow, SessionIndexRow, ToolOutboxRow
 from supervisor.journal import snapshots
 from supervisor.journal.blobs import LocalBlobs, blob_ref
 from supervisor.journal.reader import JournalReader
@@ -90,6 +90,10 @@ async def test_it_masks_every_stored_copy_and_the_session_still_reads(
     lost = next(e.payload for e in events if isinstance(e.payload, HandLost))
     logs = await reader.hand_logs("s1", lost.logs_ref or "")
     assert logs is not None and MASKED.encode() in logs and lost.logs_bytes == len(logs)
+
+    async with factory() as db:
+        named = set(await db.scalars(select(JournalBlobRefRow.ref)))
+    assert named == set(report.replaced.values()), "the events name the masked blobs, and only those"
 
     again = await scrub(factory, blobs, apply=True)
     assert (again.events_masked, again.blobs_masked, again.outbox_masked) == (0, 0, 0), "a second pass finds nothing"
