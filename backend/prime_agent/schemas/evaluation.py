@@ -234,6 +234,15 @@ class Gate(BaseModel):
     held_out_worse: int = 0
 
 
+class PromptEdit(BaseModel):
+    action: str
+    """``add`` (appended to a section, or a new one) or ``replace`` (one passage)."""
+    section: str
+    text: str
+    old: str | None = None
+    reason: str = ""
+
+
 class ProposalOut(BaseModel):
     id: str
     agent_id: str
@@ -246,6 +255,9 @@ class ProposalOut(BaseModel):
     base_version: int
     rationale: str | None = None
     changed: list[str] = Field(default_factory=list)
+    edits: list[PromptEdit] = Field(default_factory=list)
+    skipped_edits: list[str] = Field(default_factory=list)
+    expected_outcome: str | None = None
     gate: Gate | None = None
     release_version: int | None = None
     created_at: datetime

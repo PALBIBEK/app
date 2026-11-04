@@ -1,7 +1,8 @@
 """Self-improvement, gated: learn a change from the traces, prove it on saved runs, ask a person.
 
 1. **Reflect.** The supervisor reads the agent's issues (failing checks, judges' fails and
-   their reasons, runs people marked wrong) and proposes edits to the live version's prompt.
+   their reasons, runs people marked wrong) and what became of the changes proposed before
+   (``_history``), and proposes itemized edits to the live version's prompt.
 2. **Candidate.** The edited manifest is published as a candidate: its artifacts exist and a
    session can be pinned to them, but it is not a release and nothing runs it unasked.
 3. **Measure.** The chosen dataset is replayed on the live version and on the candidate, back
@@ -66,6 +67,10 @@ logger = logging.getLogger(__name__)
 
 ACTIVE = ("drafting", "evaluating")
 """A proposal still being worked on; an agent has at most one."""
+HISTORY = 20
+"""Earlier proposals the reflection reads, the latest (``supervisor.traces.reflect.MAX_HISTORY``)."""
+_SETTLED = ("awaiting_approval", "refused", "no_change", "approved", "rejected")
+"""Outcomes a reflection learns from (a failed proposal says nothing about the prompt)."""
 EVIDENCE_DAYS = 30
 
 
@@ -174,6 +179,8 @@ class ImprovementService:
             id=row.id, agent_id=row.harness_id, agent_name=agent.name if agent else None, dataset_id=row.dataset_id,
             dataset_name=dataset.name if dataset else None, status=row.status, error=row.error, notes=row.notes,
             base_version=row.base_version, rationale=row.rationale, changed=list(row.changed or []),
+            edits=list(row.edits or []), skipped_edits=list(row.skipped_edits or []),
+            expected_outcome=row.expected_outcome,
             gate=Gate.model_validate(row.gate) if row.gate else None, release_version=row.release_version,
             created_at=row.created_at, decided_at=row.decided_at,
         )
@@ -291,6 +298,40 @@ class ImprovementService:
                                 examples=examples).model_dump())
         return out
 
+    @staticmethod
+    async def _history(db: AsyncSession, row: Proposal) -> list[dict[str, Any]]:
+        """The agent's earlier proposals, oldest first, each with what became of it: so a change
+        the gate refused or a person rejected is not proposed again, and one that was approved
+        but did not fix its issue is revised (Prime Agent's ``/refine`` plans from its
+        refinement history the same way: ``history_for_prompt``, the latest 20)."""
+        rows = (
+            await db.execute(
+                select(Proposal)
+                .where(Proposal.harness_id == row.harness_id, Proposal.id != row.id, Proposal.status.in_(_SETTLED))
+                .order_by(Proposal.created_at.desc())
+                .limit(HISTORY)
+            )
+        ).scalars().all()
+        out: list[dict[str, Any]] = []
+        for past in reversed(rows):
+            reasons = list((past.gate or {}).get("reasons") or [])
+            gate = reasons if (past.gate or {}).get("passed") else [f"the gate refused it: {r}" for r in reasons]
+            why = {
+                "approved": [f"a person approved it: it became v{past.release_version}", *gate],
+                # a refused change can be dismissed too: what the gate said is what counts
+                "rejected": [*(["it passed the gate, but a person rejected it"] if (past.gate or {}).get("passed") else []),
+                             *gate],
+                "refused": gate,
+                "awaiting_approval": ["it passed the gate and waits for a person", *gate],
+            }.get(past.status, [])
+            out.append({
+                "outcome": past.status,
+                "rationale": past.rationale,
+                "edits": [{k: e.get(k) for k in ("action", "section", "text")} for e in past.edits or []][:20],
+                "why": why[:10],
+            })
+        return out
+
     async def _fail(self, db: AsyncSession, row: Proposal, message: str, status: str = "failed") -> None:
         row.status, row.error = status, message[:1000]
         await db.commit()
@@ -338,12 +379,16 @@ class ImprovementService:
                 "notes": row.notes,
                 "since_ms": since,
                 "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
+                "history": await self._history(db, row),
             })
         except AiUpstreamError as exc:
             return await self._fail(db, row, f"could not learn from the traces: {exc}")
         proposal = reflected.get("proposal") or {}
         row.rationale = str(proposal.get("rationale") or "") or None
         row.changed = list(proposal.get("changed") or [])
+        row.edits = [e for e in proposal.get("edits") or [] if isinstance(e, dict)]
+        row.skipped_edits = [str(s) for s in proposal.get("skipped") or []]
+        row.expected_outcome = str(proposal.get("expected_outcome") or "") or None
         row.evidence = await self._evidence(db, row.user_id, list(reflected.get("evidence") or []))
         if not row.changed:
             row.status = "no_change"

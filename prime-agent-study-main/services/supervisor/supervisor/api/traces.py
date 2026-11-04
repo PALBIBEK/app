@@ -346,6 +346,17 @@ class PromptSectionIn(BaseModel):
     text: str = Field(max_length=20_000)
 
 
+class PastChangeIn(BaseModel):
+    """A change proposed before, and what became of it."""
+
+    outcome: str = Field(max_length=64)
+    """``approved``, ``refused`` (by the gate), ``rejected`` (by a person), ``no_change`` …"""
+    rationale: str | None = Field(default=None, max_length=4000)
+    edits: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    why: list[str] = Field(default_factory=list, max_length=10)
+    """What came of it: the gate's reasons, or a person's decision."""
+
+
 class ReflectIn(BaseModel):
     composition_id: str = Field(min_length=1, max_length=255)
     persona: str = Field(default="", max_length=2000)
@@ -357,11 +368,14 @@ class ReflectIn(BaseModel):
     exclude_sessions: list[str] = Field(default_factory=list, max_length=5000)
     """Sessions that are not evidence: the replays a candidate is measured on, so the
     reflection never sees what it will be graded on."""
+    history: list[PastChangeIn] = Field(default_factory=list, max_length=20)
+    """The changes proposed before, oldest first: so a refused one is not proposed again."""
 
 
 @router.post("/v1/traces/reflect")
 async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
-    """Read how the composition's runs went wrong and propose edits to its prompt.
+    """Read how the composition's runs went wrong, and what became of earlier changes, and
+    propose itemized edits to its prompt (``supervisor.traces.reflect``).
 
     Changes nothing: the proposal is for the caller to try on saved runs and to approve.
     The model is asked through the newest session of the composition (its key and budget).
@@ -395,7 +409,8 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
         raise HTTPException(status_code=409, detail={"error_code": "NO_MODEL",
                                                      "message": "the agent has no session to ask a model through yet"})
     sections = [{"id": s.id, "text": s.text} for s in body.sections]
-    messages = reflect_messages(body.persona, sections, issues, body.notes)
+    messages = reflect_messages(body.persona, sections, issues, body.notes,
+                                [h.model_dump() for h in body.history])
     model = (body.model or os.environ.get(REFLECT_MODEL_ENV, "")).strip() or None
 
     def ask() -> str:

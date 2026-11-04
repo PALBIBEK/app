@@ -154,6 +154,12 @@ class Proposal(Base):
     candidate_manifest: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     changed: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    edits: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """The itemized edits the reflection made (action, section, text, old, reason), in order."""
+    skipped_edits: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """Edits it asked for that could not be applied, and why."""
+    expected_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """What should improve, in the reflection's words: checked against the gate's result."""
     evidence: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     candidate: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     """The candidate's pin: composition id and digest, harness version, runtime."""

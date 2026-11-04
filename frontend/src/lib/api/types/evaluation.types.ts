@@ -187,6 +187,15 @@ export interface Gate {
   held_out_worse?: number;
 }
 
+export interface PromptEdit {
+  /** `add` (appended to a section, or a new one) or `replace` (one passage). */
+  action: 'add' | 'replace' | string;
+  section: string;
+  text: string;
+  old: string | null;
+  reason: string;
+}
+
 export interface Proposal {
   id: string;
   agent_id: string;
@@ -200,6 +209,12 @@ export interface Proposal {
   rationale: string | null;
   /** Section ids the change touches ("persona" for the persona line). */
   changed: string[];
+  /** The itemized edits the reflection made, in order. */
+  edits: PromptEdit[];
+  /** Edits it asked for that could not be applied, and why. */
+  skipped_edits: string[];
+  /** What should improve, in the reflection's words. */
+  expected_outcome: string | null;
   gate: Gate | null;
   release_version: number | null;
   created_at: string;

@@ -7,7 +7,7 @@
 
 import { DiffView } from '@/components/traces/DiffView';
 import { StatusPill, type StatusKind } from '@/components/ui';
-import type { Gate, PromptView, ProposalStatus } from '@/lib/api/types/evaluation.types';
+import type { Gate, PromptEdit, PromptView, ProposalStatus } from '@/lib/api/types/evaluation.types';
 import { cn } from '@/lib/utils';
 
 export const PROPOSAL_STATUS: Record<ProposalStatus, { label: string; kind: StatusKind; says: string }> = {
@@ -24,6 +24,49 @@ export const PROPOSAL_STATUS: Record<ProposalStatus, { label: string; kind: Stat
 export function ProposalStatusPill({ status }: { status: ProposalStatus }): JSX.Element {
   const s = PROPOSAL_STATUS[status] ?? PROPOSAL_STATUS.failed;
   return <StatusPill kind={s.kind} label={s.label} />;
+}
+
+/** The change as the reflection made it: each edit with why, what it expects, and the edits it
+ * asked for that could not be applied. */
+export function EditList({
+  edits,
+  skipped,
+  expected,
+}: {
+  edits: PromptEdit[];
+  skipped: string[];
+  expected: string | null;
+}): JSX.Element | null {
+  if (!edits.length && !skipped.length && !expected) return null;
+  return (
+    <div className="flex flex-col gap-2.5" data-testid="edit-list">
+      {edits.length ? (
+        <ol className="flex flex-col gap-2">
+          {edits.map((e, n) => (
+            <li key={n} className="flex flex-col gap-0.5 text-[13px]" data-testid="edit">
+              <span>
+                <span className="font-medium">{e.action === 'replace' ? 'Changes' : 'Adds to'}</span>{' '}
+                <span className="font-mono text-ink-2">{e.section}</span>
+                {e.reason ? <span className="text-ink-3"> · {e.reason}</span> : null}
+              </span>
+              <span className="whitespace-pre-wrap text-ink-2">{e.text}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {expected ? (
+        <p className="text-[13px] text-ink-2">
+          <span className="font-medium text-ink">Expected: </span>
+          {expected}
+        </p>
+      ) : null}
+      {skipped.length ? (
+        <p className="text-xs text-ink-3" data-testid="skipped-edits">
+          Not applied: {skipped.join('; ')}.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 /** The prompt, section by section: unchanged sections fold away, changed ones show as a diff. */
