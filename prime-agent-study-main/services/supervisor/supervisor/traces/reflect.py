@@ -2,7 +2,12 @@
 
 The evidence is the agent's issues (``supervisor.traces.issues``): failing checks, judges'
 fails with their reasons, and runs people marked wrong with their notes, each with the
-latest runs it hit (what was asked, what the run did). A model reads the agent's prompt,
+latest runs it hit (what was asked, what the run did). A few of those runs are also read in
+full (``trajectory_record``): what was asked, every step the agent took, and why it was judged
+a failure. This is GEPA's reflective dataset (``gepa/core/adapter.py``
+``make_reflective_dataset``): per example, ``Inputs``, ``Generated Outputs`` (the trajectory)
+and ``Feedback``, on a minibatch of 3 by default (``reflection_minibatch_size``); a summary
+says that a run failed, the trajectory shows where. A model reads the agent's prompt,
 that evidence, and what became of the changes proposed before (approved, refused by the
 gate and why, rejected by a person), and proposes itemized edits, each with why.
 
@@ -45,14 +50,21 @@ __all__ = [
     "MAX_NOTES",
     "REFLECT_MODEL_ENV",
     "REFLECT_SYSTEM",
+    "TRAJECTORIES",
     "Proposal",
     "ProposalError",
     "evidence_text",
     "history_text",
     "parse_proposal",
     "reflect_messages",
+    "trajectories_text",
+    "trajectory_record",
 ]
 
+TRAJECTORIES = 3
+"""Failing runs read in full per reflection (GEPA's default ``reflection_minibatch_size``)."""
+TRAJECTORY_LIMIT = 6_000
+"""Characters of one run read in full (the middle is cut first, as ``run_text`` does)."""
 MAX_EVIDENCE = 8
 """Issues read into one reflection, the ones hitting the most runs first."""
 EXAMPLES_PER_ISSUE = 3
@@ -175,6 +187,23 @@ def history_text(history: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def trajectory_record(ask: str | None, run: str, feedback: list[str]) -> dict[str, str]:
+    """One failing run as the model reads it: GEPA's reflective-dataset record."""
+    return {
+        "Inputs": _clip(ask, 1000) or "(not recorded)",
+        "Generated Outputs": run,
+        "Feedback": "; ".join(_clip(f, 300) for f in feedback) or "judged a failure",
+    }
+
+
+def trajectories_text(records: list[dict[str, str]]) -> str:
+    blocks = [
+        f"Run {n}:\n[Inputs]\n{r['Inputs']}\n[Generated Outputs]\n{r['Generated Outputs']}\n[Feedback]\n{r['Feedback']}"
+        for n, r in enumerate(records[:TRAJECTORIES], 1)
+    ]
+    return "\n\n".join(blocks) if blocks else "None read."
+
+
 def reflect_messages(
     persona: str,
     sections: list[dict[str, str]],
@@ -182,12 +211,14 @@ def reflect_messages(
     notes: str | None = None,
     history: list[dict[str, Any]] | None = None,
     learned: list[dict[str, str]] | None = None,
+    trajectories: list[dict[str, str]] | None = None,
 ) -> list[ChatMessage]:
     prompt = json.dumps({"persona": persona, "sections": sections}, ensure_ascii=False, indent=1)
     kept = json.dumps(learned or [], ensure_ascii=False, indent=1)
     ask = (
         f"The person's prompt (read only):\n{prompt}\n\nThe notes it has learnt (yours to edit):\n{kept}\n\n"
         f"How its runs went wrong:\n{evidence_text(issues)}\n\n"
+        f"Some of those runs in full, step by step:\n{trajectories_text(trajectories or [])}\n\n"
         f"Changes proposed before, and what became of them:\n{history_text(history or [])}\n"
     )
     if notes and notes.strip():

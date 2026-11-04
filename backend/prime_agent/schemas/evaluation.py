@@ -213,6 +213,8 @@ class EvidenceExample(BaseModel):
     input: str | None = None
     summary: str | None = None
     reason: str | None = None
+    read_in_full: bool = False
+    """The reflection read this run step by step, not only its summary."""
 
 
 class Evidence(BaseModel):

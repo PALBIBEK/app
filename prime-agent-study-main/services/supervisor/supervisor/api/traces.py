@@ -32,10 +32,14 @@ from supervisor.traces.model import RunStatus
 from supervisor.traces.reflect import (
     MAX_NOTES,
     REFLECT_MODEL_ENV,
+    TRAJECTORIES,
+    TRAJECTORY_LIMIT,
     ProposalError,
     parse_proposal,
     reflect_messages,
+    trajectory_record,
 )
+from supervisor.traces.render import run_text
 from supervisor.traces.scores import (
     Feedback,
     clear_feedback,
@@ -512,8 +516,9 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
                                                      "message": "the agent has no session to ask a model through yet"})
     sections = [{"id": s.id, "text": s.text} for s in body.sections]
     learned = [{"id": n.id, "text": n.text} for n in body.learned]
+    read, trajectories = await _trajectories(request, issues)
     messages = reflect_messages(body.persona, sections, issues, body.notes,
-                                [h.model_dump() for h in body.history], learned)
+                                [h.model_dump() for h in body.history], learned, trajectories)
     model = (body.model or os.environ.get(REFLECT_MODEL_ENV, "")).strip() or None
 
     def ask() -> str:
@@ -534,4 +539,35 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
                       for e in i["examples"][:3]]}
         for i in issues
     ]
-    return {"proposal": proposal.out(), "evidence": evidence, "model": model}
+    return {"proposal": proposal.out(), "evidence": evidence, "model": model, "read_in_full": read}
+
+
+async def _trajectories(
+    request: Request, issues: list[dict[str, Any]]
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """The first few failing runs of the issues, in their order, read in full: which ones,
+    and each as a reflective-dataset record. The issues already leave out every session the
+    optimizer must not read, so these are runs it may learn from."""
+    factory, reader = deps.get_session_factory(request), deps.get_reader(request)
+    picked: dict[tuple[str, str], dict[str, Any]] = {}
+    for issue in issues:
+        for e in issue["examples"]:
+            picked.setdefault((e["session_id"], e["run_id"]), e)
+    read: list[dict[str, str]] = []
+    records: list[dict[str, str]] = []
+    for e in picked.values():
+        if len(records) == TRAJECTORIES:
+            break
+        async with factory() as db:
+            row = await db.get(SessionRow, e["session_id"])
+        trace = await load_run(factory, reader, row, e["run_id"]) if row is not None else None
+        if trace is None:
+            continue
+        feedback = [
+            f"{s['source']} {s['name']}: {s.get('comment') or s.get('reason') or s['label']}"
+            for s in await run_scores(factory, e["session_id"], e["run_id"])
+            if s["label"] in ("fail", "bad")
+        ]
+        records.append(trajectory_record(trace.rollup.input, run_text(trace, limit=TRAJECTORY_LIMIT), feedback))
+        read.append({"session_id": e["session_id"], "run_id": e["run_id"]})
+    return read, records

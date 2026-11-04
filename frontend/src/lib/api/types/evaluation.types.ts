@@ -170,6 +170,8 @@ export interface EvidenceExample {
   input: string | null;
   summary: string | null;
   reason: string | null;
+  /** The reflection read this run step by step, not only its summary. */
+  read_in_full?: boolean;
 }
 
 export interface Evidence {
