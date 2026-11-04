@@ -604,6 +604,20 @@ class TraceScoreRow(Base):
     created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class SessionEvaluationRow(Base):
+    """A session that replays a saved run for an experiment (``supervisor.traces.judges``).
+
+    Its runs are measurements, not traffic: every enabled judge judges them (no sampling), so
+    the two versions an experiment compares are judged by the same judges."""
+
+    __tablename__ = "session_evaluations"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    experiment_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class TraceJudgeRow(Base):
     """A judge: a rubric a model applies to an agent's finished runs (``supervisor.traces.judges``).
 

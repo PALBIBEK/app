@@ -508,6 +508,17 @@ class AiClient:
             expected=(200,),
         )
 
+    async def mark_evaluation(self, identity: TenantPrincipal, ai_session_id: str, *, experiment_id: str) -> None:
+        """Mark a session as an experiment's replay: every enabled judge judges its runs."""
+        await self._json_request(
+            "PUT",
+            f"/v1/sessions/{ai_session_id}/evaluation",
+            identity,
+            json_body={"experiment_id": experiment_id},
+            expected=(204,),
+            allow_empty=True,
+        )
+
     async def terminate_session(
         self, identity: TenantPrincipal, ai_session_id: str
     ) -> None:

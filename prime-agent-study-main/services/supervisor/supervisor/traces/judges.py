@@ -27,7 +27,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from supervisor.db.models import SessionRow, TraceJudgeRow, TraceScoreRow
+from supervisor.db.models import SessionEvaluationRow, SessionRow, TraceJudgeRow, TraceScoreRow
 from supervisor.seams.core.types import ChatMessage
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
 from supervisor.traces.model import RunTrace
@@ -209,8 +209,9 @@ def _ask(client: ModelGatewayClient, judge: Judge, trace: RunTrace) -> str:
 async def judge_run(
     factory: Factory, session: SessionRow, trace: RunTrace, client: ModelGatewayClient | None
 ) -> list[Verdict]:
-    """Apply the agent's enabled judges to a finished run (each on its sample); returns the
-    verdicts given. A judge that cannot be asked (no client, the call failed) gives none."""
+    """Apply the agent's enabled judges to a finished run (each on its sample; a replay for an
+    experiment by all of them); returns the verdicts given. A judge that cannot be asked (no
+    client, the call failed) gives none."""
     pins = session.composition_pins if isinstance(session.composition_pins, dict) else {}
     composition_id = pins.get("composition_id")
     if client is None or not composition_id or not trace.rollup.status.finished:
@@ -228,9 +229,10 @@ async def judge_run(
                 )
             ).scalars()
         ]
+        replay = await db.get(SessionEvaluationRow, session.id) is not None
     given: list[Verdict] = []
     for judge in judges:
-        if not sampled(judge, trace.run_id):
+        if not replay and not sampled(judge, trace.run_id):
             continue
         try:
             reply = await asyncio.to_thread(_ask, client, judge, trace)

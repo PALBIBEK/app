@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from supervisor.api import deps
-from supervisor.db.models import RunTraceRow, SessionRow
+from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow
 from supervisor.traces.issues import list_issues
 from supervisor.traces.judges import delete_judge, list_judges, save_judge
 from supervisor.traces.model import RunStatus
@@ -206,6 +207,28 @@ async def delete_feedback(
     )
     if not gone:
         raise HTTPException(status_code=404, detail="no feedback of yours on that")
+    return Response(status_code=204)
+
+
+class EvaluationIn(BaseModel):
+    experiment_id: str = Field(min_length=1, max_length=64)
+
+
+@router.put("/v1/sessions/{session_id}/evaluation", status_code=204)
+async def mark_evaluation(
+    session_id: str, body: EvaluationIn, request: Request, tenant_id: str = Depends(deps.current_tenant)
+) -> Response:
+    """Mark the session as an experiment's replay: every enabled judge judges its runs (no
+    sampling), so the versions an experiment compares are judged alike. Mark it before its
+    first message."""
+    await _session(request, tenant_id, session_id)
+    async with deps.get_session_factory(request)() as db, db.begin():
+        row = await db.get(SessionEvaluationRow, session_id)
+        if row is None:
+            db.add(SessionEvaluationRow(session_id=session_id, tenant_id=tenant_id,
+                                        experiment_id=body.experiment_id, created_ms=int(time.time() * 1000)))
+        else:
+            row.experiment_id = body.experiment_id
     return Response(status_code=204)
 
 
