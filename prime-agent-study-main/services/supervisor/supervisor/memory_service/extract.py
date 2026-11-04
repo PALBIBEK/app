@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -12,9 +13,12 @@ from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.bank import MemoryBank
+from supervisor.memory_service.metrics import METRICS
 from supervisor.memory_service.models import ExtractionJobRow, MemorySessionRow, SessionEventRow
 from supervisor.memory_service.tier2_types import ItemSuperseded, NewMemoryItem
 from supervisor.memory_service.types import Scope
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -81,12 +85,28 @@ CLAIM_TIMEOUT_MS = 10 * 60_000
 """How long a processor's claim on a job holds before another may retake it (a crashed processor)."""
 
 
+MAX_ATTEMPTS = 5
+"""Runs a job gets; after the last failure it stays ``error`` (``retry_failed`` re-queues)."""
+RETRY_BASE_MS = 30_000
+RETRY_MAX_MS = 60 * 60_000
+
+
+def retry_delay_ms(attempts: int) -> int:
+    """Backoff after the ``attempts``-th failed run: 30 s, 1 min, 2 min, ... at most 1 h."""
+    return int(min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** max(0, attempts - 1)))
+
+
+def _stale(now: int) -> ColumnElement[bool]:
+    return (ExtractionJobRow.status == "running") & (ExtractionJobRow.claimed_at_ms < now - CLAIM_TIMEOUT_MS)
+
+
 def _claimable(now: int) -> ColumnElement[bool]:
-    """Pending, or claimed by a processor that has not finished within the timeout."""
-    return or_(
-        ExtractionJobRow.status == "pending",
-        (ExtractionJobRow.status == "running") & (ExtractionJobRow.claimed_at_ms < now - CLAIM_TIMEOUT_MS),
+    """Due (pending, past any backoff), or claimed by a processor that has not finished
+    within the timeout; either way with runs left."""
+    due = (ExtractionJobRow.status == "pending") & or_(
+        ExtractionJobRow.retry_at_ms.is_(None), ExtractionJobRow.retry_at_ms <= now
     )
+    return or_(due, _stale(now)) & (ExtractionJobRow.attempts < MAX_ATTEMPTS)
 
 
 class ExtractionQueue:
@@ -173,14 +193,16 @@ class ExtractionQueue:
             claimed = await db.execute(
                 update(ExtractionJobRow)
                 .where(ExtractionJobRow.id == job_id, _claimable(now))
-                .values(status="running", claimed_at_ms=now)
+                .values(status="running", claimed_at_ms=now, attempts=ExtractionJobRow.attempts + 1)
             )
         return int(getattr(claimed, "rowcount", 0) or 0) == 1
 
     async def process_pending(self, *, limit: int = 50) -> int:
         """Run up to ``limit`` claimable jobs; returns how many this call ran.
 
-        Errors are recorded on the job, never raised to callers."""
+        A failed run is retried after a backoff, up to ``MAX_ATTEMPTS`` runs; then the job
+        is ``error``. Errors are recorded on the job, never raised to callers."""
+        await self._give_up_on_stale()
         async with self._factory() as db:
             result = await db.execute(
                 select(ExtractionJobRow)
@@ -199,9 +221,45 @@ class ExtractionQueue:
             try:
                 await self._run_one(job)
                 processed += 1
-            except Exception as exc:  # noqa: BLE001 — must not fail the turn
-                await self._finish(job.id, "error", str(exc)[:500])
+            except Exception as exc:
+                logger.warning("extraction job %s failed", job.id, exc_info=True)
+                await self._failed(job.id, str(exc)[:500])
         return processed
+
+    async def _failed(self, job_id: str, error: str) -> None:
+        """Back to pending after a backoff, or ``error`` once it has had its runs."""
+        async with self._factory() as db, db.begin():
+            row = await db.get(ExtractionJobRow, job_id)
+            if row is None:
+                return
+            attempts = int(row.attempts)
+            row.error, row.claimed_at_ms = error, None
+            if attempts >= MAX_ATTEMPTS:
+                row.status, row.retry_at_ms = "error", None
+            else:
+                row.status = "pending"
+                row.retry_at_ms = int(time.time() * 1000) + retry_delay_ms(attempts)
+        METRICS.inc("extraction_job_failures")
+
+    async def _give_up_on_stale(self) -> None:
+        """A job whose last run never finished (its process died) and that has no runs left."""
+        now = int(time.time() * 1000)
+        async with self._factory() as db, db.begin():
+            await db.execute(
+                update(ExtractionJobRow)
+                .where(_stale(now), ExtractionJobRow.attempts >= MAX_ATTEMPTS)
+                .values(status="error", error="its runs never finished", claimed_at_ms=None)
+            )
+
+    async def retry_failed(self) -> int:
+        """Queue every ``error`` job again with fresh runs (after a fix, say); how many."""
+        async with self._factory() as db, db.begin():
+            reset = await db.execute(
+                update(ExtractionJobRow)
+                .where(ExtractionJobRow.status == "error", ExtractionJobRow.error != "session missing")
+                .values(status="pending", attempts=0, retry_at_ms=None)
+            )
+        return int(getattr(reset, "rowcount", 0) or 0)
 
     async def _finish(self, job_id: str, status: str, error: str | None) -> None:
         async with self._factory() as db, db.begin():
@@ -254,7 +312,5 @@ class ExtractionQueue:
                     kept += 1
 
         await self._finish(job.id, "done", None)
-        from supervisor.memory_service.metrics import METRICS
-
         METRICS.inc("extraction_jobs_done")
         METRICS.inc("extraction_items_kept", kept)

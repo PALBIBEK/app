@@ -479,6 +479,10 @@ async def process_extraction(request: Request) -> dict[str, Any]:
     n = await _svc(request).process_extraction_jobs()
     return {"processed": n}
 
+@router.post("/v1/memory/extraction:retry_failed")
+async def retry_failed_extraction(request: Request) -> dict[str, Any]:
+    return {"requeued": await _svc(request).retry_failed_extraction_jobs()}
+
 
 def create_app(
     *, database_url: str = "sqlite+aiosqlite:///:memory:", extraction_interval_s: float | None = None

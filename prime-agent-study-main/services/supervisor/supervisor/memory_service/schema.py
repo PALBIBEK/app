@@ -56,6 +56,14 @@ def add_column(table: str, column: str, ddl_type: str) -> Callable[[Connection],
     return apply
 
 
+def _all(*steps: Callable[[Connection], None]) -> Callable[[Connection], None]:
+    def apply(conn: Connection) -> None:
+        for step in steps:
+            step(conn)
+
+    return apply
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (1, "baseline: the schema as created by metadata.create_all", lambda conn: None),
     (2, "outbox.claimed_at: an executor claims an item before running it", add_column("outbox", "claimed_at", "BIGINT")),
@@ -63,6 +71,14 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
         3,
         "extraction_job.claimed_at_ms: a processor claims a job before running it",
         add_column("extraction_job", "claimed_at_ms", "BIGINT"),
+    ),
+    (
+        4,
+        "extraction_job.attempts, retry_at_ms: a failed job is retried with backoff",
+        _all(
+            add_column("extraction_job", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+            add_column("extraction_job", "retry_at_ms", "BIGINT"),
+        ),
     ),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""

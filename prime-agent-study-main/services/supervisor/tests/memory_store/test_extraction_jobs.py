@@ -92,3 +92,79 @@ async def test_the_worker_drains_the_queue_and_the_backlog_is_reported(url: str)
     assert [j.status for j in await _jobs(svc)] == ["done"]
     await svc.aclose()  # stops the worker
     assert svc._extraction_worker is None
+
+
+class _Flaky:
+    """Fails its first ``failures`` runs, then extracts nothing."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures, self.runs = failures, 0
+
+    def extract(self, events: list[object]) -> list[object]:
+        self.runs += 1
+        if self.runs <= self.failures:
+            raise RuntimeError(f"model gateway timed out (run {self.runs})")
+        return []
+
+
+async def _due_now(svc: MemoryService) -> None:
+    async with svc._factory() as db, db.begin():
+        await db.execute(update(ExtractionJobRow).values(retry_at_ms=0))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_job_is_retried_after_a_backoff(url: str) -> None:
+    flaky = _Flaky(failures=2)
+    svc = MemoryService(database_url=url, extractor=flaky)  # type: ignore[arg-type]
+    await svc.startup()
+    h = await svc.create_session(SC)
+    await _turn(svc, h.id, "we decided to use postgres for storage")
+    assert await svc.process_extraction_jobs() == 0
+    (job,) = await _jobs(svc)
+    assert (job.status, job.attempts) == ("pending", 1) and job.retry_at_ms is not None
+    assert "timed out" in (job.error or "")
+    assert await svc.process_extraction_jobs() == 0 and flaky.runs == 1, "not due yet: backing off"
+    for _ in range(2):
+        await _due_now(svc)
+        await svc.process_extraction_jobs()
+    (job,) = await _jobs(svc)
+    assert (job.status, job.attempts, flaky.runs) == ("done", 3, 3)
+    await svc.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_job_that_keeps_failing_stops_and_can_be_requeued(url: str) -> None:
+    from supervisor.memory_service.extract import MAX_ATTEMPTS, retry_delay_ms
+
+    flaky = _Flaky(failures=10**6)
+    svc = MemoryService(database_url=url, extractor=flaky)  # type: ignore[arg-type]
+    await svc.startup()
+    h = await svc.create_session(SC)
+    await _turn(svc, h.id, "we decided to use postgres for storage")
+    for _ in range(MAX_ATTEMPTS + 2):
+        await _due_now(svc)
+        await svc.process_extraction_jobs()
+    (job,) = await _jobs(svc)
+    assert (job.status, job.attempts, flaky.runs) == ("error", MAX_ATTEMPTS, MAX_ATTEMPTS)
+    assert (await svc.metrics_snapshot())["extraction_jobs_failed"] == 1
+    assert await svc.retry_failed_extraction_jobs() == 1
+    (job,) = await _jobs(svc)
+    assert (job.status, job.attempts) == ("pending", 0)
+    assert [retry_delay_ms(n) for n in (1, 2, 3)] == [30_000, 60_000, 120_000]
+    assert retry_delay_ms(50) == 60 * 60_000
+    await svc.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_job_whose_runs_all_crashed_their_process_is_given_up(url: str) -> None:
+    from supervisor.memory_service.extract import MAX_ATTEMPTS
+
+    svc = await _svc(url)
+    h = await svc.create_session(SC)
+    await _turn(svc, h.id, "we decided to use postgres for storage")
+    async with svc._factory() as db, db.begin():  # claimed for its last run, then the process died
+        await db.execute(update(ExtractionJobRow).values(status="running", claimed_at_ms=1, attempts=MAX_ATTEMPTS))
+    assert await svc.process_extraction_jobs() == 0
+    (job,) = await _jobs(svc)
+    assert job.status == "error"
+    await svc.aclose()
