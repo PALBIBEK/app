@@ -9,4 +9,5 @@ pytest_plugins = [
     "tests.support.githi_env",
     "tests.support.notebooks",
     "tests.support.trace_api",
+    "tests.support.browser",
 ]

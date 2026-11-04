@@ -2,7 +2,8 @@
 
 The model writes Python; ``browser_exec`` (``supervisor.tools.builtin.browser_exec``)
 runs it in the session's sandbox with ``runner.py``, beside a browser that outlives the
-call, and returns what it prints. As Hermes's ``browser_exec`` and Stagehand's ``run``:
+call (``daemon.py`` owns it, with a CDP connection and an event buffer), and returns
+what it prints. As Hermes's ``browser_exec`` and Stagehand's ``run``:
 one call does a whole sub-procedure (open, fill, click, check, extract), its steps never
 cross the network, and only its output reaches the model's context.
 
@@ -28,11 +29,13 @@ __all__ = [
     "RUNNER_DIR",
     "BrowserProvider",
     "SandboxChromium",
-    "runner_payload",
+    "runtime_payload",
 ]
 
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
-"""Where the runner is kept in the sandbox, one file per runner version."""
+"""Where the runtime is kept in the sandbox, one folder per version of its files."""
+RUNTIME_FILES: Final = ("runner.py", "daemon.py")
+"""What the sandbox runs: the call's runner, and the daemon it starts."""
 
 
 class BrowserProvider(Protocol):
@@ -59,8 +62,9 @@ class SandboxChromium:
 
 
 @functools.cache
-def runner_payload() -> tuple[str, str]:
-    """The runner as the sandbox stores it: (its path there, its source in base64)."""
-    source = resources.files(__package__).joinpath("runner.py").read_bytes()
-    path = f"{RUNNER_DIR}/runner-{hashlib.sha256(source).hexdigest()[:12]}.py"
-    return path, base64.b64encode(source).decode("ascii")
+def runtime_payload() -> tuple[str, dict[str, str]]:
+    """The runtime as the sandbox stores it: its folder there (named by its files' hash),
+    and each file's source in base64. The runner is ``<folder>/runner.py``."""
+    sources = {name: resources.files(__package__).joinpath(name).read_bytes() for name in RUNTIME_FILES}
+    version = hashlib.sha256(b"".join(sources[name] for name in RUNTIME_FILES)).hexdigest()[:12]
+    return f"{RUNNER_DIR}/{version}", {name: base64.b64encode(data).decode("ascii") for name, data in sources.items()}
