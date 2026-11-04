@@ -196,6 +196,18 @@ export interface PromptEdit {
   reason: string;
 }
 
+export interface SearchRound {
+  round: number;
+  /** The round whose candidate it edits (0: the live version). */
+  parent: number;
+  rationale: string | null;
+  edits: PromptEdit[];
+  experiment_id: string | null;
+  /** Better than its parent on the saved runs it may learn from. */
+  kept: boolean;
+  why: string;
+}
+
 export interface Proposal {
   id: string;
   agent_id: string;
@@ -215,6 +227,10 @@ export interface Proposal {
   skipped_edits: string[];
   /** What should improve, in the reflection's words. */
   expected_outcome: string | null;
+  /** Candidates the search could try. */
+  max_rounds: number;
+  /** Each candidate it tried. */
+  rounds: SearchRound[];
   gate: Gate | null;
   release_version: number | null;
   created_at: string;

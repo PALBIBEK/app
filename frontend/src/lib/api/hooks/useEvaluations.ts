@@ -165,7 +165,7 @@ export function useProposal(id: string | undefined) {
 export function usePropose(agentId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body: { dataset_id: string; notes?: string | null }) => evaluationsAPI.propose(agentId, body),
+    mutationFn: (body: { dataset_id: string; notes?: string | null; rounds?: number }) => evaluationsAPI.propose(agentId, body),
     onSuccess: () => void client.invalidateQueries({ queryKey: evaluationKeys.all }),
     onError: (err) => toast.error(message(err, 'Could not start learning from the traces')),
   });

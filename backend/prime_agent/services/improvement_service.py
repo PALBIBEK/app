@@ -14,6 +14,9 @@
 5. **Approve.** One that passes waits in Approvals with its diff, its evidence and its
    results. Approving makes that exact candidate the next version; nothing is rebuilt.
 
+A proposal may try a few candidates (``rounds``), each editing the best one kept so far
+(GEPA's loop, ``_run``); the one shown is the best-scoring kept candidate that passes the gate.
+
 The optimizer can only change the prompt, and cannot change a judge, a check or a dataset, so
 it cannot grade its own work. It never reads an experiment's replays, nor the conversations of
 held-out saved runs: the runs it learns from are the agent's failures (a dataset saved from an
@@ -25,6 +28,8 @@ candidate is kept on its scores on a separate validation set (``gepa.api.optimiz
 from __future__ import annotations
 
 import logging
+import random
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -50,6 +55,7 @@ from prime_agent.schemas.evaluation import (
     PromptSectionOut,
     ProposalDetail,
     ProposalOut,
+    SearchRound,
 )
 from prime_agent.schemas.harness_manifest import HarnessManifest, PromptSpec, manifest_body
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
@@ -61,7 +67,7 @@ from prime_agent.services.evaluation_service import (
 )
 from prime_agent.services.harness_publish_service import HarnessPublisher, PublishError
 
-__all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate"]
+__all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate", "pareto_parent"]
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +146,71 @@ def decide_gate(cmp: ExperimentComparison, *, max_cost_increase: float = 0.2, ma
     return Gate(passed=passed, reasons=reasons, **gate)
 
 
+@dataclass
+class _Member:
+    """A version in the search's pool: the live one (round 0) or a candidate kept."""
+
+    round: int
+    manifest: HarnessManifest
+    artifacts: dict[str, str] | None
+    experiment_id: str | None
+    scores: dict[str, float | None]
+
+
+def _total(scores: dict[str, float | None], items: list[str] | None = None) -> float | None:
+    """The sum of the scores on ``items`` (all of them by default); None if one is unfinished."""
+    picked = [scores.get(i) for i in (items if items is not None else list(scores))]
+    if any(v is None for v in picked):
+        return None
+    return float(sum(v for v in picked if v is not None))
+
+
+def pareto_parent(scores: list[dict[str, float | None]], held_out: set[str], rng: random.Random) -> int:
+    """Which version of the pool the next candidate edits: GEPA's
+    ``select_program_candidate_from_pareto_front`` (``gepa/gepa_utils.py``). For each saved
+    run (the held-out ones when there are some: GEPA's valset), the versions with its best
+    score form a front; versions on no front only by others' grace are dropped
+    (``remove_dominated_programs``: lowest total first, while every front it is on keeps
+    another); the parent is drawn weighted by how many fronts each remaining one is on."""
+    items = sorted({i for s in scores for i in s if not held_out or i in held_out})
+    fronts: dict[str, set[int]] = {}
+    for item in items:
+        values = [(n, s.get(item)) for n, s in enumerate(scores)]
+        best = max((v for _, v in values if v is not None), default=None)
+        if best is not None:
+            fronts[item] = {n for n, v in values if v == best}
+    if not fronts:
+        return 0
+    totals = [_total(s, items) or 0.0 for s in scores]
+    on: dict[int, list[str]] = {}
+    for item, front in fronts.items():
+        for n in front:
+            on.setdefault(n, []).append(item)
+    left = {item: len(front) for item, front in fronts.items()}
+    dominated: set[int] = set()
+    for n in sorted(on, key=lambda m: totals[m]):
+        if all(left[item] > 1 for item in on[n]):
+            dominated.add(n)
+            for item in on[n]:
+                left[item] -= 1
+    draw = [n for item in sorted(fronts) for n in sorted(fronts[item]) if n not in dominated]
+    return rng.choice(draw)
+
+
+def _round_feedback(record: dict[str, Any]) -> dict[str, Any]:
+    """An earlier round of this search as the reflection reads it (with the gate's history)."""
+    return {
+        "outcome": "kept in this search" if record.get("kept") else "dropped in this search",
+        "rationale": record.get("rationale"),
+        "edits": [{k: e.get(k) for k in ("action", "section", "text")} for e in record.get("edits") or []][:20],
+        "why": [record["why"]] if record.get("why") else [],
+    }
+
+
+def _public(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: record.get(k) for k in ("round", "parent", "rationale", "edits", "experiment_id", "kept", "why")}
+
+
 def _prompt(manifest: dict[str, Any] | None) -> PromptOut | None:
     if not manifest:
         return None
@@ -180,7 +251,8 @@ class ImprovementService:
             dataset_name=dataset.name if dataset else None, status=row.status, error=row.error, notes=row.notes,
             base_version=row.base_version, rationale=row.rationale, changed=list(row.changed or []),
             edits=list(row.edits or []), skipped_edits=list(row.skipped_edits or []),
-            expected_outcome=row.expected_outcome,
+            expected_outcome=row.expected_outcome, max_rounds=row.max_rounds or 1,
+            rounds=[SearchRound.model_validate(r) for r in row.rounds or []],
             gate=Gate.model_validate(row.gate) if row.gate else None, release_version=row.release_version,
             created_at=row.created_at, decided_at=row.decided_at,
         )
@@ -221,7 +293,7 @@ class ImprovementService:
     # --- proposing ------------------------------------------------------------------
 
     async def propose(
-        self, *, user_id: str, agent_id: str, dataset_id: str, notes: str | None, db: AsyncSession
+        self, *, user_id: str, agent_id: str, dataset_id: str, notes: str | None, db: AsyncSession, rounds: int = 1
     ) -> Proposal:
         """A proposal queued for the agent (``run`` drafts, measures and gates it)."""
         agent = (
@@ -244,7 +316,8 @@ class ImprovementService:
         if live is None:
             raise HTTPException(status_code=409, detail={"error_code": "NO_SUCH_VERSION", "message": "publish the agent first"})
         row = Proposal(user_id=user_id, harness_id=agent_id, dataset_id=dataset_id, status="drafting",
-                       notes=(notes or "").strip() or None, base_version=live.version, base_manifest=live.manifest)
+                       notes=(notes or "").strip() or None, base_version=live.version, base_manifest=live.manifest,
+                       max_rounds=rounds)
         db.add(row)
         await db.commit()
         return row
@@ -363,102 +436,205 @@ class ImprovementService:
         self, row: Proposal, identity: TenantPrincipal, db: AsyncSession, session_factory: SessionFactory, *,
         poll_s: float, timeout_s: float,
     ) -> None:
+        """Search for a better prompt, then gate the best candidate found.
+
+        With one round (the default) this is: reflect, publish a candidate, replay the live
+        version and the candidate, gate. With more, it is GEPA's loop (``gepa.core.engine``):
+        each round picks a parent from the candidates kept so far by Pareto front over the
+        held-out runs (``pareto_parent``), reflects on it with what earlier rounds did, and
+        keeps the new candidate only if it beats its parent on the runs it may learn from
+        (``StrictImprovementAcceptance``). The kept candidate with the best score that passes
+        the gate is the one a person sees.
+        """
         agent = await db.get(Harness, row.harness_id)
         live = await self._live(db, row.harness_id)
         if agent is None or live is None:
             return await self._fail(db, row, "the agent or its live version is gone")
         base = HarnessManifest.model_validate(row.base_manifest)
-
-        # 1. reflect: what in the prompt the failing runs point to
         since = int((_now().timestamp() - EVIDENCE_DAYS * 86400) * 1000)
-        try:
-            reflected = await self._client.reflect(identity, {
-                "composition_id": live.composition_id,
-                "persona": base.prompt.persona,
-                "sections": [{"id": s.id, "text": s.text} for s in base.prompt.sections],
-                "notes": row.notes,
-                "since_ms": since,
-                "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
-                "history": await self._history(db, row),
-            })
-        except AiUpstreamError as exc:
-            return await self._fail(db, row, f"could not learn from the traces: {exc}")
-        proposal = reflected.get("proposal") or {}
-        row.rationale = str(proposal.get("rationale") or "") or None
-        row.changed = list(proposal.get("changed") or [])
-        row.edits = [e for e in proposal.get("edits") or [] if isinstance(e, dict)]
-        row.skipped_edits = [str(s) for s in proposal.get("skipped") or []]
-        row.expected_outcome = str(proposal.get("expected_outcome") or "") or None
-        row.evidence = await self._evidence(db, row.user_id, list(reflected.get("evidence") or []))
-        if not row.changed:
-            row.status = "no_change"
+        held = await self._evals.held_out_items(db, row.dataset_id)
+        history = await self._history(db, row)
+        rng = random.Random(row.id)  # a search replays the same way: reproducible parents
+        pool: list[_Member] = [_Member(round=0, manifest=base, artifacts=None, experiment_id=None, scores={})]
+        rounds: list[dict[str, Any]] = []
+        baseline: Experiment | None = None
+        for n in range(1, max(1, row.max_rounds) + 1):
+            parent = pool[0] if len(pool) == 1 else pool[pareto_parent([m.scores for m in pool], held, rng)]
+            # 1. reflect: what in the parent's prompt the failing runs point to
+            try:
+                reflected = await self._client.reflect(identity, {
+                    "composition_id": live.composition_id,
+                    "persona": parent.manifest.prompt.persona,
+                    "sections": [{"id": s.id, "text": s.text} for s in parent.manifest.prompt.sections],
+                    "notes": row.notes,
+                    "since_ms": since,
+                    "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
+                    "history": [*history, *(_round_feedback(r) for r in rounds)][-HISTORY:],
+                })
+            except AiUpstreamError as exc:
+                if rounds:  # what earlier rounds found still stands
+                    break
+                return await self._fail(db, row, f"could not learn from the traces: {exc}")
+            proposal = reflected.get("proposal") or {}
+            if n == 1:
+                row.evidence = await self._evidence(db, row.user_id, list(reflected.get("evidence") or []))
+            if not list(proposal.get("changed") or []):
+                if rounds:
+                    break  # nothing more to try: decide on what was found
+                row.rationale = str(proposal.get("rationale") or "") or None
+                row.status, row.changed = "no_change", []
+                await db.commit()
+                return None
+            try:
+                persona = str(proposal.get("persona") or parent.manifest.prompt.persona)
+                prompt = PromptSpec(
+                    persona=persona if len(persona) <= 64 else parent.manifest.prompt.persona,
+                    sections=[{"id": s["id"], "text": s["text"]} for s in proposal.get("sections") or []],
+                )
+                candidate = parent.manifest.model_copy(update={"prompt": prompt})
+                HarnessManifest.model_validate(manifest_body(candidate))
+            except (ValidationError, KeyError, TypeError) as exc:
+                if rounds:
+                    break
+                return await self._fail(db, row, f"the proposed prompt is not valid: {exc}"[:500])
+            record: dict[str, Any] = {
+                "round": n, "parent": parent.round, "rationale": str(proposal.get("rationale") or "") or None,
+                "edits": [e for e in proposal.get("edits") or [] if isinstance(e, dict)],
+                "skipped": [str(x) for x in proposal.get("skipped") or []],
+                "expected_outcome": str(proposal.get("expected_outcome") or "") or None,
+                "changed": list(proposal.get("changed") or []),
+                "manifest": manifest_body(candidate), "experiment_id": None, "kept": False, "why": "",
+            }
+            rounds.append(record)
+            row.rounds = [_public(r) for r in rounds]
+            if n == 1:
+                self._show(row, record)
             await db.commit()
-            return None
-        try:
-            persona = str(proposal.get("persona") or base.prompt.persona)
-            prompt = PromptSpec(
-                persona=persona if len(persona) <= 64 else base.prompt.persona,
-                sections=[{"id": s["id"], "text": s["text"]} for s in proposal.get("sections") or []],
+
+            # 2. a candidate: runnable by its pin, not a release, not live
+            tag = row.id.replace("-", "")[:8] + ("" if n == 1 else f"r{n}")
+            try:
+                artifacts = await self._publisher.publish_candidate(agent, candidate, tag=tag, identity=identity, db=db)
+            except PublishError as exc:
+                if n > 1:
+                    record["why"] = f"could not be published: {exc}"[:300]
+                    break
+                return await self._fail(db, row, f"the candidate could not be published: {exc}")
+            if n == 1:
+                row.candidate = artifacts
+            row.status = "evaluating"
+            await db.commit()
+
+            # 3. measure. The live version is replayed once per search, here, not reused from an
+            # older replay: the model behind it may answer differently now, and both sides of a
+            # comparison should meet the same provider (and the same judges).
+            if baseline is None:
+                pin = await self._evals.pin_for(db, agent, live.version)
+                baseline = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s)
+                if baseline is None:
+                    return None
+                row.baseline_experiment_id = baseline.id
+                pool[0].experiment_id = baseline.id
+                pool[0].scores = await self._evals.item_scores(identity=identity, user_id=row.user_id,
+                                                               experiment_id=baseline.id, db=db)
+                await db.commit()
+            label = f"candidate {row.id[:6]}" + ("" if n == 1 else f" round {n}")
+            pin = Pin(label=label, harness_version=artifacts["harness_version"], runtime=artifacts["runtime"],
+                      composition_id=artifacts["composition_id"], composition_digest=artifacts["composition_digest"],
+                      release_version=None)
+            measured = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s,
+                                           required=n == 1)
+            if measured is None:
+                if n == 1:
+                    return None
+                record["why"] = "its replay did not finish"  # ends the search; earlier rounds stand
+                break
+            record["experiment_id"] = measured.id
+            if n == 1:
+                row.candidate_experiment_id = measured.id
+            scores = await self._evals.item_scores(identity=identity, user_id=row.user_id, experiment_id=measured.id,
+                                                   db=db)
+            learnt = [i for i in parent.scores if i not in held]
+            before, after = _total(parent.scores, learnt), _total(scores, learnt)
+            record["kept"] = after is not None and before is not None and after > before
+            record["why"] = (
+                "its replay did not finish on every saved run" if after is None or before is None
+                else f"scored {after:g} against its parent's {before:g} on the {len(learnt)} saved runs it may learn from"
             )
-            candidate = base.model_copy(update={"prompt": prompt})
-            HarnessManifest.model_validate(manifest_body(candidate))
-        except (ValidationError, KeyError, TypeError) as exc:
-            return await self._fail(db, row, f"the proposed prompt is not valid: {exc}"[:500])
-        row.candidate_manifest = manifest_body(candidate)
-        await db.commit()
+            if record["kept"]:
+                pool.append(_Member(round=n, manifest=candidate, artifacts=artifacts, experiment_id=measured.id,
+                                    scores=scores))
+            row.rounds = [_public(r) for r in rounds]
+            await db.commit()
 
-        # 2. a candidate: runnable by its pin, not a release, not live
-        try:
-            artifacts = await self._publisher.publish_candidate(agent, candidate, tag=row.id.replace("-", "")[:8],
-                                                                identity=identity, db=db)
-        except PublishError as exc:
-            return await self._fail(db, row, f"the candidate could not be published: {exc}")
-        row.candidate, row.status = artifacts, "evaluating"
-        await db.commit()
-
-        # 3. measure: the live version and the candidate, back to back. An older replay of the
-        # live version is not reused: the model behind it may answer differently now, and the
-        # two sides of a comparison should meet the same provider (and the same judges).
-        pin = await self._evals.pin_for(db, agent, live.version)
-        baseline = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s)
+        # 4. gate the best candidate kept (or, when none was, the first one tried)
         if baseline is None:
-            return None
-        row.baseline_experiment_id = baseline.id
-        await db.commit()
-        pin = Pin(label=f"candidate {row.id[:6]}", harness_version=artifacts["harness_version"],
-                  runtime=artifacts["runtime"], composition_id=artifacts["composition_id"],
-                  composition_digest=artifacts["composition_digest"], release_version=None)
-        measured = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s)
-        if measured is None:
-            return None
-        row.candidate_experiment_id = measured.id
-        await db.commit()
-
-        # 4. gate
-        cmp = await self._evals.compare(identity=identity, user_id=row.user_id, a_id=baseline.id, b_id=measured.id, db=db)
-        gate = decide_gate(cmp, max_cost_increase=self._settings.improvement_max_cost_increase,
-                           max_time_increase=self._settings.improvement_max_time_increase)
+            return await self._fail(db, row, "no candidate was measured")
+        chosen, gate = await self._choose(row, identity, db, baseline, pool, rounds)
         await db.refresh(row)
+        if chosen is not None:
+            self._show(row, chosen)
+            row.candidate_experiment_id = chosen["experiment_id"]
+            row.candidate = chosen["artifacts"]
+        row.rounds = [_public(r) for r in rounds]
         row.gate = gate.model_dump()
         row.status = "awaiting_approval" if gate.passed else "refused"
         await db.commit()
         return None
 
+    async def _choose(
+        self, row: Proposal, identity: TenantPrincipal, db: AsyncSession, baseline: Experiment,
+        pool: list[_Member], rounds: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, Gate]:
+        """The candidate to show: the best-scoring kept one that passes the gate; else the first
+        tried, with its gate (a refusal says why the plain change was not enough)."""
+        by_round = {r["round"]: r for r in rounds}
+        kept = sorted((m for m in pool[1:] if m.experiment_id), key=lambda m: (-(_total(m.scores) or 0), m.round))
+        first = rounds[0]
+        tried = [*kept] + ([] if any(m.round == 1 for m in kept) else [None])
+        verdict: Gate | None = None
+        for member in tried:
+            record = by_round[member.round] if member else first
+            if not record.get("experiment_id"):
+                continue
+            cmp = await self._evals.compare(identity=identity, user_id=row.user_id, a_id=baseline.id,
+                                            b_id=record["experiment_id"], db=db)
+            gate = decide_gate(cmp, max_cost_increase=self._settings.improvement_max_cost_increase,
+                               max_time_increase=self._settings.improvement_max_time_increase)
+            if gate.passed:
+                return {**record, "artifacts": member.artifacts if member else row.candidate}, gate
+            if record is first:
+                verdict = gate
+        if verdict is None:
+            return None, Gate(passed=False, reasons=["no candidate finished its replay"], better=0, worse=0)
+        return {**first, "artifacts": row.candidate}, verdict
+
+    @staticmethod
+    def _show(row: Proposal, record: dict[str, Any]) -> None:
+        """Put a round's candidate on the proposal (what its page shows and approval publishes)."""
+        row.rationale, row.changed = record["rationale"], record["changed"]
+        row.edits, row.skipped_edits = record["edits"], record["skipped"]
+        row.expected_outcome, row.candidate_manifest = record["expected_outcome"], record["manifest"]
+
     async def _measure(
         self, db: AsyncSession, row: Proposal, pin: Pin, identity: TenantPrincipal,
-        session_factory: SessionFactory, poll_s: float, timeout_s: float,
+        session_factory: SessionFactory, poll_s: float, timeout_s: float, *, required: bool = True,
     ) -> Experiment | None:
+        """The dataset replayed on ``pin``; None if it did not finish (and, when ``required``,
+        the proposal failed with why)."""
         try:
             exp = await self._evals.create_experiment(user_id=row.user_id, dataset_id=row.dataset_id, pin=pin, db=db)
         except HTTPException as exc:
             detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
-            await self._fail(db, row, f"could not replay the dataset: {detail.get('message') or exc.detail}")
+            if required:
+                await self._fail(db, row, f"could not replay the dataset: {detail.get('message') or exc.detail}")
             return None
         await self._evals.run_experiment(exp.id, identity=identity, session_factory=session_factory,
                                          poll_s=poll_s, timeout_s=timeout_s)
         await db.refresh(exp)
         if exp.status != "done":
-            await self._fail(db, row, f"the replay on {pin.label} {exp.status}" + (f": {exp.error}" if exp.error else ""))
+            if required:
+                await self._fail(db, row, f"the replay on {pin.label} {exp.status}" + (f": {exp.error}" if exp.error else ""))
             return None
         return exp
 

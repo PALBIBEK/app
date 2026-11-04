@@ -7,7 +7,7 @@
 
 import { DiffView } from '@/components/traces/DiffView';
 import { StatusPill, type StatusKind } from '@/components/ui';
-import type { Gate, PromptEdit, PromptView, ProposalStatus } from '@/lib/api/types/evaluation.types';
+import type { Gate, PromptEdit, PromptView, ProposalStatus, SearchRound } from '@/lib/api/types/evaluation.types';
 import { cn } from '@/lib/utils';
 
 export const PROPOSAL_STATUS: Record<ProposalStatus, { label: string; kind: StatusKind; says: string }> = {
@@ -66,6 +66,28 @@ export function EditList({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/** The candidates a search tried, each with the version it built on and whether it was kept. */
+export function SearchRounds({ rounds }: { rounds: SearchRound[] }): JSX.Element | null {
+  if (rounds.length < 2) return null;
+  return (
+    <ol className="flex flex-col divide-y divide-line-soft rounded-lg border border-line-soft" data-testid="search-rounds">
+      {rounds.map((r) => (
+        <li key={r.round} className="flex flex-col gap-0.5 px-3 py-2 text-[13px]" data-testid="search-round" data-kept={r.kept}>
+          <span>
+            <span className="font-medium">Candidate {r.round}</span>
+            <span className="text-ink-3"> · edits {r.parent ? `candidate ${r.parent}` : 'the live version'}</span>
+            <span className={cn('ml-2 rounded-full px-2 py-px text-xs', r.kept ? 'bg-emerald-50 text-emerald-800' : 'bg-line-soft text-ink-2')}>
+              {r.kept ? 'kept' : 'dropped'}
+            </span>
+          </span>
+          {r.rationale ? <span className="text-ink-2">{r.rationale}</span> : null}
+          {r.why ? <span className="text-xs text-ink-3">{r.why}</span> : null}
+        </li>
+      ))}
+    </ol>
   );
 }
 

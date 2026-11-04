@@ -29,6 +29,7 @@ export default function ImprovePage(): JSX.Element {
   const [agent, setAgent] = useState('');
   const [dataset, setDataset] = useState('');
   const [notes, setNotes] = useState('');
+  const [rounds, setRounds] = useState('1');
   useEffect(() => {
     if (!agent && published.length) setAgent(published[0].id);
   }, [agent, published]);
@@ -74,7 +75,11 @@ export default function ImprovePage(): JSX.Element {
                 className="flex flex-col gap-3 border-t border-line-soft px-5 py-4"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (dataset) propose.mutate({ dataset_id: dataset, notes: notes.trim() || null }, { onSuccess: () => setNotes('') });
+                  if (dataset)
+                    propose.mutate(
+                      { dataset_id: dataset, notes: notes.trim() || null, rounds: Number(rounds) },
+                      { onSuccess: () => setNotes('') },
+                    );
                 }}
               >
                 <div className="flex flex-wrap items-end gap-3">
@@ -84,6 +89,16 @@ export default function ImprovePage(): JSX.Element {
                     value={dataset}
                     onChange={setDataset}
                     options={usable.length ? usable.map((d) => ({ value: d.id, label: `${d.name} (${d.items})` })) : [{ value: '', label: 'No dataset with saved runs' }]}
+                  />
+                  <Select
+                    label="Candidates to try"
+                    value={rounds}
+                    onChange={setRounds}
+                    options={[
+                      { value: '1', label: 'One' },
+                      { value: '2', label: 'Up to 2, each built on the best so far' },
+                      { value: '3', label: 'Up to 3, each built on the best so far' },
+                    ]}
                   />
                 </div>
                 <label className="flex flex-col gap-1.5 text-sm">

@@ -5,7 +5,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { EditList, GateResult, PromptDiff, ProposalStatusPill } from './Proposal';
+import { EditList, GateResult, PromptDiff, ProposalStatusPill, SearchRounds } from './Proposal';
 
 afterEach(cleanup);
 
@@ -88,6 +88,30 @@ describe('EditList', () => {
 
   it('shows nothing for a proposal made before edits were itemized', () => {
     const { container } = render(<EditList edits={[]} skipped={[]} expected={null} />);
+    expect(container.textContent).toBe('');
+  });
+});
+
+describe('SearchRounds', () => {
+  it('shows each candidate a search tried, what it built on, and whether it was kept', () => {
+    render(
+      <SearchRounds
+        rounds={[
+          { round: 1, parent: 0, rationale: 'test first', edits: [], experiment_id: 'e1', kept: true, why: 'scored 20 against 10' },
+          { round: 2, parent: 1, rationale: null, edits: [], experiment_id: 'e2', kept: false, why: 'scored 15 against 20' },
+        ]}
+      />,
+    );
+    const rows = screen.getAllByTestId('search-round');
+    expect(rows.map((r) => r.dataset.kept)).toEqual(['true', 'false']);
+    expect(rows[1].textContent).toContain('edits candidate 1');
+    expect(rows[0].textContent).toContain('edits the live version');
+  });
+
+  it('says nothing for a single candidate', () => {
+    const { container } = render(
+      <SearchRounds rounds={[{ round: 1, parent: 0, rationale: null, edits: [], experiment_id: null, kept: false, why: '' }]} />,
+    );
     expect(container.textContent).toBe('');
   });
 });

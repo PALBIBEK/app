@@ -160,6 +160,10 @@ class Proposal(Base):
     """Edits it asked for that could not be applied, and why."""
     expected_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     """What should improve, in the reflection's words: checked against the gate's result."""
+    max_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    """Candidates the search may try (``ImprovementService._run``): one, or a few built on each other."""
+    rounds: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    """Each candidate tried: its parent, its edits, its replay, whether it was kept and why."""
     evidence: Mapped[list | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     candidate: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     """The candidate's pin: composition id and digest, harness version, runtime."""
