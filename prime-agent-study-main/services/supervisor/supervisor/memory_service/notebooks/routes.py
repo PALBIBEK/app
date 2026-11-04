@@ -16,8 +16,10 @@ from pydantic import BaseModel, Field
 from supervisor.memory_service.auth import enforce_item_tenant, enforce_scope_tenant
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
+    EmptyFact,
     MemoryFactsMissing,
     MemoryLimitExceeded,
+    NotebookArchived,
     NotebookError,
     NotebookExists,
     NotebookNotFound,
@@ -30,13 +32,19 @@ from supervisor.memory_service.notebooks.types import Notebook
 router = APIRouter(prefix="/v1/notebooks", tags=["notebooks"])
 
 
+_ID = Field(min_length=1, max_length=512)
+
+
 class NotebookKey(BaseModel):
-    tenant_id: str
-    owner: str
-    agent_pin: str
-    name: str
-    agent: str | None = None
-    label: str | None = None
+    """Names a notebook. The supervisor asks for names of 1-64 characters; the service holds
+    every caller to the same bounds."""
+
+    tenant_id: str = _ID
+    owner: str = _ID
+    agent_pin: str = _ID
+    name: str = Field(min_length=1, max_length=64, pattern=r"\S")
+    agent: str | None = Field(default=None, max_length=512)
+    label: str | None = Field(default=None, max_length=200)
 
 
 class ArchiveIn(BaseModel):
@@ -89,6 +97,10 @@ def _error(exc: NotebookError) -> HTTPException:
         status, detail["ids"] = 404, list(exc.ids)
     elif isinstance(exc, RevisionConflict):
         detail["expected"], detail["actual"] = exc.expected, exc.actual
+    elif isinstance(exc, EmptyFact):
+        status, detail["ids"] = 422, list(exc.ids)
+    elif isinstance(exc, NotebookArchived):
+        detail["ref"] = exc.ref
     elif isinstance(exc, MemoryLimitExceeded):
         status, detail["what"], detail["limit"], detail["got"] = 422, exc.what, exc.limit, exc.got
     elif isinstance(exc, RevisionOutOfRange):

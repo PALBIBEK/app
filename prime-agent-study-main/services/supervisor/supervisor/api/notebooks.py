@@ -39,9 +39,11 @@ from supervisor.memory.cross import search_across
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
+    EmptyFact,
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     MemoryLimitExceeded,
+    NotebookArchived,
     NotebookExists,
     NotebookNotFound,
     RevisionConflict,
@@ -76,8 +78,10 @@ async def _errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RevisionOutOfRange, MemoryLimitExceeded, MemoryRequestInvalid) as exc:
+    except (RevisionOutOfRange, MemoryLimitExceeded, MemoryRequestInvalid, EmptyFact) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NotebookArchived as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MemoryDisclosureDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (MemoryUnavailable, MemoryRefused, MemoryServiceNotConfigured) as exc:

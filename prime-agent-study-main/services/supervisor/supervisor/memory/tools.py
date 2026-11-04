@@ -19,9 +19,11 @@ from supervisor.memory.cross import read_notebook, search_across
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.errors import (
+    EmptyFact,
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     MemoryLimitExceeded,
+    NotebookArchived,
 )
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Provenance
 
@@ -272,6 +274,8 @@ class TurnMemory:
                 MemoryDisclosureDenied,
                 MemoryLimitExceeded,
                 MemoryRequestInvalid,
+                NotebookArchived,
+                EmptyFact,
             ) as exc:
                 return ToolOutput(f"[error] {exc}", True)
             except (MemoryUnavailable, MemoryRefused) as exc:

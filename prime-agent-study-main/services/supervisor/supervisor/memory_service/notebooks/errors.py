@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 
 class NotebookError(Exception):
     """Base for memory errors; none is fixed by retrying."""
@@ -39,6 +41,23 @@ class MemoryDisclosureDenied(NotebookError):
             "This notebook isn't editable from this conversation. "
             "Edit it from an authorized conversation."
         )
+
+
+class NotebookArchived(NotebookError):
+    """An archived notebook is read-only until it is unarchived; nothing was changed."""
+
+    def __init__(self, ref: str) -> None:
+        super().__init__(f"notebook {ref!r} is archived: unarchive it to change its facts")
+        self.ref = ref
+
+
+class EmptyFact(NotebookError):
+    """An edit would leave a fact with no text (delete it instead); nothing was changed."""
+
+    def __init__(self, ids: Sequence[str]) -> None:
+        listed = ", ".join(f"#{i}" for i in ids)
+        super().__init__(f"an edit would leave {listed} empty: delete a fact rather than blank it")
+        self.ids = tuple(ids)
 
 
 class MemoryLimitExceeded(NotebookError):

@@ -54,6 +54,8 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
   const archive = useArchiveNotebook();
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  // The memory service refuses changes to an archived notebook: offer none.
+  const readOnly = notebook.archived;
 
   const states = useMemo(() => [...new Set(revisions.map((r) => r.revision))].sort((a, b) => b - a), [revisions]);
 
@@ -63,9 +65,11 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
         <h2 className="text-base font-semibold text-slate-900">{notebook.label || notebook.name}</h2>
         <span className="text-xs text-slate-500">
           {notebook.facts} facts · revision {notebook.revision}
-          {notebook.version != null ? ` · version ${notebook.version}` : ''} </span> <span className="ml-auto flex items-center gap-1"> <button type="button" onClick={() => setShowHistory((s) => !s)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <ClockCounterClockwise size={14} /> History </button> <button type="button" onClick={() => window.confirm('Forget every fact in this notebook? You can restore it from its history.') && clear.mutate(notebook.id)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas" > <Trash size={14} /> Clear </button> <button type="button" onClick={() => archive.mutate({ notebookId: notebook.id, archived: !notebook.archived })} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <Archive size={14} /> {notebook.archived ?'Unarchive' : 'Archive'} </button> </span> </div> {isLoading ? ( <p className="mt-4 text-sm text-ink-2">Loading…</p> ) : facts.length === 0 ? ( <p className="mt-4 text-sm text-ink-2">Nothing remembered yet.</p> ) : ( <ul data-testid="facts" className="mt-4 divide-y divide-line-soft"> {facts.map((f) => ( <li key={f.id} className="flex items-start gap-3 py-2"> {editing?.id === f.id ? ( <form className="flex flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); edit.mutate({ notebookId: notebook.id, edits: [{ id: f.id, text: editing.text }] }, { onSuccess: () => setEditing(null) }); }} > <input aria-label="Edit fact" className={cn(input,'flex-1')} value={editing.text} onChange={(e) => setEditing({ id: f.id, text: e.target.value })} autoFocus /> <button type="submit" className="h-10 rounded-lg bg-accent-500 px-3.5 text-sm font-medium text-white hover:bg-accent-600">Save</button> <button type="button" onClick={() => setEditing(null)} className="text-xs text-ink-2">Cancel</button> </form> ) : ( <> <span className="flex-1 text-sm text-ink">{f.text}</span> {['sensitive', 'restricted'].includes(f.sensitivity) ? <span className="rounded-full bg-slate-100 px-2 text-[10px] text-slate-600">{f.sensitivity}</span> : null}
+          {notebook.version != null ? ` · version ${notebook.version}` : ''} </span> <span className="ml-auto flex items-center gap-1"> <button type="button" onClick={() => setShowHistory((s) => !s)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <ClockCounterClockwise size={14} /> History </button> {readOnly ? null : (<button type="button" onClick={() => window.confirm('Forget every fact in this notebook? You can restore it from its history.') && clear.mutate(notebook.id)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas" > <Trash size={14} /> Clear </button>)} <button type="button" onClick={() => archive.mutate({ notebookId: notebook.id, archived: !notebook.archived })} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[13px] font-medium text-ink hover:bg-canvas"> <Archive size={14} /> {notebook.archived ?'Unarchive' : 'Archive'} </button> </span> </div> {isLoading ? ( <p className="mt-4 text-sm text-ink-2">Loading…</p> ) : facts.length === 0 ? ( <p className="mt-4 text-sm text-ink-2">Nothing remembered yet.</p> ) : ( <ul data-testid="facts" className="mt-4 divide-y divide-line-soft"> {facts.map((f) => ( <li key={f.id} className="flex items-start gap-3 py-2"> {editing?.id === f.id ? ( <form className="flex flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); edit.mutate({ notebookId: notebook.id, edits: [{ id: f.id, text: editing.text }] }, { onSuccess: () => setEditing(null) }); }} > <input aria-label="Edit fact" className={cn(input,'flex-1')} value={editing.text} onChange={(e) => setEditing({ id: f.id, text: e.target.value })} autoFocus /> <button type="submit" className="h-10 rounded-lg bg-accent-500 px-3.5 text-sm font-medium text-white hover:bg-accent-600">Save</button> <button type="button" onClick={() => setEditing(null)} className="text-xs text-ink-2">Cancel</button> </form> ) : ( <> <span className="flex-1 text-sm text-ink">{f.text}</span> {['sensitive', 'restricted'].includes(f.sensitivity) ? <span className="rounded-full bg-slate-100 px-2 text-[10px] text-slate-600">{f.sensitivity}</span> : null}
+                  {readOnly ? null : (<>
                   <button type="button" aria-label={`Edit ${f.text}`} onClick={() => setEditing({ id: f.id, text: f.text })} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><PencilSimple size={14} /></button>
                   <button type="button" aria-label={`Forget ${f.text}`} onClick={() => forget.mutate({ notebookId: notebook.id, ids: [f.id] })} className="rounded p-1 text-slate-400 hover:bg-line-soft hover:text-bad"><Trash size={14} /></button>
+                  </>)}
                 </>
               )}
             </li>
@@ -73,6 +77,9 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
         </ul>
       )}
 
+      {readOnly ? (
+        <p className="mt-4 text-sm text-ink-2">Archived: unarchive this notebook to change its facts.</p>
+      ) : (
       <form
         className="mt-4 flex gap-2"
         onSubmit={(e) => {
@@ -86,6 +93,7 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
           <Plus size={14} /> Add
         </button>
       </form>
+      )}
 
       {showHistory ? (
         <div data-testid="history" className="mt-4 rounded-[10px] border border-line-soft bg-canvas p-3">
@@ -95,7 +103,7 @@ function NotebookView({ notebook }: { notebook: Notebook }): JSX.Element {
               <div className="flex items-center gap-2 text-xs">
                 <span className="font-medium text-slate-700">Revision {rev}</span>
                 <span className="text-slate-400">{new Date(revisions.find((r) => r.revision === rev)?.at ?? 0).toLocaleString()}</span>
-                {rev !== notebook.revision ? (
+                {rev !== notebook.revision && !readOnly ? (
                   <button type="button" onClick={() => restore.mutate({ notebookId: notebook.id, revision: rev })} className="ml-auto rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-slate-700 hover:bg-slate-100">
                     Restore
                   </button>
