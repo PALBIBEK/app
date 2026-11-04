@@ -161,6 +161,9 @@ class MemoryService:
         await self._leases.assert_fence(session_id, fence)
         buf = self._buf(session_id)
         row = await self._store.get_session_row(session_id)
+        if row.status == "erased":  # what was buffered for it goes with it
+            self._buffers.pop(session_id, None)
+            raise SessionNotFound(f"SESSION_NOT_FOUND: erased {session_id}")
         expected = row.last_seq + 1
         pending = list(buf.peek())
         if pending and pending[0].seq != expected:
@@ -321,14 +324,18 @@ class MemoryService:
     ) -> dict[str, int]:
         if not self._ready:
             await self.startup()
+        # A user's notebooks go first, history included (erasure is not clearing): their
+        # facts' bank items are the subject's too, and the notebooks link to them.
+        notebooks = None
+        if subject.startswith("user:"):
+            notebooks = await self.notebooks.store.erase_owner(
+                tenant_id=tenant, owner=subject.removeprefix("user:")
+            )
         erased = await self._erase.erase_subject(
             tenant=tenant, subject=subject, actor=actor, reason=reason
         )
-        # A user's notebooks go too, history included (erasure is not clearing).
-        if subject.startswith("user:"):
-            erased["notebooks_erased"] = await self.notebooks.store.erase_owner(
-                tenant_id=tenant, owner=subject.removeprefix("user:")
-            )
+        if notebooks is not None:
+            erased["notebooks_erased"] = notebooks
         return erased
 
     async def archive_session(self, session_id: str) -> dict:
