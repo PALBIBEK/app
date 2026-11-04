@@ -139,7 +139,9 @@ export function SessionChat({
     [state.messages.length, pendingTools.length, state.pendingApprovals.length],
   );
 
-  const blocked = ended || !canRun;
+  // The stream saying the session ended is enough to stop sending: the status that says
+  // how it ended is fetched after, and the badge already shows Ended meanwhile.
+  const blocked = ended || connection === 'ended' || !canRun;
   const thinking = state.running && !state.awaitingApproval && pendingTools.every((t) => t.status !== 'running');
 
   const kind: StatusKind = ended
