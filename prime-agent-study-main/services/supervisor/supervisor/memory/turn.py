@@ -159,7 +159,51 @@ class SessionMemory:
         return Scope(audience, binding, self._platform.view(audience, one_shot=one_shot))
 
     async def bounded(self, session_id: str) -> list[Envelope]:
-        return boundary.bounded(await self._reader.read(session_id))
+        """Every event the session's audience may see: its whole journal past the cutoff.
+        For what reads all of it (the history tool, a compaction naming what it replaced);
+        what needs a few events reads only those (``recent_messages``, ``_retained_now``)."""
+        context = await self._latest_context(session_id)
+        through = -1 if context is None else context.through_seq
+        events = await self._reader.read(session_id, since=through)
+        return [e for e in events if not isinstance(e.payload, MemoryContext)]
+
+    async def recent_messages(
+        self, session_id: str, enough: Callable[[Sequence[Envelope]], bool], *, page: int = 16
+    ) -> list[Envelope]:
+        """The session's latest messages past the cutoff, oldest first: pages of them read
+        newest first until ``enough`` says these suffice, or there are no more."""
+        context = await self._latest_context(session_id)
+        through = -1 if context is None else context.through_seq
+        found: list[Envelope] = []
+        before: int | None = None
+        while True:
+            batch = await self._reader.last_of(session_id, _MESSAGES, limit=page, before_seq=before)
+            fresh = [e for e in batch if e.seq > through]
+            found = [*reversed(fresh), *found]
+            if len(fresh) < page or enough(found):
+                return found
+            before = batch[-1].seq
+
+    async def _retained_now(self, session_id: str) -> list[Shown] | None:
+        """The last injection the model still holds, or None (inject everything): read
+        from the latest injections and compactions past the cutoff. A compaction after it
+        may have summarised it away, so then nothing is held."""
+        context = await self._latest_context(session_id)
+        through = -1 if context is None else context.through_seq
+        before: int | None = None
+        while True:
+            page = await self._reader.last_of(session_id, _HELD, limit=8, before_seq=before)
+            for envelope in page:
+                if envelope.seq <= through:
+                    return None
+                event = envelope.payload
+                if isinstance(event, CompactionEnd) and event.stop_reason == "ok":
+                    return None
+                if isinstance(event, MemoryInjected):
+                    return [Shown.from_dict(s) for s in event.shown]
+            if len(page) < 8:
+                return None
+            before = page[-1].seq
 
     # --- checkpoint --------------------------------------------------------------
 
@@ -218,13 +262,13 @@ class SessionMemory:
         scope = await self.scope(session_id)
         if scope is None or not scope.binding.recall_notebooks:
             return None
-        events = await self.bounded(session_id)
+        recent = await self.recent_messages(session_id, _four_exchanges)
         labels = scope.binding.labels
         try:
             recalled = await recall_across(
                 scope.view,
                 scope.binding.recall_notebooks,
-                RecallContext(query=recall_query(message, events), actor=scope.audience.actor),
+                RecallContext(query=recall_query(message, recent), actor=scope.audience.actor),
                 labels,
             )
             held = {
@@ -237,7 +281,7 @@ class SessionMemory:
             skipped = MemoryInjected(run_id, RECALL_UNAVAILABLE, [])
             await record(session_id, run_id, "memory", skipped)
             return skipped
-        delta = recall_delta(recalled, _retained(events), held, labels)
+        delta = recall_delta(recalled, await self._retained_now(session_id), held, labels)
         section = memory_section(
             delta.text,
             shared=scope.audience.target != personal_source(scope.audience.actor),
@@ -250,17 +294,22 @@ class SessionMemory:
     # --- tools -------------------------------------------------------------------
 
     async def tools(self, session_id: str) -> TurnMemory:
+        """What the session's tool calls need; its journal is read only by a call that uses
+        it (every step lists the schemas, few call ``history`` or ``memory``)."""
         scope = await self.scope(session_id)
-        events = await self.bounded(session_id)
+
+        async def load() -> tuple[Sequence[Envelope], tuple[Provenance, ...]]:
+            events = await self.bounded(session_id)
+            return events, dependencies(events)
+
         if scope is None:
-            return TurnMemory(None, None, None, session_id, events)
+            return TurnMemory(None, None, None, session_id, load=load)
         return TurnMemory(
             scope.view,
             scope.binding,
             scope.audience,
             session_id,
-            events,
-            dependencies=dependencies(events),
+            load=load,
             sessions=self._sessions_for(session_id, scope.binding) if self._sessions_for else None,
             labels=scope.binding.labels,
         )
@@ -279,11 +328,11 @@ class SessionMemory:
             or binding.writable is None
         ):
             return 0
-        events = await self._reader.read(session_id)
-        visible = boundary.bounded(events)
+        context = await self._latest_context(session_id)
+        through = -1 if context is None else context.through_seq
         exchanges, runs = [], []
         for run_id in run_ids:
-            run = [e for e in visible if e.turn_id == run_id]
+            run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
             if (exchange := _exchange(run)) is not None:
                 exchanges.append(exchange)
                 runs.extend(run)
@@ -313,6 +362,14 @@ class SessionMemory:
 
 
 _CHECKPOINTS: Final = (type_name_of(RunEnd), type_name_of(CompactionEnd))
+_MESSAGES: Final = (type_name_of(MessageEnd),)
+_HELD: Final = (type_name_of(MemoryInjected), type_name_of(CompactionEnd))
+
+
+def _four_exchanges(messages: Sequence[Envelope]) -> bool:
+    """Enough for ``recall_query``: its last four exchanges' text."""
+    said = [e for e in messages if isinstance(e.payload, MessageEnd) and e.payload.role in ("user", "assistant")]
+    return len(said) >= 4
 
 
 def _checkpoint(event: object) -> list[dict[str, Any]] | None:
@@ -321,20 +378,6 @@ def _checkpoint(event: object) -> list[dict[str, Any]] | None:
         return list(event.messages)
     if isinstance(event, CompactionEnd) and event.stop_reason == "ok" and event.messages is not None:
         return list(event.messages)
-    return None
-
-
-def _retained(events: Sequence[Envelope]) -> list[Shown] | None:
-    """The last injection the model still holds, or None (inject everything).
-
-    A compaction after it may have summarised it away, so then nothing is held.
-    """
-    for envelope in reversed(events):
-        event = envelope.payload
-        if isinstance(event, CompactionEnd) and event.stop_reason == "ok":
-            return None
-        if isinstance(event, MemoryInjected):
-            return [Shown.from_dict(s) for s in event.shown]
     return None
 
 

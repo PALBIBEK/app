@@ -216,6 +216,19 @@ class JournalReader:
             rows = (await db.execute(query.order_by(EventRow.seq.desc()).limit(limit))).scalars().all()
         return await self._envelopes(rows)
 
+    async def of_types(self, session_id: str, types: Sequence[str], *, since: int = -1) -> list[Envelope]:
+        """The session's events of ``types`` after ``since``, in order: one indexed read of
+        those rows, not the session's whole journal."""
+        async with self._factory() as db:
+            rows = (
+                await db.execute(
+                    select(EventRow)
+                    .where(EventRow.session_id == session_id, EventRow.type.in_(list(types)), EventRow.seq > since)
+                    .order_by(EventRow.seq.asc())
+                )
+            ).scalars().all()
+        return await self._envelopes(rows)
+
     async def read_types(
         self,
         session_ids: list[str],

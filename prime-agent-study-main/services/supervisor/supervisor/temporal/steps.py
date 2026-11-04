@@ -18,7 +18,7 @@ import os
 import posixpath
 import threading
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import asdict
 from datetime import timedelta
 from decimal import Decimal
@@ -32,6 +32,7 @@ from supervisor.agent.events import (
     ApprovalResolved,
     BackgroundResults,
     CompactionEnd,
+    Envelope,
     ErrorEvent,
     MemoryInjected,
     MemoryRecall,
@@ -71,6 +72,7 @@ from supervisor.harness import BudgetSpec, RecoveryAction
 from supervisor.harness.core.enums import ToolClass as HarnessToolClass
 from supervisor.journal.partials import PartialOutputs, PartialSink
 from supervisor.journal.reader import JournalReader
+from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import keyed_event_id
 from supervisor.memory.binding import Strategy
 from supervisor.memory.classification import OneShot
@@ -393,6 +395,11 @@ def _in_call_order(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _since_a_counted_reply(messages: Sequence[Envelope]) -> bool:
+    """Enough for a compaction's estimate: back to the last reply the provider counted."""
+    return any(isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and e.payload.usage for e in messages)
+
+
 def _user_text(run: list[Any]) -> str:
     for envelope in run:
         event = envelope.payload
@@ -487,7 +494,8 @@ class GithiSteps:
                 session_id,
                 run_id,
                 await self._memory.prior_history(session_id),
-                await self._memory.bounded(session_id),
+                await self._memory.recent_messages(session_id, _since_a_counted_reply),
+                history=lambda: self._memory.bounded(session_id),
                 retries=retry_spec(manifest),
             )
         )
@@ -821,7 +829,7 @@ class GithiSteps:
                 run_id,
                 req.step,
                 history,
-                await self._reader.read(sid),
+                lambda: self._memory.bounded(sid),
                 request=_user_text(run),
                 retries=retry_spec(await self._manifest(sid)),
             )
@@ -923,7 +931,7 @@ class GithiSteps:
         end = next(
             (
                 e.payload
-                for e in reversed(await self._reader.read(session_id))
+                for e in reversed(await self._reader.of_types(session_id, [type_name_of(SubagentEnd)]))
                 if isinstance(e.payload, SubagentEnd) and e.payload.run_id == message.notice_run
             ),
             None,
@@ -1148,11 +1156,16 @@ class GithiSteps:
             )
         return SubagentBegun(child_id, row.root_session_id or sid, asked.prompt, kind=asked.kind)
 
+    async def _last_run(self, session_id: str) -> list[Envelope]:
+        """The session's events from its last run's start (what ``last_outcome`` reads)."""
+        start = await self._reader.last_of(session_id, [type_name_of(RunStart)])
+        return await self._reader.read(session_id, since=start[0].seq - 1) if start else []
+
     async def subagent_end(self, req: SubagentEndRequest) -> bool:
         """A child settled: journal how it ended and, when a call waits for it, answer the
         call with that outcome as githi grades it (``graded``); whether that is a failure."""
         sid, child_id = req.session_id, req.child_id
-        outcome = last_outcome(await self._reader.read(child_id)) or ChildOutcome(
+        outcome = last_outcome(await self._last_run(child_id)) or ChildOutcome(
             stop_reason="error",
             error_class="SubagentNotStarted",
             detail=req.error or "the subagent's session could not start",
@@ -1170,7 +1183,7 @@ class GithiSteps:
             started_in = next(
                 (
                     e.turn_id
-                    for e in await self._reader.read(sid)
+                    for e in await self._reader.of_types(sid, [type_name_of(SubagentStart)])
                     if isinstance(e.payload, SubagentStart) and e.payload.child_session_id == child_id
                 ),
                 None,

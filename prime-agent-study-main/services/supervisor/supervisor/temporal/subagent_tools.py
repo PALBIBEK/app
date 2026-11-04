@@ -536,7 +536,7 @@ class SubagentTools:
             raise NotFound(f"no background subagent job named {job_id!r}")
         start: SubagentStart | None = None
         end: SubagentEnd | None = None
-        for envelope in await self._reader.read(session_id):
+        for envelope in await self._reader.of_types(session_id, [SubagentStart.__name__, SubagentEnd.__name__]):
             match envelope.payload:
                 case SubagentStart(child_session_id=started) as s if started == job_id:
                     start = s
@@ -555,7 +555,7 @@ class SubagentTools:
         ended: dict[str, JobEnd] = {}
         announced: set[str] = set()
         types = [JobStart.__name__, JobEnd.__name__, BackgroundResults.__name__, ToolEnd.__name__]
-        for envelope in await self._reader.read_types([session_id], types):
+        for envelope in await self._reader.of_types(session_id, types):
             match envelope.payload:
                 case JobStart(job_id=job_id, kind="subagent"):
                     jobs.append(job_id)
@@ -576,7 +576,7 @@ class SubagentTools:
     async def _result(self, session_id: str, job_id: str) -> Outcome:
         """A transport-based job's outcome, read from the journal."""
         started = ended = None
-        for envelope in await self._reader.read(session_id):
+        for envelope in await self._reader.of_types(session_id, [JobStart.__name__, JobEnd.__name__]):
             event = envelope.payload
             if isinstance(event, JobStart) and event.job_id == job_id:
                 started = event

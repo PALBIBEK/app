@@ -715,7 +715,7 @@ class SessionManagerBase:
         session_id, hand = split_key(key)
         return any(
             isinstance(e.payload, HandCheckpointed) and e.payload.hand == hand
-            for e in await self._reader.read(session_id, since=-1)
+            for e in await self._reader.of_types(session_id, [type_name_of(HandCheckpointed)])
         )
 
     async def _journal_checkpoint(
@@ -814,8 +814,17 @@ class _HandHooks:
         """
         m = self._m
         session_id, hand = split_key(key)
-        events = await m._reader.read(session_id, since=-1)
-        lost, run_id = lost_calls(events, hand), open_run(events)
+        # What ran since the hand's last checkpoint, and the run still open: not the
+        # whole journal (this runs whenever a sandbox is rebuilt).
+        checkpoints = [
+            e.seq
+            for e in await m._reader.of_types(session_id, [type_name_of(HandCheckpointed)])
+            if isinstance(e.payload, HandCheckpointed) and e.payload.hand == hand
+        ]
+        events = await m._reader.read(session_id, since=checkpoints[-1] - 1 if checkpoints else -1)
+        bound = await m._reader.last_of(session_id, [type_name_of(RunStart), type_name_of(RunEnd)])
+        lost = lost_calls(events, hand)
+        run_id = bound[0].turn_id if bound and isinstance(bound[0].payload, RunStart) else None
         if not lost or run_id is None:
             return
         text = (
@@ -883,14 +892,3 @@ def lost_calls(events: Sequence[Envelope], hand: str) -> list[str]:
             if spec is not None and spec.needs_workspace and spec.tool_class is not ToolClass.PURE:
                 lost.append(f"{p.tool_name} ({p.tool_call_id})")
     return lost
-
-
-def open_run(events: Sequence[Envelope]) -> str | None:
-    """The run still going (its RunStart has no RunEnd yet), if any."""
-    current: str | None = None
-    for env in events:
-        if isinstance(env.payload, RunStart):
-            current = env.turn_id
-        elif isinstance(env.payload, RunEnd):
-            current = None
-    return current

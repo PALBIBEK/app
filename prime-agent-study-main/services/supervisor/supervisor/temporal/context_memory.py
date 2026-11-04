@@ -131,6 +131,10 @@ class _Binding:
         )
 
 
+type History = Callable[[], Awaitable[Sequence[Envelope]]]
+"""Reads the journal the audience may see: only a compaction that happens needs it."""
+
+
 def _reported_tokens(events: Sequence[Envelope], memory: ContextMemoryProvider) -> int:
     """What the next call will send, from the provider's count of the last one.
 
@@ -196,15 +200,18 @@ class PinnedContextMemory:
         session_id: str,
         run_id: str,
         prior: list[dict[str, Any]],
-        events: Sequence[Envelope] = (),
+        recent: Sequence[Envelope] = (),
         *,
+        history: History | None = None,
         retries: RetrySpec = DEFAULT_RETRY,
     ) -> CompactionEnd | None:
         """Compact the conversation carried into this run, if the profile's limit is passed;
         the compaction, or None when there was nothing to compact.
 
-        ``events``: the journal the audience may see. The summary names the entries
-        it replaced, so the model can reopen any of them verbatim with ``history``.
+        ``recent``: the session's latest messages, from its last reply with a provider's
+        count on (what the next call will send). ``history``: reads the journal the
+        audience may see, only when it compacts: the summary names the entries it
+        replaced, so the model can reopen any of them verbatim with ``history``.
         """
         if (done := await self._keyed(session_id, run_id, "compaction:end")) is not None:
             return done
@@ -214,7 +221,7 @@ class PinnedContextMemory:
         # The estimate sees only the conversation; the model also gets the system
         # prompt, the tool schemas and recalled memory. The provider's own count of
         # the last call includes all of it, so the larger of the two decides.
-        tokens = max(binding.memory.estimate_tokens(prior), _reported_tokens(events, binding.memory))
+        tokens = max(binding.memory.estimate_tokens(prior), _reported_tokens(recent, binding.memory))
         window = await binding.context_window()
         if tokens <= binding.limit(window):
             return None
@@ -243,7 +250,8 @@ class PinnedContextMemory:
             context_window=window,
             reserve_tokens=binding.reserve(window),
         )
-        replaced = _replaced_range([e for e in events if e.turn_id != run_id], tail)
+        before = await history() if history is not None else recent
+        replaced = _replaced_range([e for e in before if e.turn_id != run_id], tail)
         end = await self._summarise(
             compaction_id, binding, preparation, tail, replaced, retries=retries, deadline=_step_deadline()
         )
@@ -274,7 +282,7 @@ class PinnedContextMemory:
         run_id: str,
         step: int,
         conversation: list[dict[str, Any]],
-        events: Sequence[Envelope],
+        history: History,
         *,
         request: str = "",
         reason: str = "threshold",
@@ -332,7 +340,7 @@ class PinnedContextMemory:
             binding,
             preparation,
             tail,
-            _replaced_range(list(events), tail),
+            _replaced_range(list(await history()), tail),
             request=_clipped(request.strip(), binding.keep_recent(window), binding.memory) if kept else "",
             retries=retries,
             deadline=_step_deadline(),
