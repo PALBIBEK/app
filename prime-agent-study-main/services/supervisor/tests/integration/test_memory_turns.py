@@ -122,6 +122,34 @@ async def test_finished_turns_are_captured_after_a_quiet_window(
     assert "User said:\nI always drink tea" in extraction
 
 
+async def test_a_captured_fact_that_contradicts_one_held_retires_it(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    gateway = model(extract="SENSITIVITY: ordinary\n- Prefers tea in the morning")
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, memory=QUICK)
+        await env.sessions.submit(sid, Message("c1", "I drink tea every morning"))
+        await env.wait_for(state, sid, run_ended())
+        (tea,) = await _wait_facts(state, sid, 1)
+        gateway.extract = "SENSITIVITY: ordinary\n- Prefers coffee in the morning"
+        gateway.resolution = '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}]}'
+        await env.sessions.submit(sid, Message("c2", "I switched to coffee in the mornings"))
+        await env.wait_for(state, sid, run_ended(2))
+        async with asyncio.timeout(30):
+            while [f.text for f in await _facts(state, sid)] != ["Prefers coffee in the morning"]:
+                await asyncio.sleep(0.2)
+    (resolving,) = [c for k, c in gateway.one_shots if k.startswith("You compare NEW FACTS")]
+    assert "[0] (" in resolving and "Prefers tea in the morning" in resolving
+    assert "NEW FACTS:\n[0] Prefers coffee in the morning" in resolving
+    binding = await _binding(state, sid)
+    history = await state.memory.notebooks.history(binding.write)  # type: ignore[union-attr, arg-type]
+    assert [(r.op, r.text) for r in history if r.fact_id == tea.id] == [
+        ("insert", "Prefers tea in the morning"),
+        ("delete", "Prefers tea in the morning"),
+    ], "retired, not erased: its history keeps it"
+
+
 async def test_a_turn_that_used_tools_captures_unknown_provenance(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

@@ -62,6 +62,7 @@ class ScriptedGateway:
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
     sensitivity: str = "ordinary"
+    resolution: str = '{"facts": []}'  # supervisor.memory.resolution: nothing duplicated or contradicted
     # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
     window: int | None = None
     # Agent calls (0-based, in order, tools offered) the provider refuses as too long for its window.
@@ -230,6 +231,8 @@ class ScriptedGateway:
             answer = self.extract
         elif system.startswith("Classify sensitivity"):
             answer = self.sensitivity
+        elif system.startswith("You compare NEW FACTS"):
+            answer = self.resolution
         else:
             return None
         with self._lock:
