@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from sqlalchemy import Table, delete, func, or_, select
+from sqlalchemy import Table, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import (
@@ -41,6 +41,7 @@ from supervisor.db.models import (
     ErasedSessionRow,
     EventRow,
     HandLeaseRow,
+    JournalBlobRefRow,
     PartialOutputRow,
     RunInputRow,
     RunTraceRow,
@@ -58,6 +59,7 @@ from supervisor.db.models import (
 )
 from supervisor.hands.checkpoint import checkpoint_scope
 from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key
+from supervisor.journal import blobrefs
 from supervisor.journal.blobs import BlobStore, LocalBlobs
 from supervisor.seams.services.object_storage import ObjectStorage
 
@@ -80,6 +82,7 @@ _SESSION_TABLES: Final[tuple[Table, ...]] = tuple(
         RunTraceRow,
         TraceScoreRow,
         SessionIndexRow,
+        JournalBlobRefRow,
         EventRow,
     )
 )
@@ -147,18 +150,7 @@ class SessionEraser:
     @staticmethod
     async def _payload_refs(db: AsyncSession, session_id: str) -> set[str]:
         """Payloads kept beside the journal: large events', and lost hands' logs."""
-        payloads = await db.scalars(
-            select(EventRow.payload).where(
-                EventRow.session_id == session_id,
-                or_(EventRow.payload["_blob_ref"].as_string().is_not(None), EventRow.type == "HandLost"),
-            )
-        )
-        refs: set[str] = set()
-        for payload in payloads:
-            for field in ("_blob_ref", "logs_ref"):
-                if isinstance(ref := (payload or {}).get(field), str):
-                    refs.add(ref)
-        return refs
+        return set(await db.scalars(select(JournalBlobRefRow.ref).where(JournalBlobRefRow.session_id == session_id)))
 
     @staticmethod
     async def _hand_keys(db: AsyncSession, session_id: str) -> set[str]:
@@ -207,31 +199,13 @@ class SessionEraser:
             logger.warning("could not delete object %s while erasing a session", key, exc_info=True)
 
     async def _delete_unreferenced(self, refs: set[str]) -> int:
-        """Delete the payloads no other session's journal still holds (they are stored once)."""
+        """Delete the payloads no other session's journal still names (they are stored once):
+        one indexed lookup (``supervisor.journal.blobrefs``), not a scan of every journal."""
         if self._blobs is None or not refs:
             return 0
-        async with self._db() as db:
-            shared = set(
-                await db.scalars(
-                    select(EventRow.payload["_blob_ref"].as_string()).where(
-                        EventRow.payload["_blob_ref"].as_string().in_(refs)
-                    )
-                )
-            )
-            shared |= set(
-                await db.scalars(
-                    select(EventRow.payload["logs_ref"].as_string()).where(
-                        EventRow.payload["logs_ref"].as_string().in_(refs)
-                    )
-                )
-            )
-        removed = 0
-        for ref in refs - shared:
-            try:
-                removed += await self._blobs.delete(ref)
-            except FileNotFoundError:
-                pass
-            except Exception:
-                logger.warning("could not delete journal payload %s while erasing", ref, exc_info=True)
-        return removed
+        try:
+            return await blobrefs.forget_unused(self._db, self._blobs, refs)
+        except Exception:
+            logger.warning("could not delete journal payloads while erasing", exc_info=True)
+            return 0
 

@@ -102,6 +102,30 @@ class EventRow(Base):
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class JournalBlobRow(Base):
+    """A blob the journal keeps (``supervisor.journal.blobs``), from when it was stored:
+    the orphan sweep deletes one no event names once it is old enough that no write
+    storing it can still be on its way to commit."""
+
+    __tablename__ = "journal_blobs"
+
+    ref: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JournalBlobRefRow(Base):
+    """An event that names a blob (its large payload, or a lost sandbox's logs): written
+    with the event, so whether a blob is still used is one indexed lookup, not a scan of
+    every journal (``supervisor.journal.blobrefs``)."""
+
+    __tablename__ = "journal_blob_refs"
+    __table_args__ = (Index("ix_journal_blob_refs_session", "session_id"),)
+
+    ref: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+
 class SessionIndexRow(Base):
     __tablename__ = "session_index"
 

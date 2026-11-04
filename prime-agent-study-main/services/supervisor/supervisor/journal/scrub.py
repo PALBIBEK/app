@@ -36,6 +36,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import EventRow, SessionIndexRow, ToolOutboxRow
+from supervisor.journal import blobrefs
 from supervisor.journal.blobs import BlobStore, blob_ref
 from supervisor.journal.secrets import mask, mask_bytes, mask_text
 
@@ -79,10 +80,13 @@ async def scrub(
                 break
             for row in rows:
                 report.events += 1
-                payload = await _masked_payload(row.payload, blobs, report, apply=apply)
+                payload = await _masked_payload(factory, row.payload, blobs, report, apply=apply)
                 if payload is not row.payload:
                     report.events_masked += 1
                     if apply:
+                        if blobrefs.refs_of(payload) != blobrefs.refs_of(row.payload):
+                            await blobrefs.drop_refs(db, row.session_id, int(row.seq))
+                            blobrefs.add_refs(db, row.session_id, int(row.seq), payload)
                         row.payload = payload
             if apply:
                 await db.commit()
@@ -96,7 +100,12 @@ async def scrub(
 
 
 async def _masked_payload(
-    payload: dict[str, Any], blobs: BlobStore | None, report: ScrubReport, *, apply: bool
+    factory: async_sessionmaker[AsyncSession],
+    payload: dict[str, Any],
+    blobs: BlobStore | None,
+    report: ScrubReport,
+    *,
+    apply: bool,
 ) -> dict[str, Any]:
     """``payload`` as it is stored once masked (itself when nothing changes)."""
     out = mask(payload)
@@ -104,7 +113,7 @@ async def _masked_payload(
         ref = payload.get(key)
         if not isinstance(ref, str) or blobs is None:
             continue
-        new_ref = await _masked_blob(ref, blobs, report, apply=apply, logs=key == "logs_ref")
+        new_ref = await _masked_blob(factory, ref, blobs, report, apply=apply, logs=key == "logs_ref")
         if new_ref != ref:
             out = dict(out)
             out[key] = new_ref
@@ -113,7 +122,9 @@ async def _masked_payload(
     return out
 
 
-async def _masked_blob(ref: str, blobs: BlobStore, report: ScrubReport, *, apply: bool, logs: bool) -> str:
+async def _masked_blob(
+    factory: async_sessionmaker[AsyncSession], ref: str, blobs: BlobStore, report: ScrubReport, *, apply: bool, logs: bool
+) -> str:
     """The ref the blob ``ref`` names is kept under once masked."""
     if ref in report.replaced:
         return report.replaced[ref]
@@ -132,6 +143,7 @@ async def _masked_blob(ref: str, blobs: BlobStore, report: ScrubReport, *, apply
     new_ref = blob_ref(masked)
     report.blobs_masked += 1
     if apply:
+        await blobrefs.kept(factory, new_ref)
         await blobs.put(new_ref, masked)
     report.replaced[ref] = new_ref
     return new_ref
@@ -170,17 +182,5 @@ async def _outbox_and_titles(factory: async_sessionmaker[AsyncSession], report: 
 
 
 async def _delete_replaced(factory: async_sessionmaker[AsyncSession], blobs: BlobStore, replaced: dict[str, str]) -> int:
-    """Delete each replaced blob no row names any more (a whole pass ran: none should)."""
-    old = sorted(replaced)
-    named: set[str] = set()
-    async with factory() as db:
-        for i in range(0, len(old), _BATCH):
-            chunk = old[i : i + _BATCH]
-            for key in ("_blob_ref", "logs_ref"):
-                column = EventRow.payload[key].as_string()
-                named.update(await db.scalars(select(column).where(column.in_(chunk))))
-    deleted = 0
-    for ref in old:
-        if ref not in named:
-            deleted += await blobs.delete(ref)
-    return deleted
+    """Delete each replaced blob no event names any more (a whole pass ran: none should)."""
+    return await blobrefs.forget_unused(factory, blobs, replaced)
