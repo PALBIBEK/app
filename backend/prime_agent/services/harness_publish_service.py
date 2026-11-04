@@ -185,6 +185,17 @@ class HarnessPublisher:
         release = await self._release(harness, manifest, version, artifacts, user_id=user_id, db=db)
         return Published(release, created=True)
 
+    async def restore(self, harness: Harness, release: HarnessRelease, *, user_id: str, db: AsyncSession) -> Published:
+        """Make an earlier release live again, as the next version with its exact artifacts and
+        manifest (nothing rebuilt): a rollback is a new version, so history only grows."""
+        history = await releases(harness.id, db)
+        version = (history[0].version if history else 0) + 1
+        artifacts = {"composition_id": release.composition_id, "composition_digest": release.composition_digest,
+                     "harness_version": release.harness_version, "runtime": release.runtime}
+        restored = await self._release(harness, HarnessManifest.model_validate(release.manifest), version, artifacts,
+                                       user_id=user_id, db=db)
+        return Published(restored, created=True)
+
     async def _release(
         self, harness: Harness, manifest: HarnessManifest, version: int, artifacts: dict[str, str], *,
         user_id: str, db: AsyncSession,

@@ -10,7 +10,15 @@ import { useParams } from 'next/navigation';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
 import { ExperimentStatsLine } from '@/components/traces/ExperimentStatsLine';
-import { EditList, GateResult, PROPOSAL_STATUS, PromptDiff, ProposalStatusPill, SearchRounds } from '@/components/traces/Proposal';
+import {
+  EditList,
+  GateResult,
+  PROPOSAL_STATUS,
+  PromptDiff,
+  ProposalStatusPill,
+  SearchRounds,
+  WatchLine,
+} from '@/components/traces/Proposal';
 import { Button, Card, CardHeader, ErrorNote, LinkButton, PageHeader, SkeletonRows } from '@/components/ui';
 import { useDecideProposal, useProposal } from '@/lib/api/hooks/useEvaluations';
 
@@ -79,6 +87,7 @@ export default function ProposalPage(): JSX.Element {
                   }
                 />
                 <div className="flex flex-col gap-3 border-t border-line-soft px-5 py-4">
+                  <WatchLine watch={p.watch} />
                   <GateResult gate={p.gate} />
                   {p.baseline ? (
                     <p className="text-[13px] text-ink-2">

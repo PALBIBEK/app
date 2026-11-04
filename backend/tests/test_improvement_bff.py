@@ -595,3 +595,89 @@ async def test_an_agent_proposes_a_change_by_itself_when_an_issue_keeps_growing(
         assert (await api.get(f"/api/v1/traces/agents/{agent.id}/auto-improve")).status_code == 404
         put = await api.put(f"/api/v1/traces/agents/{agent.id}/auto-improve", json={"dataset_id": ds.id})
         assert put.status_code == 404
+
+
+async def _approved(db_session, owner, monkeypatch, fake):
+    agent, ds = await _published_agent(db_session, owner, fake)
+    started: list = []
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        api.fake, api.user = fake, owner
+        p = await _propose(api, db_session, agent, ds, started)
+        approved = (await api.post(f"/api/v1/traces/proposals/{p['id']}/approve")).json()
+    assert approved["watch"]["status"] == "watching" and approved["watch"]["previous_version"] == 1
+    return agent, approved
+
+
+def _watcher(fake, live: dict):  # type: ignore[no-untyped-def]
+    """A watcher whose supervisor answers version quality from ``live`` (digest -> stats)."""
+    from prime_agent.services.release_watch_service import ReleaseWatcher
+
+    plain = fake.__call__
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/versions":
+            assert request.url.params["exclude_replays"] == "true", "live traffic only"
+            return httpx.Response(200, json={"versions": [{"composition_digest": d, **v} for d, v in live.items()]})
+        return plain(request)
+
+    return ReleaseWatcher(config.get_settings(), client=AiClient(config.get_settings(), transport=httpx.MockTransport(handler)))
+
+
+@pytest.mark.asyncio
+async def test_an_approved_change_that_does_worse_live_is_rolled_back(db_session, owner, settings, monkeypatch):
+    """Flagger's canary analysis: a check needs new traffic; failed checks add up; at the
+    threshold the previous version is live again (as a new version, its exact artifacts)."""
+    from prime_agent.db.models.evaluation import Proposal
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, approved = await _approved(db_session, owner, monkeypatch, fake)
+    v1, v2 = sorted(await releases(agent.id, db_session), key=lambda r: r.version)
+    live = {v1.composition_digest: {"runs": 50, "failed": 5, "runs_failing_checks": 0, "feedback_bad": 0},
+            v2.composition_digest: {"runs": 5, "failed": 3, "runs_failing_checks": 0, "feedback_bad": 0}}
+    watcher = _watcher(fake, live)
+
+    assert await watcher.tick(_same(db_session)) == [], "5 live runs: not enough for a check"
+    row = await db_session.get(Proposal, approved["id"])
+    assert row.watch["failed_checks"] == 0 and row.watch["seen_runs"] == 0
+
+    live[v2.composition_digest] = {"runs": 12, "failed": 6, "runs_failing_checks": 1, "feedback_bad": 0}
+    assert await watcher.tick(_same(db_session)) == []
+    await db_session.refresh(row)
+    assert row.watch["failed_checks"] == 1 and row.watch["note"].startswith("a check failed: 58% of its live runs failed")
+    assert await watcher.tick(_same(db_session)) == [], "no new runs since that check: no second check on them"
+
+    live[v2.composition_digest] = {"runs": 24, "failed": 12, "runs_failing_checks": 0, "feedback_bad": 0}
+    assert await watcher.tick(_same(db_session)) == [approved["id"]]
+    await db_session.refresh(row)
+    v3 = (await releases(agent.id, db_session))[0]
+    assert (row.watch["status"], row.watch["rolled_back_to"], v3.version) == ("rolled_back", 3, 3)
+    assert (v3.composition_digest, v3.harness_version) == (v1.composition_digest, v1.harness_version), "nothing rebuilt"
+    await db_session.refresh(agent)
+    assert agent.composition_digest == v1.composition_digest
+    assert "v1 is live again as v3" in row.watch["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_change_no_worse_live_is_held_and_a_newer_release_ends_the_watch(db_session, owner, settings, monkeypatch):
+    from prime_agent.db.models.evaluation import Proposal
+    from prime_agent.services.harness_publish_service import HarnessPublisher
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, approved = await _approved(db_session, owner, monkeypatch, fake)
+    v1, v2 = sorted(await releases(agent.id, db_session), key=lambda r: r.version)
+    live = {v1.composition_digest: {"runs": 50, "failed": 10}, v2.composition_digest: {"runs": 0, "failed": 0}}
+    watcher = _watcher(fake, live)
+    for n in range(1, 4):
+        live[v2.composition_digest] = {"runs": 10 * n, "failed": n}
+        await watcher.tick(_same(db_session))
+    row = await db_session.get(Proposal, approved["id"])
+    assert row.watch["status"] == "held" and row.watch["checks"] == 3 and row.watch["failed_checks"] == 0
+
+    # a fresh watch, then a person releases another version: the watcher never undoes it
+    row.watch = {"status": "watching", "previous_version": 1, "checks": 0, "failed_checks": 0, "seen_runs": 0}
+    await db_session.commit()
+    await HarnessPublisher(AiClient(config.get_settings(), transport=httpx.MockTransport(fake))).restore(
+        agent, v1, user_id=owner.id, db=db_session)
+    assert await watcher.tick(_same(db_session)) == []
+    await db_session.refresh(row)
+    assert row.watch["status"] == "superseded" and row.watch["note"] == "v3 was released after it"

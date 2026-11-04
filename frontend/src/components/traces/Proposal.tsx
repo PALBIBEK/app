@@ -7,7 +7,7 @@
 
 import { DiffView } from '@/components/traces/DiffView';
 import { StatusPill, type StatusKind } from '@/components/ui';
-import type { Gate, PromptEdit, PromptView, ProposalStatus, SearchRound } from '@/lib/api/types/evaluation.types';
+import type { Gate, PromptEdit, PromptView, ProposalStatus, ReleaseWatch, SearchRound } from '@/lib/api/types/evaluation.types';
 import { cn } from '@/lib/utils';
 
 export const PROPOSAL_STATUS: Record<ProposalStatus, { label: string; kind: StatusKind; says: string }> = {
@@ -66,6 +66,30 @@ export function EditList({
         </p>
       ) : null}
     </div>
+  );
+}
+
+const WATCH: Record<string, string> = {
+  watching: 'Watching it live',
+  held: 'Held: no worse live',
+  rolled_back: 'Rolled back',
+  superseded: 'No longer watched',
+  ended: 'No longer watched',
+};
+
+/** After approval: how the change does live against the version before it. */
+export function WatchLine({ watch }: { watch: ReleaseWatch | null | undefined }): JSX.Element | null {
+  if (!watch) return null;
+  return (
+    <p
+      className={cn('text-[13px]', watch.status === 'rolled_back' ? 'text-bad' : 'text-ink-2')}
+      data-testid="release-watch"
+      data-status={watch.status}
+    >
+      <span className="font-medium">{WATCH[watch.status] ?? watch.status}</span>
+      {watch.previous_version != null ? ` against v${watch.previous_version}` : ''}
+      {watch.note ? `: ${watch.note}.` : '.'}
+    </p>
   );
 }
 

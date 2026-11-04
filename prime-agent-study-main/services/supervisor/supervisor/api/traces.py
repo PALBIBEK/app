@@ -246,14 +246,17 @@ async def mark_evaluation(
 async def trace_versions(
     request: Request,
     composition_id: str = Query(min_length=1, max_length=255),
+    exclude_replays: bool = False,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> dict[str, Any]:
-    """How each version of a composition did across the caller's finished runs."""
+    """How each version of a composition did across the caller's finished runs
+    (``exclude_replays``: live traffic only)."""
     versions = await version_quality(
         deps.get_session_factory(request),
         tenant_id=tenant_id,
         principal_id=deps.request_principal_id(request, tenant_id),
         composition_id=composition_id,
+        exclude_replays=exclude_replays,
     )
     return {"composition_id": composition_id, "versions": versions}
 

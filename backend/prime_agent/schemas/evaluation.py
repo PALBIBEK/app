@@ -259,6 +259,20 @@ class SearchRound(BaseModel):
     why: str = ""
 
 
+class ReleaseWatch(BaseModel):
+    """How an approved change does live against the version before it."""
+
+    status: str
+    """``watching``, ``held`` (no worse: the watch ended), ``rolled_back``, ``superseded``, ``ended``."""
+    previous_version: int | None = None
+    checks: int = 0
+    failed_checks: int = 0
+    seen_runs: int = 0
+    note: str | None = None
+    rolled_back_to: int | None = None
+    """The version that made the previous one live again."""
+
+
 class ProposalOut(BaseModel):
     id: str
     agent_id: str
@@ -278,6 +292,7 @@ class ProposalOut(BaseModel):
     rounds: list[SearchRound] = Field(default_factory=list)
     gate: Gate | None = None
     release_version: int | None = None
+    watch: ReleaseWatch | None = None
     created_at: datetime
     decided_at: datetime | None = None
 
