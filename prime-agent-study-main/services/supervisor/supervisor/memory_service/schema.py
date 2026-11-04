@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable
 from typing import Final
 
-from sqlalchemy import BigInteger, Connection, Integer, Text, inspect, text
+from sqlalchemy import BigInteger, Connection, Integer, Text, inspect, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -56,6 +56,21 @@ def add_column(table: str, column: str, ddl_type: str) -> Callable[[Connection],
     return apply
 
 
+def _reembed(conn: Connection) -> None:
+    """Re-embed bank items whose stored vector is not the hashing embedder's current size."""
+    from supervisor.memory_service.embed import EMBED_DIM, HashingEmbedder
+    from supervisor.memory_service.models import MemoryItemRow
+
+    table = MemoryItemRow.__table__
+    embedder = HashingEmbedder()
+    rows = conn.execute(select(table.c.id, table.c.content, table.c.embedding)).all()
+    for item_id, content, embedding in rows:
+        if len(embedding or ()) != EMBED_DIM:
+            conn.execute(
+                update(MemoryItemRow).where(MemoryItemRow.id == item_id).values(embedding=embedder.embed(content))
+            )
+
+
 def _all(*steps: Callable[[Connection], None]) -> Callable[[Connection], None]:
     def apply(conn: Connection) -> None:
         for step in steps:
@@ -80,6 +95,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
             add_column("extraction_job", "retry_at_ms", "BIGINT"),
         ),
     ),
+    (5, "memory_item.embedding: re-embedded at 1024 buckets, stopwords left out", _reembed),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""
 
