@@ -80,11 +80,6 @@ def candidate(fact: Fact, score: float) -> Candidate:
     )
 
 
-def recent_candidates(facts: Iterable[Fact]) -> list[Candidate]:
-    """Newest first at a flat score: the fallback ranking without embeddings."""
-    return [candidate(f, 0.2) for f in reversed(list(facts))]
-
-
 def query_facts(facts: Iterable[Fact], q: str, limit: int) -> list[str]:
     """Every term must appear (case-insensitive); oldest first, as fact lines."""
     terms = [t for t in q.lower().split() if t]

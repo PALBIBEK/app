@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 from supervisor.memory.client import NotebookClient, UnavailableNotebooks
+from supervisor.memory_service.notebooks.rank import ranked_candidates
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
     query_facts,
-    recent_candidates,
     render_facts,
 )
 from supervisor.memory_service.notebooks.types import (
@@ -117,7 +117,7 @@ class NotebookMemory:
     def rank(self, facts: Sequence[Fact], context: RecallContext | None = None) -> list[Candidate]:
         """Recall over facts already read: a layer that read them (to filter what an
         audience may see) recalls from those instead of reading them again."""
-        return recent_candidates(facts)
+        return ranked_candidates(facts, context.query if context else None)
 
     async def capture(
         self,
