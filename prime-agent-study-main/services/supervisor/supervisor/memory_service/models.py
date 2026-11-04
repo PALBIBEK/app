@@ -69,9 +69,12 @@ class OutboxRow(Base):
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     tool_call_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")  # pending | running | done
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # When an executor claimed it (status running): a claim older than the outbox's
+    # CLAIM_TIMEOUT_MS is taken to be a crashed executor's, and may be claimed again.
+    claimed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class MemoryItemRow(Base):
