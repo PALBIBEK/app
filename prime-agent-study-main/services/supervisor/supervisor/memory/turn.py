@@ -33,7 +33,7 @@ from supervisor.journal.writer import keyed_event_id
 from supervisor.memory import boundary
 from supervisor.memory.binding import CaptureMode, MemoryBinding, Strategy
 from supervisor.memory.classification import OneShot
-from supervisor.memory.client import MemoryRefused, MemoryUnavailable
+from supervisor.memory.client import MemoryRefused, MemoryRequestInvalid, MemoryUnavailable
 from supervisor.memory.cross import recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta
 from supervisor.memory.disclosure import Audience
@@ -275,7 +275,7 @@ class SessionMemory:
                 nb: held_hashes(await scope.view.facts(nb))
                 for nb in scope.binding.recall_notebooks
             }
-        except (MemoryUnavailable, MemoryRefused) as exc:
+        except (MemoryUnavailable, MemoryRefused, MemoryRequestInvalid) as exc:
             # Long-term memory is an aid: an outage costs this turn its recall, never the turn.
             logger.warning("session %s: recall skipped, memory unavailable: %s", session_id, exc)
             skipped = MemoryInjected(run_id, RECALL_UNAVAILABLE, [])

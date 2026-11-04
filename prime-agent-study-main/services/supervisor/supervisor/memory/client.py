@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MemoryRefused",
+    "MemoryRequestInvalid",
     "MemoryServiceNotConfigured",
     "MemoryUnavailable",
     "NotebookClient",
@@ -74,6 +75,11 @@ class MemoryUnavailable(NotebookError):
 
 class MemoryServiceNotConfigured(NotebookError):
     """No memory service is configured, so there is no long-term memory (not retryable)."""
+
+
+class MemoryRequestInvalid(NotebookError):
+    """The memory service rejected the request itself (a 4xx without a known code): sending
+    it again cannot succeed."""
 
 
 class MemoryRefused(NotebookError):
@@ -365,6 +371,10 @@ def _error(response: httpx.Response) -> NotebookError:
     if response.status_code == 404:
         # A notebook of another tenant is "not found" too, by design.
         return NotebookNotFound(str(detail.get("message", "")))
+    if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
+        return MemoryRequestInvalid(
+            f"memory service rejected the request ({response.status_code}): {detail.get('message', detail)}"
+        )
     logger.warning("memory service refused %s: %s %s", response.request.url.path, response.status_code, detail)
     return MemoryUnavailable(
         f"memory service returned {response.status_code}: {detail.get('message', detail)}"
