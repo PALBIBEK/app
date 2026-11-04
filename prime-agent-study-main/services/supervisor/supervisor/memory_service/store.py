@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from supervisor.memory_service.leases import check_fence
 from supervisor.memory_service.models import MemorySessionRow, OutboxRow, SessionEventRow
 from supervisor.memory_service.types import (
     FORMAT_VERSION,
@@ -77,8 +78,14 @@ class DurableStore:
         events: list[SessionEvent],
         *,
         outbox_items: list[dict[str, Any]] | None = None,
+        fence: int | None = None,
+        fenced: bool = False,
     ) -> int:
-        """Persist events (+ optional outbox rows) in one transaction. Returns last seq."""
+        """Persist events (+ optional outbox rows) in one transaction. Returns last seq.
+
+        ``fenced``: check ``fence`` against the session's lease under the row lock, in the
+        same transaction as the write, so a writer whose lease was taken over after it
+        last looked cannot write (``supervisor.memory_service.leases``)."""
         if not events:
             return (await self.get_session_row(session_id)).last_seq
         async with self._factory() as db:
@@ -86,6 +93,8 @@ class DurableStore:
                 row = await db.get(MemorySessionRow, session_id, with_for_update=True)
                 if row is None:
                     raise SessionNotFound(f"SESSION_NOT_FOUND: {session_id}")
+                if fenced:
+                    check_fence(row, fence)
                 expected = row.last_seq + 1
                 for ev in events:
                     if ev.seq != expected:
