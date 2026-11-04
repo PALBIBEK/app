@@ -26,6 +26,8 @@ export function ProposalStatusPill({ status }: { status: ProposalStatus }): JSX.
   return <StatusPill kind={s.kind} label={s.label} />;
 }
 
+const EDIT_VERB: Record<string, string> = { add: 'Adds', update: 'Changes', delete: 'Removes' };
+
 /** The change as the reflection made it: each edit with why, what it expects, and the edits it
  * asked for that could not be applied. */
 export function EditList({
@@ -45,8 +47,8 @@ export function EditList({
           {edits.map((e, n) => (
             <li key={n} className="flex flex-col gap-0.5 text-[13px]" data-testid="edit">
               <span>
-                <span className="font-medium">{e.action === 'replace' ? 'Changes' : 'Adds to'}</span>{' '}
-                <span className="font-mono text-ink-2">{e.section}</span>
+                <span className="font-medium">{EDIT_VERB[e.action] ?? e.action}</span>{' '}
+                <span className="font-mono text-ink-2">{e.id}</span>
                 {e.reason ? <span className="text-ink-3"> · {e.reason}</span> : null}
               </span>
               <span className="whitespace-pre-wrap text-ink-2">{e.text}</span>
@@ -120,6 +122,11 @@ export function PromptDiff({ base, next }: { base: PromptView; next: PromptView 
   const before = new Map(base.sections.map((s) => [s.id, s.text]));
   const rows = next.sections.map((s) => ({ id: s.id, before: before.get(s.id) ?? null, after: s.text }));
   const same = rows.filter((r) => r.before === r.after);
+  const notesBefore = new Map((base.learned ?? []).map((n) => [n.id, n.text]));
+  const notesAfter = new Map((next.learned ?? []).map((n) => [n.id, n.text]));
+  const notes = [...new Set([...notesBefore.keys(), ...notesAfter.keys()])]
+    .map((id) => ({ id, before: notesBefore.get(id) ?? null, after: notesAfter.get(id) ?? null }))
+    .filter((n) => n.before !== n.after);
   return (
     <div className="flex flex-col gap-3" data-testid="prompt-diff">
       {base.persona !== next.persona ? (
@@ -132,6 +139,17 @@ export function PromptDiff({ base, next }: { base: PromptView; next: PromptView 
             <DiffView change={{ path: r.before == null ? `${r.id} (new section)` : r.id, removed: r.before ?? '', added: r.after }} />
           </div>
         ))}
+      {notes.map((n) => (
+        <div key={n.id} data-testid="changed-note" data-note={n.id}>
+          <DiffView
+            change={{
+              path: `${n.id} (${n.before == null ? 'new note' : n.after == null ? 'removed note' : 'note'})`,
+              removed: n.before ?? '',
+              added: n.after ?? '',
+            }}
+          />
+        </div>
+      ))}
       {same.length ? (
         <p className="text-[12.5px] text-ink-3">
           Unchanged: {same.map((r) => r.id).join(', ')}

@@ -63,11 +63,11 @@ class FakeSupervisor:
         self.candidate, self.live = candidate, live
         self.marked: list[str] = []
         self.reflection = reflection if reflection is not None else {
-            "proposal": {"persona": "coder", "rationale": "Runs answer before testing; say to test first.",
-                         "changed": ["rules"],
-                         "sections": [{"id": "intro", "text": "You are a coding agent in {cwd}."},
-                                      {"id": "rules", "text": FIXED}],
-                         "edits": [{"action": "replace", "section": "rules", "old": "x", "text": FIXED,
+            "proposal": {"persona": "ignored", "rationale": "Runs answer before testing; say to test first.",
+                         "changed": ["note-00001"],
+                         "sections": [{"id": "intro", "text": "a rewrite the loop must ignore"}],
+                         "learned": [{"id": "note-00001", "text": FIXED}],
+                         "edits": [{"action": "add", "id": "note-00001", "text": FIXED,
                                     "reason": "tests fail after changes"}],
                          "skipped": ["edit 2: unknown action 'delete'"],
                          "expected_outcome": "runs test before answering"},
@@ -201,13 +201,14 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         p = await _propose(api, db_session, agent, ds, started, notes="it skips the tests")
         assert p["status"] == "awaiting_approval", p
         assert p["gate"]["passed"] and p["gate"]["better"] == 2 and p["gate"]["worse"] == 0
-        assert p["changed"] == ["rules"] and p["rationale"].startswith("Runs answer before testing")
-        assert [(e["action"], e["section"], e["reason"]) for e in p["edits"]] == [
-            ("replace", "rules", "tests fail after changes")]
+        assert p["changed"] == ["note-00001"] and p["rationale"].startswith("Runs answer before testing")
+        assert [(e["action"], e["id"], e["reason"]) for e in p["edits"]] == [
+            ("add", "note-00001", "tests fail after changes")]
         assert p["skipped_edits"] == ["edit 2: unknown action 'delete'"]
         assert p["expected_outcome"] == "runs test before answering"
-        assert p["candidate_prompt"]["sections"][1]["text"] == FIXED
-        assert p["base_prompt"]["sections"][1]["text"] != FIXED
+        assert p["candidate_prompt"]["learned"] == [{"id": "note-00001", "text": FIXED}]
+        assert p["candidate_prompt"]["sections"] == p["base_prompt"]["sections"], "the person's prompt is never changed"
+        assert p["candidate_prompt"]["persona"] == p["base_prompt"]["persona"] and p["base_prompt"]["learned"] == []
         assert p["evidence"][0]["title"] == "Tests failing after a change"
         assert p["evidence"][0]["examples"][0]["session_id"] is None  # not a session of the user's: not linked
         assert (p["baseline"]["label"], p["candidate"]["label"]) == ("v1", f"candidate {p['id'][:6]}")
@@ -234,9 +235,12 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         v2 = (await releases(agent.id, db_session))[0]
         assert v2.version == 2 and agent.composition_digest == v2.composition_digest != live_digest
         assert agent.harness_version.endswith(f"-c{p['id'].replace('-', '')[:8]}")
-        assert v2.manifest["prompt"]["sections"][1]["text"] == FIXED
+        assert v2.manifest["prompt"]["learned"] == [{"id": "note-00001", "text": FIXED}]
         draft = await db_session.get(HarnessDraft, agent.id)
-        assert draft is not None and draft.manifest["prompt"]["sections"][1]["text"] == FIXED
+        assert draft is not None and draft.manifest["prompt"]["learned"][0]["text"] == FIXED
+        # the notes reach the agent as one section after the person's
+        (pack,) = [b for k, b in fake.published if k == "prompt_pack"][-1:]
+        assert pack["sections"][-1]["id"] == "learned" and FIXED in pack["sections"][-1]["text"]
 
         again = await api.post(f"/api/v1/traces/proposals/{p['id']}/approve")
         assert again.status_code == 409
@@ -248,7 +252,7 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         # and it reads what became of the first: approved, with what it changed
         (past,) = fake.reflected[1]["history"]
         assert past["outcome"] == "approved" and past["why"][0] == "a person approved it: it became v2"
-        assert past["edits"] == [{"action": "replace", "section": "rules", "text": FIXED}]
+        assert past["edits"] == [{"action": "add", "id": "note-00001", "text": FIXED}]
 
 
 @pytest.mark.asyncio
@@ -476,10 +480,9 @@ async def test_a_search_keeps_trying_and_offers_the_best_candidate_it_kept(db_se
     fake.by_round = {1: "fail", 2: "ok"}  # the first change does not help; the second does
     second = "Run the tests, and read every failure before answering."
     fake.later = [{
-        "proposal": {"persona": "coder", "rationale": "Say to read failures.", "changed": ["rules"],
-                     "sections": [{"id": "intro", "text": "You are a coding agent in {cwd}."},
-                                  {"id": "rules", "text": second}],
-                     "edits": [{"action": "add", "section": "rules", "text": "read every failure", "reason": "r"}],
+        "proposal": {"persona": "coder", "rationale": "Say to read failures.", "changed": ["note-00001"],
+                     "learned": [{"id": "note-00001", "text": second}],
+                     "edits": [{"action": "add", "id": "note-00001", "text": second, "reason": "r"}],
                      "skipped": [], "expected_outcome": "fewer failing runs"},
         "evidence": [],
     }]
@@ -491,11 +494,11 @@ async def test_a_search_keeps_trying_and_offers_the_best_candidate_it_kept(db_se
         assert p["status"] == "awaiting_approval", p
         assert [(r["round"], r["parent"], r["kept"]) for r in p["rounds"]] == [(1, 0, False), (2, 0, True)]
         assert p["rounds"][0]["why"].startswith("scored ") and "on the 2 saved runs it may learn from" in p["rounds"][0]["why"]
-        assert p["candidate_prompt"]["sections"][1]["text"] == second
+        assert p["candidate_prompt"]["learned"] == [{"id": "note-00001", "text": second}]
         assert p["rationale"] == "Say to read failures." and p["candidate"]["label"] == f"candidate {p['id'][:6]} round 2"
         # the second reflection read what became of the first round
         assert fake.reflected[1]["history"][-1]["outcome"] == "dropped in this search"
-        assert fake.reflected[1]["sections"][1]["text"] != FIXED, "its parent is the live version: the first was dropped"
+        assert fake.reflected[1]["learned"] == [], "its parent is the live version: the first was dropped"
         approved = (await api.post(f"/api/v1/traces/proposals/{p['id']}/approve")).json()
         assert approved["status"] == "approved"
         await db_session.refresh(agent)
@@ -513,9 +516,9 @@ async def test_a_search_offers_the_first_change_when_later_ones_do_not_pass(db_s
         api.fake, api.user = fake, owner
         p = await _propose(api, db_session, agent, ds, started, rounds=3)
         assert p["status"] == "awaiting_approval" and len(p["rounds"]) == 1, "no more to change: the search stops"
-        assert p["candidate_prompt"]["sections"][1]["text"] == FIXED and p["max_rounds"] == 3
+        assert p["candidate_prompt"]["learned"][0]["text"] == FIXED and p["max_rounds"] == 3
         # round 2's reflection edited the kept first candidate (the only version on the front)
-        assert fake.reflected[1]["sections"][1]["text"] == FIXED
+        assert fake.reflected[1]["learned"] == [{"id": "note-00001", "text": FIXED}]
 
 
 @pytest.mark.asyncio

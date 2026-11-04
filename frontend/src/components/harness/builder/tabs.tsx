@@ -12,6 +12,38 @@ import { cn } from '@/lib/utils';
 
 type Edit = (next: Manifest) => void;
 
+/** The notes the improvement loop learnt: sent after the sections; the person may edit or
+ * remove them (a new note comes only from an approved change). */
+function LearnedNotes({ m, onChange }: { m: Manifest; onChange: Edit }): JSX.Element | null {
+  const notes = m.prompt.learned ?? [];
+  if (!notes.length) return null;
+  const setNotes = (next: typeof notes) => onChange({ ...m, prompt: { ...m.prompt, learned: next.length ? next : null } });
+  return (
+    <div data-testid="learned-notes">
+      <p className="mb-2 text-sm font-semibold text-slate-700">
+        Learnt from earlier runs <span className="font-normal text-slate-500">— added by approved changes, sent after your sections</span>
+      </p>
+      <ul className="space-y-2">
+        {notes.map((n, i) => (
+          <li key={n.id} className="flex items-start gap-2">
+            <span className="mt-2 w-[84px] flex-none font-mono text-xs text-slate-500">{n.id}</span>
+            <textarea
+              aria-label={`Note ${n.id}`}
+              rows={2}
+              className={cn(input, 'resize-y')}
+              value={n.text}
+              onChange={(e) => setNotes(notes.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))}
+            />
+            <IconButton label={`Remove note ${n.id}`} onClick={() => setNotes(notes.filter((_, j) => j !== i))}>
+              <Trash size={14} />
+            </IconButton>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export const input =
   'w-full rounded-xl border-2 border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10'; export function Field({ label, hint, htmlFor, children,
 }: { label: string; hint?: React.ReactNode; htmlFor?: string; children: React.ReactNode;
@@ -75,7 +107,7 @@ export const input =
         ))}
         <button
           type="button"
-          onClick={() => setSections([...sections, { id: freshId(), text: ''}])} className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:text-accent-700" > <Plus size={14} weight="bold" /> Add section </button> </div> </div> );
+          onClick={() => setSections([...sections, { id: freshId(), text: ''}])} className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:text-accent-700" > <Plus size={14} weight="bold" /> Add section </button> </div> <LearnedNotes m={m} onChange={onChange} /> </div> );
 } function IconButton({ label, disabled, onClick, children,
 }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode;
 }): JSX.Element { return ( <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="rounded-lg p-1.5 text-ink-2 hover:bg-line-soft disabled:opacity-30" > {children} </button> );

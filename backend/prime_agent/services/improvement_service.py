@@ -2,7 +2,8 @@
 
 1. **Reflect.** The supervisor reads the agent's issues (failing checks, judges' fails and
    their reasons, runs people marked wrong) and what became of the changes proposed before
-   (``_history``), and proposes itemized edits to the live version's prompt.
+   (``_history``), and proposes itemized edits to the notes the live version has learnt (the
+   person's own prompt sections are never changed).
 2. **Candidate.** The edited manifest is published as a candidate: its artifacts exist and a
    session can be pinned to them, but it is not a release and nothing runs it unasked.
 3. **Measure.** The chosen dataset is replayed on the live version and on the candidate, back
@@ -17,9 +18,9 @@
 A proposal may try a few candidates (``rounds``), each editing the best one kept so far
 (GEPA's loop, ``_run``); the one shown is the best-scoring kept candidate that passes the gate.
 
-The optimizer can only change the prompt, and cannot change a judge, a check or a dataset, so
-it cannot grade its own work. It never reads an experiment's replays, nor the conversations of
-held-out saved runs: the runs it learns from are the agent's failures (a dataset saved from an
+The optimizer can only change the learnt notes, and cannot change the person's prompt, a judge,
+a check or a dataset, so it cannot grade its own work. It never reads an experiment's replays,
+nor the conversations of held-out saved runs: the runs it learns from are the agent's failures (a dataset saved from an
 issue holds some of them), and the held-out ones show whether a change fixes more than what it
 read. That is GEPA's split: reflective mutation reads minibatches of the train set, and a
 candidate is kept on its scores on a separate validation set (``gepa.api.optimize``).
@@ -58,7 +59,7 @@ from prime_agent.schemas.evaluation import (
     ReleaseWatch,
     SearchRound,
 )
-from prime_agent.schemas.harness_manifest import HarnessManifest, PromptSpec, manifest_body
+from prime_agent.schemas.harness_manifest import HarnessManifest, LearnedNote, PromptSpec, manifest_body
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.evaluation_service import (
     ITEM_TIMEOUT_S,
@@ -203,7 +204,7 @@ def _round_feedback(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "outcome": "kept in this search" if record.get("kept") else "dropped in this search",
         "rationale": record.get("rationale"),
-        "edits": [{k: e.get(k) for k in ("action", "section", "text")} for e in record.get("edits") or []][:20],
+        "edits": [{k: e.get(k) for k in ("action", "id", "text")} for e in record.get("edits") or []][:20],
         "why": [record["why"]] if record.get("why") else [],
     }
 
@@ -219,6 +220,7 @@ def _prompt(manifest: dict[str, Any] | None) -> PromptOut | None:
     return PromptOut(
         persona=str(p.get("persona") or ""),
         sections=[PromptSectionOut(id=str(s.get("id")), text=str(s.get("text") or "")) for s in p.get("sections") or []],
+        learned=[PromptSectionOut(id=str(n.get("id")), text=str(n.get("text") or "")) for n in p.get("learned") or []],
     )
 
 
@@ -402,7 +404,7 @@ class ImprovementService:
             out.append({
                 "outcome": past.status,
                 "rationale": past.rationale,
-                "edits": [{k: e.get(k) for k in ("action", "section", "text")} for e in past.edits or []][:20],
+                "edits": [{k: e.get(k) for k in ("action", "id", "text")} for e in past.edits or []][:20],
                 "why": why[:10],
             })
         return out
@@ -468,6 +470,7 @@ class ImprovementService:
                     "composition_id": live.composition_id,
                     "persona": parent.manifest.prompt.persona,
                     "sections": [{"id": s.id, "text": s.text} for s in parent.manifest.prompt.sections],
+                    "learned": [{"id": n.id, "text": n.text} for n in parent.manifest.prompt.learned or []],
                     "notes": row.notes,
                     "since_ms": since,
                     "exclude_sessions": await self._unseen_sessions(db, row.harness_id),
@@ -487,13 +490,11 @@ class ImprovementService:
                 row.status, row.changed = "no_change", []
                 await db.commit()
                 return None
-            try:
-                persona = str(proposal.get("persona") or parent.manifest.prompt.persona)
-                prompt = PromptSpec(
-                    persona=persona if len(persona) <= 64 else parent.manifest.prompt.persona,
-                    sections=[{"id": s["id"], "text": s["text"]} for s in proposal.get("sections") or []],
-                )
-                candidate = parent.manifest.model_copy(update={"prompt": prompt})
+            try:  # only the learnt notes change: the person's sections and persona are the parent's
+                prompt = parent.manifest.prompt.model_copy(update={"learned": [
+                    LearnedNote(id=str(n["id"]), text=str(n["text"])) for n in proposal.get("learned") or []
+                ] or None})
+                candidate = parent.manifest.model_copy(update={"prompt": PromptSpec.model_validate(prompt.model_dump())})
                 HarnessManifest.model_validate(manifest_body(candidate))
             except (ValidationError, KeyError, TypeError) as exc:
                 if rounds:

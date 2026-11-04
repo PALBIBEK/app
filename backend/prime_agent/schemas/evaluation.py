@@ -200,6 +200,8 @@ class PromptSectionOut(BaseModel):
 class PromptOut(BaseModel):
     persona: str
     sections: list[PromptSectionOut]
+    learned: list[PromptSectionOut] = Field(default_factory=list)
+    """The notes the improvement loop keeps, sent after the sections."""
 
 
 class EvidenceExample(BaseModel):
@@ -237,11 +239,16 @@ class Gate(BaseModel):
 
 
 class PromptEdit(BaseModel):
+    """One edit to the learnt notes."""
+
     action: str
-    """``add`` (appended to a section, or a new one) or ``replace`` (one passage)."""
-    section: str
+    """``add``, ``update`` or ``delete``."""
+    id: str
+    """The note's id."""
     text: str
+    """Its text after the edit (before it, for ``delete``)."""
     old: str | None = None
+    """Its text before an ``update``."""
     reason: str = ""
 
 

@@ -23,10 +23,13 @@ from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.harness_release import HarnessDraft, HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.harness_manifest import (
+    LEARNED_SECTION,
     HarnessManifest,
     PolicySpec,
+    PromptSection,
     SandboxSpec,
     default_manifest,
+    learned_text,
     manifest_body,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
@@ -256,6 +259,9 @@ class HarnessPublisher:
                            "APPROVAL_PAST_DEADLINE")
             )
 
+        sections = [*m.prompt.sections]  # the person's, then the notes the loop learnt
+        if m.prompt.learned:
+            sections.append(PromptSection(id=LEARNED_SECTION, text=learned_text(m.prompt.learned)))
         prompt = await self._publish(identity, "prompt_pack", {
             "name": f"{prefix}-prompt",
             "semver": semver,
@@ -263,9 +269,9 @@ class HarnessPublisher:
             "persona": m.prompt.persona,
             "sections": [
                 {"id": s.id, "order": i + 1, "text": s.text, "complete": True}
-                for i, s in enumerate(m.prompt.sections)
+                for i, s in enumerate(sections)
             ],
-            "vars": ["cwd"] if any("{cwd}" in s.text for s in m.prompt.sections) else [],
+            "vars": ["cwd"] if any("{cwd}" in s.text for s in sections) else [],
         })
 
         definitions: dict[str, Any] = {}

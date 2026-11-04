@@ -159,6 +159,8 @@ export type ProposalStatus =
 export interface PromptView {
   persona: string;
   sections: { id: string; text: string }[];
+  /** The notes the improvement loop keeps, sent after the sections. */
+  learned?: { id: string; text: string }[];
 }
 
 export interface EvidenceExample {
@@ -187,11 +189,14 @@ export interface Gate {
   held_out_worse?: number;
 }
 
+/** One edit to the learnt notes. */
 export interface PromptEdit {
-  /** `add` (appended to a section, or a new one) or `replace` (one passage). */
-  action: 'add' | 'replace' | string;
-  section: string;
+  action: 'add' | 'update' | 'delete' | string;
+  /** The note's id. */
+  id: string;
+  /** Its text after the edit (before it, for a delete). */
   text: string;
+  /** Its text before an update. */
   old: string | null;
   reason: string;
 }

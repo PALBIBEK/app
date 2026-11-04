@@ -25,13 +25,34 @@ class PromptSection(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
 
 
+LEARNED_SECTION = "learned"
+"""The section the learnt notes are sent in, after the person's (``learned_text``)."""
+MAX_NOTES = 30
+"""Notes an agent keeps (``supervisor.traces.reflect.MAX_NOTES``)."""
+
+
+class LearnedNote(BaseModel):
+    """One instruction the improvement loop learnt from the agent's runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^note-\d{5}$")
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class PromptSpec(BaseModel):
-    """The system prompt, in ordered sections. ``{cwd}`` becomes the working directory."""
+    """The system prompt, in ordered sections. ``{cwd}`` becomes the working directory.
+
+    ``sections`` are the person's: the improvement loop never changes them. ``learned`` are
+    the notes it keeps (Prime Agent's base prompt and its supplemental notes): the loop adds,
+    updates and deletes them; the person may edit or delete them too."""
 
     model_config = ConfigDict(extra="forbid")
 
     persona: str = Field(default="assistant", min_length=1, max_length=64)
     sections: list[PromptSection] = Field(min_length=1, max_length=20)
+    learned: list[LearnedNote] | None = Field(default=None, max_length=MAX_NOTES)
+    """None (no notes) is left out of a stored manifest, so older releases compare unchanged."""
 
     @field_validator("sections")
     @classmethod
@@ -39,7 +60,23 @@ class PromptSpec(BaseModel):
         ids = [s.id for s in sections]
         if len(ids) != len(set(ids)):
             raise ValueError("section ids must be unique")
+        if LEARNED_SECTION in ids:
+            raise ValueError(f"the section id {LEARNED_SECTION!r} is kept for the notes the agent learnt")
         return sections
+
+    @field_validator("learned")
+    @classmethod
+    def unique_notes(cls, learned: list[LearnedNote] | None) -> list[LearnedNote] | None:
+        if not learned:
+            return None
+        if len({n.id for n in learned}) != len(learned):
+            raise ValueError("note ids must be unique")
+        return learned
+
+
+def learned_text(notes: list[LearnedNote]) -> str:
+    """The notes as the agent reads them: one section after the person's."""
+    return "Learnt from earlier runs:\n" + "\n".join(f"- {n.text}" for n in notes)
 
 
 class SandboxSpec(BaseModel):
