@@ -130,6 +130,11 @@ export default function DatasetPage(): JSX.Element {
                       <span className="tabular w-6 flex-none text-right font-mono text-sm text-ink-3">{n + 1}</span>
                       <div className="flex min-w-0 flex-1 flex-col gap-1">
                         <p className="line-clamp-2 whitespace-pre-wrap">{item.input}</p>
+                        {item.history?.length ? (
+                          <p className="text-xs text-ink-3" data-testid="item-history">
+                            replayed after {item.history.length} earlier message{item.history.length === 1 ? '' : 's'} of its conversation
+                          </p>
+                        ) : null}
                         {item.expected ? <p className="text-[13px] text-ink-2">Good answer: {item.expected}</p> : null}
                         <div className="flex flex-wrap gap-x-3 text-xs text-ink-3">
                           {item.source_version != null ? <span>from v{item.source_version}</span> : null}

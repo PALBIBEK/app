@@ -65,6 +65,7 @@ export default function ExperimentPage(): JSX.Element {
                         <span className="text-xs text-ink-3" data-testid="trial">trial {r.trial + 1} of {data.experiment.stats?.trials}</span>
                       ) : null}
                       <p className="line-clamp-3 whitespace-pre-wrap">{r.input}</p>
+                      {(r.turns ?? 1) > 1 ? <span className="text-xs text-ink-3">message {r.turns} of its conversation</span> : null}
                       {r.expected ? <p className="text-[12.5px] text-ink-3">Good answer: {r.expected}</p> : null}
                     </div>
                   </div>

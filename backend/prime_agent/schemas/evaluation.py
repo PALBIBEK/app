@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DatasetCreate(BaseModel):
@@ -22,6 +22,13 @@ class AddRunRequest(BaseModel):
 class DatasetItemOut(BaseModel):
     id: str
     input: str
+    history: list[str] = Field(default_factory=list)
+    """Earlier messages of its conversation, replayed before ``input``."""
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _none_is_empty(cls, value: object) -> object:
+        return [] if value is None else value
     expected: str | None = None
     source_session_id: str | None = None
     source_run_id: str | None = None
@@ -109,6 +116,8 @@ class ExperimentItemResult(BaseModel):
     position: int
     trial: int = 0
     input: str
+    turns: int = 1
+    """Messages replayed: the earlier ones of the conversation, then the saved run's."""
     expected: str | None = None
     status: str
     """How the replay went: ``done``, ``needs_approval``, ``timed_out``, ``failed``, ``pending``."""
