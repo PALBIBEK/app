@@ -6,7 +6,8 @@
 - ``worker``: runs the session workflows (model calls, tools, sandboxes). Run more of them on
   the same queue for more load; ``WORKER_MAX_CONCURRENT_RUNS`` caps each one.
 
-``rollout`` sees and steers a deploy (versions, ramp, promote, the replay gate).
+``rollout`` sees and steers a deploy (versions, ramp, promote, the replay gate). ``scrub``
+masks credentials journalled before the journal masked them (``supervisor.journal.scrub``).
 
 This is the production split of LangGraph's API servers and queue workers: scale each on its
 own, and always keep at least one worker, or work waits (``GET /v1/ops/workers`` says so).
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import sys
 
-ROLES = ("api", "worker", "rollout")
+ROLES = ("api", "worker", "rollout", "scrub")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -34,6 +35,10 @@ def main(argv: list[str] | None = None) -> None:
         from supervisor.temporal.rollout_cli import main as steer
 
         raise SystemExit(steer(args[1:]))
+    elif role == "scrub":
+        from supervisor.scrub_cli import main as scrub
+
+        raise SystemExit(scrub(args[1:]))
     else:
         raise SystemExit(f"unknown role {role!r}: use one of {', '.join(ROLES)}")
 

@@ -140,6 +140,13 @@ conversation on.
 **Drill it.** Once a quarter, restore into a staging stack and check that sessions list, a
 transcript opens, an artifact downloads and a fork can be sent a message.
 
+**Credentials journalled before masking.** The journal masks credentials in what it stores,
+but journals written before it did may hold them. Once, after a backup:
+`python -m supervisor scrub` counts what it would mask; `python -m supervisor scrub --apply`
+rewrites it (it can be stopped and run again; `--after <session>:<seq>` carries on where it
+printed it was). Then `VACUUM` the `events`, `tool_outbox` and `session_index` tables, and
+rotate the credentials it found: older backups still hold them.
+
 ### Safe deploys
 
 Workers register as versions of the `yal-supervisor` worker deployment, with the image tag as
