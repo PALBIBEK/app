@@ -112,7 +112,12 @@ class NotebookMemory:
     async def recall(
         self, notebook_id: str, context: RecallContext | None = None
     ) -> list[Candidate]:
-        return recent_candidates(await self._store.facts(notebook_id))
+        return self.rank(await self._store.facts(notebook_id), context)
+
+    def rank(self, facts: Sequence[Fact], context: RecallContext | None = None) -> list[Candidate]:
+        """Recall over facts already read: a layer that read them (to filter what an
+        audience may see) recalls from those instead of reading them again."""
+        return recent_candidates(facts)
 
     async def capture(
         self,

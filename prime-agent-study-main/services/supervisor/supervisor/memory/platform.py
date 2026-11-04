@@ -71,6 +71,10 @@ def platform_one_shot() -> OneShot:
     return call
 
 
+_HOMES_KEPT = 10_000
+"""Notebook homes cached per process (a cleared cache only costs one lookup each)."""
+
+
 class MemoryPlatform:
     def __init__(
         self,
@@ -94,6 +98,7 @@ class MemoryPlatform:
         self.base: MemoryService = layers(self.notebooks) if layers else self.notebooks
         self._is_member = is_member or self._db_membership
         self._one_shot = one_shot or platform_one_shot()
+        self._homes: dict[str, str] = {}
 
     @property
     def one_shot(self) -> OneShot:
@@ -138,7 +143,14 @@ class MemoryPlatform:
         )
 
     async def _home_of(self, notebook_id: str) -> str:
-        return (await self.store.get(notebook_id)).home
+        """A notebook's home, looked up once: it follows from the owner, which never changes
+        (and an id is never reused), so a turn's disclosure checks make no request for it."""
+        if (home := self._homes.get(notebook_id)) is None:
+            home = (await self.store.get(notebook_id)).home
+            if len(self._homes) >= _HOMES_KEPT:
+                self._homes.clear()
+            self._homes[notebook_id] = home
+        return home
 
     async def _db_membership(self, principal_id: str, scope_id: str) -> bool:
         async with self._db() as db:
