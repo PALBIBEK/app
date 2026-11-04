@@ -18,12 +18,19 @@ from supervisor.memory.client import MemoryRefused, MemoryUnavailable
 from supervisor.memory.cross import read_notebook, search_across
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.service import CaptureContext, MemoryService
-from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
+from supervisor.memory_service.notebooks.errors import (
+    MemoryDisclosureDenied,
+    MemoryFactsMissing,
+    MemoryLimitExceeded,
+)
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Provenance
 
 MEMORY_TOOL: Final = "memory"
 HISTORY_TOOL: Final = "history"
 SESSIONS_TOOL: Final = "sessions"
+MAX_FACTS_PER_ADD: Final = 20
+"""One memory add saves at most this many facts: a looping model cannot fill a notebook."""
+MAX_RESULTS: Final = 100
 
 _MEMORY_DESCRIPTION: Final = (
     "Your durable memory of the person you work for — the ONE way to read or change it. "
@@ -83,7 +90,7 @@ MEMORY_SCHEMA: Final[dict[str, Any]] = {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "search only: max facts to return (default 20).",
+                    "description": "search only: max facts to return (default 20, at most 100).",
                 },
                 "notebook": {
                     "type": "string",
@@ -92,7 +99,7 @@ MEMORY_SCHEMA: Final[dict[str, Any]] = {
                 },
                 "facts": {
                     "type": "array",
-                    "description": "add: [{text}, …]; edit: [{id, text}, …].",
+                    "description": "add: [{text}, …] (at most 20 per call); edit: [{id, text}, …].",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -199,6 +206,15 @@ SESSIONS_SCHEMA: Final[dict[str, Any]] = {
 UNAVAILABLE: Final = "[memory isn't available in this conversation]"
 
 
+def _limit(args: Mapping[str, Any], default: int = 20) -> int:
+    """The model's ``limit``, within 1..MAX_RESULTS; anything unusable is the default."""
+    try:
+        wanted = int(args.get("limit") or default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(MAX_RESULTS, wanted))
+
+
 @dataclass(frozen=True, slots=True)
 class ToolOutput:
     text: str
@@ -251,7 +267,7 @@ class TurnMemory:
         if name == MEMORY_TOOL:
             try:
                 return await self._memory(args)
-            except (MemoryFactsMissing, MemoryDisclosureDenied) as exc:
+            except (MemoryFactsMissing, MemoryDisclosureDenied, MemoryLimitExceeded) as exc:
                 return ToolOutput(f"[error] {exc}", True)
             except (MemoryUnavailable, MemoryRefused) as exc:
                 return ToolOutput(f"[error] long-term memory is unavailable right now: {exc}", True)
@@ -291,6 +307,12 @@ class TurnMemory:
                 if not texts:
                     return ToolOutput(
                         "[error] memory add requires `facts` (a non-empty list of {text}).", True
+                    )
+                if len(texts) > MAX_FACTS_PER_ADD:
+                    return ToolOutput(
+                        f"[error] memory add takes at most {MAX_FACTS_PER_ADD} facts per call "
+                        f"(got {len(texts)}); save only what is worth remembering.",
+                        True,
                     )
                 if binding.writable is None:
                     return ToolOutput(UNAVAILABLE, True)
@@ -351,8 +373,7 @@ class TurnMemory:
         if not readable or (notebook is not None and notebook not in readable):
             return ToolOutput(UNAVAILABLE, True)
         targets = [notebook] if notebook is not None else list(readable)
-        limit = int(args.get("limit") or 20)
-        hits = await search_across(memory, targets, query, limit)
+        hits = await search_across(memory, targets, query, _limit(args))
         if not hits:
             return ToolOutput(f'[no remembered facts match "{query}"]')
         tag = len(readable) > 1 or notebook is not None
@@ -394,7 +415,7 @@ class TurnMemory:
         query = str(args.get("query") or "")
         if not query.strip():
             return ToolOutput("[error] history requires `query` or `seq`.", True)
-        hits = session_history.search(self.events, query, int(args.get("limit") or 20))
+        hits = session_history.search(self.events, query, _limit(args))
         return ToolOutput(
             "\n".join(hits) if hits else f'[nothing in this conversation matches "{query}"]'
         )

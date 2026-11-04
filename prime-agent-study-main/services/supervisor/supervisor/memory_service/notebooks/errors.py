@@ -41,6 +41,14 @@ class MemoryDisclosureDenied(NotebookError):
         )
 
 
+class MemoryLimitExceeded(NotebookError):
+    """A request beyond a limit of ``supervisor.memory_service.limits``: nothing was changed."""
+
+    def __init__(self, what: str, limit: int, got: int) -> None:
+        super().__init__(f"{what}: at most {limit}, got {got}")
+        self.what, self.limit, self.got = what, limit, got
+
+
 class RevisionOutOfRange(NotebookError):
     """A revision the notebook has not reached (or below 0): nothing was read or changed."""
 

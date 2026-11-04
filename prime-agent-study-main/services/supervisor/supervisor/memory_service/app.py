@@ -16,6 +16,7 @@ from supervisor.memory_service.auth import (
     enforce_scope_tenant,
     resolve_http_auth,
 )
+from supervisor.memory_service.limits import MAX_ITEM_CHARS, MAX_RECALL_TOKENS, has_nul
 from supervisor.memory_service.notebooks.routes import router as notebook_router
 from supervisor.memory_service.rate_limit import (
     TokenBucketLimiter,
@@ -79,16 +80,16 @@ class OutboxExecuteIn(BaseModel):
 
 class WriteItemIn(BaseModel):
     scope: ScopeIn
-    content: str
-    confidence: float = 0.8
+    content: str = Field(min_length=1, max_length=MAX_ITEM_CHARS)
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     source_session: str | None = None
     source_seq: int | None = None
 
 
 class SupersedeIn(BaseModel):
     scope: ScopeIn
-    content: str
-    confidence: float = 0.8
+    content: str = Field(min_length=1, max_length=MAX_ITEM_CHARS)
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     source_session: str | None = None
     source_seq: int | None = None
 
@@ -96,7 +97,7 @@ class SupersedeIn(BaseModel):
 class RecallIn(BaseModel):
     scope: ScopeIn
     query: str
-    max_tokens: int = 512
+    max_tokens: int = Field(default=512, ge=1, le=MAX_RECALL_TOKENS)
     log_session_id: str | None = None
 
 
@@ -151,6 +152,11 @@ async def _guard(request: Request) -> None:
     resolve_http_auth(request)
     if not is_mutating_method(request.method):
         return
+    if has_nul(await request.body()):  # Postgres keeps no NUL in text: say so, not a 500
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "NUL_CHARACTER", "message": "text may not contain the NUL character (U+0000)"},
+        )
     key = rate_limit_key(
         tenant_id=caller_tenant(request) or request.headers.get("x-tenant-id"),
         client_ip=request.client.host if request.client else None,
