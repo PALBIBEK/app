@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-import base64
 import json
 import shlex
 from typing import Any, Final
 
 from pydantic import Field
 
-from supervisor.hands.browser import META_MARK, BrowserProvider, SandboxChromium, runtime_payload
+from supervisor.hands.browser import (
+    META_MARK,
+    UNPACK,
+    BrowserProvider,
+    SandboxChromium,
+    pack,
+    runtime_payload,
+)
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
@@ -21,8 +27,8 @@ WORKSPACE_DIR: Final = ".githi/browser"
 """The browser's folder in the session's workspace: saved with the session, so batch
 files and the agent's own helpers survive a lost sandbox (the open tabs do not)."""
 MAX_CODE_BYTES: Final = 48 * 1024
-"""The code travels in base64 inside the one shell argument a command is, which Linux
-caps at 128 KiB, beside the runtime's source (about 34 KiB of it)."""
+"""The code travels packed (compressed, then base64) inside the one shell argument a
+command is, which Linux caps at 128 KiB, beside the packed runtime (about 16 KiB)."""
 MAX_STDERR_CHARS: Final = 4000
 _GRACE_S: Final = 2.0
 """Kept back from the call's budget, as ``bash`` does, so a slow call is cut by its own
@@ -48,7 +54,7 @@ class BrowserExecArgs(ToolArgs):
 
 @tool(tool_class=ToolClass.NON_ATOMIC)
 async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate); helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; ask the user.
+    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains="text") narrows it to the matches and their groups); act(("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; ask the user.
 
     Code mode, as Hermes's ``browser_exec`` and Stagehand's ``run``: the runner
     (``supervisor.hands.browser.runner``) is shipped into the sandbox and runs the code
@@ -81,15 +87,15 @@ def _command(code: bytes) -> str:
     """Store the runtime in the sandbox once per version, then run the runner with ``code``
     on stdin."""
     folder, sources = runtime_payload()
-    decode = shlex.quote("import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.argv[1]))")
+    unpack = shlex.quote(UNPACK)
     store = " && ".join(
-        f'python3 -c {decode} {source} > "$d/{name}.$$" && mv "$d/{name}.$$" "$d/{name}"'
+        f'python3 -c {unpack} {source} > "$d/{name}.$$" && mv "$d/{name}.$$" "$d/{name}"'
         for name, source in sources.items()
     )
     return (
         f"d={shlex.quote(folder)}\n"
         f'[ -f "$d/runner.py" ] || {{ mkdir -p "$d" && {store}; }}\n'
-        f'python3 -c {decode} {base64.b64encode(code).decode("ascii")} | exec python3 "$d/runner.py"'
+        f'python3 -c {unpack} {pack(code)} | exec python3 "$d/runner.py"'
     )
 
 

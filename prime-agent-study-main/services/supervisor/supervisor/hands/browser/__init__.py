@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import functools
 import hashlib
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
@@ -27,15 +28,17 @@ from supervisor.hands.browser.runner import META_MARK
 __all__ = [
     "META_MARK",
     "RUNNER_DIR",
+    "UNPACK",
     "BrowserProvider",
     "SandboxChromium",
+    "pack",
     "runtime_payload",
 ]
 
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
-RUNTIME_FILES: Final = ("runner.py", "daemon.py")
-"""What the sandbox runs: the call's runner, and the daemon it starts."""
+RUNTIME_FILES: Final = ("runner.py", "daemon.py", "snapshot.py")
+"""What the sandbox runs: the call's runner, the daemon it starts, and its snapshots."""
 
 
 class BrowserProvider(Protocol):
@@ -64,7 +67,16 @@ class SandboxChromium:
 @functools.cache
 def runtime_payload() -> tuple[str, dict[str, str]]:
     """The runtime as the sandbox stores it: its folder there (named by its files' hash),
-    and each file's source in base64. The runner is ``<folder>/runner.py``."""
+    and each file's source, packed (``pack``). The runner is ``<folder>/runner.py``."""
     sources = {name: resources.files(__package__).joinpath(name).read_bytes() for name in RUNTIME_FILES}
     version = hashlib.sha256(b"".join(sources[name] for name in RUNTIME_FILES)).hexdigest()[:12]
-    return f"{RUNNER_DIR}/{version}", {name: base64.b64encode(data).decode("ascii") for name, data in sources.items()}
+    return f"{RUNNER_DIR}/{version}", {name: pack(data) for name, data in sources.items()}
+
+
+def pack(data: bytes) -> str:
+    """Compressed, then base64: what fits in a shell argument and ``UNPACK`` restores."""
+    return base64.b64encode(zlib.compress(data, 9)).decode("ascii")
+
+
+UNPACK: Final = "import base64,sys,zlib;sys.stdout.buffer.write(zlib.decompress(base64.b64decode(sys.argv[1])))"
+"""The sandbox's side of ``pack``: Python's own, as the runtime needs Python anyway."""
