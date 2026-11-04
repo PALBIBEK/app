@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -455,13 +456,31 @@ async def process_extraction(request: Request) -> dict[str, Any]:
     return {"processed": n}
 
 
-def create_app(*, database_url: str = "sqlite+aiosqlite:///:memory:") -> FastAPI:
+def create_app(
+    *, database_url: str = "sqlite+aiosqlite:///:memory:", extraction_interval_s: float | None = None
+) -> FastAPI:
+    """``extraction_interval_s``: how often the service processes extraction jobs in the
+    background (``MEMORY_EXTRACTION_INTERVAL_S``, default 5; 0 turns the worker off, and
+    jobs then wait for ``POST /v1/memory/extraction:process``).
+
+    An in-memory SQLite database has no worker: its one shared connection cannot carry a
+    background transaction beside a request's."""
+    interval = (
+        float(os.environ.get("MEMORY_EXTRACTION_INTERVAL_S", "5"))
+        if extraction_interval_s is None
+        else extraction_interval_s
+    )
+    if ":memory:" in database_url:
+        interval = 0
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         existing = getattr(app.state, "memory", None)
         if existing is None:
             svc = MemoryService(database_url=database_url)
             await svc.startup()
+            if interval > 0:
+                svc.start_extraction_worker(interval_s=interval)
             app.state.memory = svc
             owned = True
         else:
