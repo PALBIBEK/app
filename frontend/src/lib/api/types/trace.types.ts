@@ -238,6 +238,27 @@ export interface Judge {
   updated_ms: number;
 }
 
+/** How a judge's verdicts agree with people's good/bad on the same runs. */
+export interface JudgeAgreement {
+  name: string;
+  runs: number;
+  agreement: number | null;
+  /** Cohen's kappa: agreement beyond chance (1 perfect, 0 chance); null when undefined. */
+  kappa: number | null;
+  passed_but_marked_bad: number;
+  failed_but_marked_good: number;
+}
+
+/** A rubric's verdict on one recent run, beside what people said of it. */
+export interface JudgePreviewRun {
+  session_id: string;
+  run_id: string;
+  input: string | null;
+  verdict: 'pass' | 'fail' | 'unclear' | string;
+  reason: string;
+  people: 'good' | 'bad' | null;
+}
+
 export interface JudgeInput {
   name: string;
   rubric: string;

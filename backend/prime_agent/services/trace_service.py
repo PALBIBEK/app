@@ -25,6 +25,11 @@ from prime_agent.schemas.trace import (
     Issue,
     IssuesResponse,
     Judge,
+    JudgeAgreement,
+    JudgeAgreementResponse,
+    JudgePreviewRequest,
+    JudgePreviewResponse,
+    JudgePreviewRun,
     JudgeRequest,
     JudgesResponse,
     RunSummary,
@@ -429,6 +434,51 @@ class TraceService:
         except AiUpstreamError as exc:
             raise _upstream(exc) from exc
         return Judge.model_validate(raw)
+
+    async def judge_agreement(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, db: AsyncSession
+    ) -> JudgeAgreementResponse:
+        harness = await self._owned_agent(db, user_id, agent_id)
+        if not harness.composition_id:
+            return JudgeAgreementResponse(agent_id=agent_id, judges=[])
+        try:
+            raw = await self._client.judge_agreement(identity, harness.composition_id)
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        return JudgeAgreementResponse(
+            agent_id=agent_id,
+            judges=[JudgeAgreement.model_validate(j) for j in raw.get("judges", []) if isinstance(j, dict)],
+        )
+
+    async def judge_preview(
+        self, *, identity: TenantPrincipal, user_id: str, agent_id: str, body: JudgePreviewRequest, db: AsyncSession
+    ) -> JudgePreviewResponse:
+        """A rubric tried on the agent's latest runs, keeping nothing (runs the user cannot open
+        are left out)."""
+        harness = await self._owned_agent(db, user_id, agent_id)
+        if not harness.composition_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"error_code": "AGENT_NOT_PUBLISHED", "message": "publish the agent before trying a rubric"},
+            )
+        try:
+            raw = await self._client.judge_preview(identity, {**body.model_dump(), "composition_id": harness.composition_id})
+        except AiUpstreamError as exc:
+            raise _upstream(exc) from exc
+        runs = [r for r in raw.get("runs", []) if isinstance(r, dict)]
+        ids = {str(r.get("session_id")) for r in runs}
+        links = dict(
+            (
+                await db.execute(
+                    select(SessionLink.ai_session_id, SessionLink.id)
+                    .where(SessionLink.user_id == user_id, SessionLink.ai_session_id.in_(ids))
+                )
+            ).all()
+        ) if ids else {}
+        return JudgePreviewResponse(runs=[
+            JudgePreviewRun.model_validate({**r, "session_id": links[str(r["session_id"])]})
+            for r in runs if str(r.get("session_id")) in links
+        ])
 
     async def delete_judge(
         self, *, identity: TenantPrincipal, user_id: str, agent_id: str, judge_id: str, db: AsyncSession

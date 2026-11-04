@@ -10,6 +10,13 @@ The judge calls the model through the session's own gateway client (its key, its
 judging costs what the agent's own calls cost, and is opt-in per agent. A reply that is not
 a verdict is recorded as ``unclear``, never guessed. Sampling is deterministic per run and
 judge, so re-judging a run never flips whether it is judged.
+
+A judge is only as good as its agreement with people. ``agreement`` compares each judge's
+verdicts with people's good/bad on the same runs (agreement and Cohen's kappa, as
+``sklearn.metrics.cohen_kappa_score``), and ``preview`` applies a rubric to recent runs
+without keeping anything, so a rubric is checked before it grades anything (EvalGen,
+arXiv 2404.12272: criteria are refined by grading outputs). ``TRACE_JUDGE_MODEL`` sets the
+model a judge with none of its own uses, so the agent does not grade itself by default.
 """
 
 from __future__ import annotations
@@ -25,26 +32,31 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.db.models import SessionEvaluationRow, SessionRow, TraceJudgeRow, TraceScoreRow
 from supervisor.seams.core.types import ChatMessage
 from supervisor.seams.interfaces.model_gateway import ModelGatewayClient
+from supervisor.session.access import session_visibility
 from supervisor.traces.model import RunTrace
 from supervisor.traces.render import run_text
 
 __all__ = [
+    "JUDGE_MODEL_ENV",
     "JUDGE_SYSTEM",
     "REFERENCE_JUDGE",
     "Judge",
     "Verdict",
+    "agreement",
     "delete_judge",
     "judge_messages",
     "judge_out",
     "judge_run",
+    "kappa",
     "list_judges",
     "parse_verdict",
+    "preview",
     "sampled",
     "save_judge",
 ]
@@ -59,6 +71,11 @@ JUDGE_SYSTEM = (
     '"one sentence a person can act on"}.'
 )
 
+
+JUDGE_MODEL_ENV = "TRACE_JUDGE_MODEL"
+"""The model a judge without one uses, when set; otherwise the session's own model."""
+PREVIEW_RUNS = 5
+"""Recent runs a rubric is tried on before it is saved."""
 
 REFERENCE_JUDGE = "good answer"
 """The built-in judge of a replay whose saved run has a good answer: does the run meet it."""
@@ -260,8 +277,9 @@ async def judge_run(
             ).scalars()
         ]
         replay = await db.get(SessionEvaluationRow, session.id)
+    default = os.environ.get(JUDGE_MODEL_ENV, "").strip() or None
     asks: list[tuple[str, str, str | None, list[ChatMessage]]] = [
-        (judge.name, judge.evaluator, judge.model, judge_messages(judge, trace))
+        (judge.name, judge.evaluator, judge.model or default, judge_messages(judge, trace))
         for judge in judges
         if replay is not None or sampled(judge, trace.run_id)
     ]
@@ -296,3 +314,79 @@ async def judge_run(
             )
         given.append(verdict)
     return given
+
+
+def kappa(pairs: list[tuple[bool, bool]]) -> float | None:
+    """Cohen's kappa of two raters' pass/fail on the same runs: agreement beyond what chance
+    gives, as ``sklearn.metrics.cohen_kappa_score`` (unweighted): ``1 - Σ w·observed / Σ w·expected``
+    with ``expected`` the outer product of the marginals over the total. None when it is
+    undefined (no pairs, or chance already explains everything)."""
+    n = len(pairs)
+    if not n:
+        return None
+    observed = {(a, b): sum(1 for p in pairs if p == (a, b)) for a in (True, False) for b in (True, False)}
+    first = {a: observed[(a, True)] + observed[(a, False)] for a in (True, False)}
+    second = {b: observed[(True, b)] + observed[(False, b)] for b in (True, False)}
+    disagree = observed[(True, False)] + observed[(False, True)]
+    chance = (first[True] * second[False] + first[False] * second[True]) / n
+    if chance == 0:
+        return None
+    return round(1 - disagree / chance, 4)
+
+
+async def agreement(
+    factory: Factory, *, tenant_id: str, principal_id: str | None, composition_id: str
+) -> list[dict[str, Any]]:
+    """For each judge of the composition: on the runs people marked good or bad, how often its
+    pass/fail matched, Cohen's kappa, and the two ways it was wrong (it passed a run people
+    marked bad; it failed one they marked good). An experiment's replays are left out."""
+    async with factory() as db:
+        rows = (
+            await db.execute(
+                select(TraceScoreRow.session_id, TraceScoreRow.run_id, TraceScoreRow.source, TraceScoreRow.name,
+                       TraceScoreRow.label)
+                .join(SessionRow, SessionRow.id == TraceScoreRow.session_id)
+                .where(SessionRow.tenant_id == tenant_id, session_visibility(tenant_id, principal_id),
+                       TraceScoreRow.composition_id == composition_id,
+                       TraceScoreRow.source.in_(("judge", "person")),
+                       ~exists().where(SessionEvaluationRow.session_id == TraceScoreRow.session_id))
+            )
+        ).all()
+    people: dict[tuple[str, str], bool] = {}
+    judged: dict[str, dict[tuple[str, str], bool]] = {}
+    for session_id, run_id, source, name, label in rows:
+        run = (session_id, run_id)
+        if source == "person" and label in ("good", "bad"):
+            people[run] = label == "good"
+        elif source == "judge" and label in ("pass", "fail"):
+            judged.setdefault(name, {})[run] = label == "pass"
+    out: list[dict[str, Any]] = []
+    for name in sorted(judged):
+        pairs = [(verdict, people[run]) for run, verdict in judged[name].items() if run in people]
+        agree = sum(1 for j, p in pairs if j == p)
+        out.append({
+            "name": name,
+            "runs": len(pairs),
+            "agreement": round(agree / len(pairs), 4) if pairs else None,
+            "kappa": kappa(pairs),
+            "passed_but_marked_bad": sum(1 for j, p in pairs if j and not p),
+            "failed_but_marked_good": sum(1 for j, p in pairs if not j and p),
+        })
+    return out
+
+
+async def preview(
+    rubric: str, traces: list[RunTrace], client: ModelGatewayClient, model: str | None
+) -> list[tuple[RunTrace, Verdict]]:
+    """``rubric`` applied to ``traces`` as a judge would, keeping nothing: what it would say."""
+    judge = Judge("preview", "", "preview", rubric, 1.0, model, 0, True)
+    out: list[tuple[RunTrace, Verdict]] = []
+    for trace in traces:
+        try:
+            reply = await asyncio.to_thread(_complete, client, judge_messages(judge, trace),
+                                            model or os.environ.get(JUDGE_MODEL_ENV, "").strip() or None)
+        except Exception as exc:  # noqa: BLE001 - said in the verdict, as a judge that could not be asked
+            out.append((trace, Verdict("unclear", f"the judge could not be asked: {exc}"[:300])))
+            continue
+        out.append((trace, parse_verdict(reply)))
+    return out

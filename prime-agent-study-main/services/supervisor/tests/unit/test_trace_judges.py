@@ -19,8 +19,17 @@ from supervisor.db.models import RunTraceRow, SessionRow, TraceScoreRow
 from supervisor.journal.reader import JournalReader
 from supervisor.seams.providers.gateway.fake_gateway import FakeModelGatewayClient
 from supervisor.traces.after_run import after_run
-from supervisor.traces.judges import Judge, judge_run, parse_verdict, sampled, save_judge
+from supervisor.traces.judges import (
+    JUDGE_MODEL_ENV,
+    Judge,
+    judge_run,
+    kappa,
+    parse_verdict,
+    sampled,
+    save_judge,
+)
 from supervisor.traces.render import run_text
+from supervisor.traces.store import record_run
 from supervisor.traces.summary import SUMMARY_MODEL_ENV, describe
 from tests.support.trace_api import ALICE, BOB, Api, list_traces
 from tests.support.trace_journal import Journal, model, ran, tool, user
@@ -254,3 +263,65 @@ async def test_a_replay_with_a_good_answer_is_graded_against_it(api: Api) -> Non
     async with api.factory() as db:
         scores = (await db.execute(select(TraceScoreRow).where(TraceScoreRow.source == "judge"))).scalars().all()
     assert [(s.name, s.label, s.evaluator) for s in scores] == [(REFERENCE_JUDGE, "fail", "reference:closed_qa@v1")]
+
+
+def test_kappa_is_agreement_beyond_chance() -> None:
+    """Cohen's kappa as sklearn.metrics.cohen_kappa_score: p_o = 0.7, p_e = 0.5 gives 0.4."""
+    pairs = [(True, True)] * 20 + [(True, False)] * 5 + [(False, True)] * 10 + [(False, False)] * 15
+    assert kappa(pairs) == 0.4
+    assert kappa([(True, True), (False, False)]) == 1.0
+    assert kappa([]) is None and kappa([(True, True)] * 3) is None, "undefined: chance explains it all"
+
+
+async def test_a_judge_is_measured_against_what_people_said(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid = await api.session()
+    reader = JournalReader(api.factory)
+    await save_judge(api.factory, tenant_id="t1", composition_id="githi-v1", name="answers",
+                     rubric="Answers the question that was asked.", sample_rate=1.0, model=None,
+                     enabled=True, created_by="alice")
+    monkeypatch.setenv(JUDGE_MODEL_ENV, "judge-model")
+    seen: list[str | None] = []
+
+    class Says(FakeModelGatewayClient):
+        def complete(self, messages, tools, *, model=None, tool_choice=None):  # type: ignore[no-untyped-def]
+            seen.append(model)
+            return super().complete(messages, tools, model=model, tool_choice=tool_choice)
+
+    # the judge passes all four; people liked r0 and r1 and not r2 and r3
+    for n in range(4):
+        await api.run(sid, f"r{n}", f"ask {n}", start=1_000 * (n + 1))
+        await after_run(api.factory, reader, sid, f"r{n}",
+                        lambda s: Says(assistant_text='{"verdict": "pass", "reason": "fine"}'))
+        await api.client.put(f"/v1/sessions/{sid}/runs/r{n}/feedback", json={"good": n < 2}, headers=ALICE)
+    assert seen and set(seen) == {"judge-model"}, "a judge with no model of its own uses TRACE_JUDGE_MODEL"
+
+    r = await api.client.get("/v1/traces/judges/agreement", params={"composition_id": "githi-v1"}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    (judge,) = r.json()["judges"]
+    assert (judge["name"], judge["runs"], judge["agreement"]) == ("answers", 4, 0.5)
+    assert (judge["passed_but_marked_bad"], judge["failed_but_marked_good"]) == (2, 0)
+    assert judge["kappa"] == 0.0, "it passes everything: no better than chance"
+    bob = await api.client.get("/v1/traces/judges/agreement", params={"composition_id": "githi-v1"}, headers=BOB)
+    assert bob.json()["judges"] == []
+
+
+async def test_a_rubric_is_tried_on_recent_runs_before_it_is_saved(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    body = {"composition_id": "githi-v1", "rubric": "Says what it changed and why."}
+    r = await api.client.post("/v1/traces/judges/preview", json=body, headers=ALICE)
+    assert r.status_code == 409 and r.json()["detail"]["error_code"] == "NO_RUNS"
+    sid, replay = await api.session(), await api.session()
+    for n in range(3):
+        await api.run(sid, f"r{n}", f"ask {n}", start=1_000 * (n + 1))
+    await api.run(replay, "x", "a replay", start=9_000)
+    for session, run in ((sid, "r0"), (sid, "r1"), (sid, "r2"), (replay, "x")):  # as each run's end records it
+        await record_run(api.factory, JournalReader(api.factory), session, run)
+    await api.client.put(f"/v1/sessions/{replay}/evaluation", json={"experiment_id": "e"}, headers=ALICE)
+    await api.client.put(f"/v1/sessions/{sid}/runs/r2/feedback", json={"good": False}, headers=ALICE)
+    monkeypatch.setattr(type(api.state.manager), "session_model_client",
+                        lambda self, s, row: FakeModelGatewayClient(assistant_text='{"verdict": "fail", "reason": "no why"}'))
+    r = await api.client.post("/v1/traces/judges/preview", json=body | {"runs": 2}, headers=ALICE)
+    assert r.status_code == 200, r.text
+    runs = r.json()["runs"]
+    assert [(x["run_id"], x["verdict"], x["people"]) for x in runs] == [("r2", "fail", "bad"), ("r1", "fail", None)]
+    async with api.factory() as db:  # a preview keeps nothing
+        assert (await db.execute(select(TraceScoreRow).where(TraceScoreRow.source == "judge"))).first() is None
