@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Integer, LargeBinary, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -81,6 +91,18 @@ class MemoryItemRow(Base):
     """Tier 2 semantic bank — rebuildable projection of Tier 1."""
 
     __tablename__ = "memory_item"
+    # The scope of live items: recall's filter, for exact nearest-neighbour search in it
+    # (pgvector's README, "Filtering"); also created on existing databases by migration 7.
+    __table_args__ = (
+        Index(
+            "ix_memory_item_scope_live",
+            "tenant",
+            "subject",
+            "namespace",
+            postgresql_where=text("superseded_by IS NULL AND forgotten = 0"),
+            sqlite_where=text("superseded_by IS NULL AND forgotten = 0"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     tenant: Mapped[str] = mapped_column(Text, nullable=False, index=True)

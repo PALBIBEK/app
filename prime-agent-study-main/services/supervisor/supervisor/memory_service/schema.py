@@ -20,10 +20,12 @@ A change to a model's columns ships with a migration appended here.
 from __future__ import annotations
 
 import time
+import warnings
 from collections.abc import Callable
 from typing import Final
 
 from sqlalchemy import BigInteger, Connection, Integer, Text, inspect, select, text, update
+from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,6 +73,15 @@ def _reembed(conn: Connection) -> None:
             )
 
 
+def _scope_index(conn: Connection) -> None:
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_memory_item_scope_live ON memory_item (tenant, subject, namespace) "
+            "WHERE superseded_by IS NULL AND forgotten = 0"
+        )
+    )
+
+
 def _all(*steps: Callable[[Connection], None]) -> Callable[[Connection], None]:
     def apply(conn: Connection) -> None:
         for step in steps:
@@ -97,6 +108,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     ),
     (5, "memory_item.embedding: re-embedded at 1024 buckets, stopwords left out", _reembed),
     (6, "memory_facts.expires_on: a time-bound fact stops being recalled after it", add_column("memory_facts", "expires_on", "TEXT")),
+    (7, "memory_item: a partial index on the scope of live items (exact nearest-neighbour search)", _scope_index),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""
 
@@ -130,6 +142,9 @@ def _upgrade(conn: Connection) -> None:
             text("INSERT INTO memory_schema_version (version, name, applied_at) VALUES (:v, :n, :t)"),
             {"v": version, "n": name, "t": int(time.time() * 1000)},
         )
+    from supervisor.memory_service import vector_search
+
+    vector_search.ensure(conn)  # every startup: idempotent, and on once pgvector is there
     missing = _missing_columns(conn)
     if missing:
         raise SchemaOutOfDate(
@@ -142,7 +157,11 @@ def _upgrade(conn: Connection) -> None:
 def _missing_columns(conn: Connection) -> list[str]:
     inspector = inspect(conn)
     missing = []
-    for table in Base.metadata.sorted_tables:
-        have = {c["name"] for c in inspector.get_columns(table.name)}
-        missing += [f"{table.name}.{c.name}" for c in table.columns if c.name not in have]
+    with warnings.catch_warnings():
+        # Only names are compared; pgvector's column type (vector_search) is not one
+        # SQLAlchemy reflects, and saying so at every startup is noise.
+        warnings.filterwarnings("ignore", message="Did not recognize type 'vector'", category=SAWarning)
+        for table in Base.metadata.sorted_tables:
+            have = {c["name"] for c in inspector.get_columns(table.name)}
+            missing += [f"{table.name}.{c.name}" for c in table.columns if c.name not in have]
     return missing

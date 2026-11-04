@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:  # the migrations run against it (tests/test_migrations.py)
-        image: postgres:16
+        image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
           POSTGRES_USER: yal
           POSTGRES_PASSWORD: yal
@@ -126,7 +126,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:  # the supervisor's migration tests run against it
-        image: postgres:16
+        image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
           POSTGRES_USER: yal
           POSTGRES_PASSWORD: yal
@@ -179,7 +179,7 @@ jobs:
     timeout-minutes: 60
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
           POSTGRES_USER: yal
           POSTGRES_PASSWORD: yal
@@ -235,7 +235,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:  # dev.sh creates its three databases on it
-        image: postgres:16
+        image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
           POSTGRES_USER: yal
           POSTGRES_PASSWORD: yal

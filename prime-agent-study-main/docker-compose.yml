@@ -1,7 +1,7 @@
 services:
   # D9 durable workspace / journal SoT — matches supervisor DATABASE_URL below.
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-yal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yal}
