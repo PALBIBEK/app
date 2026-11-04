@@ -319,15 +319,16 @@ class EvaluationService:
         self, identity: TenantPrincipal, exp: Experiment, link: SessionLink, run: ExperimentRun, db: AsyncSession,
         *, poll_s: float,
     ) -> None:
-        """Wait until every judge that judges all of the agent's runs has given this run its
-        verdict, so results compare like with like. A judge that never answers is noted."""
+        """Wait until every enabled judge has given this run its verdict (a replay is judged
+        by all of them, sampled or not), so results compare like with like. A judge that
+        never answers is noted."""
         if not exp.composition_id or not run.run_id:
             return
         try:
             listed = await self._client.list_judges(identity, exp.composition_id)
         except AiUpstreamError:
             return
-        expected = {str(j["name"]) for j in listed.get("judges") or [] if j.get("enabled") and float(j.get("sample_rate") or 0) >= 1}
+        expected = {str(j["name"]) for j in listed.get("judges") or [] if j.get("enabled")}
         if not expected:
             return
         deadline = asyncio.get_running_loop().time() + JUDGE_WAIT_S
@@ -366,6 +367,8 @@ class EvaluationService:
         await db.commit()
         try:
             await self._wait_ready(identity, ai_session_id)
+            # Judged by every enabled judge, not on a sample: both versions alike.
+            await self._client.mark_evaluation(identity, ai_session_id, experiment_id=exp.id)
             posted = await self._client.post_message(identity, ai_session_id, text=item.input, command_id=str(uuid4()))
             run.run_id = str(posted.get("turn_id") or "")
             await db.commit()

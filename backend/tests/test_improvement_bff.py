@@ -58,6 +58,7 @@ class FakeSupervisor:
 
     def __init__(self, candidate: str = "ok", reflection: dict | None = None, live: str = "fail") -> None:
         self.candidate, self.live = candidate, live
+        self.marked: list[str] = []
         self.reflection = reflection if reflection is not None else {
             "proposal": {"persona": "coder", "rationale": "Runs answer before testing; say to test first.",
                          "changed": ["rules"],
@@ -97,6 +98,9 @@ class FakeSupervisor:
             self.sessions[sid] = body["harness_version"]
             return httpx.Response(202, json={"session_id": sid, "status": "starting"})
         sid = path.split("/")[3] if path.startswith("/v1/sessions/") else ""
+        if path.endswith("/evaluation") and method == "PUT":  # a replay: judged by every judge
+            self.marked.append(sid)
+            return httpx.Response(204)
         if path.endswith("/startup"):
             return httpx.Response(200, json={"status": "ready"})
         if path.endswith("/messages"):

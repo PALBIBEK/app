@@ -174,3 +174,24 @@ async def test_judges_are_set_up_over_the_api(api: Api) -> None:
     assert bad.status_code == 422
     assert (await api.client.delete(f"/v1/traces/judges/{r.json()['id']}", headers=ALICE)).status_code == 204
     assert (await api.client.delete(f"/v1/traces/judges/{r.json()['id']}", headers=ALICE)).status_code == 404
+
+
+async def test_a_replay_for_an_experiment_is_judged_by_every_judge(api: Api) -> None:
+    """A judge on a sample judges live runs on its share, but every replay an experiment makes:
+    otherwise the two versions it compares are judged by different judges."""
+    row, sid = await _finished_run(api)
+    reader = JournalReader(api.factory)
+    await save_judge(api.factory, tenant_id="t1", composition_id="githi-v1", name="rare",
+                     rubric="Answers the question that was asked.", sample_rate=0.0001, model=None,
+                     enabled=True, created_by="alice")
+    verdict = FakeModelGatewayClient(assistant_text='{"verdict": "pass", "reason": "answers it"}')
+    trace = await after_run(api.factory, reader, sid, "r1", lambda s: verdict)
+    assert trace is not None
+    assert await judge_run(api.factory, row, trace, verdict) == [], "live traffic: on its sample"
+
+    marked = await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "exp-1"}, headers=ALICE)
+    assert marked.status_code == 204, marked.text
+    assert [v.label for v in await judge_run(api.factory, row, trace, verdict)] == ["pass"]
+    again = await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "exp-2"}, headers=ALICE)
+    assert again.status_code == 204
+    assert (await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "x"}, headers=BOB)).status_code in (403, 404)

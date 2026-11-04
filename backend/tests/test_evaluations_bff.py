@@ -76,16 +76,20 @@ class FakeSupervisor:
         self.cancelled: list[str] = []
         self.ended: list[str] = []
         self.created: list[dict] = []
+        self.marked: dict[str, str] = {}  # ai session id -> experiment it replays for
+        self.judged_on_replays: list[str] = ["answers"]  # judges a marked session's runs get
 
     def trace(self, sid: str, run_id: str) -> dict:
         digest = self.sessions.get(sid, V1)
         good = self.outcome.get(digest) == "ok"
         scores = [{"id": "c", "span_id": None, "name": "finished", "topic": None, "source": "check",
                    "label": "pass" if good else "fail", "value": None, "reason": None, "comment": None,
-                   "evaluator": "checks@1", "principal_id": None, "created_ms": 1},
-                  {"id": "j", "span_id": None, "name": "answers", "topic": "answers", "source": "judge",
-                   "label": "pass" if good else "fail", "value": None, "reason": "judged", "comment": None,
-                   "evaluator": "judge:answers@v1", "principal_id": None, "created_ms": 1}]
+                   "evaluator": "checks@1", "principal_id": None, "created_ms": 1}]
+        # A replay (a session marked as one) is judged by every enabled judge.
+        judges = self.judged_on_replays if sid in self.marked else ["answers"]
+        scores += [{"id": f"j-{name}", "span_id": None, "name": name, "topic": name, "source": "judge",
+                    "label": "pass" if good else "fail", "value": None, "reason": "judged", "comment": None,
+                    "evaluator": f"judge:{name}@v1", "principal_id": None, "created_ms": 1} for name in judges]
         return {"session_id": sid, "run_id": run_id, "trace_id": "t" * 32, "composition_digest": digest,
                 "summary": "Answered." if good else "Failed: boom.",
                 "rollup": {"status": "ok" if good else "error", "input": "fix the test", "cost": 0.02 if good else 0.05,
@@ -101,6 +105,9 @@ class FakeSupervisor:
             self.sessions[sid] = body["composition_digest"]
             return httpx.Response(202, json={"session_id": sid, "status": "starting"})
         sid = path.split("/")[3] if path.startswith("/v1/sessions/") else ""
+        if path.endswith("/evaluation") and method == "PUT":
+            self.marked[sid] = json.loads(request.content)["experiment_id"]
+            return httpx.Response(204)
         if path.endswith("/startup"):
             return httpx.Response(200, json={"status": "ready", "worker_available": True})
         if path.endswith("/messages"):
@@ -280,6 +287,7 @@ async def test_a_replay_waits_for_the_agents_judges(db_session, owner, agent, se
         return plain(request)
 
     fake.handler = with_judges
+    fake.judged_on_replays = ["answers", "sampled"]  # a sampled judge judges every replay
     monkeypatch.setattr("prime_agent.services.evaluation_service.JUDGE_WAIT_S", 0.2)
     launched: list = []
     src = await _source_run(db_session, owner, agent)
@@ -296,3 +304,4 @@ async def test_a_replay_waits_for_the_agents_judges(db_session, owner, agent, se
         await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
         (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
     assert result["status"] == "done" and result["error"] == noted
+    assert set(fake.marked.values()) == {exp_id}, "every replay session is marked for its experiment"
