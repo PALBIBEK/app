@@ -57,6 +57,12 @@ class ItemNotFound(MemoryError):
     code = "ITEM_NOT_FOUND"
 
 
+class ItemSuperseded(MemoryError):
+    """The item already has a successor: supersede the current version instead."""
+
+    code = "ITEM_SUPERSEDED"
+
+
 def estimate_tokens(text: str) -> int:
     """Cheap chars/4 estimate — packing authority stays in the service."""
     return max(1, len(text) // 4)
