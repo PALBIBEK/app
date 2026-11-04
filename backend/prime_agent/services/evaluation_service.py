@@ -48,6 +48,10 @@ from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 
 __all__ = ["MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
 
+REFERENCE_JUDGE = "good answer"
+"""The supervisor's built-in judge of a replay against its saved good answer
+(``supervisor.traces.judges.REFERENCE_JUDGE``)."""
+
 logger = logging.getLogger(__name__)
 
 MAX_ITEMS = 50
@@ -317,7 +321,7 @@ class EvaluationService:
 
     async def _wait_judged(
         self, identity: TenantPrincipal, exp: Experiment, link: SessionLink, run: ExperimentRun, db: AsyncSession,
-        *, poll_s: float,
+        *, poll_s: float, graded: bool = False,
     ) -> None:
         """Wait until every enabled judge has given this run its verdict (a replay is judged
         by all of them, sampled or not), so results compare like with like. A judge that
@@ -329,6 +333,8 @@ class EvaluationService:
         except AiUpstreamError:
             return
         expected = {str(j["name"]) for j in listed.get("judges") or [] if j.get("enabled")}
+        if graded:  # the saved run has a good answer: the supervisor grades against it
+            expected.add(REFERENCE_JUDGE)
         if not expected:
             return
         deadline = asyncio.get_running_loop().time() + JUDGE_WAIT_S
@@ -368,7 +374,7 @@ class EvaluationService:
         try:
             await self._wait_ready(identity, ai_session_id)
             # Judged by every enabled judge, not on a sample: both versions alike.
-            await self._client.mark_evaluation(identity, ai_session_id, experiment_id=exp.id)
+            await self._client.mark_evaluation(identity, ai_session_id, experiment_id=exp.id, expected=item.expected)
             posted = await self._client.post_message(identity, ai_session_id, text=item.input, command_id=str(uuid4()))
             run.run_id = str(posted.get("turn_id") or "")
             await db.commit()
@@ -378,7 +384,7 @@ class EvaluationService:
                 status = str(state.get("status") or "")
                 if status in ("completed", "failed", "cancelled", "incomplete"):
                     run.status = "done"
-                    await self._wait_judged(identity, exp, link, run, db, poll_s=poll_s)
+                    await self._wait_judged(identity, exp, link, run, db, poll_s=poll_s, graded=bool(item.expected))
                     break
                 if status == "requires_action" or state.get("pending_approval_id"):
                     await self._client.cancel_run(identity, ai_session_id, run.run_id)

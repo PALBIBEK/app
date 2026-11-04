@@ -195,3 +195,36 @@ async def test_a_replay_for_an_experiment_is_judged_by_every_judge(api: Api) -> 
     again = await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "exp-2"}, headers=ALICE)
     assert again.status_code == 204
     assert (await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "x"}, headers=BOB)).status_code in (403, 404)
+
+
+async def test_a_replay_with_a_good_answer_is_graded_against_it(api: Api) -> None:
+    """Braintrust autoevals' ClosedQA: the task, the run's answer and the saved good answer as
+    the criterion; a pass or fail recorded as the built-in ``good answer`` judge."""
+    from supervisor.traces.judges import REFERENCE_JUDGE
+
+    row, sid = await _finished_run(api)
+    reader = JournalReader(api.factory)
+    asked: list[list[object]] = []
+
+    class Grader(FakeModelGatewayClient):
+        def complete(self, messages, tools, **kw):  # type: ignore[no-untyped-def, override]
+            asked.append(list(messages))
+            return super().complete(messages, tools, **kw)
+
+    grader = Grader(assistant_text='{"verdict": "fail", "reason": "it never ran the tests"}')
+    trace = await after_run(api.factory, reader, sid, "r1", lambda s: grader)
+    assert trace is not None and await judge_run(api.factory, row, trace, grader) == [], "no judges, no good answer"
+
+    marked = await api.client.put(
+        f"/v1/sessions/{sid}/evaluation",
+        json={"experiment_id": "exp-1", "expected": "Runs the tests after the change and says they pass."},
+        headers=ALICE,
+    )
+    assert marked.status_code == 204, marked.text
+    given = await judge_run(api.factory, row, trace, grader)
+    assert [(g.label, g.reason) for g in given] == [("fail", "it never ran the tests")]
+    prompt = asked[-1][1].content  # type: ignore[attr-defined]
+    assert "[Task]: fix it" in prompt and "[Criterion]: Runs the tests after the change and says they pass." in prompt
+    async with api.factory() as db:
+        scores = (await db.execute(select(TraceScoreRow).where(TraceScoreRow.source == "judge"))).scalars().all()
+    assert [(s.name, s.label, s.evaluator) for s in scores] == [(REFERENCE_JUDGE, "fail", "reference:closed_qa@v1")]

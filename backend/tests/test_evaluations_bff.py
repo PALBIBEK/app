@@ -76,7 +76,7 @@ class FakeSupervisor:
         self.cancelled: list[str] = []
         self.ended: list[str] = []
         self.created: list[dict] = []
-        self.marked: dict[str, str] = {}  # ai session id -> experiment it replays for
+        self.marked: dict[str, dict] = {}  # ai session id -> its evaluation mark (experiment, good answer)
         self.judged_on_replays: list[str] = ["answers"]  # judges a marked session's runs get
 
     def trace(self, sid: str, run_id: str) -> dict:
@@ -87,6 +87,8 @@ class FakeSupervisor:
                    "evaluator": "checks@1", "principal_id": None, "created_ms": 1}]
         # A replay (a session marked as one) is judged by every enabled judge.
         judges = self.judged_on_replays if sid in self.marked else ["answers"]
+        if self.marked.get(sid, {}).get("expected"):
+            judges = [*judges, "good answer"]  # graded against the saved good answer
         scores += [{"id": f"j-{name}", "span_id": None, "name": name, "topic": name, "source": "judge",
                     "label": "pass" if good else "fail", "value": None, "reason": "judged", "comment": None,
                     "evaluator": f"judge:{name}@v1", "principal_id": None, "created_ms": 1} for name in judges]
@@ -106,7 +108,7 @@ class FakeSupervisor:
             return httpx.Response(202, json={"session_id": sid, "status": "starting"})
         sid = path.split("/")[3] if path.startswith("/v1/sessions/") else ""
         if path.endswith("/evaluation") and method == "PUT":
-            self.marked[sid] = json.loads(request.content)["experiment_id"]
+            self.marked[sid] = json.loads(request.content)
             return httpx.Response(204)
         if path.endswith("/startup"):
             return httpx.Response(200, json={"status": "ready", "worker_available": True})
@@ -187,9 +189,11 @@ async def test_a_dataset_is_replayed_on_two_versions_and_compared(db_session, ow
         assert detail["experiment"]["status"] == "done"
         (result,) = detail["results"]
         assert result["status"] == "done" and result["run_status"] == "ok" and result["summary"] == "Answered."
-        assert [(v["name"], v["label"]) for v in result["verdicts"]] == [("finished", "pass"), ("answers", "pass")]
+        assert [(v["name"], v["label"]) for v in result["verdicts"]] == [
+            ("finished", "pass"), ("answers", "pass"), ("good answer", "pass"),
+        ], "graded against the saved good answer too"
         stats = detail["experiment"]["stats"]
-        assert (stats["answered"], stats["judge_pass"], stats["checks_failed"]) == (1, 1, 0)
+        assert (stats["answered"], stats["judge_pass"], stats["checks_failed"]) == (1, 2, 0)
 
         cmp = (await api.get("/api/v1/traces/experiments/compare", params={"a": ids[1], "b": ids[2]})).json()
         assert (cmp["better"], cmp["worse"]) == (1, 0) and cmp["rows"][0]["change"] == "better"
@@ -198,6 +202,7 @@ async def test_a_dataset_is_replayed_on_two_versions_and_compared(db_session, ow
         assert [e["label"] for e in overview["experiments"]] == ["v2", "v1"] and len(overview["items"]) == 1
 
     assert [c["composition_digest"] for c in fake.created] == [V1, V2]  # each replay pinned to its version
+    assert [m["expected"] for m in fake.marked.values()] == ["fixes the parser"] * 2, "the good answer goes with it"
     assert len(fake.ended) == 2  # every replay's session is ended
 
 
@@ -304,4 +309,4 @@ async def test_a_replay_waits_for_the_agents_judges(db_session, owner, agent, se
         await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
         (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
     assert result["status"] == "done" and result["error"] == noted
-    assert set(fake.marked.values()) == {exp_id}, "every replay session is marked for its experiment"
+    assert {m["experiment_id"] for m in fake.marked.values()} == {exp_id}, "every replay is marked for its experiment"
