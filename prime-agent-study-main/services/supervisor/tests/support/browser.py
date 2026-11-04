@@ -29,8 +29,13 @@ needs_browser = pytest.mark.skipif(
     subprocess.run(["python3", "-c", "import playwright"], capture_output=True, check=False).returncode != 0,
     reason="no browser runtime here (python3 with Playwright and Chromium)",
 )
-_BROWSERS = {k: v for k, v in os.environ.items() if k == "PLAYWRIGHT_BROWSERS_PATH"}
-"""Where this machine keeps Playwright's browsers (a sandbox image sets its own)."""
+_BROWSERS = {
+    "PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(Path.home() / ".cache" / "ms-playwright"),
+    **{k: v for k, v in os.environ.items() if k == "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"},
+}
+"""Where this machine keeps Playwright's browsers, and which build it uses: a workspace
+command's HOME is the workspace, so Playwright's default would look there (a sandbox
+image sets its own)."""
 
 Call = Callable[..., Awaitable[dict[str, Any]]]
 
