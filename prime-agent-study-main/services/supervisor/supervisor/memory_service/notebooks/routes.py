@@ -17,6 +17,7 @@ from supervisor.memory_service.auth import enforce_item_tenant, enforce_scope_te
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
+    InvalidExpiry,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
@@ -101,6 +102,8 @@ def _error(exc: NotebookError) -> HTTPException:
         status, detail["ids"] = 422, list(exc.ids)
     elif isinstance(exc, NotebookArchived):
         detail["ref"] = exc.ref
+    elif isinstance(exc, InvalidExpiry):
+        status, detail["value"] = 422, exc.value
     elif isinstance(exc, MemoryLimitExceeded):
         status, detail["what"], detail["limit"], detail["got"] = 422, exc.what, exc.limit, exc.got
     elif isinstance(exc, RevisionOutOfRange):

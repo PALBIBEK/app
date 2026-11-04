@@ -41,7 +41,7 @@ Default HTTP port: `8092` (`MEMORY_HOST` / `MEMORY_PORT`).
 |---|---|
 | Owner | One tenant, one owner (principal), one exact agent version (`agent_pin`) |
 | Ids | `<tenant>~<hex>`: any caller can address the right tenant; the stored tenant is still checked |
-| Facts | Stable ids; provenance (sensitivity, sources) only tightens |
+| Facts | Stable ids; provenance (sensitivity, sources) only tightens; optional `expires_on` (YYYY-MM-DD, set through a capture's or edit's context): after it a fact is kept and listed but not recalled, searched or read by the agent, and it is never in the bank |
 | Changes | One locked transaction each: capture (deduplicated), edit, delete, clear, restore |
 | History | Every change a revision; read the facts at any revision; restore never declassifies |
 | Bank | Each live fact that is the owner's own, ordinary and fully traced is also a bank item |

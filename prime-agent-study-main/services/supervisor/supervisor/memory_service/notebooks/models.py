@@ -69,6 +69,7 @@ class FactRow(Base):
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    expires_on: Mapped[str | None] = mapped_column(Text, nullable=True)  # YYYY-MM-DD, UTC
 
 
 class FactRevisionRow(Base):

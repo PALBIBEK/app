@@ -32,6 +32,7 @@ import httpx
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
+    InvalidExpiry,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
@@ -363,6 +364,8 @@ def _error(response: httpx.Response) -> NotebookError:
         return NotebookArchived(str(detail.get("ref", "")))
     if code == "EmptyFact":
         return EmptyFact(tuple(str(i) for i in detail.get("ids") or ()))
+    if code == "InvalidExpiry":
+        return InvalidExpiry(str(detail.get("value", "")))
     if code == "MemoryLimitExceeded":
         return MemoryLimitExceeded(
             str(detail.get("what", "")), int(detail.get("limit", -1)), int(detail.get("got", -1))

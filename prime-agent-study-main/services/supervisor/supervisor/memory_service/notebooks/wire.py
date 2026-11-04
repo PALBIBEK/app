@@ -70,6 +70,7 @@ def fact_out(f: Fact) -> dict[str, Any]:
         "created_at": f.created_at,
         "updated_at": f.updated_at,
         "author": f.author,
+        "expires_on": f.expires_on,
     }
 
 
@@ -81,6 +82,7 @@ def fact_in(d: dict[str, Any]) -> Fact:
         created_at=int(d["created_at"]),
         updated_at=int(d["updated_at"]),
         author=d.get("author"),
+        expires_on=d.get("expires_on"),
     )
 
 
@@ -137,6 +139,7 @@ def context_out(c: CaptureMetadata | None) -> dict[str, Any] | None:
         "session_id": c.session_id,
         "sensitivity": c.sensitivity.value if c.sensitivity is not None else None,
         "inherited": None if c.inherited is None else [provenance_out(p) for p in c.inherited],
+        "expires_on": c.expires_on,
     }
 
 
@@ -149,4 +152,5 @@ def context_in(d: dict[str, Any] | None) -> CaptureMetadata | None:
         session_id=d.get("session_id"),
         sensitivity=Sensitivity.parse(d["sensitivity"]) if d.get("sensitivity") else None,
         inherited=None if inherited is None else tuple(provenance_in(p) for p in inherited),
+        expires_on=d.get("expires_on"),
     )

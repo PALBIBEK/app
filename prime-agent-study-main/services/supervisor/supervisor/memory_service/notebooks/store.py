@@ -74,6 +74,7 @@ def _fact(row: FactRow) -> Fact:
         created_at=int(row.created_at),
         updated_at=int(row.updated_at),
         author=row.author,
+        expires_on=row.expires_on,
     )
 
 
@@ -113,12 +114,14 @@ def _columns(provenance: Provenance) -> dict[str, object]:
     }
 
 
-def bankable(notebook: NotebookRow, provenance: Provenance) -> bool:
+def bankable(notebook: NotebookRow, provenance: Provenance, expires_on: str | None = None) -> bool:
     """Whether a fact may sit in the bank, whose recall applies no audience rules (an
-    archived notebook's facts do not: archiving takes them out of recall)."""
+    archived notebook's facts do not: archiving takes them out of recall; nor does a
+    time-bound fact: bank items have no expiry, notebook recall honours it)."""
     home = personal_source(notebook.owner_principal_id)
     return (
         notebook.archived_at is None
+        and expires_on is None
         and provenance.sensitivity is Sensitivity.ORDINARY
         and not provenance.source_unknown
         and set(provenance.sources) <= {home}
@@ -183,7 +186,12 @@ class FactTx:
         return [_fact(r) for r in rows]
 
     async def insert(
-        self, text: str, provenance: Provenance, *, created_at: int | None = None
+        self,
+        text: str,
+        provenance: Provenance,
+        *,
+        created_at: int | None = None,
+        expires_on: str | None = None,
     ) -> str:
         row = FactRow(
             notebook_id=self.notebook.id,
@@ -191,6 +199,7 @@ class FactTx:
             author=self.author,
             created_at=created_at or self.at,
             updated_at=self.at,
+            expires_on=expires_on,
             **_columns(provenance),
         )
         self.db.add(row)
@@ -268,10 +277,21 @@ class FactTx:
         )
         await self.db.delete(link)
 
+    async def set_expiry(self, fact: Fact, expires_on: str | None) -> None:
+        """Make ``fact`` time-bound (or not); a change to the fact, so it is logged."""
+        await self.db.execute(
+            update(FactRow)
+            .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact.id))
+            .values(expires_on=expires_on, updated_at=self.at)
+        )
+        self._log(int(fact.id), "update", fact.text, fact.provenance)
+        await self._index(int(fact.id), fact.text, fact.provenance)
+
     async def _index(self, fact_id: int, text: str, provenance: Provenance) -> None:
         """The fact's bank item, replacing the one it had (if it may be indexed at all)."""
         await self._unindex(fact_id)
-        if not bankable(self.notebook, provenance):
+        expires_on = await self.db.scalar(select(FactRow.expires_on).where(FactRow.id == fact_id))
+        if not bankable(self.notebook, provenance, expires_on):
             return
         item_id = str(uuid.uuid4())
         self.db.add(

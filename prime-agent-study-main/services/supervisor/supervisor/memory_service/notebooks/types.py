@@ -9,6 +9,7 @@ and whether its provenance is incomplete. Provenance only ever tightens.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Final
 
@@ -107,6 +108,13 @@ class CaptureMetadata:
     session_id: str | None = None
     sensitivity: Sensitivity | None = None
     inherited: tuple[Provenance, ...] | None = None
+    expires_on: str | None = None
+    """Not provenance: the day (YYYY-MM-DD) the captured or edited facts stop being true.
+    For an edit, None leaves each fact's expiry as it is and "" clears it."""
+
+
+def today_utc() -> str:
+    return datetime.now(UTC).date().isoformat()
 
 
 def capture_provenance(home: str, context: CaptureMetadata | None) -> Provenance:
@@ -128,6 +136,13 @@ class Fact:
     created_at: int  # epoch ms
     updated_at: int
     author: str | None = None
+    expires_on: str | None = None
+    """The day (YYYY-MM-DD, UTC) the fact stops being true, if it is time-bound."""
+
+    def expired(self, today: str | None = None) -> bool:
+        """Past its expiry: kept (and shown where facts are managed), but no longer recalled,
+        searched or read by the agent (mem0 hides expired memories from search and get_all)."""
+        return self.expires_on is not None and self.expires_on < (today or today_utc())
 
 
 @dataclass(frozen=True, slots=True)

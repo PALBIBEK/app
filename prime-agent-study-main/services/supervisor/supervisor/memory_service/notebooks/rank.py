@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Final
 
-from supervisor.memory_service.notebooks.render import candidate
+from supervisor.memory_service.notebooks.render import candidate, current
 from supervisor.memory_service.notebooks.types import Candidate, Fact
 from supervisor.memory_service.text import STOPWORDS
 
@@ -61,8 +61,9 @@ def query_weights(query: str) -> dict[str, float]:
 
 
 def ranked_candidates(facts: Sequence[Fact], query: str | None) -> list[Candidate]:
-    """Candidates for ``facts``: by relevance to ``query``, then newest first."""
-    newest_first = list(reversed(facts))
+    """Candidates for ``facts`` not past their expiry: by relevance to ``query``, then
+    newest first."""
+    newest_first = list(reversed(current(facts)))
     weights = query_weights(query) if query else {}
     if not weights or not facts:
         return [candidate(f, FLOOR) for f in newest_first]

@@ -60,6 +60,14 @@ class EmptyFact(NotebookError):
         self.ids = tuple(ids)
 
 
+class InvalidExpiry(NotebookError):
+    """An expiry that is not a day as YYYY-MM-DD; nothing was changed."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"an expiry is a day as YYYY-MM-DD, not {value!r}")
+        self.value = value
+
+
 class MemoryLimitExceeded(NotebookError):
     """A request beyond a limit of ``supervisor.memory_service.limits``: nothing was changed."""
 
