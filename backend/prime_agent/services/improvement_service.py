@@ -355,8 +355,12 @@ class ImprovementService:
         ids = [str(s) for s in [*held.scalars().all(), *replays.scalars().all()] if s]
         return list(dict.fromkeys(ids))[:5000]
 
-    async def _evidence(self, db: AsyncSession, user_id: str, raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The supervisor's evidence with product session ids (examples the user cannot open are dropped)."""
+    async def _evidence(
+        self, db: AsyncSession, user_id: str, raw: list[dict[str, Any]], read: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
+        """The supervisor's evidence with product session ids (examples the user cannot open
+        lose their link), each marked when the reflection read it in full (``read``)."""
+        full = {(str(r.get("session_id")), str(r.get("run_id"))) for r in read or []}
         ai_ids = {e.get("session_id") for i in raw for e in i.get("examples") or [] if e.get("session_id")}
         links = {}
         if ai_ids:
@@ -372,7 +376,9 @@ class ImprovementService:
                 sid = links.get(e.get("session_id"))
                 examples.append(EvidenceExample(session_id=sid, run_id=e.get("run_id") if sid else None,
                                                 input=e.get("input"), summary=e.get("summary"),
-                                                reason=e.get("reason")).model_dump())
+                                                reason=e.get("reason"),
+                                                read_in_full=(str(e.get("session_id")), str(e.get("run_id"))) in full,
+                                                ).model_dump())
             out.append(Evidence(title=str(issue.get("title") or ""), runs=int(issue.get("runs") or 0),
                                 examples=examples).model_dump())
         return out
@@ -485,7 +491,8 @@ class ImprovementService:
                 return await self._fail(db, row, f"could not learn from the traces: {exc}")
             proposal = reflected.get("proposal") or {}
             if n == 1:
-                row.evidence = await self._evidence(db, row.user_id, list(reflected.get("evidence") or []))
+                row.evidence = await self._evidence(db, row.user_id, list(reflected.get("evidence") or []),
+                                                    list(reflected.get("read_in_full") or []))
             if not list(proposal.get("changed") or []):
                 if rounds:
                     break  # nothing more to try: decide on what was found

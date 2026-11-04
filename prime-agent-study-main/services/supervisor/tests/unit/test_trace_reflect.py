@@ -12,11 +12,14 @@ from supervisor.traces.reflect import (
     MAX_EDITS,
     MAX_HISTORY,
     MAX_NOTES,
+    TRAJECTORIES,
     ProposalError,
     evidence_text,
     history_text,
     parse_proposal,
     reflect_messages,
+    trajectories_text,
+    trajectory_record,
 )
 from tests.support.trace_api import ALICE, BOB, Api
 
@@ -128,6 +131,11 @@ async def test_reflecting_on_failing_runs_proposes_a_change(api: Api, monkeypatc
     assert out["proposal"]["learned"] == [{"id": "note-00001", "text": "Read the error before running it again."}]
     assert out["proposal"]["sections"] == SECTIONS
     assert "Change 1: rejected" in model.asked[0][1].content
+    # the failing run is read in full: GEPA's reflective record, steps and why it failed
+    asked = model.asked[0][1].content
+    assert out["read_in_full"] == [{"session_id": sid, "run_id": "r2"}]
+    assert "Run 1:\n[Inputs]\nfix the tests\n[Generated Outputs]\n" in asked
+    assert "bash" in asked.split("[Generated Outputs]")[1] and "[Feedback]\ncheck tool_errors" in asked
     assert [e["title"] for e in out["evidence"]] == ["bash calls failed"]
     assert out["evidence"][0]["examples"][0]["run_id"] == "r2"
     assert "fix the tests" in model.asked[0][1].content
@@ -158,3 +166,11 @@ async def test_a_reply_that_is_not_a_proposal_is_refused_with_why(api: Api, monk
     r = await api.client.post("/v1/traces/reflect", json={"composition_id": "githi-v1", "sections": SECTIONS},
                               headers=ALICE)
     assert r.status_code == 422 and r.json()["detail"]["error_code"] == "NOT_A_PROPOSAL"
+
+
+def test_a_reflection_reads_at_most_a_minibatch_of_runs_in_full() -> None:
+    records = [trajectory_record(f"ask {n}", "step", ["check x: failed"]) for n in range(TRAJECTORIES + 2)]
+    text = trajectories_text(records)
+    assert text.count("[Inputs]") == TRAJECTORIES and "ask 0" in text and f"ask {TRAJECTORIES}" not in text
+    assert trajectory_record(None, "s", [])["Feedback"] == "judged a failure"
+    assert trajectories_text([]) == "None read."

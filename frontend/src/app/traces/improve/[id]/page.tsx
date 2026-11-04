@@ -145,6 +145,11 @@ export default function ProposalPage(): JSX.Element {
                               <span className="font-medium">{x.input || 'Run'}</span>
                             )}
                             {x.reason ? <span className="text-ink-2">{x.reason}</span> : null}
+                            {x.read_in_full ? (
+                              <span className="text-violet-800" data-testid="read-in-full">
+                                read in full, step by step
+                              </span>
+                            ) : null}
                             {x.summary ? <span className="text-ink-3">{x.summary}</span> : null}
                           </li>
                         ))}

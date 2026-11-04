@@ -75,6 +75,7 @@ class FakeSupervisor:
             "evidence": [{"key": "k", "title": "Tests failing after a change", "runs": 3,
                           "examples": [{"session_id": "ai-src", "run_id": "r0", "input": "fix the parser",
                                         "summary": "Changed parser.py; answered.", "reason": "tests failed"}]}],
+            "read_in_full": [{"session_id": "ai-src", "run_id": "r0"}],
         }
         self.published: list[tuple[str, dict]] = []
         self.sessions: dict[str, str] = {}  # ai session id -> harness version
@@ -212,6 +213,7 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
         assert p["candidate_prompt"]["persona"] == p["base_prompt"]["persona"] and p["base_prompt"]["learned"] == []
         assert p["evidence"][0]["title"] == "Tests failing after a change"
         assert p["evidence"][0]["examples"][0]["session_id"] is None  # not a session of the user's: not linked
+        assert p["evidence"][0]["examples"][0]["read_in_full"] is True, "the reflection read it step by step"
         assert (p["baseline"]["label"], p["candidate"]["label"]) == ("v1", f"candidate {p['id'][:6]}")
 
         # the reflection read the live prompt and the person's note, never the replays
