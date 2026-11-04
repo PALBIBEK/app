@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
 
 _HEARTBEAT_SECS = 20.0
+PAGE = 500
+"""Events read at once to send: a client starting from the beginning of a long session gets
+it a page at a time, not the whole journal in one read held in memory."""
 _JOURNAL_POLL_SECS = 0.25
 _ENDED_CHECK_SECS = 2.0
 """How often a quiet stream asks whether its session has ended."""
@@ -95,15 +98,16 @@ async def iter_sse(
     live_cursor = cursor
     emitted = 0
     try:
-        for env in await reader.read(session_id, since=cursor):
-            if _gone():
-                return
-            wire = envelope_to_wire(env)
-            yield _sse_data(wire.model_dump_json(), event_id=env.seq)
-            live_cursor = env.seq
-            emitted += 1
-            if max_events is not None and emitted >= max_events:
-                return
+        while page := await reader.read(session_id, since=live_cursor, limit=PAGE):
+            for env in page:
+                if _gone():
+                    return
+                wire = envelope_to_wire(env)
+                yield _sse_data(wire.model_dump_json(), event_id=env.seq)
+                live_cursor = env.seq
+                emitted += 1
+                if max_events is not None and emitted >= max_events:
+                    return
 
         while True:
             if sub.dropped or _gone():
@@ -179,7 +183,7 @@ async def iter_journal_sse(
     ending = False
     shown: tuple[str, int, int] | None = None  # the partial last sent: run, step, updated
     while is_disconnected is None or not await is_disconnected():
-        batch = await reader.read(session_id, since=cursor)
+        batch = await reader.read(session_id, since=cursor, limit=PAGE)
         for env in batch:
             yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
             cursor, emitted = env.seq, emitted + 1
@@ -228,7 +232,7 @@ async def _watched_sse(
     shown: tuple[str, int, int] | None = None
     seen = await watch.changed(session_id, None, timeout=heartbeat_secs)
     while is_disconnected is None or not await is_disconnected():
-        if seen.last_seq > cursor and (batch := await reader.read(session_id, since=cursor)):
+        if seen.last_seq > cursor and (batch := await reader.read(session_id, since=cursor, limit=PAGE)):
             for env in batch:
                 yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
                 cursor, emitted = env.seq, emitted + 1
