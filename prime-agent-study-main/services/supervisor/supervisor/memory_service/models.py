@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Float, ForeignKey, Integer, LargeBinary, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -43,6 +43,19 @@ class SessionEventRow(Base):
     type: Mapped[str] = mapped_column(Text, nullable=False)
     time: Mapped[int] = mapped_column(BigInteger, nullable=False)
     data: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class SessionArchiveRow(Base):
+    """An archived session's events, compressed (gzip JSONL), in the database every replica
+    reads: they used to go to a file on the archiving replica's disk."""
+
+    __tablename__ = "memory_session_archive"
+
+    session_id: Mapped[str] = mapped_column(Text, ForeignKey("memory_session.id"), primary_key=True)
+    events: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    through_seq: Mapped[int] = mapped_column(Integer, nullable=False)  # the last seq it holds
+    archived_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class OutboxRow(Base):
