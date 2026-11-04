@@ -44,6 +44,16 @@ class ExperimentStats(BaseModel):
     judge_fail: int
     avg_cost: float | None = None
     avg_duration_ms: int | None = None
+    trials: int = 1
+    """Replays of each item."""
+    runs: int = 0
+    """Replays in all (items × trials); ``items`` counts the saved runs."""
+    passed: int = 0
+    """Replays that answered with no failed check or judge."""
+    pass_all: int = 0
+    """Items that passed every trial (pass^k: consistency)."""
+    pass_any: int = 0
+    """Items that passed at least one trial (pass@k: capability)."""
 
 
 class ExperimentOut(BaseModel):
@@ -83,6 +93,8 @@ class DatasetDetail(BaseModel):
 class ExperimentStart(BaseModel):
     version: int | None = Field(default=None, ge=1)
     """The release to run; none: the agent's live version."""
+    trials: int = Field(default=3, ge=1, le=10)
+    """Replays of each saved run (a model answers differently from run to run)."""
 
 
 class Verdict(BaseModel):
@@ -95,6 +107,7 @@ class Verdict(BaseModel):
 class ExperimentItemResult(BaseModel):
     item_id: str
     position: int
+    trial: int = 0
     input: str
     expected: str | None = None
     status: str
@@ -121,8 +134,14 @@ class ComparisonRow(BaseModel):
     input: str
     a: ExperimentItemResult | None = None
     b: ExperimentItemResult | None = None
+    """The first trial of each (``a_trials``/``b_trials``: all of them)."""
+    a_trials: list[ExperimentItemResult] = Field(default_factory=list)
+    b_trials: list[ExperimentItemResult] = Field(default_factory=list)
+    a_pass_rate: float | None = None
+    b_pass_rate: float | None = None
+    """Share of the item's trials that passed; None until every trial finished."""
     change: str
-    """``better``, ``worse``, ``same`` or ``unknown`` (b against a)."""
+    """``better``, ``worse``, ``same`` or ``unknown`` (b against a, on mean score over trials)."""
 
 
 class ExperimentComparison(BaseModel):

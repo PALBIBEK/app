@@ -21,6 +21,7 @@ from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.services.ai_client import AiClient
 from prime_agent.services.harness_publish_service import HarnessPublisher, artifact_prefix, releases
 from prime_agent.services.harness_service import HarnessService
+from prime_agent.services.evaluation_service import DEFAULT_TRIALS
 from prime_agent.services.improvement_service import ImprovementService
 from prime_agent.web.dependencies import get_current_user, get_db
 
@@ -226,7 +227,8 @@ async def test_a_change_that_does_better_waits_for_approval_and_becomes_the_next
 
         # the next reflection never sees the sessions the first change was measured in
         await _propose(api, db_session, agent, ds, started)
-        assert len(fake.reflected[1]["exclude_sessions"]) == 4
+        # 2 saved runs, each replayed DEFAULT_TRIALS times, on the live version and the candidate
+        assert len(fake.reflected[1]["exclude_sessions"]) == 2 * DEFAULT_TRIALS * 2
 
 
 @pytest.mark.asyncio
@@ -329,3 +331,21 @@ def test_a_run_judged_on_one_version_only_is_not_compared():
                         a=result([Verdict(name="shouts", source="judge", label="fail")]), b=result([]))
     gate = decide_gate(ExperimentComparison(a=exp, b=exp, rows=[row], better=1, worse=0))
     assert not gate.passed and gate.reasons == ["1 saved run was not judged on both versions"]
+
+
+def test_a_candidate_that_passes_every_trial_on_fewer_runs_is_refused() -> None:
+    """pass^k (Anthropic's guide to agent evals): a change may not trade consistency away."""
+    from datetime import UTC, datetime
+
+    from prime_agent.schemas.evaluation import ComparisonRow, ExperimentComparison, ExperimentOut, ExperimentStats
+    from prime_agent.services.improvement_service import decide_gate
+
+    def exp(label: str, pass_all: int) -> ExperimentOut:
+        stats = ExperimentStats(items=2, finished=2, answered=2, failed=0, needs_approval=0, checks_failed=0,
+                                judge_pass=0, judge_fail=0, trials=3, passed=4, pass_all=pass_all, pass_any=2)
+        return ExperimentOut(id=label, dataset_id="d", label=label, status="done", created_at=datetime.now(UTC), stats=stats)
+
+    rows = [ComparisonRow(item_id="i1", input="x", change="better"), ComparisonRow(item_id="i2", input="y", change="same")]
+    gate = decide_gate(ExperimentComparison(a=exp("v1", 2), b=exp("cand", 1), rows=rows, better=1, worse=0))
+    assert not gate.passed and "it passed every trial on 1 saved runs, against 2" in gate.reasons
+    assert decide_gate(ExperimentComparison(a=exp("v1", 1), b=exp("cand", 1), rows=rows, better=1, worse=0)).passed

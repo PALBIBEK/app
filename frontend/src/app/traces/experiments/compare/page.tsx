@@ -82,8 +82,14 @@ function Comparison(): JSX.Element {
                     data-change={row.change}
                   >
                     <p className="line-clamp-3 whitespace-pre-wrap text-[13.5px]">{row.input}</p>
-                    <ResultCell result={row.a} />
-                    <ResultCell result={row.b} />
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <ResultCell result={row.a} />
+                      <PassRate rate={row.a_pass_rate} trials={row.a_trials.length} />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <ResultCell result={row.b} />
+                      <PassRate rate={row.b_pass_rate} trials={row.b_trials.length} />
+                    </div>
                     <span className={cn('h-fit w-fit justify-self-start rounded-full px-2 py-px text-xs md:justify-self-end', ch.className)}>
                       {ch.label}
                     </span>
@@ -95,6 +101,16 @@ function Comparison(): JSX.Element {
         ) : null}
       </PageBody>
     </AppShell>
+  );
+}
+
+/** How many of a saved run's trials passed (the first trial's result is shown above it). */
+function PassRate({ rate, trials }: { rate: number | null; trials: number }): JSX.Element | null {
+  if (trials < 2 || rate == null) return null;
+  return (
+    <span className="text-xs text-ink-3" data-testid="pass-rate">
+      passed {Math.round(rate * trials)} of {trials} trials
+    </span>
   );
 }
 

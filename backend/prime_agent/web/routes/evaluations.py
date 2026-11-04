@@ -131,7 +131,8 @@ async def start_experiment(
         dataset = await service._dataset(db, current_user.id, dataset_id)  # noqa: SLF001
         agent = await service._agent(db, current_user.id, dataset.harness_id)  # noqa: SLF001
         pin = await service.pin_for(db, agent, body.version)
-        exp = await service.create_experiment(user_id=current_user.id, dataset_id=dataset_id, pin=pin, db=db)
+        exp = await service.create_experiment(user_id=current_user.id, dataset_id=dataset_id, pin=pin, db=db,
+                                              trials=body.trials)
     except EvaluationNotFoundError as exc:
         raise _not_found() from exc
     launch(service, exp.id, TenantPrincipal.from_user(current_user))

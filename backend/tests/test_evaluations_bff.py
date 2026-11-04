@@ -82,6 +82,9 @@ class FakeSupervisor:
     def trace(self, sid: str, run_id: str) -> dict:
         digest = self.sessions.get(sid, V1)
         good = self.outcome.get(digest) == "ok"
+        if self.outcome.get(digest) == "flaky":  # passes every other replay of the version
+            replays = [s for s, d in self.sessions.items() if d == digest]
+            good = replays.index(sid) % 2 == 0
         scores = [{"id": "c", "span_id": None, "name": "finished", "topic": None, "source": "check",
                    "label": "pass" if good else "fail", "value": None, "reason": None, "comment": None,
                    "evaluator": "checks@1", "principal_id": None, "created_ms": 1}]
@@ -178,7 +181,7 @@ async def test_a_dataset_is_replayed_on_two_versions_and_compared(db_session, ow
 
         ids = {}
         for version in (1, 2):
-            started = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"version": version})
+            started = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"version": version, "trials": 1})
             assert started.status_code == 202, started.text
             assert started.json()["label"] == f"v{version}" and started.json()["status"] == "queued"
             svc, exp_id, identity = launched[-1]
@@ -219,7 +222,7 @@ async def test_a_replay_that_stops_for_an_approval_is_cancelled_never_approved(d
     async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
         ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "risky"})).json()
         await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
-        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
         svc, exp_id, identity = launched[-1]
         await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
         detail = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()
@@ -235,12 +238,12 @@ async def test_an_experiment_needs_saved_runs_and_one_at_a_time(db_session, owne
     src = await _source_run(db_session, owner, agent)
     async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
         ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "d"})).json()
-        empty = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        empty = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
         assert empty.status_code == 409 and empty.json()["detail"]["error_code"] == "EMPTY_DATASET"
         await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
         assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"version": 9})).status_code == 409
-        assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})).status_code == 202
-        busy = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})).status_code == 202
+        busy = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
         assert busy.json()["detail"]["error_code"] == "EXPERIMENT_RUNNING"
         assert (await api.post(f"/api/v1/traces/experiments/{launched[-1][1]}/cancel")).status_code == 204
 
@@ -253,7 +256,7 @@ async def test_a_stranger_sees_none_of_it(db_session, owner, agent, settings, mo
     async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
         ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "mine"})).json()
         await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
-        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
     exp_id = launched[-1][1]
     stranger = await make_user(email="stranger-evals@example.com", name="S")
     async with _api(db_session, stranger, settings, monkeypatch, fake, launched) as api:
@@ -304,9 +307,47 @@ async def test_a_replay_waits_for_the_agents_judges(db_session, owner, agent, se
     async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
         ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "judged"})).json()
         await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
-        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={})
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 1})
         svc, exp_id, identity = launched[-1]
         await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
         (result,) = (await api.get(f"/api/v1/traces/experiments/{exp_id}")).json()["results"]
     assert result["status"] == "done" and result["error"] == noted
     assert {m["experiment_id"] for m in fake.marked.values()} == {exp_id}, "every replay is marked for its experiment"
+
+
+@pytest.mark.asyncio
+async def test_each_saved_run_is_replayed_several_times_and_compared_on_its_trials(
+    db_session, owner, agent, settings, monkeypatch
+):
+    """Anthropic's guide to agent evals: several trials per task; pass@k (passed at least once)
+    and pass^k (passed every time) read from them. A flaky version is not a reliable one."""
+    fake = FakeSupervisor({V1: "ok", V2: "flaky"})
+    launched: list = []
+    src = await _source_run(db_session, owner, agent)
+
+    @asynccontextmanager
+    async def same_session():
+        yield db_session
+
+    async with _api(db_session, owner, settings, monkeypatch, fake, launched) as api:
+        ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "trials"})).json()
+        await api.post(f"/api/v1/traces/datasets/{ds['id']}/items", json={"session_id": src.id, "run_id": "r1"})
+        assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"trials": 11})).status_code == 422
+        ids = {}
+        for version in (1, 2):
+            started = await api.post(f"/api/v1/traces/datasets/{ds['id']}/experiments", json={"version": version})
+            assert started.status_code == 202, started.text
+            svc, exp_id, identity = launched[-1]
+            await svc.run_experiment(exp_id, identity=identity, session_factory=same_session, poll_s=0)
+            ids[version] = exp_id
+        steady = (await api.get(f"/api/v1/traces/experiments/{ids[1]}")).json()
+        flaky = (await api.get(f"/api/v1/traces/experiments/{ids[2]}")).json()
+        assert [r["trial"] for r in flaky["results"]] == [0, 1, 2], "three trials by default"
+        s1, s2 = steady["experiment"]["stats"], flaky["experiment"]["stats"]
+        assert (s1["trials"], s1["passed"], s1["pass_all"], s1["pass_any"]) == (3, 3, 1, 1)
+        assert (s2["trials"], s2["passed"], s2["pass_all"], s2["pass_any"]) == (3, 2, 0, 1)
+        cmp = (await api.get("/api/v1/traces/experiments/compare", params={"a": ids[1], "b": ids[2]})).json()
+        (row,) = cmp["rows"]
+        assert (len(row["a_trials"]), len(row["b_trials"])) == (3, 3)
+        assert (row["a_pass_rate"], row["b_pass_rate"], row["change"]) == (1.0, 0.6667, "worse")
+    assert len(fake.created) == 6 and len(fake.ended) == 6, "a fresh session for every trial"
