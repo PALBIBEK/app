@@ -100,12 +100,14 @@ class JournalProjector:
     _pending: list[SpanRecord] = field(default_factory=list, init=False, repr=False)
     _steps: int = field(default=0, init=False, repr=False)
     _last_event_ms: int | None = field(default=None, init=False, repr=False)
+    _prev_event_ms: int | None = field(default=None, init=False, repr=False)
+    """The event before the current one: where a model call it ends began."""
     _closed_run_ids: set[str] = field(default_factory=set, init=False, repr=False)
     closed_by_counts: dict[str, int] = field(default_factory=dict, init=False)
 
     def project(self, env: Envelope) -> None:
         try:
-            self._last_event_ms = env.ts_ms
+            self._prev_event_ms, self._last_event_ms = self._last_event_ms, env.ts_ms
             self._project(env)
             self._flush()
         except Exception:
@@ -338,6 +340,8 @@ class JournalProjector:
             self._turn = None
 
     def _on_message_end(self, env: Envelope, p: MessageEnd) -> None:
+        if p.role != "assistant":
+            return  # a user's message is not a model call (``traces.build`` makes no span of it)
         run_id = self._run_id(env)
         parent = self._turn.record.span_id if self._turn else (
             self._run.record.span_id if self._run else None
@@ -346,19 +350,30 @@ class JournalProjector:
             "gen_ai.operation.name": GenAIOperation.CHAT,
             "gen_ai.provider.name": self.provider_name,
         }
+        if p.model:
+            attrs["gen_ai.request.model"] = attrs["gen_ai.response.model"] = p.model
+        if p.finish_reason:
+            attrs["gen_ai.response.finish_reasons"] = [p.finish_reason]
         if p.usage is not None:
             attrs.update(to_genai_tokens(p.usage))
             attrs.update(to_yal_cost(p.usage))
         # content intentionally omitted
         span = self._new_span(
             env=env,
-            name="chat",
+            # GenAI conventions name an inference span "{operation} {model}".
+            name=f"chat {p.model}" if p.model else "chat",
             kind=SpanKind.LLM,
             key=f"llm:{env.seq}",
             run_id=run_id,
             attributes=attrs,
             parent_span_id=parent,
         )
+        # The journal records a model call when it ends; it began after the event before it
+        # (and not before its step), as the product's trace times it (``traces.build``).
+        start = self._prev_event_ms if self._prev_event_ms is not None else env.ts_ms
+        if self._turn is not None and self._turn.record.start_ms is not None:
+            start = max(start, self._turn.record.start_ms)
+        span.start_ms = min(start, env.ts_ms)
         span.end_ms = env.ts_ms
         span.status = SpanStatus.OK
         self._emit(span)
