@@ -4,10 +4,11 @@
    their reasons, runs people marked wrong) and proposes edits to the live version's prompt.
 2. **Candidate.** The edited manifest is published as a candidate: its artifacts exist and a
    session can be pinned to them, but it is not a release and nothing runs it unasked.
-3. **Measure.** The chosen dataset is replayed on the live version (or a finished replay of
-   it is reused) and on the candidate, item by item, as any experiment.
-4. **Gate.** The candidate is refused if it does worse on any saved run, answers fewer, or
-   fails more checks or judges. Refused candidates never reach anyone's inbox.
+3. **Measure.** The chosen dataset is replayed on the live version and on the candidate, back
+   to back, each saved run several times (trials), as any experiment.
+4. **Gate.** The candidate is refused if it does worse on any saved run, answers fewer, fails
+   more checks or judges, passes every trial on fewer runs, or costs or takes much more.
+   Refused candidates never reach anyone's inbox.
 5. **Approve.** One that passes waits in Approvals with its diff, its evidence and its
    results. Approving makes that exact candidate the next version; nothing is rebuilt.
 
@@ -48,7 +49,6 @@ from prime_agent.schemas.evaluation import (
 from prime_agent.schemas.harness_manifest import HarnessManifest, PromptSpec, manifest_body
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
 from prime_agent.services.evaluation_service import (
-    DEFAULT_TRIALS,
     ITEM_TIMEOUT_S,
     EvaluationService,
     Pin,
@@ -77,12 +77,13 @@ def _judges(result: ExperimentItemResult | None) -> set[str]:
     return {v.name for v in result.verdicts if v.source == "judge"} if result else set()
 
 
-def decide_gate(cmp: ExperimentComparison) -> Gate:
+def decide_gate(cmp: ExperimentComparison, *, max_cost_increase: float = 0.2, max_time_increase: float = 0.5) -> Gate:
     """Whether the candidate (``cmp.b``) may replace the live version (``cmp.a``).
 
     It passes only when every saved run finished and was judged on both, it did better on at least one and
-    worse on none, answered at least as many, and failed no more checks or judges than the
-    live version. A change that improves nothing the runs show is not worth a person's time.
+    worse on none, answered at least as many, failed no more checks or judges, passed every
+    trial on at least as many saved runs, and costs and takes no more per run than allowed.
+    A change that improves nothing the runs show is not worth a person's time.
     """
     a, b = cmp.a.stats, cmp.b.stats
     items = [GateItem(item_id=r.item_id, input=r.input, change=r.change) for r in cmp.rows]
@@ -107,6 +108,14 @@ def decide_gate(cmp: ExperimentComparison) -> Gate:
         reasons.append(f"judges failed it {b.judge_fail} times, against {a.judge_fail}")
     if b.pass_all < a.pass_all:  # pass^k: consistency, what a person relies on
         reasons.append(f"it passed every trial on {b.pass_all} saved runs, against {a.pass_all}")
+    # What a run costs and takes is part of how good it is: a fix that doubles either is a trade
+    # the owner decides on (``improvement_max_*_increase``), not one the gate makes for them.
+    if a.avg_cost and b.avg_cost is not None and b.avg_cost > a.avg_cost * (1 + max_cost_increase):
+        reasons.append(f"a run costs {b.avg_cost / a.avg_cost:.1f}× the live version's "
+                       f"(at most {1 + max_cost_increase:.1f}× allowed)")
+    if a.avg_duration_ms and b.avg_duration_ms is not None and b.avg_duration_ms > a.avg_duration_ms * (1 + max_time_increase):
+        reasons.append(f"a run takes {b.avg_duration_ms / a.avg_duration_ms:.1f}× as long as the live version's "
+                       f"(at most {1 + max_time_increase:.1f}× allowed)")
     passed = not reasons
     if passed:
         reasons.append(f"better on {cmp.better} and worse on none of {len(cmp.rows)} saved runs")
@@ -125,6 +134,7 @@ def _prompt(manifest: dict[str, Any] | None) -> PromptOut | None:
 
 class ImprovementService:
     def __init__(self, settings: Settings, *, client: AiClient | None = None) -> None:
+        self._settings = settings
         self._client = client or AiClient.from_settings(settings)
         self._evals = EvaluationService(settings, client=self._client)
         self._publisher = HarnessPublisher(self._client)
@@ -340,13 +350,13 @@ class ImprovementService:
         row.candidate, row.status = artifacts, "evaluating"
         await db.commit()
 
-        # 3. measure: the live version (a finished replay of it, if one covers the dataset) and the candidate
-        baseline = await self._reusable_baseline(db, row.dataset_id, live)
+        # 3. measure: the live version and the candidate, back to back. An older replay of the
+        # live version is not reused: the model behind it may answer differently now, and the
+        # two sides of a comparison should meet the same provider (and the same judges).
+        pin = await self._evals.pin_for(db, agent, live.version)
+        baseline = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s)
         if baseline is None:
-            pin = await self._evals.pin_for(db, agent, live.version)
-            baseline = await self._measure(db, row, pin, identity, session_factory, poll_s, timeout_s)
-            if baseline is None:
-                return None
+            return None
         row.baseline_experiment_id = baseline.id
         await db.commit()
         pin = Pin(label=f"candidate {row.id[:6]}", harness_version=artifacts["harness_version"],
@@ -360,7 +370,8 @@ class ImprovementService:
 
         # 4. gate
         cmp = await self._evals.compare(identity=identity, user_id=row.user_id, a_id=baseline.id, b_id=measured.id, db=db)
-        gate = decide_gate(cmp)
+        gate = decide_gate(cmp, max_cost_increase=self._settings.improvement_max_cost_increase,
+                           max_time_increase=self._settings.improvement_max_time_increase)
         await db.refresh(row)
         row.gate = gate.model_dump()
         row.status = "awaiting_approval" if gate.passed else "refused"
@@ -384,24 +395,6 @@ class ImprovementService:
             await self._fail(db, row, f"the replay on {pin.label} {exp.status}" + (f": {exp.error}" if exp.error else ""))
             return None
         return exp
-
-    @staticmethod
-    async def _reusable_baseline(db: AsyncSession, dataset_id: str, live: HarnessRelease) -> Experiment | None:
-        """A finished replay of the live version that covers exactly the dataset's items now."""
-        items = set((await db.execute(select(DatasetItem.id).where(DatasetItem.dataset_id == dataset_id))).scalars().all())
-        candidates = (
-            await db.execute(
-                select(Experiment).where(Experiment.dataset_id == dataset_id, Experiment.status == "done",
-                                         Experiment.composition_digest == live.composition_digest,
-                                         Experiment.trials == DEFAULT_TRIALS)
-                .order_by(Experiment.created_at.desc()).limit(5)
-            )
-        ).scalars().all()
-        for exp in candidates:
-            runs = (await db.execute(select(ExperimentRun).where(ExperimentRun.experiment_id == exp.id))).scalars().all()
-            if {r.item_id for r in runs} == items and all(r.status != "pending" for r in runs):
-                return exp
-        return None
 
     # --- deciding -------------------------------------------------------------------
 

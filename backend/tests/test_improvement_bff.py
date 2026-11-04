@@ -349,3 +349,29 @@ def test_a_candidate_that_passes_every_trial_on_fewer_runs_is_refused() -> None:
     gate = decide_gate(ExperimentComparison(a=exp("v1", 2), b=exp("cand", 1), rows=rows, better=1, worse=0))
     assert not gate.passed and "it passed every trial on 1 saved runs, against 2" in gate.reasons
     assert decide_gate(ExperimentComparison(a=exp("v1", 1), b=exp("cand", 1), rows=rows, better=1, worse=0)).passed
+
+
+def test_a_candidate_that_costs_or_takes_much_more_per_run_is_refused() -> None:
+    """Cost and time are part of a run's quality: the owner's limits, not a free trade."""
+    from datetime import UTC, datetime
+
+    from prime_agent.schemas.evaluation import ComparisonRow, ExperimentComparison, ExperimentOut, ExperimentStats
+    from prime_agent.services.improvement_service import decide_gate
+
+    def exp(label: str, cost: float, ms: int) -> ExperimentOut:
+        stats = ExperimentStats(items=1, finished=1, answered=1, failed=0, needs_approval=0, checks_failed=0,
+                                judge_pass=0, judge_fail=0, avg_cost=cost, avg_duration_ms=ms)
+        return ExperimentOut(id=label, dataset_id="d", label=label, status="done", created_at=datetime.now(UTC), stats=stats)
+
+    rows = [ComparisonRow(item_id="i1", input="x", change="better")]
+
+    def gate(cost: float, ms: int, **limits: float):  # type: ignore[no-untyped-def]
+        return decide_gate(ExperimentComparison(a=exp("v1", 0.10, 1000), b=exp("c", cost, ms), rows=rows, better=1, worse=0),
+                           **limits)
+
+    assert gate(0.12, 1500).passed, "within 20% more cost and 50% more time"
+    costly = gate(0.25, 1000)
+    assert not costly.passed and "a run costs 2.5× the live version's (at most 1.2× allowed)" in costly.reasons
+    slow = gate(0.10, 3000)
+    assert not slow.passed and "a run takes 3.0× as long as the live version's (at most 1.5× allowed)" in slow.reasons
+    assert gate(0.25, 3000, max_cost_increase=2.0, max_time_increase=2.0).passed, "the owner may allow more"

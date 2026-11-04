@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     jwt_issuer: str = "prime-agent-api"
     jwt_audience: str = "prime-agent-web"
     access_token_expire_minutes: int = 30
+
+    # Self-improvement gate (services.improvement_service.decide_gate): how much more a run of
+    # a candidate may cost, and take, than the live version's before the gate refuses it.
+    improvement_max_cost_increase: float = Field(default=0.2, ge=0)
+    improvement_max_time_increase: float = Field(default=0.5, ge=0)
     refresh_token_expire_days: int = 7
     refresh_cookie_name: str = "prime_agent_refresh"
     refresh_cookie_secure: bool = False
