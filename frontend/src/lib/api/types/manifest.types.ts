@@ -23,6 +23,8 @@ export const ManifestSchema = z.object({
   prompt: z.object({
     persona: z.string(),
     sections: z.array(PromptSectionSchema),
+    /** Notes the improvement loop learnt, sent after the sections; yours to edit or remove. */
+    learned: z.array(PromptSectionSchema).nullable().optional(),
   }),
   tools: z.array(z.string()),
   model: z.string(),

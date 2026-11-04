@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from prime_agent.db.models.harness import Harness
 
 
-
 def normalize_harness_mode(mode: str) -> str:
     """Map legacy chat|completion|agent to sticky|stateless.
 

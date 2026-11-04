@@ -260,3 +260,28 @@ async def test_a_clean_draft_checks_ok(db_session, owner, monkeypatch):
         r = await api.post(f"/api/v1/harnesses/{harness.id}/check")
     assert r.status_code == 200 and r.json()["ok"] is True
     assert {c["section"] for c in r.json()["checks"]} >= {"prompt", "tools", "sandbox", "memory", "policy", "model"}
+
+
+def test_learnt_notes_are_kept_apart_from_the_persons_sections() -> None:
+    """Prime Agent's base prompt and supplemental notes: the notes are their own list, sent
+    after the person's sections; a manifest without notes stores as it always did."""
+    from pydantic import ValidationError
+
+    from prime_agent.schemas.harness_manifest import HarnessManifest, default_manifest, learned_text, manifest_body
+
+    plain = default_manifest()
+    assert "learned" not in manifest_body(plain)["prompt"], "older releases compare unchanged"
+    body = manifest_body(plain)
+    body["prompt"]["learned"] = [{"id": "note-00001", "text": "Run the tests first."}]
+    noted = HarnessManifest.model_validate(body)
+    assert learned_text(noted.prompt.learned or []) == "Learnt from earlier runs:\n- Run the tests first."
+    body["prompt"]["learned"] = []
+    assert HarnessManifest.model_validate(body).prompt.learned is None
+    for bad in ({"id": "rules", "text": "x"}, {"id": "note-1", "text": "x"}):
+        body["prompt"]["learned"] = [bad]
+        with pytest.raises(ValidationError):
+            HarnessManifest.model_validate(body)
+    body["prompt"]["learned"] = None
+    body["prompt"]["sections"].append({"id": "learned", "text": "mine"})
+    with pytest.raises(ValidationError, match="kept for the notes"):
+        HarnessManifest.model_validate(body)

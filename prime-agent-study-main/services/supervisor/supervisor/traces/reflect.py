@@ -1,21 +1,26 @@
-"""Reflect: read how an agent's runs went wrong and propose small edits to its prompt.
+"""Reflect: read how an agent's runs went wrong and propose edits to what it has learnt.
 
 The evidence is the agent's issues (``supervisor.traces.issues``): failing checks, judges'
 fails with their reasons, and runs people marked wrong with their notes, each with the
 latest runs it hit (what was asked, what the run did). A model reads the agent's prompt,
 that evidence, and what became of the changes proposed before (approved, refused by the
-gate and why, rejected by a person), and proposes itemized edits, each with why:
+gate and why, rejected by a person), and proposes itemized edits, each with why.
 
-- ``add``: append an instruction to a section, or start a new section;
-- ``replace``: change one passage of a section (its exact old text, once) for new text.
+The prompt has two parts. The person's sections are the base: the reflection reads them and
+never changes them. What the loop learns is a separate list of notes, each with an id, sent
+after the sections; the reflection adds, updates or deletes notes:
 
-Edits, not a rewritten prompt. ACE (Agentic Context Engineering, ``ace-agent/ace``) grows
-its playbook only by itemized ``ADD`` operations, because rewriting the whole context
-erodes what earlier rounds learnt; Prime Agent's ``/refine`` plans "small evidence-backed"
-create/update/delete edits from the trajectory and its prior refinement history
-(``pa-core/src/refinement/planner.rs``), and never rewrites the base prompt. Here no edit
-deletes a section, and an edit that cannot be applied (an unknown passage, a bad id) is
-skipped and reported, never guessed.
+- ``add``: a new note (its id is ``note-00001``, the next number);
+- ``update``: a note's new text (by id);
+- ``delete``: a note that no longer helps or that hurt (by id).
+
+This is Prime Agent's ``/refine`` (``crates/pa-core/src/refinement/planner.rs``): "The base
+system prompt is immutable and MUST NOT be rewritten"; refinement emits create, update or
+delete edits to supplemental prompt notes, each with a stable id, from the trajectory and its
+prior refinement history. Note ids follow ACE's playbook bullets (``ace-agent/ace``
+``playbook_utils.py``: ``{slug}-{next_id:05d}``, the next global id), and edits are itemized
+deltas, never a rewrite. An edit that cannot apply (an unknown id, nothing to add, too many
+notes) is skipped and reported, never guessed.
 
 A proposal is only a proposal. Nothing here changes the agent: the product turns it into a
 candidate version, replays saved runs on it, refuses it if it does worse, and asks a person.
@@ -37,6 +42,7 @@ __all__ = [
     "MAX_EDITS",
     "MAX_EVIDENCE",
     "MAX_HISTORY",
+    "MAX_NOTES",
     "REFLECT_MODEL_ENV",
     "REFLECT_SYSTEM",
     "Proposal",
@@ -56,23 +62,26 @@ _CLIP = 600
 
 MAX_EDITS = 8
 """Edits one proposal may make: a change a person can review, and the gate can attribute."""
+MAX_NOTES = 30
+"""Notes an agent keeps: past this, a note must be updated or deleted to add one."""
+MAX_NOTE = 2000
 MAX_HISTORY = 20
 """Earlier proposals shown, the latest (Prime Agent's ``history_for_prompt`` keeps 20)."""
 
 REFLECT_SYSTEM = (
-    "You improve the system prompt of an AI agent from evidence of how its runs went wrong. "
-    "Read the prompt's sections, the issues (each with runs it hit), and the changes proposed "
-    "before with what became of them. Find what in the prompt causes or fails to prevent each "
-    "issue, and propose the fewest, smallest edits that fix it. Do not repeat a change that was "
-    "refused or rejected; if an approved change did not fix its issue, change it rather than "
-    "adding another. Write general instructions, never answers to the example tasks, and do "
-    "not fix one task at the expense of others. Edits: "
-    '{"action": "add", "section": "<id>", "text": "..."} appends an instruction to a section '
-    "(a new id starts a new section); "
-    '{"action": "replace", "section": "<id>", "old": "<exact text in that section>", "new": "..."} '
-    "changes one passage. Sections are never deleted. If the evidence does not point to a "
-    f"prompt change, propose no edits and say why. At most {MAX_EDITS} edits. Answer with JSON "
-    'only: {"rationale": "which issue each edit targets, in a few sentences", "expected_outcome": '
+    "You improve an AI agent from evidence of how its runs went wrong. Its prompt is the "
+    "person's sections, which you must not change, and a list of notes it has learnt, which you "
+    "edit. Read the sections, the notes, the issues (each with runs it hit), and the changes "
+    "proposed before with what became of them. Find what the notes should say to fix each issue, "
+    "and propose the fewest, smallest edits. Do not repeat a change that was refused or "
+    "rejected; if an approved note did not fix its issue, update or delete it rather than adding "
+    "another. Write general instructions, never answers to the example tasks, and do not fix one "
+    "task at the expense of others. Edits: "
+    '{"action": "add", "text": "..."} adds a note; '
+    '{"action": "update", "id": "<note id>", "text": "..."} rewrites one note; '
+    '{"action": "delete", "id": "<note id>"} removes one. If the evidence does not point to a '
+    f"change, propose no edits and say why. At most {MAX_EDITS} edits. Answer with JSON only: "
+    '{"rationale": "which issue each edit targets, in a few sentences", "expected_outcome": '
     '"what should improve, and how the saved runs would show it", "edits": [{..., "reason": '
     '"why, from the evidence"}]}'
 )
@@ -87,28 +96,30 @@ class Section:
 @dataclass(frozen=True)
 class Edit:
     action: str
-    """``add`` or ``replace``."""
-    section: str
+    """``add``, ``update`` or ``delete``."""
+    id: str
+    """The note's id (a new one for ``add``)."""
     text: str
-    """What is added, or the new text of the passage."""
+    """The note's text after the edit (before it, for ``delete``)."""
     old: str | None = None
-    """The passage replaced (``replace``)."""
+    """The note's text before an ``update``."""
     reason: str = ""
 
     def out(self) -> dict[str, Any]:
-        return {"action": self.action, "section": self.section, "text": self.text, "old": self.old,
-                "reason": self.reason}
+        return {"action": self.action, "id": self.id, "text": self.text, "old": self.old, "reason": self.reason}
 
 
 @dataclass(frozen=True)
 class Proposal:
     persona: str
     sections: list[Section]
+    """The person's sections, as they were."""
+    learned: list[Section]
+    """The notes after the edits, in order."""
     rationale: str
     changed: list[str] = field(default_factory=list)
-    """Ids of the sections whose text changed or that are new."""
+    """Ids of the notes added, updated or deleted."""
     edits: list[Edit] = field(default_factory=list)
-    """The edits applied, in order."""
     skipped: list[str] = field(default_factory=list)
     """Edits the reply asked for that could not be applied, and why."""
     expected_outcome: str = ""
@@ -117,6 +128,7 @@ class Proposal:
         return {
             "persona": self.persona,
             "sections": [{"id": s.id, "text": s.text} for s in self.sections],
+            "learned": [{"id": n.id, "text": n.text} for n in self.learned],
             "rationale": self.rationale,
             "changed": self.changed,
             "edits": [e.out() for e in self.edits],
@@ -156,7 +168,7 @@ def history_text(history: list[dict[str, Any]]) -> str:
             lines.append(f"  why it was proposed: {_clip(past['rationale'], 400)}")
         for e in (past.get("edits") or [])[:MAX_EDITS]:
             if isinstance(e, dict):
-                lines.append(f"  - {e.get('action')} in {e.get('section')}: {_clip(e.get('text'), 200)}")
+                lines.append(f"  - {e.get('action')} {e.get('id')}: {_clip(e.get('text'), 200)}")
         for reason in (past.get("why") or [])[:4]:
             lines.append(f"  what came of it: {_clip(str(reason), 300)}")
         blocks.append("\n".join(lines))
@@ -169,10 +181,13 @@ def reflect_messages(
     issues: list[dict[str, Any]],
     notes: str | None = None,
     history: list[dict[str, Any]] | None = None,
+    learned: list[dict[str, str]] | None = None,
 ) -> list[ChatMessage]:
     prompt = json.dumps({"persona": persona, "sections": sections}, ensure_ascii=False, indent=1)
+    kept = json.dumps(learned or [], ensure_ascii=False, indent=1)
     ask = (
-        f"The agent's prompt:\n{prompt}\n\nHow its runs went wrong:\n{evidence_text(issues)}\n\n"
+        f"The person's prompt (read only):\n{prompt}\n\nThe notes it has learnt (yours to edit):\n{kept}\n\n"
+        f"How its runs went wrong:\n{evidence_text(issues)}\n\n"
         f"Changes proposed before, and what became of them:\n{history_text(history or [])}\n"
     )
     if notes and notes.strip():
@@ -184,19 +199,26 @@ def reflect_messages(
 
 
 _JSON = re.compile(r"\{.*\}", re.DOTALL)
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_NOTE_ID = re.compile(r"^note-(\d{5})$")
 
 
 class ProposalError(ValueError):
     """The model's reply is not a usable proposal."""
 
 
-def parse_proposal(reply: str, persona: str, sections: list[dict[str, str]]) -> Proposal:
-    """The edits in ``reply`` applied to the prompt; raises ProposalError if it is not a proposal.
+def _next_id(notes: dict[str, str]) -> int:
+    """ACE's ``get_next_global_id``: one past the highest number any note id carries."""
+    numbers = [int(m.group(1)) for nid in notes if (m := _NOTE_ID.match(nid))]
+    return max(numbers, default=0) + 1
 
-    Edits apply in order, each to the text the earlier ones left. One that cannot apply (an
-    unknown action, a bad section id, an ``old`` passage not found exactly once, nothing to
-    add) is skipped with why; an edit never deletes a section. The persona is not edited.
+
+def parse_proposal(
+    reply: str, persona: str, sections: list[dict[str, str]], learned: list[dict[str, str]] | None = None
+) -> Proposal:
+    """The edits in ``reply`` applied to the notes; raises ProposalError if it is not a proposal.
+
+    Edits apply in order, each to the notes the earlier ones left. One that cannot apply is
+    skipped with why. The person's sections and persona are returned as they were.
     """
     found = _JSON.search(reply or "")
     try:
@@ -205,8 +227,8 @@ def parse_proposal(reply: str, persona: str, sections: list[dict[str, str]]) -> 
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("edits"), list):
         raise ProposalError("the model's reply was not a proposal")
-    current = {s["id"]: s["text"] for s in sections}
-    texts = dict(current)
+    before = {n["id"]: n["text"] for n in learned or []}
+    notes = dict(before)
     applied: list[Edit] = []
     skipped: list[str] = []
     for n, raw in enumerate(data["edits"], 1):
@@ -217,36 +239,38 @@ def parse_proposal(reply: str, persona: str, sections: list[dict[str, str]]) -> 
             skipped.append(f"edit {n}: not an edit")
             continue
         action = str(raw.get("action") or "").strip().lower()
-        sid = str(raw.get("section") or "").strip()
+        nid = str(raw.get("id") or "").strip()
+        text = " ".join(str(raw.get("text") or "").split())[:MAX_NOTE]
         reason = str(raw.get("reason") or "").strip()[:500]
-        if not _ID.match(sid):
-            skipped.append(f"edit {n}: {sid!r} is not a section id")
-            continue
         if action == "add":
-            text = str(raw.get("text") or "").strip()
             if not text:
                 skipped.append(f"edit {n}: nothing to add")
-                continue
-            texts[sid] = f"{texts[sid].rstrip()}\n{text}" if texts.get(sid) else text
-            applied.append(Edit("add", sid, text[:20_000], None, reason))
-        elif action == "replace":
-            old, new = str(raw.get("old") or ""), str(raw.get("new") or "").strip()
-            body = texts.get(sid)
-            if body is None:
-                skipped.append(f"edit {n}: there is no section {sid!r} to change")
-            elif not old.strip() or body.count(old) != 1:
-                skipped.append(f"edit {n}: the passage to replace is not in {sid!r} exactly once")
-            elif not new:
-                skipped.append(f"edit {n}: no new text for the passage (edits never delete)")
+            elif len(notes) >= MAX_NOTES:
+                skipped.append(f"edit {n}: the agent keeps at most {MAX_NOTES} notes; update or delete one first")
+            elif text in notes.values():
+                skipped.append(f"edit {n}: that note is already kept")
             else:
-                texts[sid] = body.replace(old, new, 1)
-                applied.append(Edit("replace", sid, new[:20_000], old, reason))
+                nid = f"note-{_next_id({**before, **notes}):05d}"  # a note deleted here keeps its number
+                notes[nid] = text
+                applied.append(Edit("add", nid, text, None, reason))
+        elif action in ("update", "delete"):
+            if nid not in notes:
+                skipped.append(f"edit {n}: there is no note {nid!r}")
+            elif action == "delete":
+                applied.append(Edit("delete", nid, notes.pop(nid), None, reason))
+            elif not text:
+                skipped.append(f"edit {n}: no new text for {nid} (to remove it, delete it)")
+            else:
+                applied.append(Edit("update", nid, text, notes[nid], reason))
+                notes[nid] = text
         else:
             skipped.append(f"edit {n}: unknown action {action!r}")
-    ordered = [Section(sid, texts[sid][:20_000]) for sid in current]
-    ordered += [Section(sid, text[:20_000]) for sid, text in texts.items() if sid not in current]
-    changed = [s.id for s in ordered if current.get(s.id) != s.text]
+    changed = list(dict.fromkeys(e.id for e in applied if before.get(e.id) != notes.get(e.id)))
     rationale = str(data.get("rationale") or "").strip()[:4000] or "no reason given"
     expected = str(data.get("expected_outcome") or "").strip()[:2000]
-    return Proposal(persona=persona, sections=ordered, rationale=rationale, changed=changed, edits=applied,
-                    skipped=skipped, expected_outcome=expected)
+    return Proposal(
+        persona=persona,
+        sections=[Section(s["id"], s["text"]) for s in sections],
+        learned=[Section(nid, text) for nid, text in notes.items()],
+        rationale=rationale, changed=changed, edits=applied, skipped=skipped, expected_outcome=expected,
+    )

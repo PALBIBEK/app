@@ -73,15 +73,15 @@ describe('EditList', () => {
     render(
       <EditList
         edits={[
-          { action: 'add', section: 'tools', text: 'Read the error first.', old: null, reason: 'bash calls repeated' },
-          { action: 'replace', section: 'role', text: 'You fix code, carefully.', old: 'You fix code.', reason: '' },
+          { action: 'add', id: 'note-00001', text: 'Read the error first.', old: null, reason: 'bash calls repeated' },
+          { action: 'delete', id: 'note-00002', text: 'Retry twice.', old: null, reason: '' },
         ]}
         skipped={["edit 3: unknown action 'delete'"]}
         expected="fewer repeated calls"
       />,
     );
     const edits = screen.getAllByTestId('edit').map((e) => e.textContent);
-    expect(edits).toEqual(['Adds to tools · bash calls repeatedRead the error first.', 'Changes roleYou fix code, carefully.']);
+    expect(edits).toEqual(['Adds note-00001 · bash calls repeatedRead the error first.', 'Removes note-00002Retry twice.']);
     expect(screen.getByText('fewer repeated calls')).toBeTruthy();
     expect(screen.getByTestId('skipped-edits').textContent).toBe("Not applied: edit 3: unknown action 'delete'.");
   });
@@ -129,5 +129,19 @@ describe('WatchLine', () => {
     expect(screen.getByTestId('release-watch').textContent).toBe(
       'Rolled back against v1: 50% of its live runs failed, against 10% on v1: v1 is live again as v3.',
     );
+  });
+});
+
+describe('PromptDiff notes', () => {
+  it('shows the notes added, changed and removed, and never the unchanged person sections as changed', () => {
+    const sections = [{ id: 'role', text: 'You fix code.' }];
+    render(
+      <PromptDiff
+        base={{ persona: 'coder', sections, learned: [{ id: 'note-00001', text: 'Retry twice.' }, { id: 'note-00002', text: 'Keep' }] }}
+        next={{ persona: 'coder', sections, learned: [{ id: 'note-00002', text: 'Keep' }, { id: 'note-00003', text: 'Stop after two failures.' }] }}
+      />,
+    );
+    expect(screen.queryAllByTestId('changed-section')).toHaveLength(0);
+    expect(screen.getAllByTestId('changed-note').map((n) => n.dataset.note)).toEqual(['note-00001', 'note-00003']);
   });
 });

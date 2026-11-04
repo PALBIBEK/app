@@ -30,6 +30,7 @@ from supervisor.traces.judges import (
 )
 from supervisor.traces.model import RunStatus
 from supervisor.traces.reflect import (
+    MAX_NOTES,
     REFLECT_MODEL_ENV,
     ProposalError,
     parse_proposal,
@@ -374,6 +375,9 @@ class ReflectIn(BaseModel):
     composition_id: str = Field(min_length=1, max_length=255)
     persona: str = Field(default="", max_length=2000)
     sections: list[PromptSectionIn] = Field(min_length=1, max_length=50)
+    """The person's sections: read, never changed."""
+    learned: list[PromptSectionIn] = Field(default_factory=list, max_length=MAX_NOTES)
+    """The notes the agent has learnt: what the edits change."""
     notes: str | None = Field(default=None, max_length=2000)
     """What the person wants addressed, in their words."""
     since_ms: int | None = None
@@ -467,7 +471,7 @@ async def judges_preview(body: PreviewIn, request: Request, tenant_id: str = Dep
 @router.post("/v1/traces/reflect")
 async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> dict[str, Any]:
     """Read how the composition's runs went wrong, and what became of earlier changes, and
-    propose itemized edits to its prompt (``supervisor.traces.reflect``).
+    propose itemized edits to the notes it has learnt (``supervisor.traces.reflect``).
 
     Changes nothing: the proposal is for the caller to try on saved runs and to approve.
     The model is asked through the newest session of the composition (its key and budget).
@@ -486,8 +490,9 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
         raise HTTPException(status_code=409, detail={"error_code": "NO_MODEL",
                                                      "message": "the agent has no session to ask a model through yet"})
     sections = [{"id": s.id, "text": s.text} for s in body.sections]
+    learned = [{"id": n.id, "text": n.text} for n in body.learned]
     messages = reflect_messages(body.persona, sections, issues, body.notes,
-                                [h.model_dump() for h in body.history])
+                                [h.model_dump() for h in body.history], learned)
     model = (body.model or os.environ.get(REFLECT_MODEL_ENV, "")).strip() or None
 
     def ask() -> str:
@@ -499,7 +504,7 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
         raise HTTPException(status_code=424, detail={"error_code": "MODEL_FAILED",
                                                      "message": f"the model could not be asked: {exc}"[:300]}) from exc
     try:
-        proposal = parse_proposal(reply, body.persona, sections)
+        proposal = parse_proposal(reply, body.persona, sections, learned)
     except ProposalError as exc:
         raise HTTPException(status_code=422, detail={"error_code": "NOT_A_PROPOSAL", "message": str(exc)}) from exc
     evidence = [
