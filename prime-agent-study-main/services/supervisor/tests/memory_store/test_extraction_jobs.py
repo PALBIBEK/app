@@ -91,7 +91,7 @@ async def test_the_worker_drains_the_queue_and_the_backlog_is_reported(url: str)
     assert (await svc.metrics_snapshot())["extraction_backlog"] == 0
     assert [j.status for j in await _jobs(svc)] == ["done"]
     await svc.aclose()  # stops the worker
-    assert svc._extraction_worker is None
+    assert svc.background == ()
 
 
 class _Flaky:

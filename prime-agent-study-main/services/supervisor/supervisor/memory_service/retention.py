@@ -13,11 +13,17 @@ import json
 import time
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.metrics import METRICS
-from supervisor.memory_service.models import MemorySessionRow, SessionArchiveRow, SessionEventRow
+from supervisor.memory_service.models import (
+    ExtractionJobRow,
+    MemorySessionRow,
+    OutboxRow,
+    SessionArchiveRow,
+    SessionEventRow,
+)
 from supervisor.memory_service.types import SessionEvent, SessionNotFound
 
 
@@ -89,6 +95,47 @@ class RetentionService:
             row.closed_at = row.closed_at or int(time.time() * 1000)
         METRICS.inc("archive_sessions")
         return {"session_id": session_id, "archived_events": len(events), "archive": "database"}
+
+    async def cold_sessions(self, *, limit: int = 100, now_ms: int | None = None) -> list[str]:
+        """Sessions with hot events, none newer than ``hot_days``, that can move out.
+
+        Left hot: a session leased to a live writer, one erased or corrupt, and one with
+        extraction or outbox work still to do (both read its hot events)."""
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        cutoff = now - self.hot_days * 86_400_000
+        last = (
+            select(SessionEventRow.session_id, func.max(SessionEventRow.time).label("last"))
+            .group_by(SessionEventRow.session_id)
+            .subquery()
+        )
+        busy_jobs = select(ExtractionJobRow.session_id).where(ExtractionJobRow.status.in_(("pending", "running")))
+        busy_outbox = select(OutboxRow.session_id).where(OutboxRow.status.in_(("pending", "running")))
+        query = (
+            select(MemorySessionRow.id)
+            .join(last, last.c.session_id == MemorySessionRow.id)
+            .where(
+                last.c.last < cutoff,
+                MemorySessionRow.status.not_in(("erased", "corrupt")),
+                or_(MemorySessionRow.lease_until_ms.is_(None), MemorySessionRow.lease_until_ms < now),
+                MemorySessionRow.id.not_in(busy_jobs),
+                MemorySessionRow.id.not_in(busy_outbox),
+            )
+            .order_by(last.c.last)
+            .limit(limit)
+        )
+        async with self._factory() as db:
+            return [str(sid) for sid in await db.scalars(query)]
+
+    async def archive_cold(self, *, limit: int = 100) -> int:
+        """Archive the coldest sessions (``cold_sessions``); how many were archived."""
+        done = 0
+        for session_id in await self.cold_sessions(limit=limit):
+            try:
+                await self.archive_session(session_id)
+                done += 1
+            except SessionNotFound:
+                continue  # erased meanwhile
+        return done
 
     async def load_archived_events(self, session_id: str) -> list[SessionEvent]:
         """The archive, then whatever was written to the session after it was archived."""
