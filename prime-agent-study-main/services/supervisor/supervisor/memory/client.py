@@ -10,12 +10,20 @@ Each request carries a credential for the notebook's tenant. A notebook id names
 its tenant (``<tenant>~<hex>``), so any worker can make that call without a
 lookup; the service still checks the stored tenant, so a forged prefix finds
 nothing. Errors come back as the service's error classes, rebuilt from ``code``.
+
+A circuit breaker keeps a failing memory service from slowing every turn: after
+``_Breaker.threshold`` failures in a row (unreachable, timed out, or a 5xx) calls fail
+at once with ``MemoryUnavailable`` for ``cooldown_s``; then one call tries again, and
+its success closes the breaker. Turns already treat ``MemoryUnavailable`` as "no
+memory this turn", so a degraded service costs a turn nothing instead of a timeout
+per call.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -53,6 +61,7 @@ __all__ = [
 ]
 
 _TIMEOUT_S = 15.0
+_CONNECT_TIMEOUT_S = 3.0
 
 Credential = Callable[[str], str | None]
 
@@ -77,6 +86,47 @@ def _default_credential(tenant_id: str) -> str | None:
     return memory_service_credential(tenant_id)
 
 
+class _Breaker:
+    """Closed, open (fail fast until ``cooldown_s`` passes), then half-open (one trial)."""
+
+    def __init__(
+        self, *, threshold: int = 5, cooldown_s: float = 30.0, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self.threshold, self.cooldown_s, self._clock = threshold, cooldown_s, clock
+        self._failures = 0
+        self._open_until: float | None = None
+        self._trial = False
+
+    def before(self) -> bool:
+        """Raise ``MemoryUnavailable`` when the call should not be made; True for the trial."""
+        if self._open_until is None:
+            return False
+        wait = self._open_until - self._clock()
+        if wait > 0 or self._trial:
+            raise MemoryUnavailable(
+                f"memory service is failing; calls are skipped for {max(wait, 0.0):.0f}s more"
+            )
+        self._trial = True  # half-open: this call is the one trial
+        return True
+
+    def succeeded(self) -> None:
+        self._failures, self._open_until, self._trial = 0, None, False
+
+    def failed(self) -> None:
+        self._failures += 1
+        if self._trial or self._failures >= self.threshold:
+            if self._open_until is None or self._trial:
+                logger.warning("memory service failing: skipping calls for %.0fs", self.cooldown_s)
+            self._open_until = self._clock() + self.cooldown_s
+        self._trial = False
+
+    def abandoned(self, trial: bool) -> None:
+        """The call was cancelled: it says nothing of the service (if it was the trial, the
+        next call is)."""
+        if trial:
+            self._trial = False
+
+
 class NotebookClient:
     """Notebooks and their facts, through the memory service."""
 
@@ -87,11 +137,15 @@ class NotebookClient:
         transport: httpx.AsyncBaseTransport | None = None,
         credential: Credential = _default_credential,
         timeout_s: float = _TIMEOUT_S,
+        breaker: _Breaker | None = None,
     ) -> None:
         self._http = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), transport=transport, timeout=timeout_s
+            base_url=base_url.rstrip("/"),
+            transport=transport,
+            timeout=httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s)),
         )
         self._credential = credential
+        self._breaker = breaker or _Breaker()
 
     @classmethod
     def from_env(cls) -> NotebookClient | None:
@@ -242,12 +296,22 @@ class NotebookClient:
         headers = {}
         if token := self._credential(tenant_id):
             headers["Authorization"] = f"Bearer {token}"
+        trial = self._breaker.before()
         try:
             response = await self._http.request(method, path, headers=headers, **kw)
         except httpx.HTTPError as exc:
+            self._breaker.failed()
             raise MemoryUnavailable(f"memory service unreachable: {exc}") from exc
+        except BaseException:
+            self._breaker.abandoned(trial)
+            raise
+        if response.status_code >= 500:
+            self._breaker.failed()
+            raise _error(response)
         if response.status_code < 400:
+            self._breaker.succeeded()
             return response.json() if response.content else None
+        self._breaker.succeeded()  # a refusal (4xx) is an answer: the service is up
         raise _error(response)
 
 

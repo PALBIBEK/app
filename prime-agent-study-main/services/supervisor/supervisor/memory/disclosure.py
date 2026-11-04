@@ -179,6 +179,8 @@ class DisclosedMemory(MemoryView):
     async def recall(
         self, notebook_id: str, context: RecallContext | None = None
     ) -> list[Candidate]:
+        if self._base.manages and self.rank is not None:
+            return self.rank(await self._visible(notebook_id), context)  # one read of the facts
         shown = {f.id for f in await self._visible(notebook_id)}
         rows = await self._base.recall(notebook_id, context)
         if not self._base.manages:  # opaque provider: only within a narrow notebook

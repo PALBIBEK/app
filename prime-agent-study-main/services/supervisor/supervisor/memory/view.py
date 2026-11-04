@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.types import (
@@ -14,6 +14,8 @@ from supervisor.memory_service.notebooks.types import (
     Revision,
 )
 
+Rank = Callable[[Sequence[Fact], RecallContext | None], list[Candidate]]
+
 
 class MemoryView:
     """Delegates every MemoryService call to ``base``; subclasses override selectively."""
@@ -21,6 +23,8 @@ class MemoryView:
     def __init__(self, base: MemoryService) -> None:
         self._base = base
         self.manages = base.manages
+        self.rank: Rank | None = getattr(base, "rank", None)
+        """The base's recall over facts already read, when it has one (``NotebookMemory.rank``)."""
 
     @property
     def base(self) -> MemoryService:
