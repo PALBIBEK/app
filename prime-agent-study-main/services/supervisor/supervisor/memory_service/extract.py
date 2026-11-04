@@ -1,11 +1,11 @@
-"""Stingy async extraction — queue off the request path."""
+"""Async extraction queue — off the request path; the extractor is a model (``model_extractor``)."""
 
 from __future__ import annotations
 
 import logging
-import re
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -26,59 +26,13 @@ class ExtractedCandidate:
     content: str
     confidence: float
     source_seq: int
-    kind: str  # preference | decision | correction | fact
+    kind: str
 
 
 class Extractor(Protocol):
-    def extract(self, events: list[SessionEventRow]) -> list[ExtractedCandidate]: ...
+    """Reads a job's events and states the facts worth keeping (``model_extractor``)."""
 
-
-_PREF = re.compile(
-    r"(?i)\b(i (?:prefer|like|want|always use)|please (?:always|never)|my preference is)\b"
-)
-_DECISION = re.compile(r"(?i)\b(we (?:decided|chose|will use)|decision:|going with)\b")
-_CORRECTION = re.compile(r"(?i)\b(no[, ]|actually[, ]|correction:|not X,? Y|i meant)\b")
-_FACT = re.compile(
-    r"(?i)\b(project (?:is|name)|repo(?:sitory)? (?:is|named)|api (?:is|called)|main project is)\b"
-)
-
-
-class StingyHeuristicExtractor:
-    """
-    Bias toward preferences, decisions, corrections, stable facts.
-    Skips tool output / transient task chatter.
-    """
-
-    def extract(self, events: list[SessionEventRow]) -> list[ExtractedCandidate]:
-        out: list[ExtractedCandidate] = []
-        for ev in events:
-            if ev.type not in ("user/message", "assistant/message"):
-                continue
-            data = ev.data if isinstance(ev.data, dict) else {}
-            text = str(data.get("text") or data.get("content") or "").strip()
-            if len(text) < 8 or len(text) > 500:
-                continue
-            kind: str | None = None
-            conf = 0.7
-            if _CORRECTION.search(text):
-                kind, conf = "correction", 0.95
-            elif _PREF.search(text):
-                kind, conf = "preference", 0.9
-            elif _DECISION.search(text):
-                kind, conf = "decision", 0.85
-            elif _FACT.search(text):
-                kind, conf = "fact", 0.8
-            if kind is None:
-                continue
-            out.append(
-                ExtractedCandidate(
-                    content=text[:400],
-                    confidence=conf,
-                    source_seq=ev.seq,
-                    kind=kind,
-                )
-            )
-        return out
+    async def extract(self, events: Sequence[SessionEventRow]) -> list[ExtractedCandidate]: ...
 
 
 CLAIM_TIMEOUT_MS = 10 * 60_000
@@ -128,7 +82,12 @@ class ExtractionQueue:
     ) -> None:
         self._factory = factory
         self._bank = bank
-        self._extractor = extractor or StingyHeuristicExtractor()
+        self._extractor = extractor
+
+    @property
+    def enabled(self) -> bool:
+        """Whether there is a model to extract with (without one, nothing is queued)."""
+        return self._extractor is not None
 
     async def enqueue(self, session_id: str, seq_from: int, seq_to: int) -> str | None:
         if seq_to < seq_from:
@@ -289,7 +248,8 @@ class ExtractionQueue:
             for e in events:
                 db.expunge(e)
 
-        candidates = self._extractor.extract(events)
+        assert self._extractor is not None, "jobs are queued only with an extractor"
+        candidates = await self._extractor.extract(events)
         kept = 0
         for cand in candidates:
             dup = await self._bank.find_near_duplicate(scope, cand.content)

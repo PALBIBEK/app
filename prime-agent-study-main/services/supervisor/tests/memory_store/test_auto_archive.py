@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from supervisor.memory_service.models import SessionEventRow
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.types import Scope
+from tests.support.memory_extraction import scripted_extractor
 
 SC = Scope("t1", "user:alice", "agent")
 LONG_AGO = 1_000  # ms since the epoch: far older than any hot window
@@ -31,7 +32,7 @@ async def _hot_rows(svc: MemoryService, session_id: str) -> int:
 
 @pytest.mark.asyncio
 async def test_only_idle_sessions_nothing_needs_are_archived(url: str) -> None:
-    svc = MemoryService(database_url=url, hot_days=30)
+    svc = MemoryService(database_url=url, hot_days=30, extractor=scripted_extractor())
     await svc.startup()
     cold = await _session(svc, at=LONG_AGO)
     recent = await _session(svc, at=None)
@@ -64,7 +65,7 @@ async def test_only_idle_sessions_nothing_needs_are_archived(url: str) -> None:
 
 @pytest.mark.asyncio
 async def test_the_archiver_runs_in_the_background(url: str) -> None:
-    svc = MemoryService(database_url=url, hot_days=30)
+    svc = MemoryService(database_url=url, hot_days=30, extractor=scripted_extractor())
     await svc.startup()
     cold = await _session(svc, at=LONG_AGO)
     svc.start_archiver(interval_s=0.01)

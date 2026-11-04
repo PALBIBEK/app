@@ -9,11 +9,12 @@ from supervisor.memory_service.app import create_app
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.tier2_types import ForgetSelector, NewMemoryItem, TokenBudget
 from supervisor.memory_service.types import Scope
+from tests.support.memory_extraction import scripted_extractor
 
 
 @pytest.fixture
 async def svc():
-    s = MemoryService(database_url="sqlite+aiosqlite:///:memory:")
+    s = MemoryService(database_url="sqlite+aiosqlite:///:memory:", extractor=scripted_extractor())
     await s.startup()
     yield s
     await s.aclose()
@@ -118,7 +119,7 @@ async def test_flush_enqueues_extraction_on_turn_end(svc: MemoryService):
 @pytest.mark.asyncio
 async def test_extraction_error_does_not_fail_flush(svc: MemoryService):
     class Boom:
-        def extract(self, events):
+        async def extract(self, events):
             raise RuntimeError("llm down")
 
     broken = MemoryService(
