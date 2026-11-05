@@ -7,13 +7,17 @@
  *
  * A surface that asks takes one answer per drawing: from the click until the agent draws it
  * again, its inputs are closed, and the line under it says what was sent.
+ *
+ * Each surface saves as a PNG or prints alone (to a PDF), as it is drawn now.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { ArrowDown, ArrowUp, ChartBar, CheckCircle, CircleNotch, Code, Trash } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, ChartBar, CheckCircle, CircleNotch, Code, FilePdf, ImageSquare, Trash } from '@phosphor-icons/react';
+import { toast } from 'sonner';
 
 import type { ToolCallView } from '@/lib/api/types/session.types';
+import { downloadPng, printReport, reportName } from '@/lib/session/exportReport';
 import { describeUiAction } from '@/lib/session/reports';
 import type { ReportSurfaceModel, Reports } from '@/lib/session/useReports';
 import type { SurfaceAnswers } from '@/lib/session/useSurfaceAnswers';
@@ -43,14 +47,46 @@ function Line({ icon, children }: { icon: JSX.Element; children: React.ReactNode
 /** Inputs a closed surface keeps on show but no longer takes (its links still open). */
 const CLOSED = '[&_button]:pointer-events-none [&_button]:opacity-60 [&_input]:pointer-events-none [&_select]:pointer-events-none [&_textarea]:pointer-events-none';
 
+const EXPORT = 'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-ink-3 hover:bg-canvas hover:text-ink';
+
+/** Save or print the report drawn in `target`. */
+function Export({ surfaceId, target }: { surfaceId: string; target: React.RefObject<HTMLDivElement> }): JSX.Element {
+  const [saving, setSaving] = useState(false);
+  const png = (): void => {
+    if (!target.current || saving) return;
+    setSaving(true);
+    downloadPng(target.current, `${reportName(surfaceId)}.png`)
+      .catch(() => toast.error('The report could not be saved as an image.'))
+      .finally(() => setSaving(false));
+  };
+  return (
+    <div className="flex justify-end gap-1 px-3 pb-1.5">
+      <button type="button" onClick={png} disabled={saving} className={EXPORT} aria-label="Save the report as a PNG">
+        {saving ? <CircleNotch size={12} className="animate-spin" aria-hidden="true" /> : <ImageSquare size={12} aria-hidden="true" />} PNG
+      </button>
+      <button
+        type="button"
+        onClick={() => target.current && printReport(target.current, reportName(surfaceId))}
+        className={EXPORT}
+        aria-label="Print the report or save it as a PDF"
+      >
+        <FilePdf size={12} aria-hidden="true" /> PDF
+      </button>
+    </div>
+  );
+}
+
 function Surface({ model, answers }: { model: ReportSurfaceModel; answers: SurfaceAnswers }): JSX.Element {
   const answer = answers.of(model.id);
   const closed = !answers.canAnswer || answer.state !== 'open';
+  const drawn = useRef<HTMLDivElement>(null);
   return (
-    <div data-testid="report-answerable" data-closed={closed || undefined} aria-disabled={closed || undefined}>
-      <div className={cn('px-4 py-3', closed && CLOSED)}>
+    <div data-testid="report-answerable" data-closed={closed || undefined}>
+      {/* Only the report is closed: saving and printing it stay open. */}
+      <div ref={drawn} data-testid="report-drawn" aria-disabled={closed || undefined} className={cn('bg-surface px-4 py-3', closed && CLOSED)}>
         <ReportSurface surface={model} />
       </div>
+      <Export surfaceId={model.id} target={drawn} />
       {answer.state === 'sending' ? (
         <Line icon={<CircleNotch size={13} className="animate-spin text-accent-600" aria-hidden="true" />}>Sending your answer…</Line>
       ) : answer.state === 'answered' ? (
