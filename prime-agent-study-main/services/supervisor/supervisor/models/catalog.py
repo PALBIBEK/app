@@ -184,15 +184,26 @@ class GatewayModels:
 
     _models: dict[str, GatewayEntry] = field(default_factory=dict)
     _aliased: frozenset[str] = frozenset()
-    _snapshot: tuple[tuple[GatewayEntry, ...], tuple[str, ...]] = ((), ())
+    _vendors: dict[str, str] = field(default_factory=dict)
+    _snapshot: tuple[tuple[GatewayEntry, ...], tuple[str, ...], tuple[tuple[str, str], ...]] = (
+        (),
+        (),
+        (),
+    )
     version: int = 0
 
-    def replace(self, models: list[GatewayEntry], aliased: list[str] | None = None) -> None:
-        snapshot = (tuple(models), tuple(aliased or ()))
+    def replace(
+        self,
+        models: list[GatewayEntry],
+        aliased: list[str] | None = None,
+        vendors: dict[str, str] | None = None,
+    ) -> None:
+        snapshot = (tuple(models), tuple(aliased or ()), tuple(sorted((vendors or {}).items())))
         if snapshot == self._snapshot:
             return
         self._models = {m.id: m for m in models}
         self._aliased = frozenset(snapshot[1])
+        self._vendors = dict(snapshot[2])
         self._snapshot = snapshot
         self.version += 1
 
@@ -200,6 +211,10 @@ class GatewayModels:
         model = self._models.get(model_id)
         return model if isinstance(model, ModelSpec) else None
 
+    def vendor(self, model_id: str) -> str | None:
+        """Who serves a discovered model: its group's first provider label (``deepseek``,
+        ``local``, …), so a picker can group models by vendor."""
+        return self._vendors.get(model_id)
 
     def chat_models(self, *, include_aliased: bool = False) -> list[ModelSpec]:
         """Discovered chat models; a group a native alias already offers is hidden by default."""
@@ -208,7 +223,6 @@ class GatewayModels:
             for m in self._models.values()
             if isinstance(m, ModelSpec) and (include_aliased or m.id not in self._aliased)
         ]
-
 
 
 class GatewayCatalog:
@@ -285,6 +299,11 @@ class GatewayCatalog:
         models = [
             m for m in (admit(row, frozen_allowed, base_url) for row in metadata) if m is not None
         ]
+        vendors = {
+            GATEWAY_MODEL_PREFIX + str(row["model_group"]): str(row["providers"][0])
+            for row in metadata
+            if isinstance(row, dict) and isinstance(row.get("providers"), list) and row["providers"]
+        }
         routes: dict[str, str] = {m.id: m.id.removeprefix(GATEWAY_MODEL_PREFIX) for m in models}
         embeddings = {m.id for m in models if isinstance(m, EmbeddingModel)}
         for source, target in self._config.aliases.items():
@@ -305,6 +324,7 @@ class GatewayCatalog:
                 and offered_in_picker(source)
                 and source in routes
             ],
+            {m.id: vendors[m.id] for m in models if m.id in vendors},
         )
 
     def _failed(self, exc: Exception) -> None:

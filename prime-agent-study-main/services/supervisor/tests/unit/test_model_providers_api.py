@@ -16,9 +16,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from supervisor.api import model_providers
+from supervisor.api import model_providers, models
 from supervisor.gateway import app as gateway_app
 from supervisor.gateway.key_check import KeyCheck
+from supervisor.gateway.local_models import LocalModels
 from supervisor.gateway.vendors import VENDORS
 from supervisor.models import ModelRouter, reset_model_router, use_model_router
 from supervisor.models.endpoints import GatewayConfig
@@ -39,7 +40,15 @@ _ECHO = {
 
 
 @pytest.fixture
-def gateway(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
+def gateway_env(request: pytest.FixtureRequest) -> dict[str, str]:
+    """Extra gateway environment (``indirect`` parametrization)."""
+    return dict(getattr(request, "param", {}))
+
+
+@pytest.fixture
+def gateway(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gateway_env: dict[str, str]
+) -> Iterator[TestClient]:
     for vendor in VENDORS.values():
         monkeypatch.delenv(vendor.key_env, raising=False)
         monkeypatch.delenv(vendor.base_url_env, raising=False)
@@ -53,6 +62,8 @@ def gateway(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestCli
     monkeypatch.setenv("MODEL_GATEWAY_TOKEN", TOKEN)
     monkeypatch.setenv("MODEL_GATEWAY_KEYS_FILE", str(tmp_path / "keys.json"))
     monkeypatch.setenv("MODEL_GATEWAY_ROUTES_JSON", json.dumps(_ECHO))
+    for name, value in gateway_env.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setattr(gateway_app, "check_key", lambda vendor, key, base_url: KeyCheck.ACCEPTED)
     with TestClient(gateway_app.app) as client:
         yield client
@@ -80,6 +91,7 @@ def supervisor(gateway: TestClient) -> Iterator[TestClient]:
     app = FastAPI()
     app.state.supervisor = SimpleNamespace(service_jwt_secret=SECRET)
     app.include_router(model_providers.router)
+    app.include_router(models.router)
     try:
         with TestClient(app) as client:
             client.seen = seen  # type: ignore[attr-defined]
@@ -154,3 +166,42 @@ def test_without_a_gateway_there_are_no_providers() -> None:
     finally:
         reset_model_router()
     assert (got.status_code, got.json()["detail"]["code"]) == (404, "NO_GATEWAY")
+
+
+def test_the_model_list_names_each_models_vendor_and_which_vendors_are_ready(
+    supervisor: TestClient,
+) -> None:
+    supervisor.put("/v1/model-providers/deepseek/key", headers=ADMIN, json={"key": "sk-d"})
+    listing = supervisor.get("/v1/models", headers=ADMIN).json()
+    assert [(m["id"], m["vendor"]) for m in listing["models"]] == [
+        ("gateway/echo", "echo"),
+        ("gateway/deepseek-flash", "deepseek"),
+    ]
+    ready = {p["id"]: p["ready"] for p in listing["providers"]}
+    assert ready["deepseek"] is True and ready["anthropic"] is False and ready["local"] is False
+    assert set(listing["providers"][0]) == {"id", "label", "ready"}
+
+
+LOCAL = "http://localhost:11434/v1"
+
+
+@pytest.mark.parametrize("gateway_env", [{"LOCAL_MODEL_BASE_URL": LOCAL}], indirect=True)
+def test_a_local_servers_models_reach_the_picker_free(
+    gateway: TestClient, supervisor: TestClient
+) -> None:
+    ollama = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": [{"id": "qwen3:8b"}]})
+    )
+    gateway.app.state.local_models = LocalModels(
+        LOCAL, lambda: "", context_window=8192, transport=ollama
+    )
+    listing = supervisor.get("/v1/models", headers=ADMIN).json()
+    local = next(m for m in listing["models"] if m["id"] == "gateway/local/qwen3:8b")
+    assert (local["vendor"], local["api"], local["context_window"], local["max_tokens"]) == (
+        "local",
+        "openai-completions",
+        8192,
+        2048,
+    )
+    assert (local["cost"]["input"], local["cost"]["output"]) == (0.0, 0.0)
+    assert {p["id"]: p["ready"] for p in listing["providers"]}["local"] is True

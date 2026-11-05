@@ -17,11 +17,12 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from supervisor.api.deps import _extract_bearer, _state, current_tenant
-from supervisor.models import ModelSpec, model_router
+from supervisor.api.model_providers import call_gateway
+from supervisor.models import ModelRouter, ModelSpec, model_router
 from supervisor.models.browser import (
     ACCOUNT_CHANGED,
     MAX_BODY_BYTES,
@@ -35,8 +36,9 @@ from supervisor.session.manager import SessionManager, SessionNotFound
 router = APIRouter(tags=["models"])
 
 
-def model_metadata(spec: ModelSpec) -> dict[str, Any]:
-    """A model as a picker shows it: no endpoint, header or key."""
+def model_metadata(spec: ModelSpec, *, vendor: str | None = None) -> dict[str, Any]:
+    """A model as a picker shows it: no endpoint, header or key. ``vendor`` is who serves it
+    (a gateway model's vendor; a native model's provider when not given)."""
     entry = REGISTRY_BY_ID.get(spec.id)
     pricing = spec.pricing
     return {
@@ -44,6 +46,7 @@ def model_metadata(spec: ModelSpec) -> dict[str, Any]:
         "name": spec.name,
         "label": entry.button_label if entry is not None and entry.button_label else spec.name,
         "provider": spec.provider,
+        "vendor": vendor or spec.provider,
         "api": spec.api.value,
         "reasoning": spec.reasoning,
         "input": sorted(spec.input),
@@ -70,14 +73,35 @@ def model_metadata(spec: ModelSpec) -> dict[str, Any]:
     }
 
 
+def _providers(routed: ModelRouter) -> list[dict[str, Any]]:
+    """Each vendor and whether its models can run, so a picker can say which need a key or a
+    local server; empty when the gateway does not say (its models are listed regardless)."""
+    try:
+        listing = call_gateway(routed, "GET", "/v1/vendors")
+    except HTTPException:
+        return []
+    return [
+        {"id": v.get("id"), "label": v.get("label"), "ready": v.get("ready") is True}
+        for v in listing.get("vendors") or []
+        if isinstance(v, dict)
+    ]
+
+
 @router.get("/v1/models")
 async def list_models(_tenant: str = Depends(current_tenant)) -> dict[str, Any]:
-    """Selectable models; empty without a routed model gateway."""
+    """The models a session can run now (a vendor without a key offers none), each with its
+    vendor, and every vendor with whether it is ready; empty without a routed model gateway."""
     router_ = model_router()
     if router_ is None:
-        return {"models": []}
-    specs = await asyncio.to_thread(router_.selectable_models)
-    return {"models": [model_metadata(spec) for spec in specs]}
+        return {"models": [], "providers": []}
+    specs, providers = await asyncio.gather(
+        asyncio.to_thread(router_.selectable_models), asyncio.to_thread(_providers, router_)
+    )
+    admitted = router_.catalog.admitted
+    return {
+        "models": [model_metadata(spec, vendor=admitted.vendor(spec.id)) for spec in specs],
+        "providers": providers,
+    }
 
 
 def _error(status: int, message: str) -> JSONResponse:

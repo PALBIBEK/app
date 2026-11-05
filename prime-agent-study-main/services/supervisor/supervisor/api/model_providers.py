@@ -39,7 +39,7 @@ def _router() -> ModelRouter:
     return routed
 
 
-def _gateway(routed: ModelRouter, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+def call_gateway(routed: ModelRouter, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     """One call to the gateway on the supervisor's key; its error passes through as is."""
     config = routed.config
     try:
@@ -81,7 +81,7 @@ def _gateway(routed: ModelRouter, method: str, path: str, **kwargs: Any) -> dict
 @router.get("")
 async def list_providers(_tenant: str = Depends(deps.current_tenant)) -> dict[str, Any]:
     """Every vendor: whether it has a key and where from, and whether keys can be set."""
-    return await asyncio.to_thread(_gateway, _router(), "GET", "/v1/vendors")
+    return await asyncio.to_thread(call_gateway, _router(), "GET", "/v1/vendors")
 
 
 @router.put("/{vendor}/key")
@@ -92,7 +92,7 @@ async def set_provider_key(
     routed = _router()
     payload = {"key": body.key, "updated_by": deps.request_principal_id(request, tenant)}
     result = await asyncio.to_thread(
-        _gateway, routed, "PUT", f"/v1/vendors/{vendor}/key", json=payload
+        call_gateway, routed, "PUT", f"/v1/vendors/{vendor}/key", json=payload
     )
     routed.catalog.expire()
     return result
@@ -106,7 +106,7 @@ async def remove_provider_key(
     routed = _router()
     params = {"updated_by": deps.request_principal_id(request, tenant)}
     result = await asyncio.to_thread(
-        _gateway, routed, "DELETE", f"/v1/vendors/{vendor}/key", params=params
+        call_gateway, routed, "DELETE", f"/v1/vendors/{vendor}/key", params=params
     )
     routed.catalog.expire()
     return result

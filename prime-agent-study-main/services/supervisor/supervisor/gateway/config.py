@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     local_model_base_url: str = Field(default="", alias="LOCAL_MODEL_BASE_URL")
     """A local OpenAI-compatible server (``http://localhost:11434/v1`` for Ollama); unset, the
     ``local`` vendor is off."""
+    local_model_context_window: int = Field(default=4096, gt=1, alias="LOCAL_MODEL_CONTEXT_WINDOW")
+    """The context length the local server runs its models at (Ollama: ``OLLAMA_CONTEXT_LENGTH``;
+    4096 without a large GPU), for a model whose server does not report one."""
     model_gateway_keys_file: str = Field(default="", alias="MODEL_GATEWAY_KEYS_FILE")
     """Where keys set through the gateway's API are kept (sealed); unset, vendor keys come
     from the environment only."""

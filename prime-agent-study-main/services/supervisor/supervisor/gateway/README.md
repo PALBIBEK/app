@@ -24,6 +24,7 @@ DB, catalog, or harness imports required.
 | `ZAI_API_KEY` / `ZAI_BASE_URL` | empty / `https://api.z.ai/api/paas/v4` | `zai` provider: GLM (chat completions) |
 | `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` | empty / `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen` provider: Alibaba Cloud Model Studio (chat completions) |
 | `LOCAL_MODEL_BASE_URL` / `LOCAL_MODEL_API_KEY` | empty / empty | `local` provider: an OpenAI-compatible server you run (Ollama: `http://localhost:11434/v1`). Off until the URL is set; the key is optional |
+| `LOCAL_MODEL_CONTEXT_WINDOW` | `4096` | The context length your local server runs models at (Ollama: `OLLAMA_CONTEXT_LENGTH`; 4096 without a large GPU). Used for a model whose server does not report one (vLLM reports `max_model_len`) |
 | `MODEL_GATEWAY_KEYS_FILE` | empty | Where keys set through `/v1/vendors/{vendor}/key` are kept, sealed (AES-256-GCM). Unset: vendor keys come from the environment only. Every gateway process sharing it sees a change; on Kubernetes it needs a volume |
 | `MODEL_GATEWAY_KEYS_SECRET` | `MODEL_GATEWAY_TOKEN` | Key material the file is sealed with (32+ characters). Changing it makes the keys in the file unreadable: set them again |
 | `PORT` | `8090` | Listen port |
@@ -63,11 +64,14 @@ Default routes (when `MODEL_GATEWAY_ROUTES_JSON` is unset): `echo`, `fake`
 `anthropic/claude-sonnet-4`). Each vendor key that is set adds its default
 route when the table lacks it: `githi` (OpenRouter), `gpt-5.5` (OpenAI),
 `claude-sonnet-5` (Anthropic), `deepseek-flash` (DeepSeek), `glm-5.2` (Z.ai) and
-`qwen3.7-plus` (Qwen). A local server has no default route: name the models it runs,
-for example
+`qwen3.7-plus` (Qwen). A local server's models are offered without naming them: each model its
+`GET /models` lists becomes the route `local/<model id>`, free, with the context window the
+server reports or `LOCAL_MODEL_CONTEXT_WINDOW` (a quarter of it for the answer). The list is
+re-read every five minutes, and thirty seconds after a failure. Name a local model in the
+table to give it other limits, for example
 
 ```json
-{"qwen3-local": {"provider": "local", "upstream_model": "qwen3:8b", "context_window": 40960,
+{"local/qwen3:8b": {"provider": "local", "upstream_model": "qwen3:8b", "context_window": 40960,
   "max_output_tokens": 8192, "input_cost_per_token": 0, "output_cost_per_token": 0}}
 ```
 
@@ -171,3 +175,9 @@ OpenRouter `/key`) and keeps it only when the vendor accepts it; Z.ai and Model 
 document no such call, so their keys are kept unchecked (`"checked": false`). A set key wins
 over the environment's; `DELETE /v1/vendors/{vendor}/key?updated_by=…` turns the vendor off
 even when the environment holds a key. Service token only; a key never comes back.
+
+## What is offered
+
+`GET /v1/models` and `GET /model_group/info` list only the routes that can be called now: a
+route whose vendor has no key (or, for `local`, no URL) is left out until it has one. `GET
+/v1/routes` lists every route, callable or not.

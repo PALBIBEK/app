@@ -31,6 +31,7 @@ from supervisor.gateway.auth import Caller, authenticate, gateway_error, require
 from supervisor.gateway.config import Settings
 from supervisor.gateway.factory import build_provider_registry
 from supervisor.gateway.key_check import KeyCheck, check_key
+from supervisor.gateway.local_models import LocalModels
 from supervisor.gateway.metering import cost_usd, normalize_usage
 from supervisor.gateway.metrics import CountModelCalls, ModelCalls, Spend, prometheus
 from supervisor.gateway.otel import setup_tracing
@@ -61,6 +62,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.keys = settings.vendor_key_store()
     app.state.registry = build_provider_registry(settings, app.state.keys)
+    app.state.local_models = LocalModels(
+        settings.local_model_base_url,
+        app.state.keys.source("local"),
+        context_window=settings.local_model_context_window,
+    )
     # Signed keys: a restart (a deploy) or another replica takes the keys sessions hold.
     app.state.virtual_keys = SignedVirtualKeyStore(settings.virtual_key_secret())
     setup_tracing()
@@ -117,10 +123,13 @@ def _keys(request: Request) -> VendorKeys:
 
 
 def _routes(request: Request) -> RouteTable:
+    """The configured routes, each keyed vendor's defaults, then the local server's models."""
     try:
-        return _settings(request).routes(_keys(request).keyed())
+        table = _settings(request).routes(_keys(request).keyed())
     except RouteConfigError as exc:
         raise gateway_error(500, "ROUTES_INVALID", str(exc)) from None
+    local: LocalModels = request.app.state.local_models
+    return table.with_defaults(local.routes())
 
 
 # -- tracing ---------------------------------------------------------------
@@ -323,13 +332,26 @@ def remove_vendor_key(
 # -- discovery -------------------------------------------------------------
 
 
-def _visible(request: Request) -> list[tuple[str, Route]]:
+def _ready(request: Request, route: Route) -> bool:
+    provider = _registry(request).get(route.provider)
+    return provider is not None and provider.credential_ok()
+
+
+def _visible(request: Request, *, callable_only: bool = False) -> list[tuple[str, Route]]:
+    """The routes this caller may use; with ``callable_only``, those that can be called now
+    (a route whose vendor has no key or URL is left out, as QM offers only the models of
+    configured providers)."""
     caller = authenticate(request)
-    return [(rid, route) for rid, route in _routes(request).items() if caller.may_use(rid)]
+    return [
+        (rid, route)
+        for rid, route in _routes(request).items()
+        if caller.may_use(rid) and (not callable_only or _ready(request, route))
+    ]
 
 
 @app.get("/v1/routes")
 def list_routes(request: Request) -> dict[str, Any]:
+    """Every route the caller may use, callable now or not: what each one calls."""
     return {"routes": [route_view(rid, route) for rid, route in _visible(request)]}
 
 
@@ -345,20 +367,24 @@ def get_route(route_id: str, request: Request) -> dict[str, Any]:
 
 @app.get("/v1/models")
 def list_models(request: Request) -> dict[str, Any]:
-    """OpenAI model list: the route ids this caller may call."""
+    """OpenAI model list: the route ids this caller may call, that can be called now."""
     return {
         "object": "list",
         "data": [
             {"id": rid, "object": "model", "created": 0, "owned_by": route.provider}
-            for rid, route in _visible(request)
+            for rid, route in _visible(request, callable_only=True)
         ],
     }
 
 
 @app.get("/model_group/info")
 def model_group_info(request: Request) -> dict[str, Any]:
-    """LiteLLM end-user model-group metadata for the routes this caller may call."""
-    return {"data": [route.model_group_info(rid) for rid, route in _visible(request)]}
+    """LiteLLM end-user model-group metadata for the routes ``/v1/models`` lists."""
+    return {
+        "data": [
+            route.model_group_info(rid) for rid, route in _visible(request, callable_only=True)
+        ]
+    }
 
 
 # -- inference -------------------------------------------------------------
