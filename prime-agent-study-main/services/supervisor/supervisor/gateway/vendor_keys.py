@@ -1,4 +1,4 @@
-"""Vendor keys set from the product, held by the gateway alone.
+"""Vendor keys set from the product, held by the gateway alone; and a local server's address.
 
 A vendor's key comes from the environment (``OPENAI_API_KEY``, …) or is set through the
 gateway's service-only API. A set key is sealed with AES-256-GCM and kept in one file the
@@ -17,6 +17,11 @@ follows QM's model credential store (``src/model/model-credential-store.ts``):
 The vendor id is the ciphertext's associated data, so a sealed key moved to another vendor's
 entry does not open. Every gateway process sharing the file sees a change: a read re-loads the
 file when it changed, and a write holds an exclusive lock and replaces the file atomically.
+
+The same file keeps the address of a vendor whose address may be set from the product (only
+a local server's, ``Vendor.address_settable``), in clear: an address is not a secret. A key is
+checked against the address it is used with, so setting a new address drops a key set for the
+old one: it must be set again, for the new server.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from supervisor.gateway.vendors import VENDORS, Vendor
 
-__all__ = ["KeySource", "KeyStatus", "VendorKeys", "sealing_key"]
+__all__ = ["AddressStatus", "KeySource", "KeyStatus", "VendorKeys", "sealing_key"]
 
 _FORMAT: Final = 1
 _SEALED_PREFIX: Final = "v1:"
@@ -73,6 +78,29 @@ class KeyStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class AddressStatus:
+    vendor: str
+    base_url: str
+    """The address now: the one set from the product, else the environment's (empty: none)."""
+    source: Literal["set", "environment", "absent"]
+    updated_at: float | None = None
+    updated_by: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Address:
+    base_url: str
+    updated_at: float
+    updated_by: str
+
+
+@dataclass(frozen=True, slots=True)
+class _File:
+    keys: dict[str, _Entry]
+    addresses: dict[str, _Address]
+
+
+@dataclass(frozen=True, slots=True)
 class _Entry:
     sealed: str | None
     """``None`` when the key was removed."""
@@ -98,7 +126,7 @@ class VendorKeys:
         self._aead = AESGCM(secret) if secret is not None else None
         self._now = now
         self._lock = threading.Lock()
-        self._entries: dict[str, _Entry] = {}
+        self._file = _File({}, {})
         self._seen: tuple[int, int, int] | None = None
 
     @property
@@ -110,7 +138,7 @@ class VendorKeys:
 
     def key(self, vendor: str) -> str:
         """The vendor's key now, or empty."""
-        entry = self._current().get(vendor)
+        entry = self._current().keys.get(vendor)
         if entry is None:
             return self._environment.get(vendor, "")
         return "" if entry.sealed is None else self._open(vendor, entry.sealed)
@@ -123,7 +151,7 @@ class VendorKeys:
         return {vendor for vendor in VENDORS if self.key(vendor)}
 
     def status(self, vendor: str) -> KeyStatus:
-        entry = self._current().get(vendor)
+        entry = self._current().keys.get(vendor)
         if entry is not None:
             return KeyStatus(
                 vendor,
@@ -150,31 +178,61 @@ class VendorKeys:
         self._write(vendor.id, _Entry(None, self._now(), by))
         return self.status(vendor.id)
 
+    # -- a local server's address ------------------------------------------------------------
+
+    def address(self, vendor: Vendor, environment: str) -> AddressStatus:
+        """``vendor``'s address now: the one set here, else ``environment`` (the deployment's)."""
+        entry = self._current().addresses.get(vendor.id) if vendor.address_settable else None
+        if entry is not None:
+            return AddressStatus(vendor.id, entry.base_url, "set", entry.updated_at, entry.updated_by)
+        return AddressStatus(vendor.id, environment, "environment" if environment else "absent")
+
+    def address_source(self, vendor: Vendor, environment: str) -> Callable[[], str]:
+        return lambda: self.address(vendor, environment).base_url
+
+    def set_address(self, vendor: Vendor, base_url: str, *, by: str) -> None:
+        """Set ``vendor``'s address (a normalized http(s) URL; empty turns it off). A key set
+        for its old address is dropped: it was checked against another server."""
+        if not vendor.address_settable:
+            raise PermissionError(f"{vendor.label}'s address is the deployment's, not set here")
+        path = self._require_file()
+        with self._lock, _exclusive(path):
+            current = _parse(path.read_bytes()) if path.exists() else _File({}, {})
+            before = current.addresses.get(vendor.id)
+            if before is None or before.base_url != base_url:
+                current.keys.pop(vendor.id, None)
+            current.addresses[vendor.id] = _Address(base_url, self._now(), by)
+            self._store(path, current)
+
     # -- the file --------------------------------------------------------------------------
 
-    def _current(self) -> dict[str, _Entry]:
+    def _current(self) -> _File:
         """The file's entries, re-read when it changed since the last read."""
         if self._path is None:
-            return {}
+            return _File({}, {})
         with self._lock:
             try:
                 stat = self._path.stat()
             except FileNotFoundError:
-                self._entries, self._seen = {}, None
-                return self._entries
+                self._file, self._seen = _File({}, {}), None
+                return self._file
             seen = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
             if seen != self._seen:
-                self._entries, self._seen = _parse(self._path.read_bytes()), seen
-            return self._entries
+                self._file, self._seen = _parse(self._path.read_bytes()), seen
+            return self._file
 
     def _write(self, vendor: str, entry: _Entry) -> None:
         path = self._require_file()
         with self._lock, _exclusive(path):
-            entries = _parse(path.read_bytes()) if path.exists() else {}
-            entries[vendor] = entry
-            _replace(path, _dump(entries))
-            stat = path.stat()
-            self._entries, self._seen = entries, (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+            current = _parse(path.read_bytes()) if path.exists() else _File({}, {})
+            current.keys[vendor] = entry
+            self._store(path, current)
+
+    def _store(self, path: Path, current: _File) -> None:
+        """Replace the file with ``current`` (under the lock), and keep it as what was read."""
+        _replace(path, _dump(current))
+        stat = path.stat()
+        self._file, self._seen = current, (stat.st_ino, stat.st_mtime_ns, stat.st_size)
 
     def _require_file(self) -> Path:
         if self._path is None:
@@ -204,25 +262,35 @@ class VendorKeys:
             ) from None
 
 
-def _parse(raw: bytes) -> dict[str, _Entry]:
+def _parse(raw: bytes) -> _File:
+    """The file's keys and addresses (a file of keys alone, as earlier gateways wrote, reads
+    as having no address set)."""
     document: Any = json.loads(raw) if raw.strip() else {"format": _FORMAT, "vendors": {}}
     if not isinstance(document, dict) or document.get("format") != _FORMAT:
         raise ValueError("the vendor key file is not in a format this gateway reads")
-    entries: dict[str, _Entry] = {}
+    keys: dict[str, _Entry] = {}
     for vendor, row in (document.get("vendors") or {}).items():
         if vendor in VENDORS and isinstance(row, dict):
-            entries[vendor] = _Entry(
-                row.get("sealed"), float(row["updated_at"]), str(row["updated_by"])
-            )
-    return entries
+            keys[vendor] = _Entry(row.get("sealed"), float(row["updated_at"]), str(row["updated_by"]))
+    addresses: dict[str, _Address] = {}
+    for vendor, row in (document.get("addresses") or {}).items():
+        if vendor in VENDORS and VENDORS[vendor].address_settable and isinstance(row, dict):
+            addresses[vendor] = _Address(str(row["base_url"]), float(row["updated_at"]), str(row["updated_by"]))
+    return _File(keys, addresses)
 
 
-def _dump(entries: Mapping[str, _Entry]) -> bytes:
+def _dump(current: _File) -> bytes:
     vendors = {
         vendor: {"sealed": e.sealed, "updated_at": e.updated_at, "updated_by": e.updated_by}
-        for vendor, e in sorted(entries.items())
+        for vendor, e in sorted(current.keys.items())
     }
-    return json.dumps({"format": _FORMAT, "vendors": vendors}, indent=2).encode()
+    document: dict[str, Any] = {"format": _FORMAT, "vendors": vendors}
+    if current.addresses:
+        document["addresses"] = {
+            vendor: {"base_url": a.base_url, "updated_at": a.updated_at, "updated_by": a.updated_by}
+            for vendor, a in sorted(current.addresses.items())
+        }
+    return json.dumps(document, indent=2).encode()
 
 
 @contextmanager

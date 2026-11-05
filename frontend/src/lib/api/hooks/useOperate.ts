@@ -5,7 +5,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { operateAPI } from '../endpoints/operate';
+import { modelKeys } from './useModels';
 import type { ArtifactKind, UsageBy } from '../types/operate.types';
+import type { ModelProvider } from '../types/provider.types';
 import { useAuthStore } from '../../store/authStore';
 
 export const operateKeys = {
@@ -17,6 +19,7 @@ export const operateKeys = {
     [...operateKeys.all, 'usage', by, sinceMs ?? null, untilMs ?? null] as const,
   runners: () => [...operateKeys.all, 'runners'] as const,
   secrets: () => [...operateKeys.all, 'secrets'] as const,
+  providers: () => [...operateKeys.all, 'model-providers'] as const,
   workers: () => [...operateKeys.all, 'workers'] as const,
   rollout: () => [...operateKeys.all, 'rollout'] as const,
 };
@@ -113,3 +116,24 @@ export function useFleet(enabledForRole: boolean) {
   const rollout = useQuery({ queryKey: operateKeys.rollout(), queryFn: () => operateAPI.rollout(), enabled, refetchInterval: 30_000, retry: false });
   return { workers, rollout };
 }
+
+/** The model vendors and their keys: owners and admins only (others are refused). */
+export function useModelProviders(enabled = true) {
+  const authed = useAuthed();
+  return useQuery({ queryKey: operateKeys.providers(), queryFn: () => operateAPI.modelProviders(), enabled: authed && enabled });
+}
+
+/** A change to a vendor (its key, a local server's address): the providers and the models a
+ * session can pick from are read again. */
+function useProviderChange<A>(change: (a: A) => Promise<ModelProvider>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: change,
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: operateKeys.providers() }), qc.invalidateQueries({ queryKey: modelKeys.choices() })]),
+  });
+}
+
+export const useSetProviderKey = () => useProviderChange(({ vendor, key }: { vendor: string; key: string }) => operateAPI.setProviderKey(vendor, key));
+export const useRemoveProviderKey = () => useProviderChange((vendor: string) => operateAPI.removeProviderKey(vendor));
+export const useSetProviderAddress = () =>
+  useProviderChange(({ vendor, baseUrl }: { vendor: string; baseUrl: string }) => operateAPI.setProviderAddress(vendor, baseUrl));

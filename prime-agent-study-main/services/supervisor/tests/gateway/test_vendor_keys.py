@@ -190,6 +190,7 @@ def test_the_vendor_list_shows_status_never_a_key(client: TestClient) -> None:
         "updated_at": None,
         "updated_by": None,
         "ready": False,
+        "address_settable": False,
     }
 
 
@@ -264,3 +265,86 @@ def test_without_a_key_file_keys_cannot_be_set(
         assert c.get("/v1/vendors", headers=SVC).json()["editable"] is False
         put = c.put("/v1/vendors/openai/key", headers=SVC, json={"key": "k", "updated_by": "u"})
     assert (put.status_code, put.json()["detail"]["error"]["code"]) == (409, "KEYS_NOT_EDITABLE")
+
+
+# -- a local server's address, set from the product ------------------------------------------
+
+
+def test_a_local_servers_address_is_kept_beside_the_keys_and_read_by_every_process(tmp_path: Path) -> None:
+    local = VENDORS["local"]
+    one, two = _store(tmp_path / "k.json"), _store(tmp_path / "k.json")
+
+    one.set_address(local, "http://gpu-box:11434/v1", by="u1")
+
+    assert two.address(local, "").base_url == "http://gpu-box:11434/v1"
+    assert (two.address(local, "").source, two.address(local, "").updated_by) == ("set", "u1")
+    assert two.address(local, "http://env:1/v1").base_url == "http://gpu-box:11434/v1", "the one set wins"
+    assert _store(tmp_path / "other.json").address(local, "http://env:1/v1").source == "environment"
+
+
+def test_a_new_address_drops_the_key_set_for_the_old_one(tmp_path: Path) -> None:
+    keys, local = _store(tmp_path / "k.json"), VENDORS["local"]
+    keys.set_address(local, "http://a:8000/v1", by="u1")
+    keys.set(local, "vllm-key", by="u1")
+    keys.set_address(local, "http://a:8000/v1", by="u1")  # the same address: the key stays
+    kept = keys.key("local")
+
+    keys.set_address(local, "http://b:8000/v1", by="u1")
+
+    assert kept == "vllm-key"
+    assert keys.key("local") == "", "a key checked against one server never follows to another"
+
+
+def test_a_cloud_vendors_address_cannot_be_set(tmp_path: Path) -> None:
+    with pytest.raises(PermissionError):
+        _store(tmp_path / "k.json").set_address(VENDORS["openai"], "http://evil.example/v1", by="u1")
+
+
+def test_setting_the_local_address_turns_it_on_with_the_models_it_runs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+
+    def server(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "qwen3:8b"}, {"id": "llama3.2"}]})
+
+    local_models = client.app.state.local_models  # type: ignore[attr-defined]
+    monkeypatch.setattr(local_models, "_transport", httpx.MockTransport(server))
+    before = _vendor(client, "local")
+
+    put = client.put("/v1/vendors/local/base-url", headers=SVC, json={"base_url": "http://gpu-box:11434/v1/", "updated_by": "u1"})
+    routes = client.get("/v1/models", headers=SVC).json()["data"]
+
+    assert (before["ready"], before["address_source"], before["models"]) == (False, "absent", [])
+    assert put.status_code == 200, put.text
+    assert put.json()["base_url"] == "http://gpu-box:11434/v1"
+    assert (put.json()["ready"], put.json()["address_source"], put.json()["models"]) == (True, "set", ["llama3.2", "qwen3:8b"])
+    assert seen[0] == "http://gpu-box:11434/v1/models"
+    assert {"local/qwen3:8b", "local/llama3.2"} <= {r["id"] for r in routes}
+
+
+def test_a_local_server_that_does_not_answer_says_so(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    monkeypatch.setattr(client.app.state.local_models, "_transport", httpx.MockTransport(down))  # type: ignore[attr-defined]
+
+    put = client.put("/v1/vendors/local/base-url", headers=SVC, json={"base_url": "http://gpu-box:11434/v1", "updated_by": "u1"})
+
+    assert put.status_code == 200
+    assert (put.json()["models"], put.json()["unreachable"]) == ([], "the server could not be reached")
+
+
+@pytest.mark.parametrize(
+    ("vendor", "address", "status", "code"),
+    [
+        ("openai", "http://evil.example/v1", 403, "ADDRESS_FIXED"),
+        ("local", "ftp://box/v1", 400, "ADDRESS_INVALID"),
+        ("local", "http://user:pw@box/v1", 400, "ADDRESS_INVALID"),
+    ],
+)
+def test_an_address_that_cannot_be_set_is_refused(client: TestClient, vendor: str, address: str, status: int, code: str) -> None:
+    put = client.put(f"/v1/vendors/{vendor}/base-url", headers=SVC, json={"base_url": address, "updated_by": "u1"})
+
+    assert put.status_code == status and put.json()["detail"]["error"]["code"] == code, put.text

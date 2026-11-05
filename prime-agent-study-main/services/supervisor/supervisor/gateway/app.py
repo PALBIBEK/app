@@ -6,6 +6,7 @@ Serves the LiteLLM-compatible contract a QM-style client discovers and calls:
   with mode, provider labels, limits, prices and capability flags;
 * ``POST /v1/chat/completions``, ``POST /v1/messages`` and ``POST /v1/responses`` —
   passthrough inference on the three wires, streaming or not;
+* ``PUT /v1/vendors/{vendor}/base-url`` — a local server's address, set from the product.
 * ``GET /v1/vendors`` and ``PUT``/``DELETE /v1/vendors/{vendor}/key`` — the vendors, whether
   each has a key, and setting or removing one (service token only; a key never comes back).
 
@@ -31,7 +32,7 @@ from supervisor.gateway.auth import Caller, authenticate, gateway_error, require
 from supervisor.gateway.config import Settings
 from supervisor.gateway.factory import build_provider_registry
 from supervisor.gateway.key_check import KeyCheck, check_key
-from supervisor.gateway.local_models import LocalModels
+from supervisor.gateway.local_models import LOCAL_PREFIX, LocalModels
 from supervisor.gateway.metering import cost_usd, normalize_usage
 from supervisor.gateway.metrics import CountModelCalls, ModelCalls, Spend, prometheus
 from supervisor.gateway.otel import setup_tracing
@@ -46,7 +47,7 @@ from supervisor.gateway.providers.base import (
 )
 from supervisor.gateway.routes import Route, RouteConfigError, RouteTable, route_view
 from supervisor.gateway.vendor_keys import VendorKeys
-from supervisor.gateway.vendors import VENDORS, Vendor
+from supervisor.gateway.vendors import VENDORS, Vendor, parse_base_url
 from supervisor.gateway.virtual_keys import (
     KEY_TTL_S,
     MintRequest,
@@ -63,7 +64,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.keys = settings.vendor_key_store()
     app.state.registry = build_provider_registry(settings, app.state.keys)
     app.state.local_models = LocalModels(
-        settings.local_model_base_url,
+        app.state.keys.address_source(VENDORS["local"], settings.local_model_base_url),
         app.state.keys.source("local"),
         context_window=settings.local_model_context_window,
     )
@@ -268,10 +269,10 @@ def _vendor_view(request: Request, vendor: Vendor) -> dict[str, Any]:
     """A vendor as the product shows it: whether it can be called, never its key."""
     status = _keys(request).status(vendor.id)
     provider = _registry(request).get(vendor.id)
-    return {
+    view: dict[str, Any] = {
         "id": vendor.id,
         "label": vendor.label,
-        "base_url": _settings(request).vendor_base_url(vendor),
+        "base_url": _base_url(request, vendor),
         "key_required": vendor.key_required,
         "key_checked": vendor.key_check is not None,
         "configured": status.configured,
@@ -279,7 +280,24 @@ def _vendor_view(request: Request, vendor: Vendor) -> dict[str, Any]:
         "updated_at": status.updated_at,
         "updated_by": status.updated_by,
         "ready": provider is not None and provider.credential_ok(),
+        "address_settable": vendor.address_settable,
     }
+    if vendor.address_settable:  # a local server: where it is, and what it runs
+        address = _keys(request).address(vendor, _settings(request).vendor_base_url(vendor))
+        local: LocalModels = request.app.state.local_models
+        models = sorted(rid.removeprefix(LOCAL_PREFIX) for rid in local.routes())
+        view |= {
+            "address_source": address.source,
+            "models": models,
+            "unreachable": local.error() if address.base_url else None,
+        }
+    return view
+
+
+def _base_url(request: Request, vendor: Vendor) -> str:
+    """The address the gateway calls ``vendor`` at now."""
+    environment = _settings(request).vendor_base_url(vendor)
+    return _keys(request).address(vendor, environment).base_url if vendor.address_settable else environment
 
 
 def _editable(request: Request) -> VendorKeys:
@@ -307,7 +325,7 @@ def set_vendor_key(vendor_id: str, body: VendorKeyIn, request: Request) -> dict[
     require_service_token(request)
     vendor, keys = _vendor(vendor_id), _editable(request)
     key = body.key.strip()
-    checked = check_key(vendor, key, _settings(request).vendor_base_url(vendor))
+    checked = check_key(vendor, key, _base_url(request, vendor))
     if checked is KeyCheck.REFUSED:
         raise gateway_error(400, "KEY_REFUSED", f"{vendor.label} refused this key")
     if checked is KeyCheck.UNREACHABLE:
@@ -315,6 +333,7 @@ def set_vendor_key(vendor_id: str, body: VendorKeyIn, request: Request) -> dict[
             502, "KEY_UNCHECKED", f"could not reach {vendor.label} to check the key; try again"
         )
     keys.set(vendor, key, by=body.updated_by)
+    request.app.state.local_models.expire()  # a local server's list may need the key
     return {**_vendor_view(request, vendor), "checked": checked is KeyCheck.ACCEPTED}
 
 
@@ -326,6 +345,30 @@ def remove_vendor_key(
     require_service_token(request)
     vendor = _vendor(vendor_id)
     _editable(request).remove(vendor, by=updated_by)
+    return _vendor_view(request, vendor)
+
+
+class VendorAddressIn(BaseModel):
+    base_url: str = Field(max_length=2048)
+    """An http(s) URL with the API's version prefix (Ollama: ``http://host:11434/v1``); empty
+    turns the vendor off."""
+    updated_by: str = Field(min_length=1, max_length=255)
+
+
+@app.put("/v1/vendors/{vendor_id}/base-url")
+def set_vendor_address(vendor_id: str, body: VendorAddressIn, request: Request) -> dict[str, Any]:
+    """Set the address of a vendor whose address the product may set (a local server): its
+    models are read from there at once. A key set for its old address is dropped."""
+    require_service_token(request)
+    vendor, keys = _vendor(vendor_id), _editable(request)
+    if not vendor.address_settable:
+        raise gateway_error(403, "ADDRESS_FIXED", f"{vendor.label}'s address is the deployment's")
+    try:
+        base_url = parse_base_url("the address", body.base_url)
+    except ValueError as exc:
+        raise gateway_error(400, "ADDRESS_INVALID", str(exc)) from None
+    keys.set_address(vendor, base_url, by=body.updated_by)
+    request.app.state.local_models.expire()
     return _vendor_view(request, vendor)
 
 

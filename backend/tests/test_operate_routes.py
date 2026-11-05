@@ -258,6 +258,8 @@ async def test_model_provider_keys_are_for_admins_and_pass_through(db_session, m
             return httpx.Response(200, json={"editable": True, "vendors": [vendor]})
         if (method, path) in (("PUT", "/v1/model-providers/deepseek/key"), ("DELETE", "/v1/model-providers/deepseek/key")):
             return httpx.Response(200, json=vendor)
+        if (method, path) == ("PUT", "/v1/model-providers/local/base-url"):
+            return httpx.Response(200, json={"id": "local", "address_source": "set", "models": ["qwen3:8b"]})
         if path == "/v1/model-providers/openai/key":
             return httpx.Response(400, json={"detail": {"code": "KEY_REFUSED", "message": "OpenAI refused this key"}})
         return httpx.Response(404)
@@ -268,6 +270,7 @@ async def test_model_provider_keys_are_for_admins_and_pass_through(db_session, m
     async with _api(db_session, member, settings, monkeypatch, handler, seen) as api:
         assert (await api.get("/api/v1/model-providers")).status_code == 403
         assert (await api.put("/api/v1/model-providers/deepseek/key", json={"key": "sk"})).status_code == 403
+        assert (await api.put("/api/v1/model-providers/local/base-url", json={"base_url": "http://x/v1"})).status_code == 403
     assert seen == []
     async with _api(db_session, admin, settings, monkeypatch, handler, seen) as api:
         assert (await api.get("/api/v1/model-providers")).json() == {"editable": True, "vendors": [vendor]}
@@ -279,6 +282,9 @@ async def test_model_provider_keys_are_for_admins_and_pass_through(db_session, m
         assert refused.status_code == 400 and refused.json()["detail"]["message"] == "OpenAI refused this key"
         assert (await api.put("/api/v1/model-providers/deepseek/key", json={"key": ""})).status_code == 422
         assert (await api.put("/api/v1/model-providers/Bad..x/key", json={"key": "k"})).status_code == 404
+        local = await api.put("/api/v1/model-providers/local/base-url", json={"base_url": "http://gpu-box:11434/v1"})
+        assert local.json()["models"] == ["qwen3:8b"]
+        assert json.loads(seen[-1].content) == {"base_url": "http://gpu-box:11434/v1"}
 
 
 @pytest.mark.asyncio

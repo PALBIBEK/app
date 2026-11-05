@@ -1,4 +1,5 @@
-"""Model providers: which vendors the gateway can call, and setting or removing their keys.
+"""Model providers: which vendors the gateway can call, setting or removing their keys, and a
+local server's address.
 
 The keys are the gateway's (``supervisor.gateway.vendor_keys``): this API passes a key to it
 once, on the supervisor's gateway key, and never stores, logs or returns one. Who may change
@@ -108,5 +109,23 @@ async def remove_provider_key(
     result = await asyncio.to_thread(
         call_gateway, routed, "DELETE", f"/v1/vendors/{vendor}/key", params=params
     )
+    routed.catalog.expire()
+    return result
+
+
+class ProviderAddressIn(BaseModel):
+    base_url: str = Field(max_length=2048)
+    """An http(s) URL with the API's version prefix; empty turns the vendor off."""
+
+
+@router.put("/{vendor}/base-url")
+async def set_provider_address(
+    vendor: str, body: ProviderAddressIn, request: Request, tenant: str = Depends(deps.current_tenant)
+) -> dict[str, Any]:
+    """Set a local server's address (the only vendor whose address can be set here): its
+    models are offered at once. A key set for its old address is dropped."""
+    routed = _router()
+    payload = {"base_url": body.base_url, "updated_by": deps.request_principal_id(request, tenant)}
+    result = await asyncio.to_thread(call_gateway, routed, "PUT", f"/v1/vendors/{vendor}/base-url", json=payload)
     routed.catalog.expire()
     return result

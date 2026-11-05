@@ -1,6 +1,7 @@
 /**
  * Policies & secrets: what each agent may do without asking, what it must ask for, its
- * limits; and the secrets its tools can use (names only: a value is never shown again).
+ * limits; the model providers sessions run on (owners and admins); and the secrets its tools
+ * can use (names only: a value is never shown again).
  */
 
 'use client';
@@ -12,6 +13,7 @@ import { Key, Trash } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { ModelProviders } from '@/components/settings/ModelProviders';
 import { Button, Card, CardHeader, EmptyState, ErrorNote, LinkButton, Mono, PageHeader, SkeletonRows, Table, Td, Th, Tr } from '@/components/ui';
 import { harnessesAPI } from '@/lib/api/endpoints/harnesses';
 import { getApiErrorMessage } from '@/lib/api/errors';
@@ -209,8 +211,12 @@ export default function PoliciesPage(): JSX.Element {
   return (
     <AppShell>
       <PageBody>
-        <PageHeader title="Policies & secrets" description="What agents may do without asking, what they must ask for, their limits, and the secrets their tools use." />
+        <PageHeader
+          title="Policies & secrets"
+          description="What agents may do without asking, what they must ask for, their limits, the secrets their tools use, and the model providers sessions run on."
+        />
         <AgentPolicies />
+        <ModelProviders />
         <Secrets />
       </PageBody>
     </AppShell>

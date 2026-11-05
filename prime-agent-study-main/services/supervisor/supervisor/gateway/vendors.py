@@ -18,8 +18,8 @@ The presets and their endpoints, as each vendor documents them:
   ``https://dashscope-intl.aliyuncs.com/compatible-mode/v1``, ``DASHSCOPE_API_KEY``;
 - ``local``: a server on the operator's machine speaking the OpenAI API (Ollama at
   ``http://localhost:11434/v1``, vLLM, LM Studio). It needs no key (Ollama ignores one),
-  so it is enabled by setting ``LOCAL_MODEL_BASE_URL``, which a deployment does only when
-  that server is meant to be reached.
+  so it is enabled by its address: ``LOCAL_MODEL_BASE_URL``, or one an admin sets from the
+  product (the only vendor whose address can be set there).
 """
 
 from __future__ import annotations
@@ -47,6 +47,9 @@ class Vendor:
     key_required: bool = True
     responses: bool = False
     """Also serves OpenAI Responses (only OpenAI itself)."""
+    address_settable: bool = False
+    """Its base URL may be set from the product (``VendorKeys.set_address``): only a local
+    server's. A cloud vendor's stays the deployment's, so no one can send its key elsewhere."""
     key_check: str | None = "/models"
     """The authenticated GET (under ``base_url``) that tells whether a key is accepted, as
     QM checks a key before saving it (``src/api/routes/admin/model-providers.ts``
@@ -71,7 +74,7 @@ VENDORS: Mapping[str, Vendor] = {
                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
                "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", key_check=None),
         Vendor("local", "Local", "openai", "",
-               "LOCAL_MODEL_API_KEY", "LOCAL_MODEL_BASE_URL", key_required=False),
+               "LOCAL_MODEL_API_KEY", "LOCAL_MODEL_BASE_URL", key_required=False, address_settable=True),
     )
 }  # fmt: skip
 """Every vendor the gateway registers a provider for, by provider name."""
