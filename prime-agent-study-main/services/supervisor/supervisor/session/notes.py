@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import Final
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.agent.events import ToolEnd
-from supervisor.db.models import RunTraceRow, SessionRow
+from supervisor.db.models import RunTraceRow, SessionEvaluationRow, SessionRow
 from supervisor.journal.reader import JournalReader
 from supervisor.session.access import session_visibility
 from supervisor.tools.builtin.note_for_session import NAME
@@ -54,7 +54,8 @@ async def composition_notes(
 ) -> list[dict[str, object]]:
     """What the agent noted in its recent sessions, the notes made in most sessions first,
     each with how many: the improvement loop reads them as unverified evidence. Sessions the
-    optimizer must not read (an experiment's replays, held-out saved runs) are left out."""
+    optimizer must not read are left out: every experiment's replay (marked in
+    ``session_evaluations``) and ``exclude_sessions`` (the held-out saved runs')."""
     query = (
         select(RunTraceRow.session_id)
         .join(SessionRow, SessionRow.id == RunTraceRow.session_id)
@@ -66,6 +67,7 @@ async def composition_notes(
     )
     if exclude_sessions:
         query = query.where(RunTraceRow.session_id.not_in(exclude_sessions))
+    query = query.where(~exists().where(SessionEvaluationRow.session_id == RunTraceRow.session_id))
     async with factory() as db:
         sessions = [str(s) for s in (await db.execute(query)).scalars()]
     seen: dict[str, set[str]] = {}
