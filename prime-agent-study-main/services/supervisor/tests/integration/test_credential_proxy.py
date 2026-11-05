@@ -11,13 +11,13 @@ serves the journal, so the journal check covers it.)
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from supervisor.agent.events import ToolEnd
 from supervisor.catalog.loading.bootstrap import bootstrap_composition_catalog, default_catalog_dir
@@ -64,8 +64,14 @@ def mcp_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def _api(state: Any) -> TestClient:
-    return TestClient(create_app(state=state), headers={"X-Tenant-Id": "t1"})
+@asynccontextmanager
+async def _api(state: Any) -> AsyncIterator[httpx.AsyncClient]:
+    """The API on this test's event loop. A sync TestClient would block the loop while the
+    request runs elsewhere, so a write the loop still holds open (the session worker's last
+    bookkeeping) can never commit and the request waits on its lock: "database is locked"."""
+    transport = httpx.ASGITransport(app=create_app(state=state))
+    async with httpx.AsyncClient(transport=transport, base_url="http://supervisor", headers={"X-Tenant-Id": "t1"}) as client:
+        yield client
 
 
 async def test_a_tool_servers_secret_reaches_only_the_server(
@@ -83,13 +89,13 @@ async def test_a_tool_servers_secret_reaches_only_the_server(
         sandbox_provider=LocalProcessProvider(base_dir=tmp_path / "sandboxes"),
         composition_catalog=compositions,
     )
-    api = _api(state)
     name = mcp_secret_name(SERVER)
     assert name == "mcp:http://tools.test"
-    put = api.put(f"/v1/secrets/{name}", json={"value": SECRET})
-    assert put.status_code == 200 and SECRET not in put.text
-    listed = api.get("/v1/secrets")
-    assert listed.json() == {"names": [name]} and SECRET not in listed.text
+    async with _api(state) as api:
+        put = await api.put(f"/v1/secrets/{name}", json={"value": SECRET})
+        assert put.status_code == 200 and SECRET not in put.text
+        listed = await api.get("/v1/secrets")
+        assert listed.json() == {"names": [name]} and SECRET not in listed.text
 
     async with session_worker(env.client, state, task_queue=env.queue):
         sid = await env.create(state)
@@ -111,5 +117,6 @@ async def test_a_tool_servers_secret_reaches_only_the_server(
     assert SECRET not in prompts and "[redacted]" in prompts
 
     # A deleted secret is gone (the server refuses calls without it: see _mcp).
-    assert api.delete(f"/v1/secrets/{name}").status_code == 204
-    assert api.delete(f"/v1/secrets/{name}").status_code == 404
+    async with _api(state) as api:
+        assert (await api.delete(f"/v1/secrets/{name}")).status_code == 204
+        assert (await api.delete(f"/v1/secrets/{name}")).status_code == 404
