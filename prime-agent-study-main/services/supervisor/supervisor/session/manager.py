@@ -382,6 +382,7 @@ class SessionManager(UpkeepOps):
         set_identity = getattr(runtime, "set_identity", None)
         if callable(set_identity) and (identity := self._long_term.get(session_id)) is not None:
             set_identity(owner=identity[0], agent=identity[1])
+        self._give_logins(runtime, tenant_id)
         # A runtime that takes a workspace gets its sandbox on first use (and a fresh
         # one after a loss); any other runtime needs its sandbox before it starts.
         set_workspace = getattr(runtime, "set_workspace", None)
@@ -453,6 +454,12 @@ class SessionManager(UpkeepOps):
         if stored is not None and stored.expires_at is not None:
             self._key_expiry[session_id] = stored.expires_at.timestamp()
         return token
+
+    def _give_logins(self, runtime: object, tenant_id: str) -> None:
+        """Hand a runtime that takes them its tenant's saved browser logins."""
+        set_logins = getattr(runtime, "set_logins", None)
+        if callable(set_logins) and self._logins is not None:
+            set_logins(self._logins.bind(tenant_id))
 
     async def _authorize_tools(
         self, session_id: str, tenant_id: str, seams: RuntimeSeams | None
@@ -569,6 +576,7 @@ class SessionManager(UpkeepOps):
         set_identity = getattr(brain, "set_identity", None)
         if callable(set_identity):
             set_identity(owner=owner, agent=agent)
+        self._give_logins(brain, row.tenant_id)
         if seams is not None:
             self._seams[session_id] = seams
         self._brains[session_id] = brain

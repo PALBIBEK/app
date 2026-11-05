@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:959021641520bc110defab6b269d2a1c71f96b3812334ff2338e0a1a19c2ca5c",
+  "digest": "sha256:57c5bc00efff54683aa7ac61ba8807051540901e2d4e50fe0527b4d2133f944b",
   "harness_version": "githi-v1",
   "memory_profile": {
     "digest": "sha256:6beabe3ba67110c3026b9ad604d3bc6cf91197ac3c7c67d2ef6be5f7be8c6189",
@@ -19,10 +19,10 @@
     "digest": "sha256:69eaead38c21cb5dfa3b05fe98de675adc79f4db8b2b7f5802494d180945b0e8",
     "id": "githi-browser-docker-v1"
   },
-  "semver": "1.1.0",
+  "semver": "1.2.0",
   "status": "offered",
   "tool_set": {
-    "digest": "sha256:f7f4a8c9296e7a107ef0eb569dd650dd6d838ecd3971b1948530a320b20c8dc0",
+    "digest": "sha256:32a2edd9c5f85bcff14db295086db44babfd26ec5a2ed7457a69a680ca1e3507",
     "id": "githi-browser-tools"
   }
 }

@@ -69,6 +69,8 @@ def test_registry_definitions_publish_as_a_tool_set() -> None:
 
 def _sample(prop: str, schema: dict[str, Any], index: int) -> Any:
     """A value unique to ``prop`` (booleans differ from every default, which is false)."""
+    if "enum" in schema:  # one of its choices (the last: the first is often the default)
+        return schema["enum"][-1]
     if schema["type"] == "array":  # one item, each of its own fields sampled
         item = schema["items"]
         return [{k: _sample(k, v, i) for i, (k, v) in enumerate(item.get("properties", {}).items())}]

@@ -12,6 +12,7 @@ from supervisor.tools.workspace import HostWorkspace, TreeWorkspace, Workspace
 
 if TYPE_CHECKING:
     from supervisor.seams.core.types import ToolInvokeContext
+    from supervisor.vault.logins import TenantLogins
 
 __all__ = ["DEFAULT_TIMEOUT_S", "ToolContext"]
 
@@ -36,6 +37,8 @@ class ToolContext:
     bound_workspace: Workspace | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     """Variables the session grants this call's commands (the browse runner's access)."""
+    logins: TenantLogins | None = None
+    """The tenant's saved browser logins (``browser_vault``); None without a vault."""
     stop: threading.Event | None = None
     """Set when the run is stopped while this call runs (the user, or its hard deadline):
     a command the tool started is killed, so nothing it does lands after the stop."""
@@ -79,6 +82,7 @@ class ToolContext:
             bound_workspace=_workspace(extra, session_id),
             env=dict(extra.get("env") or {}),
             stop=extra.get("stop"),
+            logins=extra.get("logins"),
         )
 
 

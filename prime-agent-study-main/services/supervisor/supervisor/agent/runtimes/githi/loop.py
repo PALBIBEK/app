@@ -60,6 +60,7 @@ class AgentLoop:
         workspace: Workspace | None = None,
         on_mutate: Callable[[], None] | None = None,
         identity: Mapping[str, str] | None = None,
+        logins: object | None = None,
         should_abort: Callable[[], bool] = lambda: False,
     ) -> None:
         self._seams = seams
@@ -67,6 +68,8 @@ class AgentLoop:
         self._workspace = workspace
         self._on_mutate = on_mutate
         self._identity = dict(identity or {})
+        self._logins = logins
+        """The tenant's saved browser logins, handed to each tool call (``ToolContext.logins``)."""
         self._should_abort = should_abort
 
     # --- whole turn (offline only) ---------------------------------------------
@@ -211,6 +214,8 @@ class AgentLoop:
             extra["env"] = env
         if stop is not None:
             extra["stop"] = stop
+        if self._logins is not None:
+            extra["logins"] = self._logins
         try:
             outcome = await asyncio.to_thread(
                 provider.invoke, ToolInvokeContext(trace_id=call_id, extra=extra), name, args

@@ -181,7 +181,7 @@ class ToolOps(ApprovalOps):
         A reset result is rewritten to say what the model gets back (the last
         checkpoint) and what it must redo (processes, rebuilt folders).
         """
-        result = kept(result)
+        result = await self._without_logins(session_id, kept(result))
         if hand.hand_id is None:
             return result
         key = hand.key or session_id
@@ -275,7 +275,17 @@ class ToolOps(ApprovalOps):
             extra["workspace"] = self.hand_workspace(session_id)
         if (ws := self._workspace.get(session_id)) is not None:
             extra["on_mutate"] = lambda: self._workspace_svc.mark_dirty(ws)
+        if self._logins is not None:
+            extra["logins"] = self._logins.bind(tenant_id)
         return extra
+
+    async def _without_logins(self, session_id: str, result: ToolResult) -> ToolResult:
+        """``result`` cleaned of the tenant's saved passwords (``supervisor.vault.logins``):
+        code can read a field a login was typed into, so no result is trusted to be clean."""
+        if self._logins is None:
+            return result
+        tenant = self._tenant_of.get(session_id) or (await self._get_session_row(session_id)).tenant_id
+        return await self._logins.redact(tenant, result)
 
     async def invoke_tool(
         self,

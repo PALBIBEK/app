@@ -16,6 +16,10 @@ What the code prints is the result. On stderr, after anything the code wrote the
 line starting with ``META_MARK`` carries what the tool reports besides: the page the call
 ended on, whether a fresh browser had to be started, the call's error, and what the
 browser's tabs reported since the previous call (dialogs, console errors, page errors).
+
+``runner.py fill`` is the other way in, for ``browser_vault``: it types a saved login into
+the current tab. The login arrives in ``FILL_ENV`` from the supervisor, never in code the
+model wrote, and the answer says what was filled, never with what.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import functools
 import importlib.util
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -33,6 +38,7 @@ import traceback
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 META_MARK = "\x1egithi-browser "
 """Starts the stderr line the tool reads back (an ASCII record separator, then a tag)."""
@@ -45,6 +51,10 @@ NAVIGATION_TIMEOUT_MS = 30_000
 REPORTED = ("dialog", "console", "pageerror")
 """Events a result lists, of those the daemon keeps (navigations and requests are not)."""
 MAX_REPORTED = 20
+FILL_ENV = "GITHI_BROWSER_FILL"
+"""``{"origin": …, "targets": {"username"|"password"|"submit": ID or selector}, "values": {…}}``."""
+SNAPSHOT_ID = re.compile(r"\d+-\d+")
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://")
 
 
@@ -297,6 +307,13 @@ class Helpers:
         ``act``; ``contains`` keeps the lines that match, with their groups."""
         return str(self.snapshots.snapshot(self.session.page, _target_id(self.session.page), contains=contains, max_lines=max_lines))
 
+    def locate(self, target: str) -> Any:
+        """The element a snapshot ID ("0-42") or a CSS selector names, on the current tab."""
+        page = self.session.page
+        if SNAPSHOT_ID.fullmatch(target):
+            return self.snapshots.locate(page, _target_id(page), target)
+        return page.locator(target)
+
     def act(self, *steps: tuple[Any, ...]) -> None:
         """Act by the IDs of the tab's latest snapshot: ("click", "0-42"), ("fill", "0-7",
         "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter");
@@ -326,7 +343,52 @@ def _meta(**fields: Any) -> None:
     sys.stderr.write(META_MARK + json.dumps(fields, default=str) + "\n")
 
 
+def origin(url: str) -> str:
+    """``scheme://host[:port]``, lower-cased, without the scheme's default port."""
+    parts = urlsplit(url)
+    host, _, port = (parts.netloc.lower().rsplit("@", 1)[-1]).partition(":")
+    return f"{parts.scheme.lower()}://{host}" + (f":{port}" if port and port != _DEFAULT_PORTS.get(parts.scheme.lower()) else "")
+
+
+def fill() -> int:
+    """Type a saved login into the current tab, if the tab is on the login's origin; print
+    what was filled (``{"filled": [...], ...}`` or ``{"error": ...}``), never the values."""
+    request = json.loads(os.environ.pop(FILL_ENV))
+    Path(DAEMON.HOME).mkdir(parents=True, exist_ok=True)
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        try:
+            hello = _hello()
+            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), hello)
+        except Exception as exc:  # noqa: BLE001 — reported to the model as the call's error
+            print(json.dumps({"error": f"browser unavailable: {exc}"}))
+            return 2
+        on = origin(session.page.url)
+        if on != request["origin"]:
+            print(json.dumps({"error": f"the tab is on {on or session.page.url!r}, this login is for {request['origin']}: open its page first"}))
+            return 1
+        helpers = Helpers(session)
+        filled: list[str] = []
+        try:
+            for field in ("username", "password"):
+                if target := request["targets"].get(field):
+                    helpers.locate(target).fill(request["values"][field])
+                    filled.append(field)
+            if submit := request["targets"].get("submit"):
+                helpers.locate(submit).click()
+                helpers.settle()
+        except Exception as exc:  # noqa: BLE001 — Playwright's message names the target, not the value
+            print(json.dumps({"error": f"{type(exc).__name__}: {str(exc).splitlines()[0]}", "filled": filled}))
+            return 1
+        session.remember()
+        print(json.dumps({"filled": filled, "submitted": bool(submit), "url": session.page.url}))
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1:] == ["fill"]:
+        return fill()
     code = sys.stdin.read()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     Path(DAEMON.HOME).mkdir(parents=True, exist_ok=True)
