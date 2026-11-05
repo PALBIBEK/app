@@ -62,6 +62,8 @@ are then required, and a missing one stops the process at boot.
 
 **E2B network/egress (multi-tenant path):** E2B sandboxes run on E2B cloud VMs with SaaS-managed egress. Supervisor never injects vendor API keys or `GATEWAY_TOKEN` into sandbox env — only optional `vk_*` for agent→gateway. Operators must configure E2B account/firewall policy to allow DNS + model-gateway egress only.
 
+**Browser sandboxes:** the `githi-browser-docker-v1` sandbox profile (the browser code mode's) runs `githi-browser-sandbox:1.56.0`; build it on each Docker host with `docker build -t githi-browser-sandbox:1.56.0 deploy/sandbox-images/browser` (Playwright's image with its Python package, curl and git). CI's `browser-sandboxes` job builds and tests the same recipe.
+
 **Docker hardening:** `local_docker` uses `network_mode=none`, `cap_drop=ALL`, mem/CPU limits. For controlled egress in K8s, apply `k8s/networkpolicy-sandbox-default-deny.yaml` in the sandbox namespace.
 
 ### Phase 2 multi-tenant guardrails (optional env)

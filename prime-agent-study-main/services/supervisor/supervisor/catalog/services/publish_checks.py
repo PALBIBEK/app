@@ -67,6 +67,7 @@ def check_publishable(kind: str, body: Mapping[str, Any], artifact: Any) -> None
     if kind == "sandbox_profile":
         _check_runner(name, artifact)
         _check_lifecycle(name, artifact)
+        _check_network(name, artifact)
     for field, model in _models_named(kind, artifact):
         _check_served(kind, name, field, model)
     for field, url in _service_urls(kind, artifact):
@@ -155,6 +156,31 @@ def _check_lifecycle(name: str, profile: Any) -> None:
         )
     if profile.idle_stop_s is not None and not 0 <= profile.idle_stop_s <= 86_400:
         raise InvalidArtifact("sandbox_profile", name, "idle_stop_s must be 0 (never) to 86400 seconds")
+
+
+def _check_network(name: str, profile: Any) -> None:
+    """The profile's network is one its provider enforces, and its browser one that can
+    reach where it lives."""
+    from supervisor.hands.browser import BROWSER_PROVIDERS
+    from supervisor.sandbox.network import NetworkNotEnforceable, check_network
+
+    provider = str(getattr(profile.provider, "value", profile.provider))
+    try:
+        check_network(provider, profile.network)
+    except NetworkNotEnforceable as exc:
+        raise InvalidArtifact("sandbox_profile", name, str(exc)) from None
+    if profile.browser is None:
+        return
+    needs = BROWSER_PROVIDERS.get(profile.browser)
+    if needs is None:
+        raise InvalidArtifact(
+            "sandbox_profile", name, f"browser {profile.browser!r}: use one of {', '.join(sorted(BROWSER_PROVIDERS))}"
+        )
+    mode = str(getattr(profile.network.mode, "value", profile.network.mode)) if profile.network else "none"
+    if mode not in needs:
+        raise InvalidArtifact(
+            "sandbox_profile", name, f"browser {profile.browser!r} needs network {' or '.join(sorted(needs))} to reach it"
+        )
 
 
 def _check_hands(name: str, composition: Any) -> None:

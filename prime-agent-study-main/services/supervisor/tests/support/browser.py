@@ -25,13 +25,13 @@ from supervisor.tools import default_registry
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import HostWorkspace
 
-__all__ = ["Call", "Site", "call", "needs_browser", "site"]
+__all__ = ["BROWSERS_ENV", "Call", "Site", "call", "kill", "needs_browser", "site", "stop_browsers"]
 
 needs_browser = pytest.mark.skipif(
     subprocess.run(["python3", "-c", "import playwright"], capture_output=True, check=False).returncode != 0,
     reason="no browser runtime here (python3 with Playwright and Chromium)",
 )
-_BROWSERS = {
+BROWSERS_ENV = {
     "PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(Path.home() / ".cache" / "ms-playwright"),
     **{k: v for k, v in os.environ.items() if k == "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"},
 }
@@ -53,7 +53,7 @@ async def call(tmp_path: Path) -> AsyncIterator[Call]:
         ctx = ToolContext(
             bound_workspace=HostWorkspace(tmp_path / "ws"),
             timeout_s=60,
-            env={"GITHI_BROWSER_HOME": str(home), **_BROWSERS},
+            env={"GITHI_BROWSER_HOME": str(home), **BROWSERS_ENV},
             stop=stop,
         )
         return dict(await spec.run({"code": code, **args}, ctx))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -33,6 +33,7 @@ from supervisor.catalog.providers.memory_resolve import load_pinned_memory_profi
 from supervisor.catalog.storage import CompositionCatalog
 from supervisor.db.models import EventRow, ScopeRow, SessionRow
 from supervisor.hands import SessionHands
+from supervisor.hands.browser.providers import BrowserProvider, SandboxChromium
 from supervisor.hands.checkpoint import Checkpointer, checkpoint_scope
 from supervisor.hands.inspect import Changes
 from supervisor.hands.keys import DEFAULT_HAND, split_key
@@ -197,6 +198,7 @@ class SessionManagerBase:
         browser: BrowserAccess | None = None,
         workspace_store: WorkspaceStore | None = None,
         vault: Vault | None = None,
+        browsers: Mapping[str, BrowserProvider] | None = None,
     ) -> None:
         self._db = session_factory
         self._workspace_store = workspace_store
@@ -263,6 +265,8 @@ class SessionManagerBase:
         # Brains of sessions whose sandbox another worker holds (model steps run anywhere).
         self._brains: OrderedDict[str, Any] = OrderedDict()
         self._browser = browser
+        self._browsers: Mapping[str, BrowserProvider] = browsers or {"sandbox-chromium": SandboxChromium()}
+        """Where ``browser_exec`` finds a session's browser, by the name its profile gives."""
         self._run_traces: dict[str, str] = {}
         self._tool_outbox = ToolOutbox(session_factory, writer, announce=self._announce)
         self._memory = memory or MemoryPlatform(session_factory)

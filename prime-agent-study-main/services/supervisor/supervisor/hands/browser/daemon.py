@@ -129,6 +129,8 @@ class Daemon:
         self.last_request: dict[str, float] = {}
         self.targets: dict[Any, str] = {}
         self.browser: Any = None
+        self.done = asyncio.Event()
+        """Set when the browser goes, or a call asks the daemon to stop."""
 
     # The browser -------------------------------------------------------------
 
@@ -138,6 +140,10 @@ class Daemon:
         port = HOME / "port"
         if given:
             self.endpoint = given
+            last = HOME / "remote-endpoint"
+            if not last.exists() or last.read_text() != given:  # another browser than the last one
+                self._count_generation()
+                last.write_text(given)
         elif port.exists() and _alive(endpoint := f"http://127.0.0.1:{port.read_text().strip()}"):
             self.endpoint = endpoint
         else:
@@ -217,6 +223,9 @@ class Daemon:
                     return {"error": 'dialogs are answered "accept" or "dismiss"'}
                 self.dialog_answer = (action, request.get("text"))
                 return {"ok": True}
+            case "shutdown":
+                self.done.set()
+                return {"ok": True}
             case "network":
                 tab = str(request.get("tab", ""))
                 last = self.last_request.get(tab)
@@ -229,10 +238,9 @@ class Daemon:
         server = await asyncio.start_unix_server(self._connection, path=str(SOCKET))
         os.chmod(SOCKET, 0o600)
         (HOME / "daemon.pid").write_text(str(os.getpid()))
-        disconnected = asyncio.Event()
-        self.browser.on("disconnected", lambda _: disconnected.set())
+        self.browser.on("disconnected", lambda _: self.done.set())
         async with server:
-            await disconnected.wait()  # the browser is gone: so is the reason to run
+            await self.done.wait()  # the browser is gone (or a call asked): so is the reason to run
         SOCKET.unlink(missing_ok=True)
 
     async def _connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

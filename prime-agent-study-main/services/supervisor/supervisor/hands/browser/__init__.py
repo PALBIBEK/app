@@ -7,9 +7,9 @@ what it prints. As Hermes's ``browser_exec`` and Stagehand's ``run``:
 one call does a whole sub-procedure (open, fill, click, check, extract), its steps never
 cross the network, and only its output reaches the model's context.
 
-Where the browser comes from is a seam, ``BrowserProvider``: what the runner is told so
-it reaches the browser. ``SandboxChromium``, a headless Chromium the runner starts in the
-sandbox itself, is the one provider so far.
+Where the browser comes from is a seam (``providers``): a sandbox profile names its
+browser, and the session manager tells each ``browser_exec`` call how to reach it, a
+Chromium in the sandbox itself or a hosted one over CDP.
 """
 
 from __future__ import annotations
@@ -18,50 +18,43 @@ import base64
 import functools
 import hashlib
 import zlib
-from collections.abc import Mapping
-from dataclasses import dataclass
 from importlib import resources
-from typing import Final, Protocol
+from typing import Final
 
+from supervisor.hands.browser.providers import (
+    BROWSER_PROVIDERS,
+    BrowserProvider,
+    BrowserUnreachable,
+    RemoteCdp,
+    SandboxChromium,
+    browser_providers_from_env,
+)
 from supervisor.hands.browser.runner import META_MARK
 
 __all__ = [
+    "BROWSER_ERROR_ENV",
+    "BROWSER_PROVIDERS",
+    "BROWSER_TOOLS",
     "META_MARK",
     "RUNNER_DIR",
     "UNPACK",
     "BrowserProvider",
+    "BrowserUnreachable",
+    "RemoteCdp",
     "SandboxChromium",
+    "browser_providers_from_env",
     "pack",
     "runtime_payload",
 ]
 
+BROWSER_TOOLS: Final = frozenset({"browser_exec"})
+"""The tools that need the session's browser provider: only their calls ask it."""
+BROWSER_ERROR_ENV: Final = "GITHI_BROWSER_ERROR"
+"""Why the session's browser provider could not serve this call, for the runner to report."""
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
 RUNTIME_FILES: Final = ("runner.py", "daemon.py", "snapshot.py")
 """What the sandbox runs: the call's runner, the daemon it starts, and its snapshots."""
-
-
-class BrowserProvider(Protocol):
-    """Where a session's browser runs, as the runner in the sandbox needs to know it."""
-
-    @property
-    def name(self) -> str: ...
-
-    def env(self) -> Mapping[str, str]:
-        """Variables for the runner (``GITHI_BROWSER_CDP``: a browser already running
-        somewhere it can reach); none means it starts its own in the sandbox."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class SandboxChromium:
-    """A headless Chromium in the session's sandbox, started on its first call (the
-    sandbox image must carry Python, Playwright and its Chromium)."""
-
-    name: str = "sandbox-chromium"
-
-    def env(self) -> Mapping[str, str]:
-        return {}
 
 
 @functools.cache

@@ -11,7 +11,8 @@ import io
 import logging
 import os
 import tarfile
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from supervisor.sandbox.backup import (
     BackupArea,
@@ -30,6 +31,8 @@ from supervisor.sandbox.base import (
     SandboxUnavailable,
     WorkspaceSyncUnsupported,
 )
+from supervisor.sandbox.network import check_network
+from supervisor.sandbox.providers.docker_network import DockerNetworks
 from supervisor.sandbox.security.env import sanitize_sandbox_env
 from supervisor.seams.providers.workspace import normalize_workspace_path
 
@@ -40,6 +43,9 @@ from supervisor.seams.services.workspace_store import (
     WorkspaceSyncReport,
     WorkspaceTreeIO,
 )
+
+if TYPE_CHECKING:
+    from supervisor.catalog import NetworkAccess
 
 logger = logging.getLogger(__name__)
 
@@ -504,6 +510,10 @@ class LocalDockerSandbox(Sandbox):
                 self._container.remove(force=True)
             except Exception:
                 logger.warning("removing the container failed", exc_info=True)
+            try:
+                DockerNetworks(self._client).release(self._info.labels)
+            except Exception:
+                logger.warning("removing the sandbox's egress gate failed", exc_info=True)
 
         await loop.run_in_executor(None, _rm)
 
@@ -582,7 +592,10 @@ class LocalDockerProvider(SandboxProvider):
         client: Any | None = None,
         *,
         hydrator: WorkspaceHydrator | None = None,
+        egress_gate_hosts: Mapping[str, str] | None = None,
     ) -> None:
+        """``egress_gate_hosts``: names an ``allow`` sandbox's egress gate resolves itself
+        before DNS (stand-ins for the real hosts, in a test)."""
         # Fail loud at construct time when the optional ``docker`` dep is missing
         # (so resolve_sandbox_create can soft-fall back to deploy/TrackingProvider).
         # Defer docker.from_env() until first use so bootstrap can succeed without
@@ -596,6 +609,10 @@ class LocalDockerProvider(SandboxProvider):
             self._docker_mod = None
             self._client = client
         self._hydrator = hydrator
+        self._egress_gate_hosts = egress_gate_hosts
+
+    def _networks(self) -> DockerNetworks:
+        return DockerNetworks(self._ensure_client(), gate_hosts=self._egress_gate_hosts)
 
     def _ensure_client(self) -> Any:
         if self._client is None:
@@ -645,31 +662,39 @@ class LocalDockerProvider(SandboxProvider):
         workdir: str = "/workspace",
         env: dict[str, str] | None = None,
         labels: dict[str, str] | None = None,
+        network: NetworkAccess | None = None,
     ) -> Sandbox:
         if not image:
             raise ValueError("local_docker requires image digest")
+        check_network(self.name, network)
         client = self._ensure_client()
         loop = asyncio.get_running_loop()
-        lbl = {
-            LABEL_MANAGED: "1",
-            **(labels or {}),
-        }
         cleaned = sanitize_sandbox_env(env)
+        networks = self._networks()
 
-        def _run() -> Any:
-            return client.containers.run(
-                image,
-                command=["sleep", "infinity"],
-                detach=True,
-                init=True,  # mandatory — reap zombies
-                working_dir=workdir,
-                environment=cleaned,
-                labels=lbl,
-                auto_remove=False,
-                **container_limits(),
-            )
+        def _run() -> tuple[Any, dict[str, str]]:
+            plan = networks.plan(network, image)
+            lbl = {LABEL_MANAGED: "1", **(labels or {}), **plan.labels}
+            limits = {k: v for k, v in container_limits().items() if k != "network_mode"}
+            try:
+                container = client.containers.run(
+                    image,
+                    command=["sleep", "infinity"],
+                    detach=True,
+                    init=True,  # mandatory — reap zombies
+                    working_dir=workdir,
+                    environment=cleaned,
+                    labels=lbl,
+                    auto_remove=False,
+                    **limits,
+                    **plan.run,
+                )
+            except Exception:
+                networks.release(plan.labels)  # its gate and network, made for nothing
+                raise
+            return container, lbl
 
-        container = await loop.run_in_executor(None, _run)
+        container, lbl = await loop.run_in_executor(None, _run)
         info = SandboxInfo(
             id=container.id,
             provider=self.name,
@@ -705,6 +730,7 @@ class LocalDockerProvider(SandboxProvider):
                     init=True,
                     labels={LABEL_MANAGED: "1"},
                     auto_remove=False,
+                    **container_limits(),  # a resumed sandbox is as bounded as any (no network)
                 )
             except SandboxGone:
                 raise
@@ -760,6 +786,7 @@ class LocalDockerProvider(SandboxProvider):
                 return None
             container = found[0]  # the newest
             if getattr(container, "status", "running") != "running":
+                self._networks().wake(dict(getattr(container, "labels", None) or {}), _hosts(container))  # its gate first
                 container.start()
                 container.reload()
             return container
@@ -803,3 +830,9 @@ class LocalDockerProvider(SandboxProvider):
             )
             out.append(LocalDockerSandbox(c, client=client, info=info, hydrator=self._hydrator))
         return out
+
+
+def _hosts(container: Any) -> dict[str, str]:
+    """A container's hosts entries (``extra_hosts``), name to address."""
+    entries = ((getattr(container, "attrs", None) or {}).get("HostConfig") or {}).get("ExtraHosts") or []
+    return dict(entry.split(":", 1) for entry in entries if ":" in entry)

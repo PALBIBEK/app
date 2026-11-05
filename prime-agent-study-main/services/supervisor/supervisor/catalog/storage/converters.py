@@ -26,6 +26,8 @@ from supervisor.catalog.core.types import (
     DigestRef,
     FileEffects,
     MemoryProfile,
+    NetworkAccess,
+    NetworkMode,
     PlugBindings,
     PromptPack,
     PromptSection,
@@ -223,7 +225,15 @@ def sandbox_profile_from_dict(data: dict[str, Any]) -> SandboxProfile:
         runner=data.get("runner") or None,
         start=data.get("start"),
         idle_stop_s=int(idle) if idle is not None else None,
+        network=_network(data.get("network")),
+        browser=data.get("browser") or None,
     )
+
+
+def _network(raw: Any) -> NetworkAccess | None:
+    if raw is None:
+        return None
+    return NetworkAccess(mode=NetworkMode(raw.get("mode") or NetworkMode.NONE), hosts=tuple(raw.get("hosts") or ()))
 
 
 def _sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
@@ -238,6 +248,8 @@ def _sandbox_profile_to_dict(profile: SandboxProfile) -> dict[str, Any]:
         **({"runner": profile.runner} if profile.runner else {}),
         **({"start": profile.start} if profile.start is not None else {}),
         **({"idle_stop_s": profile.idle_stop_s} if profile.idle_stop_s is not None else {}),
+        **({"network": profile.network.to_dict()} if profile.network is not None else {}),
+        **({"browser": profile.browser} if profile.browser is not None else {}),
     }
 
 

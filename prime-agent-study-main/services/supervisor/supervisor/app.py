@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from supervisor.catalog.storage import CompositionCatalog
+from supervisor.hands.browser.providers import BrowserProvider
 from supervisor.hands.runners import RunnerHub
 from supervisor.harness import HarnessCatalog
 from supervisor.journal.blobs import BlobStore, LocalBlobs
@@ -97,6 +98,7 @@ def build_supervisor(
     browser: BrowserAccess | None = None,
     vault: Vault | None = None,
     notebooks: NotebookClient | None = None,
+    browsers: Mapping[str, BrowserProvider] | None = None,
 ) -> SupervisorState:
     # One store for both: what the writer offloads, the reader (and erasing) must find.
     blobs = blobs or (LocalBlobs(blob_dir) if blob_dir is not None else None)
@@ -136,6 +138,7 @@ def build_supervisor(
         browser=browser,
         workspace_store=workspace_store,
         vault=vault,
+        browsers=browsers,
     )
 
     from supervisor.temporal.fleet import WorkerHeartbeats

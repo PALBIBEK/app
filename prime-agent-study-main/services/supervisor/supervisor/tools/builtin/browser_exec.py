@@ -9,8 +9,6 @@ from pydantic import Field
 from supervisor.hands.browser import (
     META_MARK,
     UNPACK,
-    BrowserProvider,
-    SandboxChromium,
     pack,
     runtime_payload,
 )
@@ -33,12 +31,13 @@ MAX_STDERR_CHARS: Final = 4000
 _GRACE_S: Final = 2.0
 """Kept back from the call's budget, as ``bash`` does, so a slow call is cut by its own
 timeout (and returns what it printed) before the tool call times out."""
-_NO_BROWSER_EXIT: Final = 2
-"""The runner's exit status when it could not reach a browser."""
-_NO_RUNTIME: Final = ("No module named 'playwright'", "python3: not found", "python3: command not found")
-
-PROVIDER: BrowserProvider = SandboxChromium()
-"""Where calls find the browser (``supervisor.hands.browser``'s seam)."""
+_NO_RUNTIME: Final = (
+    "No module named 'playwright'",
+    "python3: not found",
+    "python3: command not found",
+    "/chrome-linux/chrome'",  # Playwright without its Chromium
+)
+"""What a sandbox without the browser runtime (Python, Playwright, Chromium) reports."""
 
 
 class BrowserExecArgs(ToolArgs):
@@ -76,7 +75,7 @@ async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any
     result = await ctx.workspace.run(
         _command(code),
         timeout_s=timeout,
-        env={**ctx.env, **PROVIDER.env(), **_runner_env(args.session)},
+        env={**ctx.env, **_runner_env(args.session)},  # ctx.env: how to reach the session's browser
         stop=ctx.stop,
     )
     ctx.mutated()  # the code may write files (its workspace folder, screenshots)
@@ -127,7 +126,7 @@ async def _payload(ctx: ToolContext, args: BrowserExecArgs, result: Any, timeout
     if args.session:
         payload["session"] = args.session
     payload["workspace"] = WORKSPACE_DIR
-    if result.exit_code == _NO_BROWSER_EXIT or any(marker in stderr for marker in _NO_RUNTIME):
+    if any(marker in stderr or marker in str(meta.get("error") or "") for marker in _NO_RUNTIME):
         payload["hint"] = "This sandbox has no browser runtime: the session needs a sandbox image with Python, Playwright and Chromium."
     if result.stopped:
         payload["stopped"] = True
