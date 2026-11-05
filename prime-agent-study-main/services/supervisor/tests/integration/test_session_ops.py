@@ -290,7 +290,10 @@ async def test_a_fork_is_a_session_with_its_own_workflow(
         fork = resp.json()["session_id"]
         await env.sessions.submit(fork, Message("c2", "what was the word?"))
         events = await env.wait_for(worker, fork, run_ended(2))
-        assert (await env.sessions.status(fork)).turns_completed == 1
+        # The run's end is journalled a moment before the workflow counts the turn.
+        async with asyncio.timeout(10):
+            while (await env.sessions.status(fork)).turns_completed != 1:
+                await asyncio.sleep(0.05)
     # The fork carries the source's conversation, and its own turn went on top of it.
     texts = [m.content for m in gateway.seen[-1] if m.role == "user"]
     assert texts == ["remember the word kiwi", "what was the word?"]
