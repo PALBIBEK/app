@@ -1,6 +1,6 @@
 name: ci
 
-# The quality gates, on every PR and every push to main: the agent platform (prime-agent-study-main/) with
+# The quality gates, once per PR: the agent platform (prime-agent-study-main/) with
 # lint, types, every service's test suite, the end-to-end suite against a real stack
 # (Postgres, Temporal, the API process serving the gateway and memory service too, and the worker)
 # and a docker-compose smoke test; the product's backend/ and frontend/ suites (lint too); the
@@ -8,10 +8,10 @@ name: ci
 # backend's client against that live stack. A live model turn runs when MODEL_E2E_API_KEY is set.
 
 on:
-  # A PR's branch runs once, as the PR (pull_request); a push to it would start a second run of the
-  # same commit in another concurrency group. main runs on its own pushes.
-  push:
-    branches: [main]
+  # Once per change: as its PR. main does not run again on the merge: branch protection merges a
+  # PR only when it is up to date with main and these checks passed, so what lands on main is the
+  # tree its PR run tested (a squash merge of an up-to-date branch). A push to a PR's branch is not
+  # a second trigger either (the PR run covers it). workflow_dispatch runs it by hand.
   pull_request:
   workflow_dispatch:
 
@@ -125,8 +125,17 @@ jobs:
         run: npx next build
 
   tests:
-    # Playwright installs Chromium's system packages with apt (--with-deps), by the names
-    # Ubuntu 24.04 has: on ubuntu-latest, now Ubuntu 26, several of them are gone.
+    # The suite in two halves, on two runners, each half on four workers: one runner took 9 to 21
+    # minutes, the longest job of the run. pytest-split deals the tests out by their recorded
+    # durations, and without a record (.test_durations) by count, which spreads the slow
+    # integration tests over both halves as it does every other directory.
+    name: tests (${{ matrix.group }} of 2)
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
+    # Chromium's libraries come with the runner image's Chrome, by the names Ubuntu 24.04 has:
+    # on ubuntu-latest, now Ubuntu 26, several of them are gone.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -152,7 +161,9 @@ jobs:
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: pip install -e ".[dev,postgres,s3]"
       - name: Browser runtime (the browser code mode's tests run Chromium as its sandbox image does)
-        run: pip install "playwright==1.56.0" && python -m playwright install --with-deps chromium
+        # No --with-deps: the runner image ships Google Chrome, so Chromium's libraries are there;
+        # apt-installing them again (fonts mostly) took up to eight minutes on a slow mirror.
+        run: pip install "playwright==1.56.0" && python -m playwright install chromium
       - name: Temporal CLI (the supervisor's workflow tests start a dev server)
         run: |
           curl -sSf https://temporal.download/cli.sh | sh
@@ -162,9 +173,11 @@ jobs:
         run: |
           set -o pipefail
           # Four workers (pytest-xdist): the tests mostly wait on Temporal, sandboxes and timers, so
-          # four share the runner's CPUs well (19 minutes one at a time, about 9 like this). A run
-          # still going after 30 minutes is stuck: stop it and say where, instead of holding the job.
-          timeout --signal=INT --kill-after=60 30m pytest -q -rfE -n 4 2>&1 | tee pytest.out || {
+          # four share the runner's CPUs well (19 minutes one at a time, about 9 like this), on this
+          # job's half of the suite. A run still going after 30 minutes is stuck: stop it and say
+          # where, instead of holding the job.
+          timeout --signal=INT --kill-after=60 30m pytest -q -rfE -n 4 \
+            --splits 2 --group ${{ matrix.group }} --splitting-algorithm least_duration 2>&1 | tee pytest.out || {
             status=$?
             esc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
             # The shell stops at the first failing command (-e, pipefail): a grep finding nothing is one.
@@ -264,13 +277,33 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Virtualenvs, packages and the Temporal CLI
+        # The four installs are independent: they run side by side, each into its own log, and
+        # the step fails with the first one that failed. The journeys drive the runner image's
+        # Google Chrome (CHROME, as the journeys read it): no browser download and no apt-installed
+        # libraries (those took up to eight minutes on a slow mirror).
         run: |
-          python -m venv $PROJECT/services/supervisor/.venv
-          $PROJECT/services/supervisor/.venv/bin/pip install -q -e "$PROJECT/services/supervisor[dev,postgres,s3]"
-          python -m venv backend/.venv && backend/.venv/bin/pip install -q -e "backend[dev]"
-          (cd frontend && npm ci && npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium)
-          curl -sSf https://temporal.download/cli.sh | sh
+          mkdir -p /tmp/setup
+          ( python -m venv $PROJECT/services/supervisor/.venv \
+            && $PROJECT/services/supervisor/.venv/bin/pip install -q -e "$PROJECT/services/supervisor[dev,postgres,s3]" ) > /tmp/setup/supervisor.log 2>&1 &
+          s=$!
+          ( python -m venv backend/.venv && backend/.venv/bin/pip install -q -e "backend[dev]" ) > /tmp/setup/backend.log 2>&1 &
+          b=$!
+          ( cd frontend && npm ci && npm i --no-save playwright@1.48.2 ) > /tmp/setup/frontend.log 2>&1 &
+          f=$!
+          ( curl -sSf https://temporal.download/cli.sh | sh ) > /tmp/setup/temporal.log 2>&1 &
+          t=$!
+          status=0
+          for job in "supervisor:$s" "backend:$b" "frontend:$f" "temporal:$t"; do
+            wait "${job#*:}" || { status=1; echo "::error title=${job%%:*} setup failed::$(tail -c 3000 /tmp/setup/${job%%:*}.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"; }
+          done
+          [ "$status" -eq 0 ] || exit 1
           echo "TEMPORAL_CLI=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
+          chrome=$(command -v google-chrome || command -v google-chrome-stable || true)
+          if [ -n "$chrome" ]; then
+            echo "CHROME=$chrome" >> "$GITHUB_ENV"
+          else  # an image without Chrome: Playwright's own, with its libraries
+            (cd frontend && npx playwright install --with-deps chromium)
+          fi
           command -v lsof || sudo apt-get install -y -q lsof
           echo "127.0.0.1 model-gateway" | sudo tee -a /etc/hosts
       - name: Start the product
