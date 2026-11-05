@@ -350,7 +350,7 @@ async def test_a_subagent_that_settles_while_its_parent_works_is_told_at_the_nex
 async def test_job_kill_stops_a_background_subagent(env: Env, model: Callable[..., ScriptedGateway]) -> None:
     gateway = model(("subagent", {"prompt": "list slowly", "run_in_background": True}), subagent_calls=[LS])
     state = await env.state()
-    with slow_tool("ls", 6.0):
+    with slow_tool("ls", 20.0):  # well past the kill: on a loaded runner 6 s was not
         async with session_worker(env.client, state, task_queue=env.queue):
             sid = await env.create(state)
             await env.sessions.submit(sid, Message("c1", "start it"))
