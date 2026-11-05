@@ -722,3 +722,21 @@ async def test_a_change_can_start_from_an_issue(db_session, owner, settings, mon
         await service.run(r.json()["id"], identity=TenantPrincipal.from_user(owner), session_factory=_same(db_session), poll_s=0)
     assert fake.reflected[-1]["focus_issue"] == key
     assert len((await db_session.execute(select(Item).where(Item.dataset_id == ds.id))).scalars().all()) == 2
+
+
+def test_the_parent_is_drawn_by_gepa_itself() -> None:
+    """The pool's fronts go to gepa's own select_program_candidate_from_pareto_front, with each
+    version's mean score: the same draw GEPA makes for the same fronts and seed."""
+    import random
+
+    from gepa.gepa_utils import select_program_candidate_from_pareto_front
+
+    from prime_agent.services.improvement_service import pareto_fronts, pareto_parent
+
+    pool = [{"a": 5.0, "b": 5.0, "c": None}, {"a": 10.0, "b": 5.0, "c": 4.0}, {"a": 5.0, "b": 10.0, "c": 4.0}]
+    fronts = pareto_fronts(pool, ["a", "b", "c"])
+    assert fronts == {"a": {1}, "b": {2}, "c": {1, 2}}, "an equal best joins the front; an unfinished run is on none"
+    means = [0.0, 19 / 3, 19 / 3]  # a version with an unfinished run scores 0 overall, as before
+    for seed in range(20):
+        assert pareto_parent(pool, set(), random.Random(seed)) == select_program_candidate_from_pareto_front(
+            fronts, means, random.Random(seed))
