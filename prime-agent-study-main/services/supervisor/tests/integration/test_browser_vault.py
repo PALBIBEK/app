@@ -80,7 +80,7 @@ async def test_a_saved_login_is_filled_and_submitted_without_being_shown(tools: 
     after = await tools("browser_exec", code="print(page.title(), '|', page.inner_text('h1'))")
 
     assert listed == {"logins": [site.url("")]}
-    assert filled["filled"] == ["username", "password"] and filled["submitted"] is True, filled
+    assert filled.get("filled") == ["username", "password"] and filled.get("submitted") is True, filled
     assert PASSWORD not in json.dumps(filled)
     assert after["output"] == "Signed in | Welcome ada"
 
