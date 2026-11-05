@@ -34,6 +34,9 @@ class HttpUpstream:
     api_key: str
     base_url: str
     key_env_name: str
+    base_url_env_name: str = ""
+    key_required: bool = True
+    """False for a server that takes no key (a local one): requests then carry no auth header."""
     auth: AuthHeaders = bearer
     extra_headers: Mapping[str, str] = field(default_factory=dict)
     transport: httpx.BaseTransport | None = None
@@ -44,12 +47,20 @@ class HttpUpstream:
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
 
+    def missing(self) -> str | None:
+        """The setting the gateway lacks to call this upstream, or None when it has them."""
+        if not self.base_url:
+            return self.base_url_env_name or "the upstream's base URL"
+        if self.key_required and not self.api_key.strip():
+            return self.key_env_name
+        return None
+
     def credential_ok(self) -> bool:
-        return bool(self.api_key.strip())
+        return self.missing() is None
 
     def post(self, path: str, body: Body, *, retries: int | None = None) -> Body | SSE:
-        if not self.credential_ok():
-            raise ProviderUnconfigured(f"{self.key_env_name} is not configured on the gateway")
+        if (missing := self.missing()) is not None:
+            raise ProviderUnconfigured(f"{missing} is not configured on the gateway")
         attempts = 1 + max(0, self.retries if retries is None else retries)
         stream = body.get("stream") is True
         for attempt in range(attempts):
@@ -85,10 +96,11 @@ class HttpUpstream:
         raise AssertionError("unreachable")
 
     def _request(self, client: httpx.Client, path: str, body: Body) -> httpx.Request:
+        key = self.api_key.strip()
         headers = {
             "Content-Type": "application/json",
             **self.extra_headers,
-            **self.auth(self.api_key),
+            **(self.auth(key) if key else {}),
         }
         if body.get("stream") is True:
             headers["Accept"] = "text/event-stream"

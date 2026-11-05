@@ -225,5 +225,54 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
             supported_openai_params=("max_tokens", "tools", "tool_choice", "reasoning_effort"),
         ),
     },
+    # Limits and list prices as each vendor publishes them. DeepSeek: api-docs.deepseek.com
+    # quick_start/pricing (as pi-ai's catalog/providers/deepseek.ts records it).
+    "deepseek": {
+        "deepseek-flash": Route(
+            provider="deepseek",
+            upstream_model="deepseek-flash",
+            context_window=1_000_000,
+            max_output_tokens=384_000,
+            input_cost_per_token=0.3e-6,
+            output_cost_per_token=1.2e-6,
+            cache_read_input_token_cost=0.006e-6,
+            supports_vision=True,
+            supports_reasoning=True,
+            supported_openai_params=("max_tokens", "tools", "tool_choice"),
+        ),
+    },
+    # Z.ai's pay-as-you-go API rates for GLM-5.2 (pi.dev/models/zai/glm-5-2).
+    "zai": {
+        "glm-5.2": Route(
+            provider="zai",
+            upstream_model="glm-5.2",
+            context_window=1_000_000,
+            max_output_tokens=131_072,
+            input_cost_per_token=1.4e-6,
+            output_cost_per_token=4.4e-6,
+            cache_read_input_token_cost=0.26e-6,
+            supports_reasoning=True,
+            supported_openai_params=("max_tokens", "tools", "tool_choice"),
+        ),
+    },
+    # Model Studio's international list price for qwen3.7-plus
+    # (alibabacloud.com/help/en/model-studio/qwen3-7-plus): $0.40 / $1.60 per million up to
+    # 256K input tokens, three times that above. A route has one price, so the route holds
+    # the first tier only: its context window stops at 256K.
+    "qwen": {
+        "qwen3.7-plus": Route(
+            provider="qwen",
+            upstream_model="qwen3.7-plus",
+            context_window=262_144,
+            max_output_tokens=131_072,
+            input_cost_per_token=0.4e-6,
+            output_cost_per_token=1.6e-6,
+            cache_read_input_token_cost=0.08e-6,
+            supports_reasoning=True,
+            supported_openai_params=("max_tokens", "tools", "tool_choice"),
+        ),
+    },
 }
-"""Routes a vendor credential unlocks when it is set but the route table omits them."""
+"""Routes a vendor credential unlocks when it is set but the route table omits them. The
+``local`` vendor has none: what a local server serves is its own (``MODEL_GATEWAY_ROUTES_JSON``
+names the models it runs)."""
