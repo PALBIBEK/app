@@ -21,6 +21,7 @@ browser's tabs reported since the previous call (dialogs, console errors, page e
 from __future__ import annotations
 
 import contextlib
+import functools
 import importlib.util
 import json
 import os
@@ -47,16 +48,19 @@ MAX_REPORTED = 20
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://")
 
 
-def _daemon_module() -> ModuleType:
-    """``daemon.py`` beside this file: its paths and constants are the ones it serves on."""
-    spec = importlib.util.spec_from_file_location("githi_browser_daemon", Path(__file__).with_name("daemon.py"))
+def _sibling(name: str) -> ModuleType:
+    """A module of the runtime beside this file (``daemon.py``, ``snapshot.py``), loaded by
+    path: the runtime is a folder of scripts, not a package."""
+    spec = importlib.util.spec_from_file_location(f"githi_browser_{name}", Path(__file__).with_name(f"{name}.py"))
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    module = sys.modules[spec.name] = importlib.util.module_from_spec(spec)  # dataclasses look it up
     spec.loader.exec_module(module)
     return module
 
 
-DAEMON = _daemon_module()
+DAEMON = _sibling("daemon")
+"""Its paths and constants are the ones the daemon serves on."""
+SNAPSHOT = _sibling("snapshot")
 
 
 def ask(op: str, **fields: Any) -> dict[str, Any]:
@@ -105,11 +109,9 @@ class Session:
         seen = _state_file("seen-generation")
         self.started = not seen.exists() or seen.read_text() != str(hello["generation"])
         seen.write_text(str(hello["generation"]))
-        # The daemon answers dialogs; a page without a listener here would have Playwright
-        # dismiss them first, whatever the call asked.
         for page in self.context.pages:
-            page.on("dialog", _leave_to_daemon)
-        self.context.on("page", lambda page: page.on("dialog", _leave_to_daemon))
+            _prepare(page)
+        self.context.on("page", _prepare)
         self.page = self._current()
 
     def _current(self) -> Any:
@@ -137,6 +139,14 @@ class Session:
         return events[-MAX_REPORTED:]
 
 
+def _prepare(page: Any) -> None:
+    """Every tab code may act on: dialogs left to the daemon (a page without a listener
+    here would have Playwright dismiss them first, whatever the call asked), and
+    ``wait_for_timeout`` the quiet wait (``snapshot.quiet_wait``)."""
+    page.on("dialog", _leave_to_daemon)
+    page.wait_for_timeout = functools.partial(SNAPSHOT.quiet_wait, page)
+
+
 def _leave_to_daemon(_dialog: Any) -> None:
     """A dialog listener that leaves the answer to the daemon."""
 
@@ -160,12 +170,13 @@ class Helpers:
     NAMES = (
         "new_tab", "goto_url", "wait_for_load", "page_info", "js", "cdp", "fill_input", "click_at_xy",
         "capture_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
-        "browser_events", "ensure_real_tab",
+        "browser_events", "ensure_real_tab", "snapshot", "act", "settle",
     )
 
     def __init__(self, session: Session) -> None:
         self.session = session
         self.names: dict[str, Any] = {}
+        self.snapshots = SNAPSHOT.Snapshots(Path(DAEMON.HOME), self.settle)
 
     def scope(self) -> dict[str, Any]:
         """Playwright's objects, the helpers, and what the agent saved in agent_helpers.py."""
@@ -277,6 +288,23 @@ class Helpers:
         after the numbered one ``since``."""
         return list(ask("events", since=since)["events"])
 
+    def snapshot(self, contains: str | None = None, max_lines: int = SNAPSHOT.DEFAULT_MAX_LINES) -> str:
+        """The current tab's elements and the structure around them, each with an ID for
+        ``act``; ``contains`` keeps the lines that match, with their groups."""
+        return str(self.snapshots.snapshot(self.session.page, _target_id(self.session.page), contains=contains, max_lines=max_lines))
+
+    def act(self, *steps: tuple[Any, ...]) -> None:
+        """Act by the IDs of the tab's latest snapshot: ("click", "0-42"), ("fill", "0-7",
+        "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter");
+        then settle. A stale ID is refused, and says what to do."""
+        self.snapshots.act(self.session.page, _target_id(self.session.page), steps)
+
+    def settle(self, page: Any = None, timeout: float = 5.0) -> None:
+        """Wait for what the last action started to finish: a navigation, its requests,
+        then a quiet DOM (at most ``timeout`` seconds)."""
+        target = page or self.session.page
+        SNAPSHOT.settle(target, lambda left: self.wait_for_network_idle(idle_ms=300, timeout=left), timeout)
+
     def ensure_real_tab(self) -> Any:
         """Make ``page`` a real, open tab again (after it closed, or landed on an internal one)."""
         return self._use(self.session._current())
@@ -327,8 +355,11 @@ def main() -> int:
 
 
 def _traceback() -> str:
-    """The code's traceback, without the runner's frames or Playwright's internals."""
+    """The code's traceback, without the runner's frames or Playwright's internals; for
+    code that does not parse, Python's own pointer at the line."""
     kind, value, tb = sys.exc_info()
+    if kind is not None and issubclass(kind, SyntaxError):
+        return "".join(traceback.format_exception_only(kind, value))
     frames = traceback.extract_tb(tb)
     own = [f for f in frames if f.filename != __file__ and f"{os.sep}playwright{os.sep}" not in f.filename]
     lines = traceback.format_list(own or frames[-1:]) + traceback.format_exception_only(kind, value)

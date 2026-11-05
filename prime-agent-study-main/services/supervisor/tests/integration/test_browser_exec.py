@@ -71,6 +71,13 @@ async def test_an_error_in_the_code_is_its_own_traceback(call: Call) -> None:
     assert "runner" not in failed["error"], "the runner's own frames reached the model"
 
 
+async def test_code_that_does_not_parse_is_pointed_at_its_line(call: Call) -> None:
+    failed = await call("print('fine')\nprint('missing paren'")
+
+    assert "SyntaxError" in failed["error"] and "line 2" in failed["error"], failed["error"]
+    assert "runner" not in failed["error"], "the runner's own frame reached the model"
+
+
 async def test_a_playwright_error_points_at_the_code_not_at_playwright(call: Call) -> None:
     failed = await call("page.set_content('<p>no button</p>')\npage.click('#buy', timeout=300)")
 

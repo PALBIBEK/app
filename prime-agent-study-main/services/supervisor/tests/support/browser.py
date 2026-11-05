@@ -13,7 +13,9 @@ import shutil
 import signal
 import subprocess
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +25,7 @@ from supervisor.tools import default_registry
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import HostWorkspace
 
-__all__ = ["Call", "call", "needs_browser"]
+__all__ = ["Call", "Site", "call", "needs_browser", "site"]
 
 needs_browser = pytest.mark.skipif(
     subprocess.run(["python3", "-c", "import playwright"], capture_output=True, check=False).returncode != 0,
@@ -73,3 +75,40 @@ def kill(pid: int) -> None:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+
+
+class Site:
+    """A local web server for pages a test needs from a real origin: ``pages`` maps a path
+    to (HTML, seconds to wait before answering). Reachable as 127.0.0.1 and as localhost,
+    which are different sites to the browser."""
+
+    def __init__(self) -> None:
+        self.pages: dict[str, tuple[str, float]] = {}
+        site = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body, delay = site.pages.get(self.path, ("ok", 0.0))
+                time.sleep(delay)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+
+    def url(self, path: str, host: str = "127.0.0.1") -> str:
+        return f"http://{host}:{self.port}{path}"
+
+
+@pytest.fixture
+def site() -> Iterator[Site]:
+    served = Site()
+    threading.Thread(target=served.server.serve_forever, daemon=True).start()
+    yield served
+    served.server.shutdown()

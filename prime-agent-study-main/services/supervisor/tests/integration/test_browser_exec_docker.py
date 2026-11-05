@@ -45,10 +45,12 @@ async def test_the_browser_runs_inside_the_sandbox_under_its_limits(sandbox: San
         "print(page.title())",
     )
     second = await _call(sandbox, "print(page.title(), open('/proc/1/cgroup').read() != '')")
+    shown = await _call(sandbox, "print(snapshot())")
 
     assert first["exit_code"] == 0, first
     assert first["output"] == "true" and first["browser_started"] is True
     assert second["output"] == "true True" and "browser_started" not in second
+    assert "button: b" in shown["output"], shown
 
 
 async def test_the_sandbox_reaches_no_network(sandbox: SandboxWorkspace) -> None:

@@ -4,6 +4,7 @@ and the result it returns (the runner's report read back, its hints, long output
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -49,10 +50,21 @@ async def test_the_runner_and_the_code_travel_in_one_command(tmp_path: Path) -> 
     ((command, env),) = workspace.sent
     folder, sources = runtime_payload()
     assert folder in command and all(source in command for source in sources.values()), "the runtime is not shipped with the call"
-    assert len(command.encode()) < 128 * 1024, "the command no longer fits one shell argument"
+    assert len(command.encode()) < 128 * 1024
     assert env["FROM_SESSION"] == "1", "the session's own variables were dropped"
     assert env["GITHI_BROWSER_NAME"] == "r7"
     assert env["BROWSER_WORKSPACE"] == ".githi/browser"
+
+
+async def test_the_largest_code_still_fits_one_shell_argument(tmp_path: Path) -> None:
+    """Linux caps one argument at 128 KiB; the packed runtime and code of the largest size
+    allowed (incompressible, the worst case) must fit in it."""
+    code = secrets.token_hex(MAX_CODE_BYTES // 2)  # as random as text gets
+    workspace = Answering(tmp_path, CommandResult(0, "", _report()))
+    await default_registry()["browser_exec"].run({"code": code}, ToolContext(bound_workspace=workspace, timeout_s=30))
+
+    ((command, _),) = workspace.sent
+    assert len(command.encode()) < 128 * 1024, f"{len(command.encode())} bytes"
 
 
 async def test_the_report_line_becomes_fields_and_the_rest_of_stderr_stays(tmp_path: Path) -> None:

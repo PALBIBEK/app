@@ -9,14 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
-from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
-from tests.support.browser import Call, kill, needs_browser
+from tests.support.browser import Call, Site, kill, needs_browser
 
 pytestmark = [pytest.mark.asyncio, needs_browser]
 
@@ -55,32 +52,11 @@ async def test_each_event_is_reported_once(call: Call) -> None:
     assert "events" not in again, again.get("events")
 
 
-@pytest.fixture
-def slow_server() -> Iterator[str]:
-    """``/slow`` answers after 1.5 s; anything else at once."""
-
-    class Slow(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            if self.path == "/slow":
-                time.sleep(1.5)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(b"ok")
-
-        def log_message(self, *_: object) -> None:
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-
-
-async def test_the_network_idle_wait_counts_a_request_still_in_flight(call: Call, slow_server: str) -> None:
+async def test_the_network_idle_wait_counts_a_request_still_in_flight(call: Call, site: Site) -> None:
+    site.pages["/slow"] = ("ok", 1.5)
+    slow_server = site.url("")
     waited = await call(
-        f"page.goto({slow_server + '/page'!r})\n"
+        f"page.goto({site.url('/page')!r})\n"
         # Started, not awaited: js() would wait for a returned promise.
         f"js(\"(() => {{ fetch('{slow_server}/slow').then(r => r.text()).then(t => document.title = t) }})()\")\n"
         "import time; started = time.monotonic()\n"
