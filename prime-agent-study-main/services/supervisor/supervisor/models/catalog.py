@@ -140,9 +140,11 @@ def admit(info: object, allowed: frozenset[str], base_url: str) -> GatewayEntry 
     openai_params = {str(p) for p in params} if isinstance(params, list) else set()
     cache_read = _per_million(info.get("cache_read_input_token_cost"))
     cache_write = _per_million(info.get("cache_creation_input_token_cost"))
+    label = info.get("label")
+    floor = info.get("min_reasoning_effort")
     return ModelSpec(
         id=model_id,
-        name=group,
+        name=label if isinstance(label, str) and label else group,
         provider=GATEWAY_PROVIDER,
         api=api,
         base_url=base_url.removesuffix("/v1") if anthropic else base_url,
@@ -175,6 +177,8 @@ def admit(info: object, allowed: frozenset[str], base_url: str) -> GatewayEntry 
             ),
         ),
         document_input="files" if openai else "pdf" if pdf else None,
+        # A model whose reasoning cannot be turned off is asked for its lowest effort instead.
+        thinking_level_map={"off": floor} if isinstance(floor, str) and floor else {},
     )
 
 

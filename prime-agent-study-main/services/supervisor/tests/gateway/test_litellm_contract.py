@@ -540,7 +540,11 @@ def test_vendor_keys_unlock_their_default_routes(monkeypatch: pytest.MonkeyPatch
     routes = {"echo": {"provider": "echo", "upstream_model": "echo"}}
     with _client(monkeypatch, routes=routes, ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o") as c:
         ids = [m["id"] for m in c.get("/v1/models", headers=SVC).json()["data"]]
-        assert ids == ["echo", "gpt-5.5", "claude-sonnet-5"]
+        assert ids == [
+            "echo",
+            "gpt-5.5", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna",
+            "claude-sonnet-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+        ]  # fmt: skip
         assert c.get("/v1/readyz").json() == {"status": "ready"}
 
 
