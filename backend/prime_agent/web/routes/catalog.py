@@ -35,6 +35,14 @@ async def list_models(current_user: CurrentUser) -> list[dict[str, Any]]:
     return await _call(client.list_models(TenantPrincipal.from_user(current_user)))
 
 
+@router.get("/model-choices")
+async def model_choices(current_user: CurrentUser) -> dict[str, Any]:
+    """What a person can pick for a session now: the models that can run (with their vendor) and
+    every vendor with whether it is ready."""
+    client = AiClient.from_settings(get_settings())
+    return await _call(client.model_choices(TenantPrincipal.from_user(current_user)))
+
+
 _CHECKABLE = ("prompt_pack", "tool_set", "composition", "sandbox_profile", "memory_profile")
 
 

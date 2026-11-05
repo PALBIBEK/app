@@ -149,6 +149,17 @@ describe('sessionsAPI', () => {
         command_id: 'cmd-xyz',
       });
     });
+
+    it('should include the chosen model when given', async () => {
+      (apiClient.post as Mock).mockResolvedValue({ turn_id: 't', command_id: 'c', status: 'accepted' });
+
+      await sessionsAPI.sendMessage('session-123', 'Hello', undefined, { model: 'gateway/local/qwen3:8b' });
+
+      expect(apiClient.post).toHaveBeenCalledWith('/sessions/session-123/messages', {
+        content: 'Hello',
+        model: 'gateway/local/qwen3:8b',
+      });
+    });
   });
 
   describe('abort', () => {
