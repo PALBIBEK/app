@@ -134,6 +134,23 @@ describe('a report', () => {
     expect(screen.queryByTestId('report-surface')).toBeNull();
   });
 
+  it('prints alone, as it is drawn now, to save as a PDF', async () => {
+    let printed: string | null = null;
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {
+      printed = document.querySelector('[data-print-target]')?.textContent ?? null;
+    });
+    render(<Conversation tools={[report('r1', PRICES)]} />);
+    await waitFor(() => expect(screen.getByTestId('report-surface').textContent).toContain('Paper towels'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print the report or save it as a PDF' }));
+    window.dispatchEvent(new Event('afterprint'));
+
+    expect(print).toHaveBeenCalledTimes(1);
+    expect(printed).toContain('Paper towels');
+    expect(screen.getByRole('button', { name: 'Save the report as a PNG' })).toBeTruthy();
+    print.mockRestore();
+  });
+
   it('shows the A2UI it was drawn from, on request', async () => {
     render(<Conversation tools={[report('r1', PRICES)]} />);
     fireEvent.click(screen.getByRole('button', { name: /Show A2UI/ }));

@@ -49,3 +49,19 @@
     background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0 3px, transparent 3px 7px);
   }
 }
+
+/* Printing one report (lib/session/exportReport): only it is on the page, at the top. */
+@media print {
+  html[data-printing] body * {
+    visibility: hidden;
+  }
+  html[data-printing] [data-print-target],
+  html[data-printing] [data-print-target] * {
+    visibility: visible;
+  }
+  html[data-printing] [data-print-target] {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+  }
+}
