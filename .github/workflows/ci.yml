@@ -1,6 +1,6 @@
 name: ci
 
-# The quality gates, on every push and PR: the agent platform (prime-agent-study-main/) with
+# The quality gates, on every PR and every push to main: the agent platform (prime-agent-study-main/) with
 # lint, types, every service's test suite, the end-to-end suite against a real stack
 # (Postgres, Temporal, the API process serving the gateway and memory service too, and the worker)
 # and a docker-compose smoke test; the product's backend/ and frontend/ suites (lint too); the
@@ -8,7 +8,10 @@ name: ci
 # backend's client against that live stack. A live model turn runs when MODEL_E2E_API_KEY is set.
 
 on:
+  # A PR's branch runs once, as the PR (pull_request); a push to it would start a second run of the
+  # same commit in another concurrency group. main runs on its own pushes.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -158,9 +161,10 @@ jobs:
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
           set -o pipefail
-          # The run takes about 15 minutes; one still going after 30 is stuck (in a test, or after
-          # the last one): stop it and say where, instead of holding the job for six hours.
-          timeout --signal=INT --kill-after=60 30m pytest -q -rfE 2>&1 | tee pytest.out || {
+          # Four workers (pytest-xdist): the tests mostly wait on Temporal, sandboxes and timers, so
+          # four share the runner's CPUs well (19 minutes one at a time, about 9 like this). A run
+          # still going after 30 minutes is stuck: stop it and say where, instead of holding the job.
+          timeout --signal=INT --kill-after=60 30m pytest -q -rfE -n 4 2>&1 | tee pytest.out || {
             status=$?
             esc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
             # The shell stops at the first failing command (-e, pipefail): a grep finding nothing is one.
