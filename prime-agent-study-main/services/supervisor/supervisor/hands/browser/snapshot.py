@@ -124,8 +124,8 @@ def _render(node: Node, frame: int, depth: int = 0, *, collapse: bool = True) ->
         yield depth, _line(node, frame), node
         depth += 1
     if not collapse:
-        for child in node.children:
-            yield from _render(child, frame, depth, collapse=False)
+        for kid in node.children:
+            yield from _render(kid, frame, depth, collapse=False)
         return
     run: list[Node] = []
     for child in [*node.children, None]:
