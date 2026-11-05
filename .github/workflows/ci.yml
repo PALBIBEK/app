@@ -122,7 +122,9 @@ jobs:
         run: npx next build
 
   tests:
-    runs-on: ubuntu-latest
+    # Playwright installs Chromium's system packages with apt (--with-deps), by the names
+    # Ubuntu 24.04 has: on ubuntu-latest, now Ubuntu 26, several of them are gone.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
       postgres:  # the supervisor's migration tests run against it
@@ -137,8 +139,6 @@ jobs:
           --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
-      # Playwright 1.56 has no build for the runner's Ubuntu 26 yet: install and find its 24.04 one.
-      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -235,7 +235,7 @@ jobs:
           path: ${{ env.PROJECT }}/e2e/.run/logs/
 
   journeys:  # the product in a browser: ./dev.sh brings everything up, Playwright walks the pages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright's --with-deps, as for tests
     timeout-minutes: 45
     services:
       postgres:  # dev.sh creates its three databases on it
