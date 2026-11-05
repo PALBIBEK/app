@@ -100,6 +100,25 @@ class ModelGatewayError(RuntimeError):
         super().__init__(f"model gateway error {status}: {body}")
         self.status = status
         self.retry_after = retry_after
+        self.code, self.reason = _gateway_error(body)
+
+
+SETUP_ERRORS: Final = frozenset({"PROVIDER_UNCONFIGURED", "LOCAL_UNREACHABLE"})
+"""Gateway errors a person fixes by setting a model provider up: a vendor without a key, a
+local server without an address or one not answering. A run ends on one at once, saying so."""
+
+
+def _gateway_error(body: str) -> tuple[str | None, str | None]:
+    """The gateway's error code and message, when ``body`` is its error (``{"detail": {"error":
+    {"code", "message"}}}``)."""
+    try:
+        error = json.loads(body).get("detail", {}).get("error", {})
+    except (ValueError, AttributeError):
+        return None, None
+    if not isinstance(error, dict):
+        return None, None
+    code, message = error.get("code"), error.get("message")
+    return (code if isinstance(code, str) else None), (message if isinstance(message, str) else None)
 
 
 INVALID_ARGUMENTS_KEY = "__invalid_json__"

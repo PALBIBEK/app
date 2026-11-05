@@ -201,3 +201,27 @@ describe('applyWireEvent session notes', () => {
     ).toEqual([]);
   });
 });
+
+describe('a run error', () => {
+  const after = (data: Record<string, unknown>) => {
+    const state = applyWireEvent(createSessionViewState(), ev('error', data));
+    return [state.error, state.errorCode];
+  };
+
+  it('says what the supervisor said, not just that something failed', () => {
+    expect(after({ error_class: 'PROVIDER_UNCONFIGURED', detail: 'Anthropic has no API key: an admin can add it in Policies & secrets', retryable: false })).toEqual([
+      'Anthropic has no API key',
+      'PROVIDER_UNCONFIGURED',
+    ]);
+    expect(after({ error_class: 'LOCAL_UNREACHABLE', detail: 'the local model server is not answering' })).toEqual([
+      'the local model server is not answering',
+      'LOCAL_UNREACHABLE',
+    ]);
+    expect(after({ error_class: 'TurnInterrupted', detail: 'turn starting at seq 4 was interrupted by a worker failure' })[0]).toBe(
+      'The run was interrupted by a worker failure. Send your message again to carry on.',
+    );
+    expect(after({ error_class: 'ModelGatewayError', detail: 'model gateway error 400: bad request' })).toEqual(['model gateway error 400: bad request', 'ModelGatewayError']);
+    expect(after({ message: 'an older journal’s error' })).toEqual(['an older journal’s error', null]);
+    expect(after({})).toEqual(['The run failed.', null]);
+  });
+});

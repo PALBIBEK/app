@@ -11,16 +11,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 import { CircleNotch, ClockCounterClockwise, GitBranch, Stop, TerminalWindow, Trash, XCircle } from '@phosphor-icons/react';
+import axios from 'axios';
 import { toast } from 'sonner';
 
 import { Card, StatusPill, type StatusKind } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { getApiErrorMessage } from '@/lib/api/errors';
 import { useModelChoices } from '@/lib/api/hooks/useModels';
 import { useSubagentApprovals } from '@/lib/api/hooks/useSubagentApprovals';
 import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
+import { SETUP_ERRORS } from '@/lib/session/explain';
 import { usedBrowser } from '@/lib/session/liveBrowser';
 import { currentTask } from '@/lib/session/task';
 import type { ReportAction } from '@/lib/session/useReports';
@@ -36,7 +39,9 @@ import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
 import { SubagentNoticeLine, SubagentsSection } from './subagents';
 import { useToolRenderer } from './tools';
+import { SetupHint } from './ModelPicker';
 import { LiveBrowserSection } from './LiveBrowser';
+import { useCanManageProviders } from '@/components/settings/ModelProviders';
 import { SessionNoteLine } from './SessionNoteLine';
 import { TaskPanel } from './TaskPanel';
 
@@ -133,6 +138,7 @@ export function SessionChat({
   const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
     active: state.running || anyActive(subagents ?? []), // only a working subagent asks
   });
+  const canManageProviders = useCanManageProviders();
   const task = useMemo(() => currentTask(state.messages), [state.messages]);
   const sendAction = useCallback((action: ReportAction) => sessionsAPI.sendUiAction(session.id, action), [session.id]);
   const renderTool = useToolRenderer({
@@ -199,7 +205,16 @@ export function SessionChat({
       if (sent.held) toast.info('No worker has taken your message yet. It is kept and runs as soon as one does.');
       setRunsKey((k) => k + 1);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to send');
+      if (model && axios.isAxiosError(err) && err.response?.status === 422) {
+        // The picked model cannot run now (its provider's key was removed, its server stopped):
+        // the picker goes back to the session's own model, and the person is told why.
+        setPickedModel(null);
+        toast.error(getApiErrorMessage(err, 'That model is not available now'), {
+          description: canManageProviders ? 'Set up its provider in Policies & secrets, or pick another model.' : 'Pick another model, or ask an owner or admin to set its provider up.',
+        });
+      } else {
+        toast.error(getApiErrorMessage(err, 'Failed to send'));
+      }
     } finally {
       setSending(false);
     }
@@ -369,9 +384,10 @@ export function SessionChat({
           </div>
         ) : null}
         {state.error ? (
-          <div role="alert" className="flex shrink-0 items-center gap-3 rounded-card border border-line bg-surface px-4 py-2.5 text-sm" data-testid="session-error">
+          <div role="alert" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-line bg-surface px-4 py-2.5 text-sm" data-testid="session-error">
             <span className="h-2 w-2 shrink-0 rotate-45 bg-bad" aria-hidden="true" />
-            {state.error}
+            <span>{state.error}</span>
+            {state.errorCode && SETUP_ERRORS.has(state.errorCode) ? <SetupHint canManage={canManageProviders} /> : null}
           </div>
         ) : null}
 
@@ -502,6 +518,7 @@ export function SessionChat({
               choices={modelChoices}
               onChange={setPickedModel}
               disabled={blocked || sending}
+              canManage={canManageProviders}
             />
             <span className="text-xs text-ink-3">
               {state.pendingApprovals.length

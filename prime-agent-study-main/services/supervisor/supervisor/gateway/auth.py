@@ -24,8 +24,12 @@ _STATUS_FOR_DENIAL = {"VIRTUAL_KEY_BUDGET_EXCEEDED": 429}
 """Budget exhaustion is a quota condition (as OpenAI's ``insufficient_quota``), not a permission one."""
 
 
-def gateway_error(status: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=status, detail={"error": {"code": code, "message": message}})
+def gateway_error(status: int, code: str, message: str, *, vendor: str | None = None) -> HTTPException:
+    """An error in the gateway's shape; ``vendor`` names the model vendor it is about."""
+    error: dict[str, str] = {"code": code, "message": message}
+    if vendor is not None:
+        error["vendor"] = vendor
+    return HTTPException(status_code=status, detail={"error": error})
 
 
 @dataclass(frozen=True, slots=True)

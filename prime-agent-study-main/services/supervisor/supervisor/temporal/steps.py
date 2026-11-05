@@ -88,6 +88,7 @@ from supervisor.memory.turn import SessionMemory
 from supervisor.models.messages import REASONING
 from supervisor.policy.guards import call_hash
 from supervisor.seams import ChatMessage, ToolResult
+from supervisor.seams.core.types import SETUP_ERRORS, ModelGatewayError
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session import SessionManager
 from supervisor.session.children import (
@@ -812,6 +813,9 @@ class GithiSteps:
         retryable = renewed or is_retryable(exc)
         delay = retry_delay(spec, attempt, exc) if retryable else None
         if delay is None:
+            if isinstance(exc, ModelGatewayError) and exc.code in SETUP_ERRORS and exc.reason:
+                # The model cannot run until its provider is set up: the run ends saying how.
+                raise ApplicationError(exc.reason, type=exc.code, non_retryable=True) from exc
             if not retryable:
                 raise ApplicationError(str(exc), type=type(exc).__name__, non_retryable=True) from exc
             raise ApplicationError(

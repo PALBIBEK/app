@@ -87,7 +87,8 @@ def test_mg_u5_list_routes(client: TestClient) -> None:
 def test_mg_u6_githi_route_resolves_without_key_then_fails_upstream(
     client: TestClient,
 ) -> None:
-    """Route is registered; missing OPENROUTER_API_KEY fails closed (no leak)."""
+    """Route is registered; a missing OpenRouter key fails closed (no leak), saying which
+    vendor needs a key (424: asking again changes nothing until one is added)."""
     r = client.post(
         "/v1/chat/completions",
         json={
@@ -95,11 +96,10 @@ def test_mg_u6_githi_route_resolves_without_key_then_fails_upstream(
             "messages": [{"role": "user", "content": "ping"}],
         },
     )
-    # Provider raises RuntimeError → gateway surfaces 502 UPSTREAM_ERROR.
-    assert r.status_code == 502
+    assert r.status_code == 424
     detail = r.json()["detail"]
-    assert detail["error"]["code"] == "UPSTREAM_ERROR"
-    assert "OPENROUTER_API_KEY" in detail["error"]["message"]
+    assert (detail["error"]["code"], detail["error"]["vendor"]) == ("PROVIDER_UNCONFIGURED", "openrouter")
+    assert detail["error"]["message"].startswith("OpenRouter has no API key")
 
 
 def test_mg_c2_no_supervisor_imports() -> None:
