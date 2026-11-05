@@ -24,6 +24,8 @@ DB, catalog, or harness imports required.
 | `ZAI_API_KEY` / `ZAI_BASE_URL` | empty / `https://api.z.ai/api/paas/v4` | `zai` provider: GLM (chat completions) |
 | `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` | empty / `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen` provider: Alibaba Cloud Model Studio (chat completions) |
 | `LOCAL_MODEL_BASE_URL` / `LOCAL_MODEL_API_KEY` | empty / empty | `local` provider: an OpenAI-compatible server you run (Ollama: `http://localhost:11434/v1`). Off until the URL is set; the key is optional |
+| `MODEL_GATEWAY_KEYS_FILE` | empty | Where keys set through `/v1/vendors/{vendor}/key` are kept, sealed (AES-256-GCM). Unset: vendor keys come from the environment only. Every gateway process sharing it sees a change; on Kubernetes it needs a volume |
+| `MODEL_GATEWAY_KEYS_SECRET` | `MODEL_GATEWAY_TOKEN` | Key material the file is sealed with (32+ characters). Changing it makes the keys in the file unreadable: set them again |
 | `PORT` | `8090` | Listen port |
 
 ## Routes
@@ -158,3 +160,14 @@ pytest tests/gateway
 See `deploy/staging/docker-compose.staging.yml` and `deploy/README.md`.
 Keys enter via host env / ESO (`deploy/k8s/external-secret-gateway.yaml`) into
 the gateway pod only — never the browser Settings page or sandbox env.
+
+## Vendor keys
+
+`GET /v1/vendors` lists every vendor: whether it has a key and where from (`set` through the
+API, `removed` through it, `environment`, `absent`), and whether its routes can be called
+(`ready`). `PUT /v1/vendors/{vendor}/key` (`{"key", "updated_by"}`) checks the key with the
+vendor first (one authenticated GET, five seconds: `/models`, Anthropic `/v1/models`,
+OpenRouter `/key`) and keeps it only when the vendor accepts it; Z.ai and Model Studio
+document no such call, so their keys are kept unchecked (`"checked": false`). A set key wins
+over the environment's; `DELETE /v1/vendors/{vendor}/key?updated_by=…` turns the vendor off
+even when the environment holds a key. Service token only; a key never comes back.

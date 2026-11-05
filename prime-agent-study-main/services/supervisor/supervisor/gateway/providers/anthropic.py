@@ -7,7 +7,7 @@ from collections.abc import Mapping
 import httpx
 
 from supervisor.gateway.providers.base import SSE, Body, Call, Wire
-from supervisor.gateway.providers.http import AuthHeaders, HttpUpstream, bearer
+from supervisor.gateway.providers.http import ApiKey, AuthHeaders, HttpUpstream, bearer
 
 ANTHROPIC_VERSION = "2023-06-01"
 _PATHS: Mapping[Wire, str] = {Wire.MESSAGES: "/v1/messages", Wire.CHAT: "/v1/chat/completions"}
@@ -26,7 +26,7 @@ class AnthropicProvider:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: ApiKey,
         base_url: str = "https://api.anthropic.com",
         transport: httpx.BaseTransport | None = None,
         retries: int = 1,

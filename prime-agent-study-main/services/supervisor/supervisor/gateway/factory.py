@@ -10,14 +10,21 @@ from supervisor.gateway.providers.base import Provider, ProviderRegistry
 from supervisor.gateway.providers.echo import EchoChatProvider
 from supervisor.gateway.providers.openai_compat import OpenAICompatProvider
 from supervisor.gateway.providers.openrouter import OpenRouterChatProvider
+from supervisor.gateway.vendor_keys import VendorKeys
 from supervisor.gateway.vendors import VENDORS, Vendor
 
 
 def vendor_provider(
-    vendor: Vendor, settings: Settings, *, transport: httpx.BaseTransport | None = None
+    vendor: Vendor,
+    settings: Settings,
+    keys: VendorKeys | None = None,
+    *,
+    transport: httpx.BaseTransport | None = None,
 ) -> Provider:
-    """The provider that calls ``vendor`` with the gateway's settings for it."""
-    key, base_url = settings.vendor_key(vendor), settings.vendor_base_url(vendor)
+    """The provider that calls ``vendor`` with the gateway's settings for it; its key is read
+    from ``keys`` on every call (else it is the environment's)."""
+    key = keys.source(vendor.id) if keys is not None else settings.vendor_key(vendor)
+    base_url = settings.vendor_base_url(vendor)
     if vendor.api == "anthropic":
         return AnthropicProvider(api_key=key, base_url=base_url, transport=transport)
     if vendor.id == "openrouter":  # attribution headers on top of the OpenAI wire
@@ -34,9 +41,9 @@ def vendor_provider(
     )
 
 
-def build_provider_registry(settings: Settings) -> ProviderRegistry:
+def build_provider_registry(settings: Settings, keys: VendorKeys | None = None) -> ProviderRegistry:
     registry = ProviderRegistry()
     registry.register(EchoChatProvider())
     for vendor in VENDORS.values():
-        registry.register(vendor_provider(vendor, settings))
+        registry.register(vendor_provider(vendor, settings, keys))
     return registry

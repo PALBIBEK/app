@@ -5,7 +5,9 @@ Serves the LiteLLM-compatible contract a QM-style client discovers and calls:
 * ``GET /v1/models`` and ``GET /model_group/info`` — the routes a caller may use,
   with mode, provider labels, limits, prices and capability flags;
 * ``POST /v1/chat/completions``, ``POST /v1/messages`` and ``POST /v1/responses`` —
-  passthrough inference on the three wires, streaming or not.
+  passthrough inference on the three wires, streaming or not;
+* ``GET /v1/vendors`` and ``PUT``/``DELETE /v1/vendors/{vendor}/key`` — the vendors, whether
+  each has a key, and setting or removing one (service token only; a key never comes back).
 
 ``model`` on every inference call is a route id. Calls are metered per route and
 charged to the caller's virtual key.
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field
 from supervisor.gateway.auth import Caller, authenticate, gateway_error, require_service_token
 from supervisor.gateway.config import Settings
 from supervisor.gateway.factory import build_provider_registry
+from supervisor.gateway.key_check import KeyCheck, check_key
 from supervisor.gateway.metering import cost_usd, normalize_usage
 from supervisor.gateway.metrics import CountModelCalls, ModelCalls, Spend, prometheus
 from supervisor.gateway.otel import setup_tracing
@@ -41,6 +44,8 @@ from supervisor.gateway.providers.base import (
     Wire,
 )
 from supervisor.gateway.routes import Route, RouteConfigError, RouteTable, route_view
+from supervisor.gateway.vendor_keys import VendorKeys
+from supervisor.gateway.vendors import VENDORS, Vendor
 from supervisor.gateway.virtual_keys import (
     KEY_TTL_S,
     MintRequest,
@@ -54,7 +59,8 @@ from supervisor.gateway.wire_codec import TokenUsage, UsageTap, response_usage
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
-    app.state.registry = build_provider_registry(settings)
+    app.state.keys = settings.vendor_key_store()
+    app.state.registry = build_provider_registry(settings, app.state.keys)
     # Signed keys: a restart (a deploy) or another replica takes the keys sessions hold.
     app.state.virtual_keys = SignedVirtualKeyStore(settings.virtual_key_secret())
     setup_tracing()
@@ -105,9 +111,14 @@ def _vk_store(request: Request) -> VirtualKeyStore:
     return store
 
 
+def _keys(request: Request) -> VendorKeys:
+    keys: VendorKeys = request.app.state.keys
+    return keys
+
+
 def _routes(request: Request) -> RouteTable:
     try:
-        return _settings(request).routes()
+        return _settings(request).routes(_keys(request).keyed())
     except RouteConfigError as exc:
         raise gateway_error(500, "ROUTES_INVALID", str(exc)) from None
 
@@ -150,12 +161,13 @@ def _readyz_reason(request: Request) -> str | None:
     """A safe enum reason when not ready, else None."""
     settings = getattr(request.app.state, "settings", None)
     registry = getattr(request.app.state, "registry", None)
-    if settings is None or registry is None:
+    keys = getattr(request.app.state, "keys", None)
+    if settings is None or registry is None or keys is None:
         return "routes"
     if settings.auth_must_be_configured() and not settings.model_gateway_token.strip():
         return "auth"
     try:
-        routes = settings.routes()
+        routes = settings.routes(keys.keyed())
     except RouteConfigError:
         return "routes"
     for route in routes.values():
@@ -225,6 +237,87 @@ def revoke_virtual_key(
     if session_id:
         return {"revoked": store.revoke_session(session_id)}
     raise gateway_error(400, "BAD_ARGS", "session_id or token required")
+
+
+# -- vendors ---------------------------------------------------------------
+
+
+class VendorKeyIn(BaseModel):
+    key: str = Field(min_length=1, max_length=4096)
+    updated_by: str = Field(min_length=1, max_length=255)
+    """Who set it (the product's principal), kept with the key's status."""
+
+
+def _vendor(vendor_id: str) -> Vendor:
+    vendor = VENDORS.get(vendor_id)
+    if vendor is None:
+        raise gateway_error(404, "VENDOR_UNKNOWN", f"unknown vendor: {vendor_id!r}")
+    return vendor
+
+
+def _vendor_view(request: Request, vendor: Vendor) -> dict[str, Any]:
+    """A vendor as the product shows it: whether it can be called, never its key."""
+    status = _keys(request).status(vendor.id)
+    provider = _registry(request).get(vendor.id)
+    return {
+        "id": vendor.id,
+        "label": vendor.label,
+        "base_url": _settings(request).vendor_base_url(vendor),
+        "key_required": vendor.key_required,
+        "key_checked": vendor.key_check is not None,
+        "configured": status.configured,
+        "source": status.source,
+        "updated_at": status.updated_at,
+        "updated_by": status.updated_by,
+        "ready": provider is not None and provider.credential_ok(),
+    }
+
+
+def _editable(request: Request) -> VendorKeys:
+    keys = _keys(request)
+    if not keys.editable:
+        raise gateway_error(
+            409, "KEYS_NOT_EDITABLE", "vendor keys are set in the gateway's environment here"
+        )
+    return keys
+
+
+@app.get("/v1/vendors")
+def list_vendors(request: Request) -> dict[str, Any]:
+    """Every vendor, whether it has a key and where from, and whether keys can be set here."""
+    require_service_token(request)
+    return {
+        "editable": _keys(request).editable,
+        "vendors": [_vendor_view(request, vendor) for vendor in VENDORS.values()],
+    }
+
+
+@app.put("/v1/vendors/{vendor_id}/key")
+def set_vendor_key(vendor_id: str, body: VendorKeyIn, request: Request) -> dict[str, Any]:
+    """Check the key with the vendor, then keep it: a key the vendor refuses is not saved."""
+    require_service_token(request)
+    vendor, keys = _vendor(vendor_id), _editable(request)
+    key = body.key.strip()
+    checked = check_key(vendor, key, _settings(request).vendor_base_url(vendor))
+    if checked is KeyCheck.REFUSED:
+        raise gateway_error(400, "KEY_REFUSED", f"{vendor.label} refused this key")
+    if checked is KeyCheck.UNREACHABLE:
+        raise gateway_error(
+            502, "KEY_UNCHECKED", f"could not reach {vendor.label} to check the key; try again"
+        )
+    keys.set(vendor, key, by=body.updated_by)
+    return {**_vendor_view(request, vendor), "checked": checked is KeyCheck.ACCEPTED}
+
+
+@app.delete("/v1/vendors/{vendor_id}/key")
+def remove_vendor_key(
+    vendor_id: str, request: Request, updated_by: str = Query(min_length=1, max_length=255)
+) -> dict[str, Any]:
+    """Remove the vendor's key: it is off from now, even with a key in the environment."""
+    require_service_token(request)
+    vendor = _vendor(vendor_id)
+    _editable(request).remove(vendor, by=updated_by)
+    return _vendor_view(request, vendor)
 
 
 # -- discovery -------------------------------------------------------------

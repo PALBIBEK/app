@@ -15,6 +15,8 @@ _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
 
 type AuthHeaders = Callable[[str], Mapping[str, str]]
+type ApiKey = str | Callable[[], str]
+"""A fixed key, or one read on every call (a key set through the gateway's API)."""
 
 
 def bearer(key: str) -> Mapping[str, str]:
@@ -31,7 +33,7 @@ class HttpUpstream:
     """
 
     vendor: str
-    api_key: str
+    api_key: ApiKey
     base_url: str
     key_env_name: str
     base_url_env_name: str = ""
@@ -47,11 +49,14 @@ class HttpUpstream:
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
 
+    def key(self) -> str:
+        return (self.api_key() if callable(self.api_key) else self.api_key).strip()
+
     def missing(self) -> str | None:
         """The setting the gateway lacks to call this upstream, or None when it has them."""
         if not self.base_url:
             return self.base_url_env_name or "the upstream's base URL"
-        if self.key_required and not self.api_key.strip():
+        if self.key_required and not self.key():
             return self.key_env_name
         return None
 
@@ -96,7 +101,7 @@ class HttpUpstream:
         raise AssertionError("unreachable")
 
     def _request(self, client: httpx.Client, path: str, body: Body) -> httpx.Request:
-        key = self.api_key.strip()
+        key = self.key()
         headers = {
             "Content-Type": "application/json",
             **self.extra_headers,

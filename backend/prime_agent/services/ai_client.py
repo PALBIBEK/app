@@ -296,6 +296,28 @@ class AiClient:
             "DELETE", f"/v1/secrets/{quote(name, safe='/')}", identity, expected=(204,), allow_empty=True
         )
 
+    # --- model providers (the platform's; the gateway holds the keys) ----------------------------
+
+    async def list_model_providers(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """Each vendor's status at the model gateway: configured or not, never a key."""
+        payload = await self._json_request("GET", "/v1/model-providers", identity)
+        return payload if isinstance(payload, dict) else {}
+
+    async def set_model_provider_key(self, identity: TenantPrincipal, vendor: str, key: str) -> dict[str, Any]:
+        """Hand the key to the gateway (checked with the vendor first); the vendor's status back."""
+        payload = await self._json_request(
+            "PUT",
+            f"/v1/model-providers/{quote(vendor, safe='')}/key",
+            identity,
+            json_body={"key": key},
+            timeout=20.0,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def remove_model_provider_key(self, identity: TenantPrincipal, vendor: str) -> dict[str, Any]:
+        payload = await self._json_request("DELETE", f"/v1/model-providers/{quote(vendor, safe='')}/key", identity)
+        return payload if isinstance(payload, dict) else {}
+
     async def get_artifact(
         self,
         identity: TenantPrincipal,

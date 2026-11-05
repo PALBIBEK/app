@@ -251,6 +251,11 @@ class GatewayCatalog:
 
     # -- refresh --------------------------------------------------------------
 
+    def expire(self) -> None:
+        """Re-read the gateway at the next refresh (what it serves just changed)."""
+        with self._lock:
+            self._retry_at = 0.0
+
     def refresh(self) -> None:
         """Re-read the gateway when due. One refresh runs at a time; callers that arrive
         during it wait for it and then share its result."""

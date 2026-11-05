@@ -176,10 +176,12 @@ up() {
   start temporal "$TEMPORAL server start-dev --ip 127.0.0.1 --port 7233 --ui-port 8233 \
     --db-filename '$STATE/temporal.db' --log-level warn"
   start s3 "'$SPY' -m moto.server -H 127.0.0.1 -p 8333"
-  # The gateway is the only process given the provider key.
+  # The gateway is the only process given the provider key. Keys set in the product's
+  # settings are sealed in its own file (sealed with GATEWAY_TOKEN), read by no other process.
   start gateway "cd '$SUP' && export OPENROUTER_API_KEY=\"\$(grep -s '^OPENROUTER_API_KEY=' '$ROOT/.env.local' | cut -d= -f2-)\" && exec env PROFILE=dev ENV=development HOST=127.0.0.1 \
     MODEL_GATEWAY_TOKEN='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key \
     MODEL_GATEWAY_DEFAULT_ROUTE=echo MODEL_GATEWAY_ROUTES_JSON='$(routes_json)' \
+    MODEL_GATEWAY_KEYS_FILE='$STATE/gateway-keys.json' \
     SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 '$SPY' -m supervisor api"
   wait_http s3 http://127.0.0.1:8333 60
   wait_http gateway http://127.0.0.1:8090/v1/healthz 60

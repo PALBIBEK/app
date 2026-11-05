@@ -47,6 +47,11 @@ class Vendor:
     key_required: bool = True
     responses: bool = False
     """Also serves OpenAI Responses (only OpenAI itself)."""
+    key_check: str | None = "/models"
+    """The authenticated GET (under ``base_url``) that tells whether a key is accepted, as
+    QM checks a key before saving it (``src/api/routes/admin/model-providers.ts``
+    ``VALIDATION_REQUESTS``; ``custom-providers.ts`` uses ``/models`` for any OpenAI-compatible
+    upstream). ``None`` when the vendor documents no such call: its key is saved unchecked."""
 
 
 VENDORS: Mapping[str, Vendor] = {
@@ -55,16 +60,16 @@ VENDORS: Mapping[str, Vendor] = {
         Vendor("openai", "OpenAI", "openai", "https://api.openai.com/v1",
                "OPENAI_API_KEY", "OPENAI_BASE_URL", responses=True),
         Vendor("anthropic", "Anthropic", "anthropic", "https://api.anthropic.com",
-               "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"),
+               "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", key_check="/v1/models"),
         Vendor("openrouter", "OpenRouter", "openai", "https://openrouter.ai/api/v1",
-               "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"),
+               "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", key_check="/key"),
         Vendor("deepseek", "DeepSeek", "openai", "https://api.deepseek.com",
                "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"),
         Vendor("zai", "Z.ai (GLM)", "openai", "https://api.z.ai/api/paas/v4",
-               "ZAI_API_KEY", "ZAI_BASE_URL"),
+               "ZAI_API_KEY", "ZAI_BASE_URL", key_check=None),
         Vendor("qwen", "Qwen (Alibaba Cloud)", "openai",
                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-               "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"),
+               "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", key_check=None),
         Vendor("local", "Local", "openai", "",
                "LOCAL_MODEL_API_KEY", "LOCAL_MODEL_BASE_URL", key_required=False),
     )

@@ -4,7 +4,9 @@
 - ``GET /sandboxes``: their sessions' sandboxes and what state each is in;
 - ``GET /usage``: tokens and cost, by day, agent or session;
 - ``/runners`` and ``/secrets``: the user's runners and tenant secrets;
-- ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (owners and admins).
+- ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (owners and admins);
+- ``/model-providers``: the model vendors and their keys (owners and admins). A key goes to
+  the model gateway, which alone keeps it; it is never stored here or returned.
 
 The supervisor names sessions by its own ids; the browser knows this product's
 session ids. Every row is translated through the user's session links (with the
@@ -37,6 +39,7 @@ OpsUser = Annotated[User, Depends(require_any_role("owner", "admin"))]
 
 _RUNNER_NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _SECRET_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,127}")
+_VENDOR = re.compile(r"[a-z][a-z0-9-]{0,63}")
 
 
 def _client() -> AiClient:
@@ -332,6 +335,42 @@ async def put_secret(name: str, body: SecretIn, current_user: CurrentUser) -> Re
 async def delete_secret(name: str, current_user: CurrentUser) -> Response:
     await _call(_client().delete_secret(TenantPrincipal.from_user(current_user), _secret_name(name)))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- model providers (admins) ------------------------------------------------------------------
+
+
+class ProviderKeyIn(BaseModel):
+    key: str = Field(min_length=1, max_length=4096)
+
+
+def _vendor(vendor: str) -> str:
+    if not _VENDOR.fullmatch(vendor):
+        raise HTTPException(status_code=404, detail="unknown model provider")
+    return vendor
+
+
+@router.get("/model-providers")
+async def list_model_providers(current_user: OpsUser) -> dict[str, Any]:
+    """Every model vendor: whether it has a key and where from, and whether keys can be set."""
+    result: dict[str, Any] = await _call(_client().list_model_providers(TenantPrincipal.from_user(current_user)))
+    return result
+
+
+@router.put("/model-providers/{vendor}/key")
+async def set_model_provider_key(vendor: str, body: ProviderKeyIn, current_user: OpsUser) -> dict[str, Any]:
+    """Set a vendor's key; the vendor checks it first, and a key it refuses is not kept."""
+    identity = TenantPrincipal.from_user(current_user)
+    result: dict[str, Any] = await _call(_client().set_model_provider_key(identity, _vendor(vendor), body.key))
+    return result
+
+
+@router.delete("/model-providers/{vendor}/key")
+async def remove_model_provider_key(vendor: str, current_user: OpsUser) -> dict[str, Any]:
+    """Remove a vendor's key: its models are off from now."""
+    identity = TenantPrincipal.from_user(current_user)
+    result: dict[str, Any] = await _call(_client().remove_model_provider_key(identity, _vendor(vendor)))
+    return result
 
 
 # --- the worker fleet (admins) -----------------------------------------------------------------

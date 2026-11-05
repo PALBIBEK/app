@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Collection
 from functools import cached_property
+from pathlib import Path
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from supervisor.gateway.routes import DEFAULT_ROUTES, VENDOR_ROUTES, RouteTable
+from supervisor.gateway.vendor_keys import VendorKeys, sealing_key
 from supervisor.gateway.vendors import VENDORS, Vendor, parse_base_url
 from supervisor.gateway.virtual_keys import derive_virtual_key_secret
 
@@ -54,6 +57,12 @@ class Settings(BaseSettings):
     local_model_base_url: str = Field(default="", alias="LOCAL_MODEL_BASE_URL")
     """A local OpenAI-compatible server (``http://localhost:11434/v1`` for Ollama); unset, the
     ``local`` vendor is off."""
+    model_gateway_keys_file: str = Field(default="", alias="MODEL_GATEWAY_KEYS_FILE")
+    """Where keys set through the gateway's API are kept (sealed); unset, vendor keys come
+    from the environment only."""
+    model_gateway_keys_secret: str = Field(default="", alias="MODEL_GATEWAY_KEYS_SECRET")
+    """Key material the key file is sealed with (at least 32 characters); the service token
+    when unset. Every gateway process sharing the file needs the same one."""
     port: int = Field(default=8090, alias="PORT")
 
     @field_validator(
@@ -69,6 +78,13 @@ class Settings(BaseSettings):
     def _base_url(cls, value: str, info: ValidationInfo) -> str:
         field = cls.model_fields[info.field_name or ""]
         return parse_base_url(str(field.alias), value)
+
+    @field_validator("model_gateway_keys_secret")
+    @classmethod
+    def _keys_secret(cls, value: str) -> str:
+        if value and len(value) < 32:
+            raise ValueError("MODEL_GATEWAY_KEYS_SECRET must be at least 32 characters")
+        return value
 
     @field_validator("model_gateway_api_key_header")
     @classmethod
@@ -105,21 +121,39 @@ class Settings(BaseSettings):
         return self._setting(vendor.base_url_env)
 
     def vendor_keys(self) -> dict[str, str]:
-        """Each vendor's key (empty when unset)."""
+        """Each vendor's key in the environment (empty when unset)."""
         return {vendor.id: self.vendor_key(vendor) for vendor in VENDORS.values()}
+
+    def vendor_key_store(self) -> VendorKeys:
+        """The vendors' keys: the environment's, and the key file's when one is configured."""
+        if not self.model_gateway_keys_file.strip():
+            return VendorKeys(self.vendor_keys())
+        material = self.model_gateway_keys_secret or self.model_gateway_token
+        if not material:
+            raise ValueError(
+                "MODEL_GATEWAY_KEYS_FILE needs MODEL_GATEWAY_KEYS_SECRET or MODEL_GATEWAY_TOKEN"
+            )
+        return VendorKeys(
+            self.vendor_keys(),
+            path=Path(self.model_gateway_keys_file.strip()),
+            secret=sealing_key(material),
+        )
 
     @cached_property
     def route_table(self) -> RouteTable:
-        """Configured routes plus the routes each set vendor key unlocks.
+        """The configured routes (``MODEL_GATEWAY_ROUTES_JSON``, else the defaults).
 
         Raises :class:`~supervisor.gateway.routes.RouteConfigError` on an invalid table.
         """
         raw = self.model_gateway_routes_json.strip()
-        table = RouteTable.from_json(raw) if raw else RouteTable(DEFAULT_ROUTES)
-        for vendor, key in self.vendor_keys().items():
-            if key and vendor in VENDOR_ROUTES:
+        return RouteTable.from_json(raw) if raw else RouteTable(DEFAULT_ROUTES)
+
+    def routes(self, keyed: Collection[str] | None = None) -> RouteTable:
+        """The configured routes plus the default routes of each vendor with a key: those in
+        ``keyed``, else those with a key in the environment."""
+        keyed = {v for v, key in self.vendor_keys().items() if key} if keyed is None else keyed
+        table = self.route_table
+        for vendor in VENDORS:  # the vendor table's order, so listings are stable
+            if vendor in keyed and vendor in VENDOR_ROUTES:
                 table = table.with_defaults(VENDOR_ROUTES[vendor])
         return table
-
-    def routes(self) -> RouteTable:
-        return self.route_table
