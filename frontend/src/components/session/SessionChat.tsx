@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 
 import { Card, StatusPill, type StatusKind } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
+import { useModelChoices } from '@/lib/api/hooks/useModels';
 import { useSubagentApprovals } from '@/lib/api/hooks/useSubagentApprovals';
 import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session } from '@/lib/api/types/session.types';
@@ -27,6 +28,7 @@ import { useSessionStream, type Connection } from '@/lib/session/useSessionStrea
 import { useAuthStore } from '@/lib/store/authStore';
 import { cn, formatMoney } from '@/lib/utils';
 
+import { ModelPicker } from './ModelPicker';
 import { ApprovalCard, MessageBubble } from './parts';
 import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
@@ -104,6 +106,13 @@ export function SessionChat({
       .catch(() => setStatus('terminated'));
   }, [connection, ended, session.id]);
   const [input, setInput] = useState('');
+  // The model the session runs now, and the one picked for the next message (the same until
+  // the person picks another; sent with the message, it runs from that message's run on).
+  const { data: modelChoices } = useModelChoices();
+  const [currentModel, setCurrentModel] = useState(session.model ?? null);
+  const [pickedModel, setPickedModel] = useState<string | null>(null);
+  useEffect(() => setCurrentModel(session.model ?? null), [session.model]);
+  const nextModel = pickedModel ?? currentModel ?? '';
   /** Queued messages by text: the run id each got, and whether that run was cancelled. */
   const [queuedRuns, setQueuedRuns] = useState<Map<string, { runId: string; cancelled: boolean }>>(new Map());
   const [sending, setSending] = useState(false);
@@ -169,8 +178,13 @@ export function SessionChat({
     setSending(true);
     addLocalMessage(text);
     setInput('');
+    const model = nextModel && nextModel !== currentModel ? nextModel : undefined;
     try {
-      const sent = await sessionsAPI.sendMessage(session.id, text);
+      const sent = await sessionsAPI.sendMessage(session.id, text, undefined, model ? { model } : {});
+      if (model) {
+        setCurrentModel(model);
+        setPickedModel(null);
+      }
       if (sent.queued) setQueuedRuns((q) => new Map(q).set(text, { runId: sent.turn_id, cancelled: false }));
       if (sent.held) toast.info('No worker has taken your message yet. It is kept and runs as soon as one does.');
       setRunsKey((k) => k + 1);
@@ -470,7 +484,15 @@ export function SessionChat({
             }
             className="max-h-40 resize-none border-0 bg-transparent p-1 text-base text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <ModelPicker
+              id={`model-${session.id}`}
+              value={nextModel}
+              current={currentModel}
+              choices={modelChoices}
+              onChange={setPickedModel}
+              disabled={blocked || sending}
+            />
             <span className="text-xs text-ink-3">
               {state.pendingApprovals.length
                 ? 'Paused on an approval · messages queue'

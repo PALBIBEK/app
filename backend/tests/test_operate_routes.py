@@ -279,3 +279,20 @@ async def test_model_provider_keys_are_for_admins_and_pass_through(db_session, m
         assert refused.status_code == 400 and refused.json()["detail"]["message"] == "OpenAI refused this key"
         assert (await api.put("/api/v1/model-providers/deepseek/key", json={"key": ""})).status_code == 422
         assert (await api.put("/api/v1/model-providers/Bad..x/key", json={"key": "k"})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_model_choices_carry_each_models_vendor_and_which_vendors_are_ready(db_session, make_user, settings, monkeypatch):
+    listing = {
+        "models": [{"id": "gateway/deepseek-flash", "label": "deepseek-flash", "vendor": "deepseek"}],
+        "providers": [{"id": "deepseek", "label": "DeepSeek", "ready": True}, {"id": "openai", "label": "OpenAI", "ready": False}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=listing) if request.url.path == "/v1/models" else httpx.Response(404)
+
+    member = await make_user(email="m@example.com")
+    seen: list[httpx.Request] = []
+    async with _api(db_session, member, settings, monkeypatch, handler, seen) as api:
+        assert (await api.get("/api/v1/catalog/model-choices")).json() == listing
+        assert (await api.get("/api/v1/catalog/models")).json() == listing["models"]

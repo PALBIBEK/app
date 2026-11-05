@@ -74,16 +74,19 @@ export const sessionsAPI = {
     return SessionSchema.parse(response);
   },
 
+  /** ``model``: run this model from this message's run on (the session's owner chose it). */
   sendMessage: async (
     sessionId: string,
     content: string,
-    commandId?: string
+    commandId?: string,
+    options: { model?: string } = {}
   ): Promise<SessionMessageResponse> => {
     const response = await apiClient.post<SessionMessageResponse>(
       `/sessions/${sessionId}/messages`,
       {
         content,
         ...(commandId ? { command_id: commandId } : {}),
+        ...(options.model ? { model: options.model } : {}),
       }
     );
     return SessionMessageResponseSchema.parse(response);

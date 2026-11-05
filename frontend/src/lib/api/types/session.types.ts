@@ -34,6 +34,8 @@ export const SessionSchema = z.object({
   total_cost: z.number(),
   last_seq: z.number(),
   is_busy: z.boolean().nullish(),
+  /** The model the session's next run calls: its owner's choice, else the agent's own. */
+  model: z.string().nullish(),
   created_at: z.string(),
   updated_at: z.string(),
   pin: SessionPinSchema,
