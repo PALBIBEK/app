@@ -154,10 +154,14 @@ async def test_the_shipped_browser_agent_reaches_the_web_and_is_told_how_to_brow
     no site), and its prompt is the browser pack's."""
     from supervisor.catalog.core.types import NetworkMode
     from supervisor.catalog.services.publish_checks import _check_network
-    from supervisor.catalog.storage.converters import composition_from_dict, prompt_pack_from_dict, sandbox_profile_from_dict
+    from supervisor.catalog.storage.converters import (
+        composition_from_dict,
+        prompt_pack_from_dict,
+        sandbox_profile_from_dict,
+    )
 
     harness = Path(__file__).resolve().parents[4] / "harness"
-    read = lambda kind, name: json.loads((harness / kind / f"{name}.json").read_text())  # noqa: E731
+    read = lambda kind, name: json.loads((harness / kind / f"{name}.json").read_text())
     agent = composition_from_dict(read("compositions", "githi-browser-v1"))
     profile = sandbox_profile_from_dict(read("sandbox_profiles", agent.sandbox_profile.id))
     prompt = prompt_pack_from_dict(read("prompt_packs", agent.prompt_pack.id))
