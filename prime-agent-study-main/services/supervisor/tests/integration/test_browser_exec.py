@@ -1,73 +1,21 @@
-"""The browser code mode against a real headless Chromium, run as a sandbox runs it.
-
-The workspace runs the call's command as a sandbox does (a shell in the workspace root
-with a scrubbed environment, killed with everything it started on a stop), so these are
-the runner's real paths: Chromium started once and
-kept, reached again over CDP by the next call, the model's code run with Playwright's
-``page`` and the helpers, and only what it prints returned. They need the sandbox's
-runtime on this machine (``python3`` with Playwright and its Chromium): CI installs it.
-"""
+"""The browser code mode against a real headless Chromium, run as a sandbox runs it
+(``tests.support.browser``): the browser kept between calls and reached again over CDP,
+the model's code run with Playwright's ``page`` and the helpers, and only what it prints
+returned."""
 
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import subprocess
 import threading
-from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from supervisor.tools import default_registry
-from supervisor.tools.context import ToolContext
-from supervisor.tools.workspace import HostWorkspace
+from tests.support.browser import Call, needs_browser
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.skipif(
-        subprocess.run(["python3", "-c", "import playwright"], capture_output=True, check=False).returncode != 0,
-        reason="no browser runtime here (python3 with Playwright and Chromium)",
-    ),
-]
+pytestmark = [pytest.mark.asyncio, needs_browser]
 
-_BROWSERS = {
-    "PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(Path.home() / ".cache" / "ms-playwright"),
-    **{k: v for k, v in os.environ.items() if k == "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"},
-}
-"""Where this machine keeps Playwright's browsers, and which build it uses: a workspace
-command's HOME is the workspace, so Playwright's default would look there (a sandbox
-image sets its own)."""
 PAGE = "<title>Shop</title><h1>Paper towels</h1><ul><li>A $3</li><li>B $5</li></ul><input id=q>"
-Call = Callable[..., "asyncio.Future[dict[str, Any]]"]
-
-
-@pytest.fixture
-async def call(tmp_path: Path) -> AsyncIterator[Call]:
-    """``browser_exec`` on a workspace of its own, with a browser home of its own."""
-    home = tmp_path / "browser-home"
-    (tmp_path / "ws").mkdir()
-    spec = default_registry()["browser_exec"]
-
-    async def run(code: str, stop: threading.Event | None = None, **args: Any) -> dict[str, Any]:
-        ctx = ToolContext(
-            bound_workspace=HostWorkspace(tmp_path / "ws"),
-            timeout_s=60,
-            env={"GITHI_BROWSER_HOME": str(home), **_BROWSERS},
-            stop=stop,
-        )
-        return dict(await spec.run({"code": code, **args}, ctx))
-
-    yield run  # type: ignore[misc]
-    _kill_browsers(home)
-
-
-def _kill_browsers(home: Path) -> None:
-    """The browsers the test started outlive its calls by design: stop them here."""
-    subprocess.run(["pkill", "-f", "--", f"--user-data-dir={home}"], check=False)
-    shutil.rmtree(home, ignore_errors=True)
 
 
 async def test_a_call_runs_code_against_the_page_and_returns_what_it_prints(call: Call) -> None:
@@ -139,10 +87,12 @@ async def test_a_dialog_is_answered_as_asked_and_never_passes_unseen(call: Call)
     default = await call(page + "page.click('button')\nprint(page.title())")
     accepted = await call(page + "answer_dialogs('accept')\npage.click('button')\nprint(page.title())")
 
+    (dismissed,) = [e for e in default["events"] if e["kind"] == "dialog"]
+    (taken,) = [e for e in accepted["events"] if e["kind"] == "dialog"]
     assert default["output"] == "kept"
-    assert default["dialogs"] == [{"type": "confirm", "message": "Pay?", "answer": "dismiss"}]
+    assert {k: dismissed[k] for k in ("type", "message", "answer")} == {"type": "confirm", "message": "Pay?", "answer": "dismiss"}
     assert accepted["output"] == "paid"
-    assert accepted["dialogs"][0]["answer"] == "accept"
+    assert taken["answer"] == "accept"
 
 
 async def test_a_locator_that_names_nothing_fails_in_seconds(call: Call) -> None:

@@ -6,74 +6,111 @@ model's code on stdin and runs it with a Playwright ``page`` (and ``context``,
 ``browser``) already connected to the sandbox's browser, beside helpers in the shape
 Hermes's browser-harness offers (``new_tab``, ``goto_url``, ``js``, ``cdp``, ...).
 
-The browser outlives the call: the runner starts a headless Chromium once per browser
-name, in a session of its own and without the call's run tag, so neither the call ending
-nor a stop of the call kills it, and every later call reconnects to it over CDP. A
-browser endpoint given in ``GITHI_BROWSER_CDP`` (a provider's own browser) is used
-instead of starting one.
+The browser outlives the call: ``daemon.py``, started once per browser name in a session
+of its own and without the call's run tag, owns it (and a CDP connection with an event
+buffer), so neither the call ending nor a stop of the call reaches it. Each call asks the
+daemon for the browser's endpoint and connects to it over CDP; the model's code runs here,
+in the call, where a stop can end it.
 
 What the code prints is the result. On stderr, after anything the code wrote there, one
-line starting with ``META_MARK`` carries what the tool reports besides (the page the call
-ended on, whether a fresh browser had to be started, the call's error).
+line starting with ``META_MARK`` carries what the tool reports besides: the page the call
+ended on, whether a fresh browser had to be started, the call's error, and what the
+browser's tabs reported since the previous call (dialogs, console errors, page errors).
 """
 
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
 import traceback
-import urllib.request
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 META_MARK = "\x1egithi-browser "
 """Starts the stderr line the tool reads back (an ASCII record separator, then a tag)."""
-ROOT = Path(os.environ.get("GITHI_BROWSER_HOME") or "/tmp/githi-browser")
-"""Per-sandbox state: one directory per browser name (profile, port, current tab)."""
 WORKSPACE = Path(os.environ.get("BROWSER_WORKSPACE") or ".githi/browser").resolve()
 """In the session's workspace, so it is saved with the session: batch files, helpers."""
-NAME = os.environ.get("GITHI_BROWSER_NAME") or "default"
-RUN_TAG_VAR = "SUPERVISOR_RUN_TAG"
-"""The variable a stop finds a call's processes by; the browser must not carry it."""
-START_TIMEOUT_S = 20.0
 ACTION_TIMEOUT_MS = 5_000
 """How long an action waits for its element: a locator that names nothing fails in
 seconds, not Playwright's 30 (the code can pass ``timeout=`` for a slow element)."""
 NAVIGATION_TIMEOUT_MS = 30_000
+REPORTED = ("dialog", "console", "pageerror")
+"""Events a result lists, of those the daemon keeps (navigations and requests are not)."""
+MAX_REPORTED = 20
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://")
 
 
-class Session:
-    """This call's view of the browser: the page code acts on, how it got there, and the
-    dialogs its pages opened."""
+def _daemon_module() -> ModuleType:
+    """``daemon.py`` beside this file: its paths and constants are the ones it serves on."""
+    spec = importlib.util.spec_from_file_location("githi_browser_daemon", Path(__file__).with_name("daemon.py"))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    def __init__(self, browser: Any, started: bool) -> None:
+
+DAEMON = _daemon_module()
+
+
+def ask(op: str, **fields: Any) -> dict[str, Any]:
+    """One request to the daemon; its answer. Raises OSError when none is serving."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(10)
+        conn.connect(str(DAEMON.SOCKET))
+        conn.sendall(json.dumps({"op": op, **fields}).encode() + b"\n")
+        reply = conn.makefile("rb").readline()
+    answer = json.loads(reply)
+    if "error" in answer:
+        raise RuntimeError(f"browser daemon: {answer['error']}")
+    return dict(answer)
+
+
+def _hello() -> dict[str, Any]:
+    """The daemon's greeting (the browser's endpoint and generation), starting it if none
+    answers: detached, untagged, so the call's end or a stop leaves it running."""
+    try:
+        return ask("hello")
+    except OSError:
+        pass
+    env = {k: v for k, v in os.environ.items() if k != DAEMON.RUN_TAG_VAR}
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).with_name("daemon.py"))],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=env, start_new_session=True,
+    )
+    deadline = time.monotonic() + DAEMON.START_TIMEOUT_S + 5
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        with contextlib.suppress(OSError):
+            return ask("hello")
+    log = DAEMON.HOME / "daemon.log"
+    raise RuntimeError(log.read_text().strip().splitlines()[-1] if log.exists() else "the browser daemon did not start")
+
+
+class Session:
+    """This call's view of the browser: the page code acts on, and how it got there."""
+
+    def __init__(self, browser: Any, hello: dict[str, Any]) -> None:
         self.browser = browser
         self.context = browser.contexts[0] if browser.contexts else browser.new_context()
         self.context.set_default_timeout(ACTION_TIMEOUT_MS)
         self.context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
-        self.started = started
-        self.dialog_answer: tuple[str, str | None] = ("dismiss", None)
-        self.dialogs: list[dict[str, str]] = []
+        seen = _state_file("seen-generation")
+        self.started = not seen.exists() or seen.read_text() != str(hello["generation"])
+        seen.write_text(str(hello["generation"]))
+        # The daemon answers dialogs; a page without a listener here would have Playwright
+        # dismiss them first, whatever the call asked.
         for page in self.context.pages:
-            page.on("dialog", self._answer)
-        self.context.on("page", lambda page: page.on("dialog", self._answer))
+            page.on("dialog", _leave_to_daemon)
+        self.context.on("page", lambda page: page.on("dialog", _leave_to_daemon))
         self.page = self._current()
-
-    def _answer(self, dialog: Any) -> None:
-        """Answer a native dialog (alert, confirm, prompt, beforeunload) as the code asked,
-        dismissing by default, and keep it for the result: none passes unseen."""
-        action, text = self.dialog_answer
-        with contextlib.suppress(Exception):  # closed with its page
-            if action == "accept":
-                dialog.accept(text)
-            else:
-                dialog.dismiss()
-        self.dialogs.append({"type": dialog.type, "message": dialog.message, "answer": action})
 
     def _current(self) -> Any:
         """The tab the previous call ended on, else the last real tab, else a new one."""
@@ -88,9 +125,24 @@ class Session:
         with contextlib.suppress(Exception):
             _state_file("tab").write_text(_target_id(self.page))
 
+    def reported(self) -> list[dict[str, Any]]:
+        """What the tabs reported since the previous call ended, oldest first."""
+        cursor = _state_file("seq")
+        since = int(cursor.read_text()) if cursor.exists() else 0
+        answer = ask("events", since=since)
+        cursor.write_text(str(answer["seq"]))
+        events = [
+            {k: v for k, v in e.items() if k not in ("seq", "at")} for e in answer["events"] if e["kind"] in REPORTED
+        ]
+        return events[-MAX_REPORTED:]
+
+
+def _leave_to_daemon(_dialog: Any) -> None:
+    """A dialog listener that leaves the answer to the daemon."""
+
 
 def _state_file(name: str) -> Path:
-    return ROOT / NAME / name
+    return Path(DAEMON.HOME) / name
 
 
 def _target_id(page: Any) -> str:
@@ -101,163 +153,133 @@ def _target_id(page: Any) -> str:
         cdp.detach()
 
 
-def _alive(endpoint: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{endpoint}/json/version", timeout=2) as reply:
-            return reply.status == 200
-    except OSError:
-        return False
+class Helpers:
+    """The helpers code runs with, in the shape Hermes's browser-harness offers, on the
+    call's ``Session``; ``scope()`` is the namespace the code runs in."""
 
+    NAMES = (
+        "new_tab", "goto_url", "wait_for_load", "page_info", "js", "cdp", "fill_input", "click_at_xy",
+        "capture_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
+        "browser_events", "ensure_real_tab",
+    )
 
-def _endpoint(chromium_path: str) -> tuple[str, bool]:
-    """The browser's CDP endpoint, and whether this call had to start it."""
-    if given := os.environ.get("GITHI_BROWSER_CDP"):
-        return given, False
-    port_file = _state_file("port")
-    if port_file.exists() and _alive(endpoint := f"http://127.0.0.1:{port_file.read_text().strip()}"):
-        return endpoint, False
-    return _start(chromium_path), True
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.names: dict[str, Any] = {}
 
+    def scope(self) -> dict[str, Any]:
+        """Playwright's objects, the helpers, and what the agent saved in agent_helpers.py."""
+        self.names = {
+            "__name__": "__main__",
+            "page": self.session.page,
+            "context": self.session.context,
+            "browser": self.session.browser,
+            "WORKSPACE": str(WORKSPACE),
+            **{name: getattr(self, name) for name in self.NAMES},
+        }
+        _load_agent_helpers(self.names)
+        return self.names
 
-def _start(chromium_path: str) -> str:
-    """Start a headless Chromium of its own (detached, untagged) and wait for its port."""
-    profile = ROOT / NAME / "profile"
-    profile.mkdir(parents=True, exist_ok=True)
-    active = profile / "DevToolsActivePort"
-    active.unlink(missing_ok=True)
-    env = {k: v for k, v in os.environ.items() if k != RUN_TAG_VAR}
-    with open(ROOT / NAME / "chromium.log", "ab") as log:
-        subprocess.Popen(
-            [
-                chromium_path,
-                "--headless=new",
-                "--remote-debugging-port=0",
-                f"--user-data-dir={profile}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-dev-shm-usage",
-                # The sandbox it runs in is the isolation boundary (as Playwright's own
-                # launch assumes): Chromium's sandbox needs user namespaces, which Docker
-                # with no capabilities, and Ubuntu 24.04+ for unprivileged users, deny.
-                "--no-sandbox",
-                "about:blank",
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            env=env,
-            start_new_session=True,  # its own session: the call's end or stop leaves it
-        )
-    deadline = time.monotonic() + START_TIMEOUT_S
-    while time.monotonic() < deadline:
-        if active.exists() and (port := active.read_text().split("\n", 1)[0].strip()):
-            endpoint = f"http://127.0.0.1:{port}"
-            if _alive(endpoint):
-                _state_file("port").write_text(port)
-                return endpoint
-        time.sleep(0.1)
-    raise RuntimeError(f"Chromium did not start within {START_TIMEOUT_S:.0f}s (see {ROOT / NAME / 'chromium.log'})")
+    def _use(self, page: Any) -> Any:
+        """Make ``page`` the one code acts on, under the name it reads too."""
+        self.session.page = self.names["page"] = page
+        return page
 
-
-def helpers(session: Session) -> dict[str, Any]:
-    """The names code runs with: Playwright's objects and Hermes-shaped helpers on them."""
-
-    def new_tab(url: str = "about:blank") -> Any:
+    def new_tab(self, url: str = "about:blank") -> Any:
         """Open ``url`` in a new tab and make it ``page``."""
-        session.page = session.context.new_page()
+        page = self._use(self.session.context.new_page())
         if url != "about:blank":
-            session.page.goto(url, wait_until="domcontentloaded")
-        scope["page"] = session.page
-        return session.page
+            page.goto(url, wait_until="domcontentloaded")
+        return page
 
-    def goto_url(url: str) -> Any:
-        return session.page.goto(url, wait_until="domcontentloaded")
+    def goto_url(self, url: str) -> Any:
+        return self.session.page.goto(url, wait_until="domcontentloaded")
 
-    def wait_for_load(timeout: float = 15.0) -> bool:
+    def wait_for_load(self, timeout: float = 15.0) -> bool:
         try:
-            session.page.wait_for_load_state("load", timeout=timeout * 1000)
+            self.session.page.wait_for_load_state("load", timeout=timeout * 1000)
         except Exception:  # noqa: BLE001 — a slow page is an answer, not a failure
             return False
         return True
 
-    def page_info() -> dict[str, Any]:
+    def page_info(self) -> dict[str, Any]:
         return dict(
-            session.page.evaluate(
+            self.session.page.evaluate(
                 "() => ({url: location.href, title: document.title, w: innerWidth, h: innerHeight,"
                 " sx: scrollX, sy: scrollY, pw: document.documentElement.scrollWidth,"
                 " ph: document.documentElement.scrollHeight})"
             )
         )
 
-    def js(expression: str) -> Any:
+    def js(self, expression: str) -> Any:
         """Evaluate a JavaScript expression (or a function) in the page; its value."""
-        return session.page.evaluate(expression)
+        return self.session.page.evaluate(expression)
 
-    def cdp(method: str, **params: Any) -> Any:
+    def cdp(self, method: str, **params: Any) -> Any:
         """Send one raw CDP command for the current page."""
-        client = session.context.new_cdp_session(session.page)
+        client = self.session.context.new_cdp_session(self.session.page)
         try:
             return client.send(method, params)
         finally:
             client.detach()
 
-    def fill_input(selector: str, text: str) -> None:
-        session.page.fill(selector, text)
+    def fill_input(self, selector: str, text: str) -> None:
+        self.session.page.fill(selector, text)
 
-    def click_at_xy(x: float, y: float) -> None:
-        session.page.mouse.click(x, y)
+    def click_at_xy(self, x: float, y: float) -> None:
+        self.session.page.mouse.click(x, y)
 
-    def capture_screenshot(path: str | None = None, full: bool = False) -> str:
+    def capture_screenshot(self, path: str | None = None, full: bool = False) -> str:
         """Save a screenshot (in the workspace by default) and print its path."""
         if path is None:
             shots = WORKSPACE / "screenshots"
             shots.mkdir(parents=True, exist_ok=True)
             path = str(shots / f"shot-{time.strftime('%Y%m%d-%H%M%S')}-{time.monotonic_ns() % 10**6}.png")
-        session.page.screenshot(path=path, full_page=full)
+        self.session.page.screenshot(path=path, full_page=full)
         print(path)
         return path
 
-    def list_tabs() -> list[dict[str, str]]:
-        return [{"id": _target_id(p), "url": p.url, "title": p.title()} for p in session.context.pages]
+    def list_tabs(self) -> list[dict[str, str]]:
+        return [{"id": _target_id(p), "url": p.url, "title": p.title()} for p in self.session.context.pages]
 
-    def switch_tab(tab_id: str) -> Any:
-        for candidate in session.context.pages:
+    def switch_tab(self, tab_id: str) -> Any:
+        for candidate in self.session.context.pages:
             if _target_id(candidate) == tab_id:
-                session.page = scope["page"] = candidate
                 candidate.bring_to_front()
-                return candidate
+                return self._use(candidate)
         raise ValueError(f"no tab {tab_id!r}; list_tabs() shows the open ones")
 
-    def answer_dialogs(action: str = "accept", text: str | None = None) -> None:
-        """How this call answers native dialogs: "accept" (with ``text`` for a prompt) or
-        "dismiss" (the default). Every dialog is listed in the result either way."""
+    def answer_dialogs(self, action: str = "accept", text: str | None = None) -> None:
+        """How the rest of this call answers native dialogs: "accept" (with ``text`` for a
+        prompt) or "dismiss" (the default). Every dialog is listed in the result either way."""
         if action not in ("accept", "dismiss"):
             raise ValueError('answer_dialogs takes "accept" or "dismiss"')
-        session.dialog_answer = (action, text)
+        ask("dialogs", action=action, text=text)
 
-    def ensure_real_tab() -> Any:
+    def wait_for_network_idle(self, idle_ms: int = 500, timeout: float = 10.0) -> bool:
+        """Wait until the current tab has no request in flight and none began for
+        ``idle_ms``; whether it got there in ``timeout`` seconds.
+
+        Quiet is counted from the wait's start at the earliest: a request the code has just
+        made may not have reached the daemon yet, so idle is never declared sooner."""
+        tab = _target_id(self.session.page)
+        started = time.monotonic()
+        while (waited := time.monotonic() - started) < timeout:
+            state = ask("network", tab=tab)
+            quiet_ms = min(waited * 1000, state["quiet_ms"] if state["quiet_ms"] is not None else float("inf"))
+            if state["inflight"] == 0 and quiet_ms >= idle_ms:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def browser_events(self, since: int = 0) -> list[dict[str, Any]]:
+        """Every event the daemon kept (dialogs, console errors, page errors, navigations),
+        after the numbered one ``since``."""
+        return list(ask("events", since=since)["events"])
+
+    def ensure_real_tab(self) -> Any:
         """Make ``page`` a real, open tab again (after it closed, or landed on an internal one)."""
-        session.page = scope["page"] = session._current()
-        return session.page
-
-    scope: dict[str, Any] = {
-        "__name__": "__main__",
-        "page": session.page,
-        "context": session.context,
-        "browser": session.browser,
-        "WORKSPACE": str(WORKSPACE),
-    }
-    scope.update(
-        {
-            fn.__name__: fn
-            for fn in (
-                new_tab, goto_url, wait_for_load, page_info, js, cdp, fill_input,
-                click_at_xy, capture_screenshot, list_tabs, switch_tab, answer_dialogs, ensure_real_tab,
-            )
-        }
-    )
-    _load_agent_helpers(scope)
-    return scope
+        return self._use(self.session._current())
 
 
 def _load_agent_helpers(scope: dict[str, Any]) -> None:
@@ -275,26 +297,32 @@ def _meta(**fields: Any) -> None:
 def main() -> int:
     code = sys.stdin.read()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
-    (ROOT / NAME).mkdir(parents=True, exist_ok=True)
+    Path(DAEMON.HOME).mkdir(parents=True, exist_ok=True)
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
         try:
-            endpoint, started = _endpoint(playwright.chromium.executable_path)
-            session = Session(playwright.chromium.connect_over_cdp(endpoint), started)
+            hello = _hello()
+            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), hello)
         except Exception as exc:  # noqa: BLE001 — reported to the model as the call's error
             _meta(error=f"browser unavailable: {exc}", started=False)
             return 2
         failed = None
         try:
-            exec(compile(code, "<browser_exec>", "exec"), helpers(session))  # noqa: S102 — code mode
+            exec(compile(code, "<browser_exec>", "exec"), Helpers(session).scope())  # noqa: S102 — code mode
         except Exception:  # noqa: BLE001 — the code's own error, shown as Python shows it
             failed = _traceback()
+        finally:
+            with contextlib.suppress(Exception):
+                ask("dialogs", action="dismiss")  # the next call answers as it asks
         session.remember()
         url = ""
         with contextlib.suppress(Exception):
             url = session.page.url
-        _meta(started=started, url=url, error=failed, dialogs=session.dialogs)
+        events: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            events = session.reported()
+        _meta(started=session.started, url=url, error=failed, events=events)
     return 1 if failed else 0
 
 

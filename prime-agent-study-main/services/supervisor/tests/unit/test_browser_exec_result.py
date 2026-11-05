@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 
-from supervisor.hands.browser import META_MARK, runner_payload
+from supervisor.hands.browser import META_MARK, runtime_payload
 from supervisor.tools import InvalidArguments, default_registry
+from supervisor.tools.builtin.browser_exec import MAX_CODE_BYTES
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import STDERR_SEPARATOR, CommandResult, HostWorkspace
 
@@ -46,15 +47,17 @@ async def test_the_runner_and_the_code_travel_in_one_command(tmp_path: Path) -> 
     _, workspace = await _call(tmp_path, CommandResult(0, "1\n", _report(started=True)), session="r7")
 
     ((command, env),) = workspace.sent
-    path, source = runner_payload()
-    assert path in command and source in command, "the runner is not shipped with the call"
+    folder, sources = runtime_payload()
+    assert folder in command and all(source in command for source in sources.values()), "the runtime is not shipped with the call"
+    assert len(command.encode()) < 128 * 1024, "the command no longer fits one shell argument"
     assert env["FROM_SESSION"] == "1", "the session's own variables were dropped"
     assert env["GITHI_BROWSER_NAME"] == "r7"
     assert env["BROWSER_WORKSPACE"] == ".githi/browser"
 
 
 async def test_the_report_line_becomes_fields_and_the_rest_of_stderr_stays(tmp_path: Path) -> None:
-    stderr = "a warning from the code\n" + _report(started=True, url="https://shop.test/", error=None)
+    seen = [{"kind": "dialog", "tab": "T1", "type": "alert", "message": "Saved", "answer": "dismiss"}]
+    stderr = "a warning from the code\n" + _report(started=True, url="https://shop.test/", error=None, events=seen)
 
     payload, _ = await _call(tmp_path, CommandResult(0, "1\n", stderr))
 
@@ -62,6 +65,7 @@ async def test_the_report_line_becomes_fields_and_the_rest_of_stderr_stays(tmp_p
     assert payload["url"] == "https://shop.test/"
     assert payload["browser_started"] is True
     assert payload["stderr"] == "a warning from the code"
+    assert payload["events"] == seen
     assert "error" not in payload
 
 
@@ -102,7 +106,7 @@ async def test_a_timeout_says_the_browser_kept_its_state(tmp_path: Path) -> None
     assert "keeps its state" in payload["hint"]
 
 
-@pytest.mark.parametrize("code", ["", "   \n", "x" * (64 * 1024 + 1)])
+@pytest.mark.parametrize("code", ["", "   \n", "x" * (MAX_CODE_BYTES + 1)])
 async def test_empty_or_oversized_code_is_refused_before_anything_runs(tmp_path: Path, code: str) -> None:
     workspace = Answering(tmp_path, CommandResult(0, "", ""))
     ctx = ToolContext(bound_workspace=workspace, timeout_s=30)
