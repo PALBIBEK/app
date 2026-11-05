@@ -316,17 +316,14 @@ jobs:
       - name: Install
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: pip install -e ".[dev]"
-      - name: The browser sandbox image (the shipped profile's Playwright image, with curl for the network checks)
-        run: |
-          printf '%s\n' 'FROM mcr.microsoft.com/playwright/python:v1.56.0-noble' \
-            'RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*' \
-            | docker build -t githi-browser-sandbox -
+      - name: The browser sandbox image, built as deployments build it (the shipped profile names it)
+        run: docker build -t githi-browser-sandbox:1.56.0 ${{ env.PROJECT }}/deploy/sandbox-images/browser
       - name: Ports 80 and 443 for the stand-in internet (the network tests serve it here)
         run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80
       - name: Test
         working-directory: ${{ env.PROJECT }}/services/supervisor
         env:
-          SUPERVISOR_TEST_BROWSER_IMAGE: githi-browser-sandbox
+          SUPERVISOR_TEST_BROWSER_IMAGE: githi-browser-sandbox:1.56.0
         run: pytest -q -rfEs tests/integration/test_browser_exec_docker.py tests/integration/test_sandbox_network_docker.py
 
   compose-smoke:

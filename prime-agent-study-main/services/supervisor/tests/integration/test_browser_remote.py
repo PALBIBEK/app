@@ -7,6 +7,7 @@ the hosted one."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.request
@@ -27,7 +28,7 @@ def _remote_browser(profile: Path) -> tuple[subprocess.Popen[bytes], str]:
     """A Chromium of its own, and its CDP WebSocket URL (what a provider's session gives)."""
     chromium = subprocess.run(
         ["python3", "-c", "from playwright.sync_api import sync_playwright as s; p = s().start(); print(p.chromium.executable_path); p.stop()"],
-        capture_output=True, text=True, check=True, env={**BROWSERS_ENV, "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, check=True, env={**os.environ, **BROWSERS_ENV},
     ).stdout.strip()
     proc = subprocess.Popen(
         [chromium, "--headless=new", "--no-sandbox", "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],

@@ -15,6 +15,7 @@ sandbox's network: whatever destroys or wakes the sandbox finds them by it.
 from __future__ import annotations
 
 import secrets
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import resources
@@ -42,6 +43,13 @@ GATE_LIMITS: Final[dict[str, Any]] = {
     "sysctls": {"net.ipv4.ip_unprivileged_port_start": "0"},  # 80 and 443 without a capability
 }
 """The gate holds no secret and runs only the gate, but is hardened as a sandbox is."""
+GATE_READY_S: Final = 15.0
+_GATE_PROBE: Final = (
+    "import socket\n"
+    "for port in (443, 80):\n"
+    "    socket.create_connection(('127.0.0.1', port), timeout=1).close()\n"
+)
+"""Run in the gate: fails until it accepts connections on both its ports."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,14 +110,22 @@ class DockerNetworks:
         )
         own.connect(gate)
         gate.start()
-        gate.reload()
-        return str(gate.attrs["NetworkSettings"]["Networks"][_own_network(token)]["IPAddress"])
+        _wait_ready(gate)
+        return _gate_address(gate, token)
 
-    def wake(self, labels: Mapping[str, str]) -> None:
-        """Start a stopped sandbox's gate again (an adopted sandbox wakes with it)."""
+    def wake(self, labels: Mapping[str, str], hosts: Mapping[str, str] | None = None) -> None:
+        """Start a stopped sandbox's gate again, before the sandbox (an adopted sandbox wakes
+        with it), and wait until it answers. ``hosts``: the sandbox's hosts entries, which
+        name the gate's address; a gate that came back on another one is an error, not a
+        sandbox left reaching nothing."""
+        token = labels.get(LABEL_EGRESS, "")
         for gate in self._gates(labels):
             if getattr(gate, "status", "running") != "running":
                 gate.start()
+            _wait_ready(gate)
+            pinned = set((hosts or {}).values())
+            if pinned and _gate_address(gate, token) not in pinned:
+                raise RuntimeError(f"the sandbox's egress gate came back on {_gate_address(gate, token)}, not {', '.join(sorted(pinned))}")
 
     def release(self, labels: Mapping[str, str]) -> None:
         """Remove the sandbox's gate and network, once the sandbox itself is gone."""
@@ -129,3 +145,19 @@ class DockerNetworks:
 
 def _own_network(token: str) -> str:
     return f"githi-egress-{token}"
+
+
+def _gate_address(gate: Any, token: str) -> str:
+    gate.reload()
+    return str(gate.attrs["NetworkSettings"]["Networks"][_own_network(token)]["IPAddress"])
+
+
+def _wait_ready(gate: Any) -> None:
+    """Wait (``GATE_READY_S`` at most) until the gate accepts connections: a sandbox started
+    before it would find nothing listening where its allowed hosts point."""
+    deadline = time.monotonic() + GATE_READY_S
+    while time.monotonic() < deadline:
+        if gate.exec_run(["python3", "-c", _GATE_PROBE]).exit_code == 0:
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"the sandbox's egress gate did not start listening within {GATE_READY_S:.0f}s")

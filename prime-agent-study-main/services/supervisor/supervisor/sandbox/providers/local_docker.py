@@ -786,7 +786,7 @@ class LocalDockerProvider(SandboxProvider):
                 return None
             container = found[0]  # the newest
             if getattr(container, "status", "running") != "running":
-                self._networks().wake(dict(getattr(container, "labels", None) or {}))  # its gate first
+                self._networks().wake(dict(getattr(container, "labels", None) or {}), _hosts(container))  # its gate first
                 container.start()
                 container.reload()
             return container
@@ -830,3 +830,9 @@ class LocalDockerProvider(SandboxProvider):
             )
             out.append(LocalDockerSandbox(c, client=client, info=info, hydrator=self._hydrator))
         return out
+
+
+def _hosts(container: Any) -> dict[str, str]:
+    """A container's hosts entries (``extra_hosts``), name to address."""
+    entries = ((getattr(container, "attrs", None) or {}).get("HostConfig") or {}).get("ExtraHosts") or []
+    return dict(entry.split(":", 1) for entry in entries if ":" in entry)
