@@ -75,7 +75,12 @@ export default function SettingsPage(): JSX.Element {
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                   <h3 className="text-sm font-semibold text-ink mb-2">API keys</h3>
                   <p className="text-sm text-ink-2">
-                    BYOK is not required for local demo. Model keys stay on the AI plane / gateway.
+                    Model keys (OpenAI, Anthropic, DeepSeek, GLM, Qwen, a local server) are kept by the model gateway
+                    alone. Set them under{' '}
+                    <Link href="/settings/models" className="text-accent-600 hover:underline">
+                      Model providers
+                    </Link>
+                    .
                   </p>
                 </motion.div>
               )}

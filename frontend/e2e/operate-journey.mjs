@@ -90,6 +90,24 @@ const after = (await (await fetch(`${API}/harnesses/${hid}/releases`, { headers:
 check(before === after, 'checking publishes nothing');
 console.log('7 checks:', (await p.getByTestId('publish-checks').innerText()).split('\n').slice(0, 2).join(' | '));
 
+// Model providers: every vendor shows how it stands; a key is set (Z.ai has no way to check one
+// first, so nothing leaves the machine), its model can then be picked, and removing it takes
+// the model away again.
+await p.goto(`${BASE}/settings/models`);
+const zai = p.getByTestId('vendor-zai');
+await zai.waitFor({ timeout: 30000 });
+check((await p.getByTestId('vendor-local').getByTestId('vendor-status').innerText()) === 'Not set up', 'no local server in dev');
+await zai.getByLabel('Z.ai (GLM) API key').fill('sk-journey-not-a-real-key');
+await zai.getByRole('button', { name: 'Save' }).click();
+await zai.getByTestId('vendor-status').filter({ hasText: 'Key set here' }).waitFor({ timeout: 30000 });
+check(!(await p.content()).includes('sk-journey-not-a-real-key'), 'the key is never shown again');
+const offered = async () => (await (await fetch(`${API}/catalog/models`, { headers: A })).json()).map((x) => x.id);
+check((await offered()).includes('gateway/glm-5.2'), `GLM can be picked once its key is set (${await offered()})`);
+await zai.getByRole('button', { name: 'Remove' }).click();
+await zai.getByTestId('vendor-status').filter({ hasText: 'Removed here' }).waitFor({ timeout: 30000 });
+check(!(await offered()).includes('gateway/glm-5.2'), 'and not once it is removed');
+console.log('7b model providers: a key set and removed; its model came and went');
+
 // Every new page opens without an error.
 for (const path of ['overview', 'files', 'artifacts', 'fleet']) {
   await p.goto(`${BASE}/${path}`);

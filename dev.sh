@@ -222,6 +222,16 @@ EOF
   wait_http frontend http://127.0.0.1:3000 180
 
   "$BPY" "$ROOT/scripts/dev_seed.py"
+  # Whoever runs ./dev.sh owns this install: the demo user is its owner (a registered user starts
+  # as a member), so Settings can set the model keys and the fleet shows.
+  "$SPY" - "$PG/prime_agent" "$DEMO_EMAIL" <<'EOF'
+import asyncio, sys, asyncpg
+async def main():
+    conn = await asyncpg.connect(sys.argv[1].replace("+asyncpg", ""))
+    await conn.execute("UPDATE users SET role = 'owner' WHERE email = $1", sys.argv[2])
+    await conn.close()
+asyncio.run(main())
+EOF
   echo
   say "Ready: http://localhost:3000"
   echo "  log in as $DEMO_EMAIL / $DEMO_PASSWORD"
