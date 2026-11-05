@@ -1,0 +1,4 @@
+{% extends "admin/base_site.html" %}
+{% block content %}<h1>Are you sure?</h1><p>Mark these {{ loans|length }} loans as returned?</p><ul>{% for l in loans %}<li>#{{ l.id }} {{ l.member }} — {{ l.book }} (due {{ l.due }})</li>{% endfor %}</ul>
+<form method="post">{% csrf_token %}{% for l in loans %}<input type="hidden" name="_selected_action" value="{{ l.pk }}">{% endfor %}
+<input type="hidden" name="action" value="{{ action }}"><input type="hidden" name="confirm" value="yes"><input type="submit" value="Yes, I'm sure"> <a href="../">No, take me back</a></form>{% endblock %}

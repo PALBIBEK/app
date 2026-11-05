@@ -137,6 +137,8 @@ jobs:
           --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
+      # Playwright 1.56 has no build for the runner's Ubuntu 26 yet: install and find its 24.04 one.
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -146,6 +148,8 @@ jobs:
       - name: Install
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: pip install -e ".[dev,postgres,s3]"
+      - name: Browser runtime (the browser code mode's tests run Chromium as its sandbox image does)
+        run: pip install "playwright==1.56.0" && python -m playwright install --with-deps chromium
       - name: Temporal CLI (the supervisor's workflow tests start a dev server)
         run: |
           curl -sSf https://temporal.download/cli.sh | sh
