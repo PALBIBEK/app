@@ -104,6 +104,14 @@ async def test_a_dialog_is_answered_as_asked_and_never_passes_unseen(call: Call)
     assert taken["answer"] == "accept"
 
 
+async def test_a_repeated_event_is_reported_once_with_how_often(call: Call) -> None:
+    """The benchmark's admin logged one console error per page: 21 pages, 20 copies."""
+    noisy = await call("for i in range(5):\n    page.set_content(\"<script>console.error('same')</script><p>\" + str(i))\n    page.wait_for_timeout(50)")
+
+    same = [e for e in noisy["events"] if e.get("text") == "same"]
+    assert len(same) == 1 and same[0]["times"] == 5, noisy["events"]
+
+
 async def test_a_locator_that_names_nothing_fails_in_seconds(call: Call) -> None:
     failed = await call("page.set_content('<p>empty</p>')\npage.click('#missing')")
 

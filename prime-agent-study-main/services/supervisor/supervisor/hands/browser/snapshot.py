@@ -31,7 +31,10 @@ from typing import Any
 INTERACTIVE = frozenset({
     "button", "link", "textbox", "searchbox", "checkbox", "radio", "combobox", "listbox", "option",
     "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "switch", "slider", "spinbutton", "treeitem",
+    "DisclosureTriangle",
 })
+SHOWN_AS = {"DisclosureTriangle": "disclosure"}
+"""Chromium's names for roles that read better as ARIA's (a ``<summary>``: click it to open)."""
 STRUCTURE = frozenset({
     "heading", "dialog", "alertdialog", "form", "table", "row", "list", "listitem", "navigation",
     "tabpanel", "menu", "tablist", "grid", "tree", "alert", "status", "Iframe",
@@ -102,7 +105,7 @@ def _line(node: Node, frame: int) -> str:
     name = node.name if len(node.name) <= NAME_CAP else node.name[: NAME_CAP - 1] + "…"
     if node.role in TEXT:
         return f'"{name}"'
-    text = f"{ident}{node.role}" + (f": {name}" if name else "")
+    text = f"{ident}{SHOWN_AS.get(node.role, node.role)}" + (f": {name}" if name else "")
     if node.value not in (None, "", node.name):
         text += f" = {str(node.value)[:40]}"
     text += "".join(f" [{k}]" if v in (True, "true") else f" [{k}={v}]" for k, v in node.states.items())
@@ -113,12 +116,17 @@ def _shape(node: Node) -> tuple[Any, ...]:
     return (node.role, node.name, tuple(_shape(c) for c in node.children if c.shown))
 
 
-def _render(node: Node, frame: int, depth: int = 0) -> Iterator[tuple[int, str, Node]]:
-    """(depth, line, node) for every shown node; alike runs of siblings collapsed. A text
-    is shown only beside something interactive (a label), never as page prose."""
+def _render(node: Node, frame: int, depth: int = 0, *, collapse: bool = True) -> Iterator[tuple[int, str, Node]]:
+    """(depth, line, node) for every shown node; alike runs of siblings collapsed unless
+    ``collapse`` is off (a search must find the one it hides). A text is shown only beside
+    something interactive (a label), never as page prose."""
     if node.shown and not (node.role in TEXT and not node.labels_control):
         yield depth, _line(node, frame), node
         depth += 1
+    if not collapse:
+        for child in node.children:
+            yield from _render(child, frame, depth, collapse=False)
+        return
     run: list[Node] = []
     for child in [*node.children, None]:
         if child is not None and run and _shape(child) == _shape(run[0]):
@@ -168,7 +176,7 @@ class Snapshots:
             _mark_labels(root)
             if ordinal:
                 lines.append((0, f"frame {ordinal}:", root))
-            lines.extend(_render(root, ordinal, 1 if ordinal else 0))
+            lines.extend(_render(root, ordinal, 1 if ordinal else 0, collapse=not contains))
         ids = [f"{o}-{n.backend}" for o, t in trees for n in _walk(t) if n.backend is not None]
         (self.home / f"snapshot-{tab}.json").write_text(json.dumps({"url": page.url, "ids": ids}))
         picked = _matching(lines, contains) if contains else lines
