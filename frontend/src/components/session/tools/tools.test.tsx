@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { useMemo } from 'react';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ToolCallView } from '@/lib/api/types/session.types';
+import type { ChatMessage, ToolCallView } from '@/lib/api/types/session.types';
+import type { ReportAction } from '@/lib/session/useReports';
 
 import { useToolRenderer } from '.';
+import { MessageBubble } from '../parts';
 import { Markdown } from './Markdown';
 
 beforeAll(() => {
@@ -15,8 +18,23 @@ beforeAll(() => {
 const CATALOG = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json';
 const V = 'v0.9';
 
-function Conversation({ tools }: { tools: ToolCallView[] }): JSX.Element {
-  const renderTool = useToolRenderer({ sessionId: 's1', subagentOf: new Map(), tools });
+const NO_SUBAGENTS = new Map<string, string>();
+
+/** A conversation of one assistant message making `tools`, then `after` (a person's answer, say). */
+function Conversation({
+  tools,
+  after = [],
+  sendAction,
+}: {
+  tools: ToolCallView[];
+  after?: ChatMessage[];
+  sendAction?: (action: ReportAction) => Promise<void>;
+}): JSX.Element {
+  const messages = useMemo<ChatMessage[]>(
+    () => [{ id: 'm1', role: 'assistant', content: '', timestamp: '2026-11-05T10:00:00Z', toolCalls: tools }, ...after],
+    [tools, after],
+  );
+  const renderTool = useToolRenderer({ sessionId: 's1', subagentOf: NO_SUBAGENTS, messages, sendAction });
   return <div>{tools.map(renderTool)}</div>;
 }
 
@@ -126,6 +144,91 @@ describe('a report', () => {
     const refused: ToolCallView = { ...report('r1', [{ version: V }]), status: 'error', error: 'the messages are not A2UI the chat can draw' };
     render(<Conversation tools={[refused]} />);
     expect(screen.getByTestId('tool-explanation').textContent).toContain('not A2UI the chat can draw');
+  });
+});
+
+const ASK = [
+  { version: V, createSurface: { surfaceId: 'which', catalogId: CATALOG } },
+  {
+    version: V,
+    updateComponents: {
+      surfaceId: 'which',
+      components: [
+        { id: 'root', component: 'Column', children: ['pick', 'go'] },
+        { id: 'pick', component: 'ChoicePicker', options: [{ label: 'Shop A', value: 'a' }, { label: 'Shop B', value: 'b' }], value: { path: '/pick' } },
+        { id: 'go', component: 'Button', child: 'go_label', action: { event: { name: 'chosen', context: { pick: { path: '/pick' } } } } },
+        { id: 'go_label', component: 'Text', text: 'Add to basket' },
+      ],
+    },
+  },
+  { version: V, updateDataModel: { surfaceId: 'which', path: '/', value: { pick: ['a'] } } },
+];
+
+const answer = (pick: string): ChatMessage => ({
+  id: 'u2',
+  role: 'user',
+  content: `UI action: ${JSON.stringify({ context: { pick: [pick] }, name: 'chosen', sourceComponentId: 'go', surfaceId: 'which' })}`,
+  timestamp: '2026-11-05T10:01:00Z',
+});
+
+async function clickAdd(container: HTMLElement): Promise<void> {
+  await waitFor(() => expect(container.querySelector('a2ui-basic-button button')).toBeTruthy());
+  fireEvent.click(container.querySelector('a2ui-basic-button button')!);
+}
+
+describe('a report that asks', () => {
+  it('sends the person’s choice once, and says it is on its way', async () => {
+    const send = vi.fn(() => new Promise<void>(() => {}));
+    const { container } = render(<Conversation tools={[report('r1', ASK)]} sendAction={send} />);
+
+    await clickAdd(container);
+    await clickAdd(container); // a second click before the answer arrives
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ name: 'chosen', surfaceId: 'which', sourceComponentId: 'go', context: { pick: ['a'] } });
+    await waitFor(() => expect(screen.getByTestId('report-line').textContent).toBe('Sending your answer…'));
+    expect(screen.getByTestId('report-answerable').dataset.closed).toBe('true');
+  });
+
+  it('is closed once answered, saying what was sent, until the agent draws it again', async () => {
+    const send = vi.fn(async () => {});
+    const { container, rerender } = render(<Conversation tools={[report('r1', ASK)]} after={[answer('b')]} sendAction={send} />);
+
+    await clickAdd(container);
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByTestId('report-line').textContent).toBe('Sent “chosen” (pick: b)');
+    expect(screen.getByTestId('report-answerable').dataset.closed).toBe('true');
+
+    const again: ChatMessage = { id: 'm3', role: 'assistant', content: '', timestamp: '2026-11-05T10:02:00Z', toolCalls: [report('r2', ASK.slice(1))] };
+    rerender(<Conversation tools={[report('r1', ASK)]} after={[answer('b'), again]} sendAction={send} />);
+    await clickAdd(container);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens again when the answer is refused, saying why', async () => {
+    const send = vi.fn(async () => {
+      throw new Error("surface 'which' was answered already");
+    });
+    const { container } = render(<Conversation tools={[report('r1', ASK)]} sendAction={send} />);
+
+    await clickAdd(container);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('report-answerable').dataset.closed).toBeUndefined());
+    expect(screen.queryByTestId('report-line')).toBeNull();
+  });
+
+  it('reads, in the conversation, as what the person sent', () => {
+    render(<MessageBubble message={answer('b')} />);
+    expect(screen.getByTestId('ui-action').textContent).toBe('Sent “chosen” (pick: b) in a report');
+  });
+
+  it('is only read where a person cannot answer', async () => {
+    const { container } = render(<Conversation tools={[report('r1', ASK)]} />);
+
+    await clickAdd(container);
+
+    expect(screen.getByTestId('report-answerable').dataset.closed).toBe('true');
   });
 });
 

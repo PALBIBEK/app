@@ -70,7 +70,8 @@ function SubagentPageContent(): JSX.Element {
   const renderTool = useToolRenderer({
     sessionId,
     subagentOf: state.subagentOf,
-    tools: [...state.messages.flatMap((m) => m.toolCalls ?? []), ...pendingTools],
+    messages: state.messages,
+    pendingTools,
   });
 
   if (isLoading) {

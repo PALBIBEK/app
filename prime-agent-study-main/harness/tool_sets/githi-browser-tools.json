@@ -319,8 +319,8 @@
       "tool_class": "idempotent"
     },
     "show_ui": {
-      "description": "Show the user a structured view in the chat (a report, a comparison, a summary card) as A2UI v0.9 messages drawn from a fixed catalog; use it for results a person will scan, and plain replies for the rest. Send, in order: {\"version\": \"v0.9\", \"createSurface\": {\"surfaceId\": \"report\", \"catalogId\": \"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json\"}}; then {\"version\": \"v0.9\", \"updateComponents\": {\"surfaceId\": \"report\", \"components\": [...]}}, a flat list of {\"id\", \"component\", ...properties}, one with id \"root\", children named by id (Column, Row, List: \"children\": [\"a\", \"b\"]; Card: \"child\": \"a\"; Tabs: \"tabs\": [{\"title\": \"...\", \"child\": \"a\"}]); optionally {\"version\": \"v0.9\", \"updateDataModel\": {\"surfaceId\": \"report\", \"path\": \"/\", \"value\": {...}}}, a property then reading it as {\"path\": \"/key\"}. Calling again for the same surfaceId with updateComponents or updateDataModel updates it in place; deleteSurface removes it. Text takes simple Markdown (headings, lists, bold; no links or images) and variant h1-h5, caption or body: write each source's URL in the text. Components (* required): AudioPlayer(description, url*); Card(child*); Column(align, children*, justify); Divider(axis); Icon(name*); Image(description, fit, url*, variant); List(align, children*, direction); Row(align, children*, justify); Tabs(tabs*); Text(text*, variant); Video(url*).",
-      "digest": "sha256:99bdac81b5b6eaca7be0952a7a413a80d7a469e3f27e92b0248dea2b632776e0",
+      "description": "Show the user a structured view in the chat (a report, a comparison, a summary card, or a choice or short form for them to answer) as A2UI v0.9 messages drawn from a fixed catalog; use it for results a person will scan or a decision you need from them, and plain replies for the rest. Send, in order: {\"version\": \"v0.9\", \"createSurface\": {\"surfaceId\": \"report\", \"catalogId\": \"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json\"}}; then {\"version\": \"v0.9\", \"updateComponents\": {\"surfaceId\": \"report\", \"components\": [...]}}, a flat list of {\"id\", \"component\", ...properties}, one with id \"root\", children named by id (Column, Row, List: \"children\": [\"a\", \"b\"]; Card, Button: \"child\": \"a\"; Tabs: \"tabs\": [{\"title\": \"...\", \"child\": \"a\"}]); optionally {\"version\": \"v0.9\", \"updateDataModel\": {\"surfaceId\": \"report\", \"path\": \"/\", \"value\": {...}}}, a property then reading it as {\"path\": \"/key\"}. Calling again for the same surfaceId with updateComponents or updateDataModel updates it in place; deleteSurface removes it. Text takes simple Markdown (headings, lists, bold; no links or images) and variant h1-h5, caption or body: write each source's URL in the text. To ask: bind each input's value to the data model (ChoicePicker \"value\": {\"path\": \"/pick\"} with \"options\": [{\"label\": \"...\", \"value\": \"a\"}], TextField \"value\": {\"path\": \"/note\"}; give them initial values with updateDataModel) and add a Button whose \"action\": {\"event\": {\"name\": \"chosen\", \"context\": {\"pick\": {\"path\": \"/pick\"}}}} sends them; when the person clicks it you get a user message \"UI action: {...}\" with the event name and its context, and end your turn to wait for it. A drawing takes one answer: draw it again to ask again. Components (* required): AudioPlayer(description, url*); Button(action*, child*, variant); Card(child*); CheckBox(label*, value*); ChoicePicker(displayStyle, filterable, label, options*, value*, variant); Column(align, children*, justify); DateTimeInput(enableDate, enableTime, label, max, min, value*); Divider(axis); Icon(name*); Image(description, fit, url*, variant); List(align, children*, direction); Row(align, children*, justify); Slider(label, max*, min, value*); Tabs(tabs*); Text(text*, variant); TextField(label*, validationRegexp, value, variant); Video(url*).",
+      "digest": "sha256:fc91c3c2883b84f6eb92fbc4636c0ecaa428ef581e711368e68a0d067b07ec16",
       "name": "show_ui",
       "parameters": {
         "properties": {
@@ -368,7 +368,7 @@
   },
   "name": "githi-browser-tools",
   "protocol_version": 1,
-  "semver": "1.4.0",
+  "semver": "1.5.0",
   "status": "offered",
   "tools": {
     "bash": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
@@ -383,7 +383,7 @@
     "note_for_session": "sha256:05c025485cdd835c1c3f2af3c4f46cc6d1dc22e4abcc8c52213ae23c522704d2",
     "read": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
     "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
-    "show_ui": "sha256:99bdac81b5b6eaca7be0952a7a413a80d7a469e3f27e92b0248dea2b632776e0",
+    "show_ui": "sha256:fc91c3c2883b84f6eb92fbc4636c0ecaa428ef581e711368e68a0d067b07ec16",
     "write": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a"
   }
 }

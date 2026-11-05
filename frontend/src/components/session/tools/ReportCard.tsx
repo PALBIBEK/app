@@ -4,14 +4,20 @@
  * A `show_ui` call: the report it drew, where it sits in the conversation. A surface is
  * drawn by the call that created it, in its latest state; a later call that changes or
  * removes it says so in a line. A refused call reads like any refused call.
+ *
+ * A surface that asks takes one answer per drawing: from the click until the agent draws it
+ * again, its inputs are closed, and the line under it says what was sent.
  */
 
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { ArrowDown, ArrowUp, ChartBar, CircleNotch, Code, Trash } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, ChartBar, CheckCircle, CircleNotch, Code, Trash } from '@phosphor-icons/react';
 
 import type { ToolCallView } from '@/lib/api/types/session.types';
-import type { Reports } from '@/lib/session/useReports';
+import { describeUiAction } from '@/lib/session/reports';
+import type { ReportSurfaceModel, Reports } from '@/lib/session/useReports';
+import type { SurfaceAnswers } from '@/lib/session/useSurfaceAnswers';
+import { cn } from '@/lib/utils';
 
 import { ToolCard } from '../parts';
 
@@ -34,7 +40,27 @@ function Line({ icon, children }: { icon: JSX.Element; children: React.ReactNode
   );
 }
 
-export function ReportCard({ tool, reports }: { tool: ToolCallView; reports: Reports }): JSX.Element {
+/** Inputs a closed surface keeps on show but no longer takes (its links still open). */
+const CLOSED = '[&_button]:pointer-events-none [&_button]:opacity-60 [&_input]:pointer-events-none [&_select]:pointer-events-none [&_textarea]:pointer-events-none';
+
+function Surface({ model, answers }: { model: ReportSurfaceModel; answers: SurfaceAnswers }): JSX.Element {
+  const answer = answers.of(model.id);
+  const closed = !answers.canAnswer || answer.state !== 'open';
+  return (
+    <div data-testid="report-answerable" data-closed={closed || undefined} aria-disabled={closed || undefined}>
+      <div className={cn('px-4 py-3', closed && CLOSED)}>
+        <ReportSurface surface={model} />
+      </div>
+      {answer.state === 'sending' ? (
+        <Line icon={<CircleNotch size={13} className="animate-spin text-accent-600" aria-hidden="true" />}>Sending your answer…</Line>
+      ) : answer.state === 'answered' ? (
+        <Line icon={<CheckCircle size={13} weight="fill" className="text-good" aria-hidden="true" />}>{describeUiAction(answer.action)}</Line>
+      ) : null}
+    </div>
+  );
+}
+
+export function ReportCard({ tool, reports, answers }: { tool: ToolCallView; reports: Reports; answers: SurfaceAnswers }): JSX.Element {
   const [raw, setRaw] = useState(false);
   if (tool.status === 'error') return <ToolCard tool={tool} />;
   if (tool.status === 'running') return <Drawing />;
@@ -66,9 +92,7 @@ export function ReportCard({ tool, reports }: { tool: ToolCallView; reports: Rep
         if (!reports.ready) return <Drawing key={surface} />;
         const model = reports.surface(surface);
         return model ? (
-          <div key={surface} className="px-4 py-3">
-            <ReportSurface surface={model} />
-          </div>
+          <Surface key={surface} model={model} answers={answers} />
         ) : (
           <Line key={surface} icon={<Trash size={13} aria-hidden="true" />}>
             This report was removed later in the conversation.

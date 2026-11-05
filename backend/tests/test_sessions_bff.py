@@ -1038,6 +1038,25 @@ async def test_an_agui_run_is_asked_of_the_supervisors_session_and_answered_as_t
 
 
 @pytest.mark.asyncio
+async def test_a_run_the_supervisor_refuses_is_refused_with_its_reason(db_session, owner, harness, session_settings, monkeypatch):
+    """A person's action on a surface answered already (409), say: the status and the reason
+    reach the chat as the supervisor gave them."""
+    link = await _agui_link(db_session, owner, harness)
+    reason = "surface 'which' was answered already: the agent has to draw it again for another answer"
+    _patch_session(monkeypatch, session_settings, lambda request: httpx.Response(409, json={"detail": reason}))
+    action = {"name": "chosen", "surfaceId": "which", "sourceComponentId": "go", "timestamp": "2026-11-05T10:00:00Z", "context": {}}
+
+    async with _as(db_session, owner) as api:
+        r = await api.post(
+            f"/api/v1/sessions/{link.id}/agui",
+            json={**_run_input(link.id), "messages": [], "forwardedProps": {"a2uiAction": {"userAction": action}}},
+        )
+
+    assert r.status_code == 409
+    assert r.json()["detail"]["message"] == reason
+
+
+@pytest.mark.asyncio
 async def test_an_agui_run_of_another_thread_or_session_is_refused(db_session, owner, harness, session_settings, monkeypatch, make_user):
     link = await _agui_link(db_session, owner, harness)
     called: list[str] = []

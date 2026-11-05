@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactCatalogComponent } from '@a2ui/react/v0_9';
-import type { MessageProcessor, ProcessableMessage, SurfaceModel } from '@a2ui/web_core/v0_9';
+import type { ActionPayload, MessageProcessor, ProcessableMessage, SurfaceModel } from '@a2ui/web_core/v0_9';
 
 import { reportPlan, type ReportCall, type ReportChanges } from './reports';
 
@@ -29,13 +29,16 @@ export interface Reports {
   failure(callId: string): string | undefined;
 }
 
-async function newProcessor(): Promise<() => Processor> {
+/** What a person did on a surface: a button's event, with the values it sends. */
+export type ReportAction = ActionPayload;
+
+async function newProcessor(): Promise<(onAction: (action: ReportAction) => void) => Processor> {
   const [{ MessageProcessor }, { basicCatalog }] = await Promise.all([
     import('@a2ui/web_core/v0_9'),
     import('@a2ui/web_core/v0_9/basic_catalog'),
   ]);
   // The basic catalog's components are Web Components, which a React catalog holds too.
-  return () => new MessageProcessor([basicCatalog]) as unknown as Processor;
+  return (onAction) => new MessageProcessor([basicCatalog], onAction) as unknown as Processor;
 }
 
 interface Fed {
@@ -48,12 +51,15 @@ function extends_(ids: readonly string[], prefix: readonly string[]): boolean {
   return prefix.length <= ids.length && prefix.every((id, i) => ids[i] === id);
 }
 
-export function useReports(calls: readonly ReportCall[]): Reports {
+/** `calls` drawn; a button's event goes to `onAction` (the latest one given). */
+export function useReports(calls: readonly ReportCall[], onAction?: (action: ReportAction) => void): Reports {
+  const acted = useRef(onAction);
+  acted.current = onAction;
   const key = calls.map((c) => c.id).join('\n');
   // A call's messages never change once it succeeded: the ids say which calls these are.
   const stable = useMemo(() => calls, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   const plan = useMemo(() => reportPlan(stable), [stable]);
-  const [create, setCreate] = useState<(() => Processor) | null>(null);
+  const [create, setCreate] = useState<((onAction: (action: ReportAction) => void) => Processor) | null>(null);
   const fed = useRef<Fed | null>(null);
   /** What has been drawn, as of the last calls fed (a new object each time, to redraw). */
   const [drawn, setDrawn] = useState<{ fed: Fed; count: number } | null>(null);
@@ -74,7 +80,7 @@ export function useReports(calls: readonly ReportCall[]): Reports {
     let current = fed.current;
     if (!current || !extends_(ids, current.ids)) {
       current?.processor.dispose(); // the conversation was replaced (a fork, a reload): start over
-      current = { processor: create(), ids: [], failures: new Map() };
+      current = { processor: create((action) => acted.current?.(action)), ids: [], failures: new Map() };
     }
     for (const call of stable.slice(current.ids.length)) {
       try {
