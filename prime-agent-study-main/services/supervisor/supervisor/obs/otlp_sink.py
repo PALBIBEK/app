@@ -78,8 +78,8 @@ class OtlpBridgeSink:
                     logger.warning(
                         "dropping invalid span name=%s session=%s run=%s",
                         record.name,
-                        record.yal_session_id,
-                        record.yal_run_id,
+                        record.prime_session_id,
+                        record.prime_run_id,
                         exc_info=True,
                     )
                     continue
@@ -98,13 +98,13 @@ class OtlpBridgeSink:
             else:
                 span.set_attribute(key, str(value))
 
-        span.set_attribute("yal.tenant.id", record.yal_tenant_id)
-        span.set_attribute("yal.session.id", record.yal_session_id)
-        span.set_attribute("yal.run.id", record.yal_run_id)
-        span.set_attribute("yal.harness.id", record.yal_harness_id)
-        span.set_attribute("yal.harness.version", record.yal_harness_version)
+        span.set_attribute("prime.tenant.id", record.prime_tenant_id)
+        span.set_attribute("prime.session.id", record.prime_session_id)
+        span.set_attribute("prime.run.id", record.prime_run_id)
+        span.set_attribute("prime.harness.id", record.prime_harness_id)
+        span.set_attribute("prime.harness.version", record.prime_harness_version)
         if record.journal_seq is not None:
-            span.set_attribute("yal.journal.seq", record.journal_seq)
+            span.set_attribute("prime.journal.seq", record.journal_seq)
 
         if record.status == SpanStatus.ERROR:
             span.set_status(Status(StatusCode.ERROR))
@@ -132,8 +132,8 @@ class OtlpBridgeSink:
             )
         elif record.parent_span_id and record.parent_span_id in self._live:
             parent_ctx = set_span_in_context(self._live[record.parent_span_id])
-        elif record.yal_run_id and len(record.yal_run_id) == 32 and record.parent_span_id is None:
-            tid = _hex_to_int(record.yal_run_id, 128)
+        elif record.prime_run_id and len(record.prime_run_id) == 32 and record.parent_span_id is None:
+            tid = _hex_to_int(record.prime_run_id, 128)
             if tid:
                 _local.trace_id = tid
 

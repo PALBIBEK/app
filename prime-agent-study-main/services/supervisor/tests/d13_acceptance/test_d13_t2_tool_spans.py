@@ -55,8 +55,8 @@ async def test_t2_tool_start_end_paired_execute_tool_spans(supervisor_stack) -> 
         for s in sink.spans
         if (s.attributes or {}).get("gen_ai.operation.name") == "execute_tool"
         and (
-            s.yal_session_id == sid
-            or (s.attributes or {}).get("yal.session.id") == sid
+            s.prime_session_id == sid
+            or (s.attributes or {}).get("prime.session.id") == sid
         )
     ]
     assert tool_spans, "projector must emit execute_tool spans when tools fire"
@@ -74,8 +74,8 @@ async def test_t2_tool_start_end_paired_execute_tool_spans(supervisor_stack) -> 
     for cid, spans in by_call.items():
         closed = [s for s in spans if s.end_ms is not None]
         assert closed, f"tool_call_id={cid} never closed (projector must pair ToolEnd)"
-        outcome = (closed[-1].attributes or {}).get("yal.tool.outcome")
+        outcome = (closed[-1].attributes or {}).get("prime.tool.outcome")
         assert outcome in ("ok", "error"), (
-            f"closed tool span must set yal.tool.outcome, got {outcome!r}"
+            f"closed tool span must set prime.tool.outcome, got {outcome!r}"
         )
-        assert closed[-1].yal_run_id == TRACE_ID
+        assert closed[-1].prime_run_id == TRACE_ID

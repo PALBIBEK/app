@@ -1,7 +1,7 @@
 """
 Application settings using Pydantic v2.
 
-Following corridor-platforms pattern with:
+With:
 - Environment-based configuration
 - Secret management
 - Type-safe settings
@@ -14,11 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables.
-
-    Following corridor-platforms pattern for configuration management.
-    """
+    """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -100,7 +96,7 @@ class Settings(BaseSettings):
     ai_supervisor_base_url: str | None = None
     ai_service_jwt_secret: str | None = None
     ai_service_jwt_issuer: str = "prime-agent-api"
-    ai_service_jwt_audience: str = "yal-supervisor"
+    ai_service_jwt_audience: str = "prime-supervisor"
     ai_service_jwt_ttl_seconds: int = 60
     ai_service_id: str = "prime-agent-bff"
     ai_http_timeout_seconds: float = 5.0

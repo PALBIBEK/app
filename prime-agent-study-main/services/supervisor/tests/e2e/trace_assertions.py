@@ -79,12 +79,12 @@ def assert_trace_shape(
     assert roots, "missing root invoke_agent"
     root = roots[0]
     a = _attrs(root)
-    assert a.get("yal.run.id") == trace_id
+    assert a.get("prime.run.id") == trace_id
     ctx = getattr(root, "context", None)
     if ctx is not None:
         assert format(ctx.trace_id, "032x") == trace_id
 
-    turn = next(s for s in spans if _name(s) == "yal.turn")
+    turn = next(s for s in spans if _name(s) == "prime.turn")
     chat = next(s for s in spans if _name(s) == "chat")
     assert _norm_id(_parent_id(turn)) == _norm_id(_span_id(root))
     assert _norm_id(_parent_id(chat)) == _norm_id(_span_id(turn))
@@ -92,13 +92,13 @@ def assert_trace_shape(
     chat_a, turn_a = _attrs(chat), _attrs(turn)
     assert chat_a.get("gen_ai.provider.name")
     assert turn_a.get("gen_ai.provider.name") is None
-    assert turn_a.get("yal.operation.name") == "turn"
-    assert chat_a.get("yal.operation.name") is None
+    assert turn_a.get("prime.operation.name") == "turn"
+    assert chat_a.get("prime.operation.name") is None
     assert chat_a.get("gen_ai.operation.name") == "chat"
 
     for s in spans:
         sa = _attrs(s)
-        if sa.get("gen_ai.operation.name") and sa.get("yal.operation.name"):
+        if sa.get("gen_ai.operation.name") and sa.get("prime.operation.name"):
             raise AssertionError(f"mutual exclusion violated on {_name(s)}")
 
     if "gen_ai.usage.input_tokens" in chat_a:
@@ -110,5 +110,5 @@ def assert_trace_shape(
     for secret in secret_strings:
         assert secret not in blob, f"content leaked into spans: {secret!r}"
 
-    assert chat_a.get("yal.session.id") == session_id
-    assert chat_a.get("yal.journal.seq") is not None
+    assert chat_a.get("prime.session.id") == session_id
+    assert chat_a.get("prime.journal.seq") is not None

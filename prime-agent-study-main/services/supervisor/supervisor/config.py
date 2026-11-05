@@ -116,7 +116,7 @@ class Settings:
     load_composition_catalog: bool = True
     temporal: TemporalSettings = field(default_factory=TemporalSettings.from_env)
     persist_composition_catalog: bool = field(
-        default_factory=lambda: os.environ.get("YAL_PERSIST_CATALOG", "true").lower()
+        default_factory=lambda: os.environ.get("PRIME_PERSIST_CATALOG", "true").lower()
         in ("1", "true", "yes")
     )
     auth_token: str | None = field(
@@ -134,7 +134,7 @@ class Settings:
         or None
     )
     service_jwt_audience: str = field(
-        default_factory=lambda: os.environ.get("SERVICE_JWT_AUDIENCE", "yal-supervisor")
+        default_factory=lambda: os.environ.get("SERVICE_JWT_AUDIENCE", "prime-supervisor")
     )
     service_jwt_issuer: str = field(
         default_factory=lambda: os.environ.get("SERVICE_JWT_ISSUER", "prime-agent-api")
@@ -161,8 +161,8 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
-        catalog_dir_raw = os.environ.get("YAL_CATALOG_DIR")
-        load_catalog = os.environ.get("YAL_LOAD_COMPOSITION_CATALOG", "true").lower() not in (
+        catalog_dir_raw = os.environ.get("PRIME_CATALOG_DIR")
+        load_catalog = os.environ.get("PRIME_LOAD_COMPOSITION_CATALOG", "true").lower() not in (
             "0",
             "false",
             "no",
@@ -192,7 +192,7 @@ class Settings:
             load_composition_catalog=load_catalog,
             temporal=TemporalSettings.from_env(),
             persist_composition_catalog=os.environ.get(
-                "YAL_PERSIST_CATALOG", "true"
+                "PRIME_PERSIST_CATALOG", "true"
             ).lower()
             in ("1", "true", "yes"),
             auth_token=os.environ.get("AUTH_TOKEN") or None,
@@ -203,7 +203,7 @@ class Settings:
             service_jwt_secret=os.environ.get("SERVICE_JWT_SECRET")
             or os.environ.get("AI_SERVICE_JWT_SECRET")
             or None,
-            service_jwt_audience=os.environ.get("SERVICE_JWT_AUDIENCE", "yal-supervisor"),
+            service_jwt_audience=os.environ.get("SERVICE_JWT_AUDIENCE", "prime-supervisor"),
             service_jwt_issuer=os.environ.get("SERVICE_JWT_ISSUER", "prime-agent-api"),
             multi_tenant_strict=os.environ.get("MULTI_TENANT_STRICT", "false").lower()
             in ("1", "true", "yes"),

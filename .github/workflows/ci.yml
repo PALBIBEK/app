@@ -69,15 +69,15 @@ jobs:
       postgres:  # the migrations run against it (tests/test_migrations.py)
         image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
-          POSTGRES_USER: yal
-          POSTGRES_PASSWORD: yal
+          POSTGRES_USER: prime
+          POSTGRES_PASSWORD: prime
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+          --health-cmd "pg_isready -U prime" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
-      BACKEND_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
+      BACKEND_TEST_PG_URL: postgresql+asyncpg://prime:prime@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -130,15 +130,15 @@ jobs:
       postgres:  # the supervisor's migration tests run against it
         image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
-          POSTGRES_USER: yal
-          POSTGRES_PASSWORD: yal
+          POSTGRES_USER: prime
+          POSTGRES_PASSWORD: prime
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+          --health-cmd "pg_isready -U prime" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
-      SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://yal:yal@127.0.0.1:5432/postgres
+      SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://prime:prime@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -185,13 +185,13 @@ jobs:
       postgres:
         image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
-          POSTGRES_USER: yal
-          POSTGRES_PASSWORD: yal
+          POSTGRES_USER: prime
+          POSTGRES_PASSWORD: prime
           POSTGRES_DB: supervisor
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U yal -d supervisor"
+          --health-cmd "pg_isready -U prime -d supervisor"
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v5
@@ -208,13 +208,13 @@ jobs:
           echo "TEMPORAL_CLI=$HOME/.temporalio/bin/temporal" >> "$GITHUB_ENV"
       - name: Databases and service hostnames
         run: |
-          PGPASSWORD=yal psql -h 127.0.0.1 -p 5433 -U yal -d supervisor -c "create database memory"
+          PGPASSWORD=prime psql -h 127.0.0.1 -p 5433 -U prime -d supervisor -c "create database memory"
           echo "127.0.0.1 model-gateway temporal memory-service" | sudo tee -a /etc/hosts
       - name: Start the stack
         run: $PROJECT/e2e/stack/up.sh || { $PROJECT/e2e/stack/annotate-logs.sh; exit 1; }
       - name: The migrated schema matches the models
         working-directory: ${{ env.PROJECT }}/services/supervisor
-        run: DATABASE_URL=postgresql+asyncpg://yal:yal@127.0.0.1:5433/supervisor .venv/bin/alembic check
+        run: DATABASE_URL=postgresql+asyncpg://prime:prime@127.0.0.1:5433/supervisor .venv/bin/alembic check
       - name: The backend's client against the live supervisor (before the stages restart things)
         working-directory: backend
         run: |
@@ -241,13 +241,13 @@ jobs:
       postgres:  # dev.sh creates its three databases on it
         image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
         env:
-          POSTGRES_USER: yal
-          POSTGRES_PASSWORD: yal
+          POSTGRES_USER: prime
+          POSTGRES_PASSWORD: prime
           POSTGRES_DB: postgres
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U yal" --health-interval 5s --health-timeout 3s --health-retries 20
+          --health-cmd "pg_isready -U prime" --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

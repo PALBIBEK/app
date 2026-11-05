@@ -19,14 +19,14 @@ _GEN_AI_OPS = {m.value for m in GenAIOperation}
 def validate_span(span: SpanRecord) -> None:
     attrs = span.attributes
     gen_op = attrs.get("gen_ai.operation.name")
-    yal_op = attrs.get("yal.operation.name")
+    prime_op = attrs.get("prime.operation.name")
 
-    if gen_op is not None and yal_op is not None:
-        raise ValidationError("mutual exclusion: both gen_ai.operation.name and yal.operation.name")
+    if gen_op is not None and prime_op is not None:
+        raise ValidationError("mutual exclusion: both gen_ai.operation.name and prime.operation.name")
 
-    if yal_op is not None:
-        if yal_op in PHASE1_FORBIDDEN_PLATFORM_OPS or str(yal_op).startswith("sandbox"):
-            raise ValidationError(f"sandbox ops not projected in Phase 1: {yal_op}")
+    if prime_op is not None:
+        if prime_op in PHASE1_FORBIDDEN_PLATFORM_OPS or str(prime_op).startswith("sandbox"):
+            raise ValidationError(f"sandbox ops not projected in Phase 1: {prime_op}")
         if "gen_ai.provider.name" in attrs:
             raise ValidationError("provider must be absent on platform spans")
         if "gen_ai.operation.name" in attrs:
@@ -34,7 +34,7 @@ def validate_span(span: SpanRecord) -> None:
         return
 
     if gen_op is None:
-        raise ValidationError("span must carry gen_ai.operation.name or yal.operation.name")
+        raise ValidationError("span must carry gen_ai.operation.name or prime.operation.name")
 
     if gen_op not in _GEN_AI_OPS:
         raise ValidationError(f"unknown gen_ai.operation.name: {gen_op}")

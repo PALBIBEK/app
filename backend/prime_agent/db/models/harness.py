@@ -1,7 +1,7 @@
 """
 Harness model - AI agent configuration.
 
-Following corridor-platforms pattern with:
+With:
 - UUID primary key
 - AuditableMixin for audit trail
 - JSONB for array fields (tools, memory)

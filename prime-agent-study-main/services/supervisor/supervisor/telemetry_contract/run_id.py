@@ -1,4 +1,4 @@
-"""yal.run.id resolver (Phase1 §3.3a).
+"""prime.run.id resolver (Phase1 §3.3a).
 
 Duck-typed: no import of supervisor.agent.events (contract stays extractable).
 """

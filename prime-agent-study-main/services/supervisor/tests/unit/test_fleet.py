@@ -47,9 +47,9 @@ def test_a_poller_without_a_fresh_heartbeat_has_stopped() -> None:
 
 def test_prometheus_text() -> None:
     text = prometheus(assess('a"q', QueueStats(backlog=3, backlog_age_s=12.5), []))
-    assert 'yal_workers_serving{task_queue="a\\"q"} 0' in text
-    assert 'yal_task_queue_backlog{task_queue="a\\"q"} 3' in text
-    assert "yal_task_queue_backlog_age_seconds" in text and text.endswith("\n")
+    assert 'prime_workers_serving{task_queue="a\\"q"} 0' in text
+    assert 'prime_task_queue_backlog{task_queue="a\\"q"} 3' in text
+    assert "prime_task_queue_backlog_age_seconds" in text and text.endswith("\n")
 
 
 @pytest.mark.asyncio

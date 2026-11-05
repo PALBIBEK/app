@@ -28,7 +28,7 @@ from supervisor.journal.serde import encode_event, event_type_name
 
 def keyed_event_id(session_id: str, event_key: str) -> str:
     """Deterministic event id (fits EventRow.event_id) for an idempotent append."""
-    return uuid5(NAMESPACE_URL, f"yal-journal:{session_id}:{event_key}").hex
+    return uuid5(NAMESPACE_URL, f"prime-journal:{session_id}:{event_key}").hex
 
 # Default: offload payloads larger than 64 KiB.
 _DEFAULT_BLOB_THRESHOLD = 64 * 1024

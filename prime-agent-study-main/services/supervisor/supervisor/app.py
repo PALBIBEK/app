@@ -45,7 +45,7 @@ class SupervisorState:
     auth_token: str | None = None
     auth_required: bool = False
     service_jwt_secret: str | None = None
-    service_jwt_audience: str = "yal-supervisor"
+    service_jwt_audience: str = "prime-supervisor"
     service_jwt_issuer: str = "prime-agent-api"
     check_db: Callable[[], Awaitable[bool]] | None = None
     check_sandbox: Callable[[], Awaitable[bool]] | None = None
@@ -82,7 +82,7 @@ def build_supervisor(
     auth_token: str | None = None,
     auth_required: bool = False,
     service_jwt_secret: str | None = None,
-    service_jwt_audience: str = "yal-supervisor",
+    service_jwt_audience: str = "prime-supervisor",
     service_jwt_issuer: str = "prime-agent-api",
     needs_sandbox_check: bool = False,
     drain_grace_s: float = 30.0,

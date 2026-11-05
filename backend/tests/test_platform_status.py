@@ -201,7 +201,7 @@ async def test_platform_status_uses_service_bearer_not_user_access_token(
         token,
         SECRET,
         algorithms=["HS256"],
-        audience="yal-supervisor",
+        audience="prime-supervisor",
         issuer="prime-agent-api",
     )
     assert payload["type"] == "service"

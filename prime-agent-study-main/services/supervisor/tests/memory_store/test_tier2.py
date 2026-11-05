@@ -21,7 +21,7 @@ async def svc():
 
 
 def scope() -> Scope:
-    return Scope(tenant="t1", subject="repo:yal", namespace="facts")
+    return Scope(tenant="t1", subject="repo:prime", namespace="facts")
 
 
 @pytest.mark.asyncio
@@ -29,7 +29,7 @@ async def test_write_get_provenance(svc: MemoryService):
     item_id = await svc.write(
         scope(),
         NewMemoryItem(
-            content="Main project is YAL agent platform",
+            content="Main project is PRIME agent platform",
             confidence=0.9,
             source_session="s1",
             source_seq=3,
@@ -90,7 +90,7 @@ async def test_hybrid_identifier_query(svc: MemoryService):
 async def test_recall_logs_tier1_memory_recall(svc: MemoryService):
     handle = await svc.create_session(scope())
     item_id = await svc.write(
-        scope(), NewMemoryItem(content="Main project is YAL", source_session=handle.id)
+        scope(), NewMemoryItem(content="Main project is PRIME", source_session=handle.id)
     )
     await svc.recall(
         scope(),
@@ -142,11 +142,11 @@ async def test_held_out_project_fact(svc: MemoryService):
     assert empty.items == ()
     await svc.write(
         scope(),
-        NewMemoryItem(content="Main project is YAL agent platform", confidence=0.9),
+        NewMemoryItem(content="Main project is PRIME agent platform", confidence=0.9),
     )
     hit = await svc.recall(scope(), "what is my main project", TokenBudget(max_tokens=64))
     assert hit.items
-    assert "YAL" in hit.items[0].content
+    assert "PRIME" in hit.items[0].content
 
 
 def test_http_tier2_round_trip():

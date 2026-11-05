@@ -58,7 +58,7 @@ def test_the_readme_shows_the_current_table() -> None:
 
 
 def test_versioned_workers_auto_upgrade_every_workflow() -> None:
-    config = deployment_config(WorkerDeploymentVersion("yal", "b2"))
+    config = deployment_config(WorkerDeploymentVersion("prime", "b2"))
     assert config.use_worker_versioning and config.version.build_id == "b2"
     assert config.default_versioning_behavior is VersioningBehavior.AUTO_UPGRADE
     # Declared on the worker, not the class: Temporal refuses a class-level behaviour where
@@ -69,18 +69,18 @@ def test_versioned_workers_auto_upgrade_every_workflow() -> None:
 
 def test_versioning_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not TemporalSettings.from_env().versioned
-    monkeypatch.setenv("WORKER_DEPLOYMENT_NAME", "yal")
+    monkeypatch.setenv("WORKER_DEPLOYMENT_NAME", "prime")
     monkeypatch.setenv("WORKER_BUILD_ID", "abc123")
     monkeypatch.setenv("WORKER_ROLLOUT", "manual")
     t = TemporalSettings.from_env()
-    assert (t.versioned, t.deployment_name, t.build_id, t.rollout) == (True, "yal", "abc123", "manual")
+    assert (t.versioned, t.deployment_name, t.build_id, t.rollout) == (True, "prime", "abc123", "manual")
     monkeypatch.setenv("WORKER_ROLLOUT", "sometimes")
     with pytest.raises(ValueError, match="WORKER_ROLLOUT"):
         TemporalSettings.from_env()
 
 
 def test_version_names_and_retiring() -> None:
-    assert _build("yal.b2", None) == "b2" and _build("__unversioned__", None) is None and _build("", None) is None
+    assert _build("prime.b2", None) == "b2" and _build("__unversioned__", None) is None and _build("", None) is None
     assert VersionState("b1", "drained").safe_to_retire
     assert VersionState("b1", "draining", "drained").safe_to_retire
     assert not VersionState("b1", "draining", "draining").safe_to_retire

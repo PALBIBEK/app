@@ -126,7 +126,7 @@ def test_memory_jwt_tenant_from_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_SERVICE_TOKEN", raising=False)
     monkeypatch.delenv("MEMORY_ALLOW_STATIC_TOKEN", raising=False)
     monkeypatch.setenv("SERVICE_JWT_SECRET", "mem-jwt-secret")
-    monkeypatch.setenv("MEMORY_JWT_AUDIENCE", "yal-memory")
+    monkeypatch.setenv("MEMORY_JWT_AUDIENCE", "prime-memory")
     monkeypatch.setenv("MEMORY_JWT_ISSUER", "prime-agent-api")
     monkeypatch.delenv("AUTH_REQUIRED", raising=False)
     monkeypatch.delenv("ENV", raising=False)
@@ -136,7 +136,7 @@ def test_memory_jwt_tenant_from_claim(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "sub": "prime-agent-api",
             "iss": "prime-agent-api",
-            "aud": "yal-memory",
+            "aud": "prime-memory",
             "type": "service",
             "tenant_id": "tenant-a",
             "principal_id": "user-1",

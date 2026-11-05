@@ -60,8 +60,8 @@ async def _ready(base_url: str, transport: httpx.AsyncBaseTransport | None) -> b
 
 def prometheus(up: dict[str, bool]) -> list[str]:
     lines = [
-        "# HELP yal_dependency_up 1 while the dependency answers the supervisor, else 0.",
-        "# TYPE yal_dependency_up gauge",
+        "# HELP prime_dependency_up 1 while the dependency answers the supervisor, else 0.",
+        "# TYPE prime_dependency_up gauge",
     ]
-    lines += [f'yal_dependency_up{{dependency="{name}"}} {int(ok)}' for name, ok in up.items()]
+    lines += [f'prime_dependency_up{{dependency="{name}"}} {int(ok)}' for name, ok in up.items()]
     return lines

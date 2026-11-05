@@ -81,7 +81,7 @@ async def test_notebooks_of_a_harness_are_listed_by_its_agent_version(db_session
     assert call.url.path == "/v1/memory/notebooks"
     assert call.url.params["agent_pin"] == AGENT_PIN  # the pin a session of this harness runs as
     claims = jwt.decode(call.headers["authorization"].removeprefix("Bearer "), SECRET,
-                        algorithms=["HS256"], audience="yal-supervisor", issuer="prime-agent-api")
+                        algorithms=["HS256"], audience="prime-supervisor", issuer="prime-agent-api")
     assert claims["type"] == "service"  # as the user, through a service token: never the browser's
 
 

@@ -82,7 +82,7 @@ async def test_t9_terminate_reaps_open_spans_session_terminal(
         "or equivalent per-session close"
     )
     assert proj.closed_by_counts.get("session_terminal", 0) >= 1 or any(
-        (s.attributes or {}).get("yal.closed_by") == "session_terminal" for s in sink.spans
+        (s.attributes or {}).get("prime.closed_by") == "session_terminal" for s in sink.spans
     ), (
         "expected closed_by=session_terminal on terminate reap "
         f"(counts={proj.closed_by_counts})"

@@ -41,10 +41,10 @@ def default_catalog_dir() -> Path:
 
 
 def resolve_catalog_dir(explicit: Path | str | None = None) -> Path:
-    """Two-anchor resolution: explicit arg → ``YAL_CATALOG_DIR`` → shipped harness tree."""
+    """Two-anchor resolution: explicit arg → ``PRIME_CATALOG_DIR`` → shipped harness tree."""
     if explicit is not None:
         return Path(explicit).expanduser().resolve()
-    env = os.environ.get("YAL_CATALOG_DIR", "").strip()
+    env = os.environ.get("PRIME_CATALOG_DIR", "").strip()
     if env:
         return Path(env).expanduser().resolve()
     return default_catalog_dir()

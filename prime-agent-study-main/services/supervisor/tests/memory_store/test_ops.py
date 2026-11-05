@@ -45,7 +45,7 @@ async def svc(tmp_path: Path):
 
 
 def scope(tenant: str = "t1") -> Scope:
-    return Scope(tenant=tenant, subject="repo:yal", namespace="facts")
+    return Scope(tenant=tenant, subject="repo:prime", namespace="facts")
 
 
 @pytest.mark.asyncio
@@ -66,29 +66,29 @@ async def test_forget_writes_audit(svc: MemoryService):
     n = await svc.forget(
         scope(),
         ForgetSelector(item_id=item_id),
-        actor="admin@yal",
+        actor="admin@prime",
         reason="user request",
     )
     assert n == 1
     async with svc._factory() as db:  # the audit row forgetting writes
         rows = (await db.execute(select(ForgetAuditRow).where(ForgetAuditRow.tenant == "t1"))).scalars().all()
-    assert [(r.actor, r.reason) for r in rows] == [("admin@yal", "user request")]
+    assert [(r.actor, r.reason) for r in rows] == [("admin@prime", "user request")]
 
 
 @pytest.mark.asyncio
 async def test_erase_subject_scoped(svc: MemoryService):
-    await svc.write(scope("t1"), NewMemoryItem(content="yal fact"))
+    await svc.write(scope("t1"), NewMemoryItem(content="prime fact"))
     other = Scope(tenant="t1", subject="repo:other", namespace="facts")
     await svc.write(other, NewMemoryItem(content="other fact"))
-    await svc.create_session(scope("t1"), session_id="s-yal")
+    await svc.create_session(scope("t1"), session_id="s-prime")
     result = await svc.erase_subject(
-        tenant="t1", subject="repo:yal", actor="dpo", reason="GDPR"
+        tenant="t1", subject="repo:prime", actor="dpo", reason="GDPR"
     )
     assert result["items_forgotten"] == 1
     assert result["sessions_marked"] == 1
     hit = await svc.recall(other, "other fact", TokenBudget(max_tokens=64))
     assert hit.items
-    empty = await svc.recall(scope("t1"), "yal", TokenBudget(max_tokens=64))
+    empty = await svc.recall(scope("t1"), "prime", TokenBudget(max_tokens=64))
     assert empty.items == ()
 
 
@@ -109,7 +109,7 @@ async def test_cross_tenant_isolation(svc: MemoryService):
 @pytest.mark.asyncio
 async def test_metrics_four_signals(svc: MemoryService):
     handle = await svc.create_session(scope())
-    await svc.write(scope(), NewMemoryItem(content="Main project is YAL"))
+    await svc.write(scope(), NewMemoryItem(content="Main project is PRIME"))
     await svc.recall(scope(), "project", TokenBudget(max_tokens=64), log_session_id=handle.id)
     await svc.report_recall_used(1)
     snap = await svc.metrics_snapshot()

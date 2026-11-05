@@ -28,7 +28,7 @@ def create_object_storage(
             build_boto3_s3_client,
         )
 
-        bucket_name = bucket or os.environ.get("OBJECT_STORAGE_BUCKET") or "yal-workspace"
+        bucket_name = bucket or os.environ.get("OBJECT_STORAGE_BUCKET") or "prime-workspace"
         if client is None:
             client = build_boto3_s3_client(
                 endpoint_url=os.environ.get(

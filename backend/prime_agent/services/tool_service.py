@@ -1,7 +1,7 @@
 """
 Tool service with business logic and validation.
 
-Following corridor-platforms pattern with:
+With:
 - BaseService extension
 - Lifecycle hooks for validation
 - Domain-specific business logic

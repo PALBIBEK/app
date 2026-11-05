@@ -87,11 +87,11 @@ class Spend:
 
 def prometheus(calls: ModelCalls, spend: Spend) -> str:
     lines = [
-        "# HELP yal_gateway_responses_total Model calls the gateway answered, by status code.",
-        "# TYPE yal_gateway_responses_total counter",
-        *(f'yal_gateway_responses_total{{code="{code}"}} {count}' for code, count in calls.snapshot().items()),
-        "# HELP yal_gateway_spend_usd_total Model spend the gateway charged, in US dollars.",
-        "# TYPE yal_gateway_spend_usd_total counter",
-        f"yal_gateway_spend_usd_total {spend.usd:.6f}",
+        "# HELP prime_gateway_responses_total Model calls the gateway answered, by status code.",
+        "# TYPE prime_gateway_responses_total counter",
+        *(f'prime_gateway_responses_total{{code="{code}"}} {count}' for code, count in calls.snapshot().items()),
+        "# HELP prime_gateway_spend_usd_total Model spend the gateway charged, in US dollars.",
+        "# TYPE prime_gateway_spend_usd_total counter",
+        f"prime_gateway_spend_usd_total {spend.usd:.6f}",
     ]
     return "\n".join(lines) + "\n"

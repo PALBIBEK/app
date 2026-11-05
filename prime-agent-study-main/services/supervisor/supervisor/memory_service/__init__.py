@@ -1,4 +1,4 @@
-"""YAL durable Memory Service — Tier 1 session log."""
+"""PRIME durable Memory Service — Tier 1 session log."""
 
 from supervisor.memory_service.service import MemoryService
 from supervisor.memory_service.types import (

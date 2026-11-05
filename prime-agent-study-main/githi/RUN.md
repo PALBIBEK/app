@@ -1,12 +1,12 @@
 # Running githi
 
 All common commands from the project root:
-`/Users/rahulrawatadmin/Desktop/yal/githi`
+`/Users/rahulrawatadmin/Desktop/prime/githi`
 
 ## 1. One-time setup
 
 ```bash
-cd /Users/rahulrawatadmin/Desktop/yal/githi
+cd /Users/rahulrawatadmin/Desktop/prime/githi
 
 # API key (no spaces around =)
 export OPENROUTER_API_KEY='sk-or-v1-...'
@@ -137,7 +137,6 @@ List your continuable subagents with list_agents, then send_message to
 any that are ready.
 ```
 
-Architecture notes: see `DEEPSEEK-SUBAGENT.md` (section 9).
 
 ## 6. Tests
 

@@ -8,12 +8,12 @@ from pathlib import Path
 
 
 def workspaces_root() -> Path:
-    """Root for per-session directories (override with YAL_SESSION_WORKSPACES)."""
-    env = os.environ.get("YAL_SESSION_WORKSPACES")
+    """Root for per-session directories (override with PRIME_SESSION_WORKSPACES)."""
+    env = os.environ.get("PRIME_SESSION_WORKSPACES")
     if env:
         root = Path(env)
     else:
-        root = Path(tempfile.gettempdir()) / "yal-sessions"
+        root = Path(tempfile.gettempdir()) / "prime-sessions"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

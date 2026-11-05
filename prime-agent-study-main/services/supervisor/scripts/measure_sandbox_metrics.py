@@ -35,7 +35,7 @@ def _run(cmd: list[str], *, timeout: float = 120.0) -> subprocess.CompletedProce
 def measure_cold_start(image: str) -> dict[str, object]:
     if not _have_docker():
         return {"error": "docker not found"}
-    name = f"yal-metrics-{int(time.time())}"
+    name = f"prime-metrics-{int(time.time())}"
     start = time.perf_counter()
     proc = _run(
         [

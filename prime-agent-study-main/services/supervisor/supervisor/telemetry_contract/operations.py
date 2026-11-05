@@ -1,4 +1,4 @@
-"""Operation enums — GenAI registry vs yal platform (Phase1 §3.1)."""
+"""Operation enums — GenAI registry vs prime platform (Phase1 §3.1)."""
 
 from __future__ import annotations
 

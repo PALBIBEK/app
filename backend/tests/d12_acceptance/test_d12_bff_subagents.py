@@ -26,7 +26,7 @@ def _principal_from_request(request: httpx.Request) -> str:
             auth[7:],
             SECRET,
             algorithms=["HS256"],
-            audience="yal-supervisor",
+            audience="prime-supervisor",
             issuer="prime-agent-api",
         )
         return str(payload.get("principal_id", ""))
@@ -41,7 +41,7 @@ def _service_claims(request: httpx.Request) -> dict:
         auth[7:],
         SECRET,
         algorithms=["HS256"],
-        audience="yal-supervisor",
+        audience="prime-supervisor",
         issuer="prime-agent-api",
     )
 
@@ -185,7 +185,7 @@ async def test_owner_reads_messages_and_stops_subagents_via_bff(
             return httpx.Response(200, json={"ready": True, "status": "ok", "run_allowed": True})
         claims = _service_claims(request)
         assert (claims.get("type"), claims.get("principal_id")) == ("service", str(owner.id))
-        assert (claims.get("iss"), claims.get("aud")) == ("prime-agent-api", "yal-supervisor")
+        assert (claims.get("iss"), claims.get("aud")) == ("prime-agent-api", "prime-supervisor")
         upstream_tokens.append(request.headers["Authorization"].removeprefix("Bearer ").strip())
         match request.method, path:
             case "GET", p if p.endswith(f"/sessions/{ai_sid}/subagents"):

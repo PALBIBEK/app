@@ -120,7 +120,7 @@ def test_t15_hashing_embedder_deterministic_recall_smoke(authed: TestClient) -> 
     """T15: hashing embedder CI — write then recall returns the fact."""
     h = headers()
     scope = {"tenant": "d7-tenant-a", "subject": "s", "namespace": "n"}
-    content = "Main project is YAL agent platform D7"
+    content = "Main project is PRIME agent platform D7"
     created = authed.post(
         "/v1/memory/items",
         headers=h,
@@ -132,10 +132,10 @@ def test_t15_hashing_embedder_deterministic_recall_smoke(authed: TestClient) -> 
     recall = authed.post(
         "/v1/memory/recall",
         headers=h,
-        json={"scope": scope, "query": "YAL agent platform", "max_tokens": 400},
+        json={"scope": scope, "query": "PRIME agent platform", "max_tokens": 400},
     )
     assert recall.status_code == 200, recall.text
     body = recall.json()
     ids = body.get("item_ids") or [i.get("id") for i in body.get("items") or []]
     texts = [i.get("content", "") for i in body.get("items") or []]
-    assert item_id in ids or any("YAL" in t for t in texts), body
+    assert item_id in ids or any("PRIME" in t for t in texts), body

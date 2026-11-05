@@ -27,7 +27,7 @@ async def svc():
 
 
 def scope() -> Scope:
-    return Scope(tenant="t1", subject="repo:yal", namespace="facts")
+    return Scope(tenant="t1", subject="repo:prime", namespace="facts")
 
 
 # --- DM-U1 / DM-U2 ---

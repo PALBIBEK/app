@@ -33,7 +33,7 @@ from supervisor.agent.events import (
 from supervisor.telemetry_contract.operations import GenAIOperation, PlatformOperation
 from supervisor.telemetry_contract.run_id import resolve_run_id
 from supervisor.telemetry_contract.spans import SpanRecord, SpanStatus
-from supervisor.telemetry_contract.usage import to_genai_tokens, to_yal_cost
+from supervisor.telemetry_contract.usage import to_genai_tokens, to_prime_cost
 from supervisor.traces.build import span_id as trace_span_id
 from supervisor.traces.kinds import EXPORT, SpanKind
 
@@ -90,7 +90,7 @@ class JournalProjector:
     tenant_id: str
     harness_id: str
     harness_version: str
-    provider_name: str = "yal"
+    provider_name: str = "prime"
     _run: _OpenSpan | None = field(default=None, init=False, repr=False)
     _turn: _OpenSpan | None = field(default=None, init=False, repr=False)
     _tools: dict[str, _OpenSpan] = field(default_factory=dict, init=False, repr=False)
@@ -124,7 +124,7 @@ class JournalProjector:
 
     @property
     def open_run_id(self) -> str | None:
-        return self._run.record.yal_run_id if self._run else None
+        return self._run.record.prime_run_id if self._run else None
 
     @property
     def run_start_ms(self) -> int | None:
@@ -138,14 +138,14 @@ class JournalProjector:
         """Cascade-close open run. Idempotent by run_id. Returns True if closed."""
         if self._run is None:
             return False
-        run_id = self._run.record.yal_run_id
+        run_id = self._run.record.prime_run_id
         if run_id in self._closed_run_ids:
             return False
         self._cascade_close_open(end_ms=end_ms, closed_by=closed_by)
         self._run.record.end_ms = end_ms
         self._run.record.status = SpanStatus.UNSET
-        self._run.record.attributes["yal.outcome"] = "unknown"
-        self._run.record.attributes["yal.closed_by"] = closed_by
+        self._run.record.attributes["prime.outcome"] = "unknown"
+        self._run.record.attributes["prime.closed_by"] = closed_by
         self._emit(self._run.record)
         self._closed_run_ids.add(run_id)
         self.closed_by_counts[closed_by] = self.closed_by_counts.get(closed_by, 0) + 1
@@ -176,12 +176,12 @@ class JournalProjector:
 
     def _base_attrs(self, env: Envelope, run_id: str) -> dict[str, Any]:
         return {
-            "yal.tenant.id": self.tenant_id,
-            "yal.session.id": env.session_id,
-            "yal.run.id": run_id,
-            "yal.harness.id": self.harness_id,
-            "yal.harness.version": self.harness_version,
-            "yal.journal.seq": env.seq,
+            "prime.tenant.id": self.tenant_id,
+            "prime.session.id": env.session_id,
+            "prime.run.id": run_id,
+            "prime.harness.id": self.harness_id,
+            "prime.harness.version": self.harness_version,
+            "prime.journal.seq": env.seq,
         }
 
     def _new_span(
@@ -199,19 +199,19 @@ class JournalProjector:
         session, the run and ``key``), so Jaeger and the product's trace view agree."""
         attrs = {
             **self._base_attrs(env, run_id),
-            "yal.span.kind": kind.value,
+            "prime.span.kind": kind.value,
             "openinference.span.kind": EXPORT[kind].openinference,
             **attributes,
         }
         if env.turn_id:
-            attrs.setdefault("yal.turn.id", env.turn_id)
+            attrs.setdefault("prime.turn.id", env.turn_id)
         return SpanRecord(
             name=name,
-            yal_tenant_id=self.tenant_id,
-            yal_session_id=env.session_id,
-            yal_run_id=run_id,
-            yal_harness_id=self.harness_id,
-            yal_harness_version=self.harness_version,
+            prime_tenant_id=self.tenant_id,
+            prime_session_id=env.session_id,
+            prime_run_id=run_id,
+            prime_harness_id=self.harness_id,
+            prime_harness_version=self.harness_version,
             attributes=attrs,
             status=SpanStatus.UNSET,
             parent_span_id=parent_span_id,
@@ -266,7 +266,7 @@ class JournalProjector:
     def _root_run_id(self, run_id: str) -> str:
         """The run a span hashes under when its event names none: the open run (a subagent's
         own run id names its child, not the run that started it)."""
-        return self._run.record.yal_run_id if self._run is not None else run_id
+        return self._run.record.prime_run_id if self._run is not None else run_id
 
     def _on_run_start(self, env: Envelope) -> None:
         run_id = self._run_id(env)
@@ -291,27 +291,27 @@ class JournalProjector:
             for key, open_s in list(store.items()):
                 open_s.record.end_ms = end_ms
                 open_s.record.status = SpanStatus.UNSET
-                open_s.record.attributes["yal.outcome"] = "unknown"
-                open_s.record.attributes["yal.closed_by"] = closed_by
+                open_s.record.attributes["prime.outcome"] = "unknown"
+                open_s.record.attributes["prime.closed_by"] = closed_by
                 if open_s.kind == "tool":
-                    open_s.record.attributes["yal.tool.outcome"] = "unknown"
-                    open_s.record.attributes["yal.tool.unpaired"] = True
+                    open_s.record.attributes["prime.tool.outcome"] = "unknown"
+                    open_s.record.attributes["prime.tool.unpaired"] = True
                 self._emit(open_s.record)  # re-export so OTLP can end the span
                 del store[key]
         if self._turn is not None:
             self._turn.record.end_ms = end_ms
-            self._turn.record.attributes["yal.closed_by"] = closed_by
-            self._turn.record.attributes["yal.outcome"] = "unknown"
+            self._turn.record.attributes["prime.closed_by"] = closed_by
+            self._turn.record.attributes["prime.outcome"] = "unknown"
             self._emit(self._turn.record)
             self._turn = None
 
     def _on_run_end(self, env: Envelope) -> None:
         self._cascade_close_open(end_ms=env.ts_ms, closed_by="run_end")
         if self._run is not None:
-            run_id = self._run.record.yal_run_id
+            run_id = self._run.record.prime_run_id
             self._run.record.end_ms = env.ts_ms
             self._run.record.status = SpanStatus.OK
-            self._run.record.attributes["yal.closed_by"] = "terminal"
+            self._run.record.attributes["prime.closed_by"] = "terminal"
             self._emit(self._run.record)
             self._closed_run_ids.add(run_id)
             self.closed_by_counts["terminal"] = self.closed_by_counts.get("terminal", 0) + 1
@@ -323,11 +323,11 @@ class JournalProjector:
         parent = self._run.record.span_id if self._run else None
         span = self._new_span(
             env=env,
-            name="yal.turn",
+            name="prime.turn",
             kind=SpanKind.STEP,
             key=f"step:{self._steps}",
             run_id=run_id,
-            attributes={"yal.operation.name": PlatformOperation.TURN},
+            attributes={"prime.operation.name": PlatformOperation.TURN},
             parent_span_id=parent,
         )
         self._turn = _OpenSpan(span, "turn")
@@ -357,7 +357,7 @@ class JournalProjector:
             attrs["gen_ai.response.finish_reasons"] = [p.finish_reason]
         if p.usage is not None:
             attrs.update(to_genai_tokens(p.usage))
-            attrs.update(to_yal_cost(p.usage))
+            attrs.update(to_prime_cost(p.usage))
         # content intentionally omitted
         span = self._new_span(
             env=env,
@@ -406,7 +406,7 @@ class JournalProjector:
         if open_s is None:
             return
         open_s.record.end_ms = env.ts_ms
-        open_s.record.attributes["yal.tool.outcome"] = "error" if p.is_error else "ok"
+        open_s.record.attributes["prime.tool.outcome"] = "error" if p.is_error else "ok"
         open_s.record.status = SpanStatus.ERROR if p.is_error else SpanStatus.OK
         self._emit(open_s.record)
 
@@ -424,11 +424,11 @@ class JournalProjector:
         )
         span = self._new_span(
             env=env,
-            name="yal.approval",
+            name="prime.approval",
             kind=SpanKind.APPROVAL,
             key=f"approval:{p.approval_id}",
             run_id=run_id,
-            attributes={"yal.operation.name": PlatformOperation.APPROVAL},
+            attributes={"prime.operation.name": PlatformOperation.APPROVAL},
             parent_span_id=parent,
         )
         self._approvals[p.approval_id] = _OpenSpan(span, "approval")
@@ -439,7 +439,7 @@ class JournalProjector:
         if open_s is None:
             return
         open_s.record.end_ms = env.ts_ms
-        open_s.record.attributes["yal.approval.decision"] = p.choice
+        open_s.record.attributes["prime.approval.decision"] = p.choice
         open_s.record.status = SpanStatus.OK
         self._emit(open_s.record)
 
@@ -448,11 +448,11 @@ class JournalProjector:
         parent = self._run.record.span_id if self._run else None
         span = self._new_span(
             env=env,
-            name="yal.compaction",
+            name="prime.compaction",
             kind=SpanKind.COMPACTION,
             key=f"compaction:{p.compaction_id}",
             run_id=run_id,
-            attributes={"yal.operation.name": PlatformOperation.COMPACTION},
+            attributes={"prime.operation.name": PlatformOperation.COMPACTION},
             parent_span_id=parent,
         )
         self._compactions[p.compaction_id] = _OpenSpan(span, "compaction")
@@ -518,11 +518,11 @@ class JournalProjector:
         parent = self._run.record.span_id if self._run else None
         span = self._new_span(
             env=env,
-            name="yal.job",
+            name="prime.job",
             kind=SpanKind.JOB,
             key=f"job:{p.job_id}",
             run_id=run_id,
-            attributes={"yal.operation.name": PlatformOperation.JOB},
+            attributes={"prime.operation.name": PlatformOperation.JOB},
             parent_span_id=parent,
         )
         self._jobs[p.job_id] = _OpenSpan(span, "job")

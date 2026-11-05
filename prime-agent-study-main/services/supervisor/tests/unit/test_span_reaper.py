@@ -59,8 +59,8 @@ def test_idle_timeout_closes_unpaired_unknown() -> None:
 
     tool = next(s for s in sink.spans if s.attributes.get("gen_ai.operation.name") == "execute_tool")
     assert tool.status == SpanStatus.UNSET
-    assert tool.attributes.get("yal.tool.outcome") == "unknown"
-    assert tool.attributes.get("yal.closed_by") == "idle_timeout"
+    assert tool.attributes.get("prime.tool.outcome") == "unknown"
+    assert tool.attributes.get("prime.closed_by") == "idle_timeout"
     assert proj.closed_by_counts.get("idle_timeout") == 1
 
 
@@ -103,8 +103,8 @@ def test_reconstruct_then_reaper_after_restart() -> None:
     reaper = SpanReaper(projector=proj, config=cfg)
     assert reaper.tick(now_ms=200) == "idle_timeout"
 
-    tool = next(s for s in sink.spans if s.attributes.get("yal.tool.unpaired") is True)
-    assert tool.attributes.get("yal.closed_by") == "idle_timeout"
+    tool = next(s for s in sink.spans if s.attributes.get("prime.tool.unpaired") is True)
+    assert tool.attributes.get("prime.closed_by") == "idle_timeout"
 
 
 def test_session_terminal_closes_immediately() -> None:

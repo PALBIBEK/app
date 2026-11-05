@@ -2,7 +2,6 @@
  * auth.ts
  *
  * GREEN Phase: Auth API Endpoints
- * Reference: 06-authentication-and-authorization.md (JWT patterns)
  * Reference: VibeSec Skill (Auth security)
  *
  * SECURITY NOTES:

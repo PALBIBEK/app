@@ -2,8 +2,6 @@
  * harnesses.ts
  *
  * GREEN Phase: Harnesses API Endpoints
- * Reference: 03-api-routing-patterns.md (RESTful conventions)
- * Reference: FRONTEND_BUILD_CONFIG.md (TypeScript patterns)
  *
  * Harnesses represent agent configurations combining model, tools, memory, and prompts.
  * This module provides CRUD operations for harness management.

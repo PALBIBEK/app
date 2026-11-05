@@ -2,21 +2,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: yal-model-gateway
-  namespace: yal-control
+  name: prime-model-gateway
+  namespace: prime-control
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: yal-model-gateway
+      app: prime-model-gateway
   template:
     metadata:
       labels:
-        app: yal-model-gateway
+        app: prime-model-gateway
     spec:
       containers:
         - name: model-gateway
-          image: yal-supervisor:latest  # one image; this container serves only the gateway
+          image: prime-supervisor:latest  # one image; this container serves only the gateway
           ports:
             - containerPort: 8090
           env:
@@ -28,7 +28,7 @@ spec:
               value: "0"
           envFrom:
             - secretRef:
-                name: yal-gateway-credentials
+                name: prime-gateway-credentials
           startupProbe:
             httpGet:
               path: /v1/readyz
@@ -50,21 +50,21 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: yal-memory
-  namespace: yal-control
+  name: prime-memory
+  namespace: prime-control
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: yal-memory
+      app: prime-memory
   template:
     metadata:
       labels:
-        app: yal-memory
+        app: prime-memory
     spec:
       containers:
         - name: memory
-          image: yal-supervisor:latest  # one image; this container serves only the memory service
+          image: prime-supervisor:latest  # one image; this container serves only the memory service
           ports:
             - containerPort: 8092
           env:
@@ -78,7 +78,7 @@ spec:
               value: production
           envFrom:
             - secretRef:
-                name: yal-memory-secrets
+                name: prime-memory-secrets
           startupProbe:
             httpGet:
               path: /v1/readyz

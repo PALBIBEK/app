@@ -124,11 +124,11 @@ async def test_t4_interleaved_open_runs_do_not_cascade_across_sessions(
     swept = [
         s
         for s in a_tools
-        if (s.attributes or {}).get("yal.tool.unpaired") is True
+        if (s.attributes or {}).get("prime.tool.unpaired") is True
         or (
             s.end_ms is not None
-            and (s.attributes or {}).get("yal.closed_by") == "run_end"
-            and s.yal_run_id == TRACE_A
+            and (s.attributes or {}).get("prime.closed_by") == "run_end"
+            and s.prime_run_id == TRACE_A
         )
     ]
     assert not swept, (
@@ -184,21 +184,21 @@ async def test_t4_concurrent_sessions_no_projector_cross_talk(supervisor_stack) 
 
     assert sink.spans, "expected projected spans for both sessions"
 
-    spans_a = [s for s in sink.spans if s.yal_session_id == sid_a]
-    spans_b = [s for s in sink.spans if s.yal_session_id == sid_b]
+    spans_a = [s for s in sink.spans if s.prime_session_id == sid_a]
+    spans_b = [s for s in sink.spans if s.prime_session_id == sid_b]
     assert spans_a, "missing spans for session A — per-session projector required"
     assert spans_b, "missing spans for session B — per-session projector required"
 
     for s in spans_a:
-        assert s.yal_run_id == TRACE_A, (
-            f"session A span {s.name!r} has foreign run_id={s.yal_run_id!r}"
+        assert s.prime_run_id == TRACE_A, (
+            f"session A span {s.name!r} has foreign run_id={s.prime_run_id!r}"
         )
-        assert s.yal_session_id == sid_a
+        assert s.prime_session_id == sid_a
     for s in spans_b:
-        assert s.yal_run_id == TRACE_B, (
-            f"session B span {s.name!r} has foreign run_id={s.yal_run_id!r}"
+        assert s.prime_run_id == TRACE_B, (
+            f"session B span {s.name!r} has foreign run_id={s.prime_run_id!r}"
         )
-        assert s.yal_session_id == sid_b
+        assert s.prime_session_id == sid_b
 
     tools_a = {
         (s.attributes or {}).get("tool_call_id")

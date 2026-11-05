@@ -22,7 +22,7 @@ def _settings() -> Settings:
         secret_key=USER_SECRET,
         ai_service_jwt_secret=SECRET,
         ai_service_jwt_issuer="prime-agent-api",
-        ai_service_jwt_audience="yal-supervisor",
+        ai_service_jwt_audience="prime-supervisor",
         ai_service_id="prime-agent-bff",
         ai_service_jwt_ttl_seconds=60,
     )
@@ -57,11 +57,11 @@ def test_service_jwt_claims_differ_from_user_jwt_iss_aud_type(monkeypatch):
         service_token,
         SECRET,
         algorithms=["HS256"],
-        audience="yal-supervisor",
+        audience="prime-supervisor",
         issuer="prime-agent-api",
     )
     assert service_payload["type"] == "service"
-    assert service_payload["aud"] == "yal-supervisor"
+    assert service_payload["aud"] == "prime-supervisor"
     assert service_payload["tenant_id"] == "user-1"
     assert service_payload["sub"] == "prime-agent-bff"
     assert service_payload["aud"] != user_payload["aud"]
@@ -89,7 +89,7 @@ def test_user_access_jwt_rejected_by_service_audience():
             user_shaped,
             SECRET,
             algorithms=["HS256"],
-            audience="yal-supervisor",
+            audience="prime-supervisor",
             issuer="prime-agent-api",
         )
 

@@ -9,7 +9,6 @@ Following 2026 production patterns:
 
 References:
 - Production-Ready FastAPI Project Structure (2026 Guide)
-- PHASE2-BACKEND-ROADMAP.md
 """
 import asyncio
 import contextlib

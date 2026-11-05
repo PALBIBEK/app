@@ -181,7 +181,7 @@ end = (payloads(run, "ToolEnd") or [{}])[0]
 out = (end.get("result") or {}).get("payload") or {}
 check("[power] bash runs in the sandbox and sees its own files", out.get("exit_code") == 0 and "hello" in out.get("stdout", ""), out)
 check("[power] bash does not run in the supervisor's session directory",
-      os.environ["YAL_SESSION_WORKSPACES"] not in out.get("stdout", ""), out.get("stdout"))
+      os.environ["PRIME_SESSION_WORKSPACES"] not in out.get("stdout", ""), out.get("stdout"))
 run, _, _ = turn(sid, '/tool read {"file_path": "made.txt"}', 2)
 end = (payloads(run, "ToolEnd") or [{}])[0]
 check("[power] read sees the file bash wrote (same sandbox across turns)", (end.get("result") or {}).get("payload") == "hello\n", end.get("result"))

@@ -53,7 +53,7 @@ class MetricsRegistry:
         }
 
 
-def setup_metrics(service_name: str = "yal-supervisor") -> MetricsRegistry:
+def setup_metrics(service_name: str = "prime-supervisor") -> MetricsRegistry:
     """Return a process-local metrics registry (OTel export later)."""
     del service_name
     return MetricsRegistry()

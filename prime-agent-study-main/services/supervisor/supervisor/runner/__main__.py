@@ -1,7 +1,7 @@
-"""The YAL runner: hosts a tenant's hands on this machine, dialling out to the supervisor.
+"""The PRIME runner: hosts a tenant's hands on this machine, dialling out to the supervisor.
 
     python -m supervisor.runner --url https://supervisor.example.com \\
-        --tenant acme --name office --token yr_... --root /srv/yal-hands
+        --tenant acme --name office --token yr_... --root /srv/prime-hands
 
 Register the runner first (``POST /v1/runners/{name}``, which returns its token
 once). The runner opens no port: it long-polls the supervisor over HTTPS for the
@@ -151,11 +151,11 @@ async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m supervisor.runner", description=__doc__.split("\n\n")[0])
-    parser.add_argument("--url", default=os.environ.get("YAL_SUPERVISOR_URL"), required="YAL_SUPERVISOR_URL" not in os.environ)
-    parser.add_argument("--tenant", default=os.environ.get("YAL_TENANT"), required="YAL_TENANT" not in os.environ)
-    parser.add_argument("--name", default=os.environ.get("YAL_RUNNER"), required="YAL_RUNNER" not in os.environ)
-    parser.add_argument("--token", default=os.environ.get("YAL_RUNNER_TOKEN"), required="YAL_RUNNER_TOKEN" not in os.environ)
-    parser.add_argument("--root", type=Path, default=Path(os.environ.get("YAL_RUNNER_ROOT", "./yal-hands")))
+    parser.add_argument("--url", default=os.environ.get("PRIME_SUPERVISOR_URL"), required="PRIME_SUPERVISOR_URL" not in os.environ)
+    parser.add_argument("--tenant", default=os.environ.get("PRIME_TENANT"), required="PRIME_TENANT" not in os.environ)
+    parser.add_argument("--name", default=os.environ.get("PRIME_RUNNER"), required="PRIME_RUNNER" not in os.environ)
+    parser.add_argument("--token", default=os.environ.get("PRIME_RUNNER_TOKEN"), required="PRIME_RUNNER_TOKEN" not in os.environ)
+    parser.add_argument("--root", type=Path, default=Path(os.environ.get("PRIME_RUNNER_ROOT", "./prime-hands")))
     parser.add_argument("--concurrency", type=int, default=8)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

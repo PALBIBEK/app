@@ -8,17 +8,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: yal-supervisor-worker
-  namespace: yal-control
+  name: prime-supervisor-worker
+  namespace: prime-control
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: yal-supervisor-worker
+      app: prime-supervisor-worker
   template:
     metadata:
       labels:
-        app: yal-supervisor-worker
+        app: prime-supervisor-worker
         # Set by your pipeline to the image tag: it becomes this build's worker version.
         app.kubernetes.io/version: "REPLACE_WITH_IMAGE_TAG"
     spec:
@@ -26,7 +26,7 @@ spec:
       terminationGracePeriodSeconds: 75
       containers:
         - name: worker
-          image: yal-supervisor:latest
+          image: prime-supervisor:latest
           args: ["worker"]
           ports:
             - name: health
@@ -40,7 +40,7 @@ spec:
               value: "8081"
             # Safe deploys (README "Safe deploys"): each build is a version of this deployment.
             - name: WORKER_DEPLOYMENT_NAME
-              value: yal-supervisor
+              value: prime-supervisor
             - name: WORKER_BUILD_ID
               valueFrom:
                 fieldRef:
@@ -56,7 +56,7 @@ spec:
               value: "3600"
           envFrom:
             - secretRef:
-                name: yal-supervisor-secrets
+                name: prime-supervisor-secrets
           resources:
             requests:
               cpu: "500m"
@@ -85,16 +85,16 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app: yal-supervisor-worker
+              app: prime-supervisor-worker
 ---
 # Never take every worker down at once (node drains, upgrades).
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: yal-supervisor-worker
-  namespace: yal-control
+  name: prime-supervisor-worker
+  namespace: prime-control
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: yal-supervisor-worker
+      app: prime-supervisor-worker

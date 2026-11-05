@@ -44,10 +44,10 @@ def memory_allow_static_token() -> bool:
 def memory_jwt_audiences() -> list[str]:
     raw = os.environ.get(
         "MEMORY_JWT_AUDIENCE",
-        "yal-memory,yal-supervisor",
+        "prime-memory,prime-supervisor",
     ).strip()
     parts = [a.strip() for a in raw.split(",") if a.strip()]
-    return parts or ["yal-memory"]
+    return parts or ["prime-memory"]
 
 
 def memory_jwt_issuer() -> str:

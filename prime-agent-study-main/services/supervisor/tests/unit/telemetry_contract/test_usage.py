@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from supervisor.agent.events import Usage
-from supervisor.telemetry_contract.usage import to_genai_tokens, to_yal_cost
+from supervisor.telemetry_contract.usage import to_genai_tokens, to_prime_cost
 
 
 def test_zero_cache_passthrough() -> None:
@@ -50,7 +50,7 @@ def test_cache_read_heavy_summed() -> None:
     assert attrs["gen_ai.usage.cache_creation.input_tokens"] == 100
 
 
-def test_yal_cost_includes_currency() -> None:
+def test_prime_cost_includes_currency() -> None:
     u = Usage(
         input_tokens=1,
         output_tokens=1,
@@ -58,6 +58,6 @@ def test_yal_cost_includes_currency() -> None:
         cache_write=0,
         cost_total=0.42,
     )
-    cost = to_yal_cost(u, currency="USD")
-    assert cost["yal.cost.total"] == 0.42
-    assert cost["yal.cost.currency"] == "USD"
+    cost = to_prime_cost(u, currency="USD")
+    assert cost["prime.cost.total"] == 0.42
+    assert cost["prime.cost.currency"] == "USD"

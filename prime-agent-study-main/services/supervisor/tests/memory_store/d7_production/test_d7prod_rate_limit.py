@@ -47,7 +47,7 @@ def test_prod_mutating_routes_emit_rate_limit_signal(
     monkeypatch.delenv("MEMORY_SERVICE_TOKEN", raising=False)
     monkeypatch.delenv("MEMORY_ALLOW_STATIC_TOKEN", raising=False)
     monkeypatch.setenv("SERVICE_JWT_SECRET", "d7-prod-memory-jwt-secret-at-least-32b!!")
-    monkeypatch.setenv("MEMORY_JWT_AUDIENCE", "yal-memory")
+    monkeypatch.setenv("MEMORY_JWT_AUDIENCE", "prime-memory")
     monkeypatch.setenv("MEMORY_JWT_ISSUER", "prime-agent-api")
     monkeypatch.setenv("ENV", "staging")
     monkeypatch.setenv("AUTH_REQUIRED", "true")

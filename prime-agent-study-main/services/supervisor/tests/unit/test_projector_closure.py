@@ -42,8 +42,8 @@ def test_cascade_marks_closed_by_on_unpaired_descendants() -> None:
         proj.project(e)
 
     tool = next(s for s in sink.spans if s.attributes.get("gen_ai.operation.name") == "execute_tool")
-    assert tool.attributes.get("yal.closed_by") == "run_end"
-    assert tool.attributes.get("yal.tool.unpaired") is True
+    assert tool.attributes.get("prime.closed_by") == "run_end"
+    assert tool.attributes.get("prime.tool.unpaired") is True
     assert tool.status == SpanStatus.UNSET
 
 

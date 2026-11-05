@@ -1,4 +1,4 @@
-# YAL deploy artifacts
+# PRIME deploy artifacts
 
 ## Phase 1 (operational baseline)
 
@@ -46,10 +46,10 @@ docker compose -f deploy/staging/docker-compose.staging.yml up --build
 
 Never put these in `NEXT_PUBLIC_*`, the browser Settings UI, or sandbox env.
 Kubernetes: `k8s/external-secret-gateway.yaml` (ESO) makes one secret per service, each with
-only what that service uses: `yal-gateway-credentials` (the gateway's token and the vendor keys,
-read by the gateway alone), `yal-supervisor-secrets` (database, gateway token, service JWT
+only what that service uses: `prime-gateway-credentials` (the gateway's token and the vendor keys,
+read by the gateway alone), `prime-supervisor-secrets` (database, gateway token, service JWT
 secret, `VAULT_KEYS`, `TEMPORAL_CODEC_KEY`; the API, its workers and the rollout check) and
-`yal-memory-secrets` (the memory service's database and the service JWT secret). Every service
+`prime-memory-secrets` (the memory service's database and the service JWT secret). Every service
 runs with `ENV=production`: service authentication, the vault keys and the Temporal history key
 are then required, and a missing one stops the process at boot.
 
@@ -105,8 +105,8 @@ Scrape these, then load `alerts/*.rules.yml` into Prometheus (CI checks the rule
 | Scrape | Serves | Rules |
 |---|---|---|
 | each API replica, `GET /v1/ops/workers/metrics` | the worker fleet | `workers.rules.yml` |
-| each API replica, `GET /v1/ops/metrics` | `yal_api_responses_total{code}`; `yal_dependency_up{dependency}` for the database, Temporal, the sandbox provider, the model gateway and the memory service (probed on each scrape, 3 s each) | `platform.rules.yml` |
-| each gateway replica, `GET /v1/metrics` | `yal_gateway_responses_total{code}` (model calls only) and `yal_gateway_spend_usd_total` | `platform.rules.yml` |
+| each API replica, `GET /v1/ops/metrics` | `prime_api_responses_total{code}`; `prime_dependency_up{dependency}` for the database, Temporal, the sandbox provider, the model gateway and the memory service (probed on each scrape, 3 s each) | `platform.rules.yml` |
+| each gateway replica, `GET /v1/metrics` | `prime_gateway_responses_total{code}` (model calls only) and `prime_gateway_spend_usd_total` | `platform.rules.yml` |
 
 They page when the database, Temporal, the gateway or the sandbox provider stops answering, and
 warn on over 5% of API responses failing, over 20% of model calls failing, the memory service
@@ -151,7 +151,7 @@ rotate the credentials it found: older backups still hold them.
 
 ### Safe deploys
 
-Workers register as versions of the `yal-supervisor` worker deployment, with the image tag as
+Workers register as versions of the `prime-supervisor` worker deployment, with the image tag as
 the build id (`WORKER_DEPLOYMENT_NAME`, `WORKER_BUILD_ID`). Sessions auto-upgrade to each new
 build, so a rolling update of `worker-deployment.yaml` (with `WORKER_ROLLOUT=auto`) is safe.
 

@@ -18,7 +18,7 @@ WORKFLOW_ID_PREFIX = "session/"
 def run_id_for(session_id: str, command_id: str) -> str:
     """One run per (session, message): the id a client gets back for its message, and the
     ``turn_id`` on every event of that run (a retried or re-homed run finds the same id)."""
-    return uuid.uuid5(uuid.NAMESPACE_URL, f"yal-run:{session_id}:{command_id}").hex
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"prime-run:{session_id}:{command_id}").hex
 
 
 def workflow_id(session_id: str) -> str:
@@ -32,7 +32,7 @@ def job_workflow_id(session_id: str, job_id: str) -> str:
 
 def job_ids(op_id: str) -> tuple[str, str]:
     """(job_id, run_id) for the START_BACKGROUND op ``op_id``: same op, same job."""
-    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"yal-job:{op_id}").hex
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"prime-job:{op_id}").hex
     return f"job-{digest[:16]}", f"run-{digest[16:28]}"
 
 
@@ -57,7 +57,7 @@ CLOSE_SIGNAL = "close"
 
 def child_session_id(parent_id: str, call_id: str) -> str:
     """The subagent a parent's tool call starts: the same call, the same child."""
-    return uuid.uuid5(uuid.NAMESPACE_URL, f"yal-subagent:{parent_id}:{call_id}").hex
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"prime-subagent:{parent_id}:{call_id}").hex
 
 
 def subagent_task_id(call_id: str) -> str:

@@ -18,11 +18,11 @@ class SpanRecord:
     """Contract-shaped span. Content bodies must never appear in attributes."""
 
     name: str
-    yal_tenant_id: str
-    yal_session_id: str
-    yal_run_id: str
-    yal_harness_id: str
-    yal_harness_version: str
+    prime_tenant_id: str
+    prime_session_id: str
+    prime_run_id: str
+    prime_harness_id: str
+    prime_harness_version: str
     attributes: dict[str, Any] = field(default_factory=dict)
     status: SpanStatus = SpanStatus.UNSET
     parent_span_id: str | None = None

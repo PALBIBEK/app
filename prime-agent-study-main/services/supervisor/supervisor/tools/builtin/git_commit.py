@@ -14,7 +14,7 @@ _NOT_A_REPO: Final = 3
 # Commit as the agent unless the repository names an author itself.
 _SCRIPT: Final = """\
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit {not_a_repo}
-git config user.email >/dev/null || set -- -c user.name='YAL agent' -c user.email=agent@yal.invalid
+git config user.email >/dev/null || set -- -c user.name='PRIME agent' -c user.email=agent@prime.invalid
 git add -A && git "$@" commit --allow-empty -m {message}
 """
 

@@ -11,11 +11,11 @@ from supervisor.telemetry_contract.validate import ValidationError, validate_spa
 def _base(**kwargs: object) -> SpanRecord:
     defaults: dict[str, object] = {
         "name": "chat",
-        "yal_tenant_id": "t1",
-        "yal_session_id": "s1",
-        "yal_run_id": "r1",
-        "yal_harness_id": "coding",
-        "yal_harness_version": "coding-v1",
+        "prime_tenant_id": "t1",
+        "prime_session_id": "s1",
+        "prime_run_id": "r1",
+        "prime_harness_id": "coding",
+        "prime_harness_version": "coding-v1",
         "attributes": {},
         "status": SpanStatus.UNSET,
     }
@@ -39,15 +39,15 @@ def test_genai_chat_requires_provider_and_operation() -> None:
 
 def test_platform_turn_forbids_genai_operation_and_provider() -> None:
     span = _base(
-        name="yal.turn",
-        attributes={"yal.operation.name": "turn"},
+        name="prime.turn",
+        attributes={"prime.operation.name": "turn"},
     )
     validate_span(span)
 
     bad = _base(
-        name="yal.turn",
+        name="prime.turn",
         attributes={
-            "yal.operation.name": "turn",
+            "prime.operation.name": "turn",
             "gen_ai.operation.name": "chat",
         },
     )
@@ -55,21 +55,21 @@ def test_platform_turn_forbids_genai_operation_and_provider() -> None:
         validate_span(bad)
 
     bad_provider = _base(
-        name="yal.turn",
+        name="prime.turn",
         attributes={
-            "yal.operation.name": "turn",
-            "gen_ai.provider.name": "yal",
+            "prime.operation.name": "turn",
+            "gen_ai.provider.name": "prime",
         },
     )
     with pytest.raises(ValidationError, match="provider"):
         validate_span(bad_provider)
 
 
-def test_genai_and_yal_operation_mutually_exclusive() -> None:
+def test_genai_and_prime_operation_mutually_exclusive() -> None:
     span = _base(
         attributes={
             "gen_ai.operation.name": "chat",
-            "yal.operation.name": "turn",
+            "prime.operation.name": "turn",
             "gen_ai.provider.name": "anthropic",
         }
     )
@@ -96,8 +96,8 @@ def test_chat_token_nesting_enforced() -> None:
 def test_no_sandbox_operation_in_phase1_enum_use() -> None:
     """Phase 1: sandbox ops reserved / not projected — validator rejects emission."""
     span = _base(
-        name="yal.sandbox.create",
-        attributes={"yal.operation.name": "sandbox.create"},
+        name="prime.sandbox.create",
+        attributes={"prime.operation.name": "sandbox.create"},
     )
     with pytest.raises(ValidationError, match="sandbox"):
         validate_span(span)

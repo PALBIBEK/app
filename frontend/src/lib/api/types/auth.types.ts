@@ -2,7 +2,6 @@
  * Auth Type Definitions
  *
  * References:
- * - 06-authentication-and-authorization.md (JWT patterns)
  * - VibeSec Skill (Auth security best practices)
  *
  * SECURITY NOTES:

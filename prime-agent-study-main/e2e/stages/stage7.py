@@ -285,11 +285,11 @@ def section_e_journal() -> None:
           [e["seq"] for e in alice.events(sid, since=mid, query=True)] == seqs[mid + 1:])
     check("replay from the last event returns nothing", alice.events(sid, since=seqs[-1]) == [])
     check("a replay is identical to the first read", alice.events(sid) == evs)
-    pg = {k: os.environ.get(k, d) for k, d in (("PG_HOST", "127.0.0.1"), ("PG_PORT", "5433"), ("PG_USER", "yal"))}
+    pg = {k: os.environ.get(k, d) for k, d in (("PG_HOST", "127.0.0.1"), ("PG_PORT", "5433"), ("PG_USER", "prime"))}
     row = subprocess.run(["psql", "-h", pg["PG_HOST"], "-p", pg["PG_PORT"], "-U", pg["PG_USER"], "supervisor", "-Atc",
                           f"select count(*), max(seq) from events where session_id='{sid}'"], check=True,
                          capture_output=True, text=True,
-                         env={**os.environ, "PGPASSWORD": os.environ.get("PG_PASSWORD", "yal")}).stdout.strip()
+                         env={**os.environ, "PGPASSWORD": os.environ.get("PG_PASSWORD", "prime")}).stdout.strip()
     check("every event is persisted in the database", row == f"{len(evs)}|{seqs[-1]}", row)
 
     print("   live stream during a slow turn, then a reconnect from its cursor")

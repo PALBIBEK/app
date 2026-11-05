@@ -1,6 +1,6 @@
 """Usage → GenAI token attrs.
 
-YAL ``Usage.input_tokens`` is DISJOINT from cache_read/cache_write (see harness
+PRIME ``Usage.input_tokens`` is DISJOINT from cache_read/cache_write (see harness
 translate.py). Exported ``gen_ai.usage.input_tokens`` MUST include cache counts
 per GenAI semconv nesting. Journal payload numbers and span numbers will differ
 — that is intentional.
@@ -34,8 +34,8 @@ def to_genai_tokens(u: UsageLike) -> dict[str, int]:
     }
 
 
-def to_yal_cost(u: UsageLike, *, currency: str = "USD") -> dict[str, float | str]:
+def to_prime_cost(u: UsageLike, *, currency: str = "USD") -> dict[str, float | str]:
     return {
-        "yal.cost.total": u.cost_total,
-        "yal.cost.currency": currency,
+        "prime.cost.total": u.cost_total,
+        "prime.cost.currency": currency,
     }

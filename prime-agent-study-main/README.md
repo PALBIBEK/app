@@ -37,4 +37,3 @@ container from the same image (as `docker-compose.yml` does).
 docker compose up --build
 ```
 
-See `services/supervisor/PROGRESS.md` for what is built, how it was verified, and its known gaps.

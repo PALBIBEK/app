@@ -38,7 +38,7 @@ async def test_a_new_build_takes_over_sessions_while_the_old_one_drains(
 ) -> None:
     model()
     state = await env.state()
-    dep = f"yal-{uuid.uuid4().hex[:6]}"
+    dep = f"prime-{uuid.uuid4().hex[:6]}"
     old, new = WorkerDeploymentVersion(dep, "b1"), WorkerDeploymentVersion(dep, "b2")
     async with session_worker(env.client, state, task_queue=env.queue, deployment=old, identity="w-b1"):
         # The first version of a deployment promotes itself, even with a manual rollout:
@@ -99,7 +99,7 @@ async def test_turning_versioning_on_keeps_sessions_started_before_it(
         sid = await env.create(state)
         await env.sessions.submit(sid, Message("c1", "before versioning"))
         await env.wait_for(state, sid, run_ended())
-    dep = f"yal-{uuid.uuid4().hex[:6]}"
+    dep = f"prime-{uuid.uuid4().hex[:6]}"
     async with session_worker(
         env.client, state, task_queue=env.queue, deployment=WorkerDeploymentVersion(dep, "b1")
     ):

@@ -1,7 +1,7 @@
 """Harness configuration from the environment, cached.
 
 Environment Variables:
-    YAL_CONTRACTS_DIR / CONTRACTS_DIR: Path to contracts directory (protocol versions)
+    PRIME_CONTRACTS_DIR / CONTRACTS_DIR: Path to contracts directory (protocol versions)
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class HarnessSettings:
     @classmethod
     def from_env(cls) -> HarnessSettings:
         contracts_dir = (
-            os.environ.get("YAL_CONTRACTS_DIR", "").strip()
+            os.environ.get("PRIME_CONTRACTS_DIR", "").strip()
             or os.environ.get("CONTRACTS_DIR", "").strip()
             or None
         )

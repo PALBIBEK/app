@@ -44,11 +44,11 @@ from githi.types import AssistantMessage, SystemMessage, Usage
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "githi"
 SUPERVISOR = Path(
-    "/Users/rahulrawatadmin/Desktop/YAL_AGENT_SERVICE/agent-platform"
+    "/Users/rahulrawatadmin/Desktop/PRIME_AGENT_SERVICE/agent-platform"
     "/services/supervisor/src/supervisor"
 )
 CONTRACTS = Path(
-    "/Users/rahulrawatadmin/Desktop/YAL_AGENT_SERVICE/agent-platform/contracts"
+    "/Users/rahulrawatadmin/Desktop/PRIME_AGENT_SERVICE/agent-platform/contracts"
 )
 
 

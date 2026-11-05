@@ -22,7 +22,7 @@ def service_token(tenant_id: str, principal_id: str | None = None) -> str:
     claims = {
         "sub": "prime-agent-bff",
         "iss": "prime-agent-api",
-        "aud": "yal-supervisor",
+        "aud": "prime-supervisor",
         "type": "service",
         "tenant_id": tenant_id,
         "principal_id": principal_id or tenant_id,

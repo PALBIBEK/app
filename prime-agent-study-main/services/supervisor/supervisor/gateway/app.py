@@ -1,4 +1,4 @@
-"""FastAPI application — the YAL model gateway.
+"""FastAPI application — the PRIME model gateway.
 
 Serves the LiteLLM-compatible contract a QM-style client discovers and calls:
 
@@ -61,7 +61,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="yal-model-gateway", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="prime-model-gateway", version="0.1.0", lifespan=_lifespan)
 
 MODEL_CALLS = ModelCalls()
 SPEND = Spend()
@@ -118,14 +118,14 @@ def _routes(request: Request) -> RouteTable:
 @contextmanager
 def _span(operation: str, route_id: str, traceparent: str | None) -> Iterator[Span]:
     """A ``gen_ai`` server span joined to the caller's W3C trace (a no-op without a provider)."""
-    with trace.get_tracer("yal-model-gateway").start_as_current_span(
+    with trace.get_tracer("prime-model-gateway").start_as_current_span(
         operation,
         context=extract({"traceparent": traceparent}) if traceparent else None,
         kind=SpanKind.SERVER,
         attributes={
             "gen_ai.operation.name": "chat",
-            "gen_ai.provider.name": "yal-model-gateway",
-            "yal.route.id": route_id,
+            "gen_ai.provider.name": "prime-model-gateway",
+            "prime.route.id": route_id,
         },
     ) as span:
         yield span
@@ -395,7 +395,7 @@ def _infer(
             {
                 "gen_ai.usage.input_tokens": usage.prompt_tokens,
                 "gen_ai.usage.output_tokens": usage.output,
-                "yal.cost.usd": cost,
+                "prime.cost.usd": cost,
             }
         )
         if wire is Wire.CHAT:
@@ -411,22 +411,22 @@ def _infer(
 def chat_completions(
     request: Request,
     body: JSONObject,
-    x_yal_route_id: str | None = Header(default=None, alias="X-YAL-Route-Id"),
+    x_prime_route_id: str | None = Header(default=None, alias="X-PRIME-Route-Id"),
     traceparent: str | None = Header(default=None),
 ) -> Any:
-    return _infer(request, Wire.CHAT, body, route_header=x_yal_route_id, traceparent=traceparent)
+    return _infer(request, Wire.CHAT, body, route_header=x_prime_route_id, traceparent=traceparent)
 
 
 @app.post("/v1/messages")
 def messages(
     request: Request,
     body: JSONObject,
-    x_yal_route_id: str | None = Header(default=None, alias="X-YAL-Route-Id"),
+    x_prime_route_id: str | None = Header(default=None, alias="X-PRIME-Route-Id"),
     traceparent: str | None = Header(default=None),
 ) -> Any:
     """Anthropic Messages passthrough: thinking blocks and their signatures round-trip intact."""
     return _infer(
-        request, Wire.MESSAGES, body, route_header=x_yal_route_id, traceparent=traceparent
+        request, Wire.MESSAGES, body, route_header=x_prime_route_id, traceparent=traceparent
     )
 
 
@@ -434,10 +434,10 @@ def messages(
 def responses(
     request: Request,
     body: JSONObject,
-    x_yal_route_id: str | None = Header(default=None, alias="X-YAL-Route-Id"),
+    x_prime_route_id: str | None = Header(default=None, alias="X-PRIME-Route-Id"),
     traceparent: str | None = Header(default=None),
 ) -> Any:
     """OpenAI Responses passthrough: encrypted reasoning and ``service_tier`` reach the upstream."""
     return _infer(
-        request, Wire.RESPONSES, body, route_header=x_yal_route_id, traceparent=traceparent
+        request, Wire.RESPONSES, body, route_header=x_prime_route_id, traceparent=traceparent
     )

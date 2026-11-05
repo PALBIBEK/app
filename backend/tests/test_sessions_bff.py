@@ -272,7 +272,7 @@ async def test_create_session_uses_ensure_runnable_pin_and_service_bearer_only(
         token,
         SECRET,
         algorithms=["HS256"],
-        audience="yal-supervisor",
+        audience="prime-supervisor",
         issuer="prime-agent-api",
     )
     assert payload["type"] == "service"
