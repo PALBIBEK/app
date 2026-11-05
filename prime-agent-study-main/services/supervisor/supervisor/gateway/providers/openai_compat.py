@@ -7,7 +7,7 @@ from collections.abc import Mapping
 import httpx
 
 from supervisor.gateway.providers.base import SSE, Body, Call, Wire
-from supervisor.gateway.providers.http import ApiKey, HttpUpstream
+from supervisor.gateway.providers.http import ApiKey, BaseUrl, HttpUpstream
 
 _PATHS: Mapping[Wire, str] = {Wire.CHAT: "/chat/completions", Wire.RESPONSES: "/responses"}
 
@@ -24,7 +24,7 @@ class OpenAICompatProvider:
         self,
         *,
         api_key: ApiKey,
-        base_url: str = "https://api.openai.com/v1",
+        base_url: BaseUrl = "https://api.openai.com/v1",
         transport: httpx.BaseTransport | None = None,
         extra_headers: Mapping[str, str] | None = None,
         retries: int = 1,

@@ -318,6 +318,17 @@ class AiClient:
         )
         return payload if isinstance(payload, dict) else {}
 
+    async def set_model_provider_address(self, identity: TenantPrincipal, vendor: str, base_url: str) -> dict[str, Any]:
+        """Set a local server's address at the gateway; its status (and the models it runs) back."""
+        payload = await self._json_request(
+            "PUT",
+            f"/v1/model-providers/{quote(vendor, safe='')}/base-url",
+            identity,
+            json_body={"base_url": base_url},
+            timeout=20.0,
+        )
+        return payload if isinstance(payload, dict) else {}
+
     async def remove_model_provider_key(self, identity: TenantPrincipal, vendor: str) -> dict[str, Any]:
         payload = await self._json_request("DELETE", f"/v1/model-providers/{quote(vendor, safe='')}/key", identity)
         return payload if isinstance(payload, dict) else {}

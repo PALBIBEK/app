@@ -44,7 +44,7 @@ class _Clock:
 
 def _local(server: _Server, clock: _Clock | None = None, key: str = "") -> LocalModels:
     return LocalModels(
-        BASE,
+        lambda: BASE,
         lambda: key,
         context_window=8192,
         transport=httpx.MockTransport(server),
@@ -112,7 +112,7 @@ def test_a_server_that_is_down_offers_nothing_and_is_tried_again_soon() -> None:
 
 def test_no_server_configured_is_never_read() -> None:
     server = _Server([{"id": "a"}])
-    local = LocalModels("", lambda: "", context_window=4096, transport=httpx.MockTransport(server))
+    local = LocalModels(lambda: "", lambda: "", context_window=4096, transport=httpx.MockTransport(server))
     assert local.routes() == {} and server.requests == []
 
 

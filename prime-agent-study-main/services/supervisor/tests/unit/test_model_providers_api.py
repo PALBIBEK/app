@@ -193,7 +193,7 @@ def test_a_local_servers_models_reach_the_picker_free(
         lambda request: httpx.Response(200, json={"data": [{"id": "qwen3:8b"}]})
     )
     gateway.app.state.local_models = LocalModels(
-        LOCAL, lambda: "", context_window=8192, transport=ollama
+        lambda: LOCAL, lambda: "", context_window=8192, transport=ollama
     )
     listing = supervisor.get("/v1/models", headers=ADMIN).json()
     local = next(m for m in listing["models"] if m["id"] == "gateway/local/qwen3:8b")
@@ -205,3 +205,19 @@ def test_a_local_servers_models_reach_the_picker_free(
     )
     assert (local["cost"]["input"], local["cost"]["output"]) == (0.0, 0.0)
     assert {p["id"]: p["ready"] for p in listing["providers"]}["local"] is True
+
+
+def test_a_local_servers_address_set_from_the_product_offers_its_models_at_once(
+    gateway: TestClient, supervisor: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ollama = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"id": "qwen3:8b"}]}))
+    monkeypatch.setattr(gateway.app.state.local_models, "_transport", ollama)  # type: ignore[attr-defined]
+    assert "gateway/local/qwen3:8b" not in _models(supervisor)
+
+    put = supervisor.put("/v1/model-providers/local/base-url", headers=ADMIN, json={"base_url": "http://gpu-box:11434/v1"})
+    fixed = supervisor.put("/v1/model-providers/openai/base-url", headers=ADMIN, json={"base_url": "http://elsewhere/v1"})
+
+    assert put.status_code == 200, put.text
+    assert (put.json()["address_source"], put.json()["updated_by"], put.json()["models"]) == ("set", None, ["qwen3:8b"])
+    assert "gateway/local/qwen3:8b" in _models(supervisor), "the supervisor re-read the gateway's models"
+    assert fixed.status_code == 403 and fixed.json()["detail"]["code"] == "ADDRESS_FIXED"

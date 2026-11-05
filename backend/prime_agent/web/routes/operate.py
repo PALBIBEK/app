@@ -5,7 +5,8 @@
 - ``GET /usage``: tokens and cost, by day, agent or session;
 - ``/runners`` and ``/secrets``: the user's runners and tenant secrets;
 - ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (owners and admins);
-- ``/model-providers``: the model vendors and their keys (owners and admins). A key goes to
+- ``/model-providers``: the model vendors, their keys and a local server's address (owners
+  and admins). A key goes to
   the model gateway, which alone keeps it; it is never stored here or returned.
 
 The supervisor names sessions by its own ids; the browser knows this product's
@@ -362,6 +363,18 @@ async def set_model_provider_key(vendor: str, body: ProviderKeyIn, current_user:
     """Set a vendor's key; the vendor checks it first, and a key it refuses is not kept."""
     identity = TenantPrincipal.from_user(current_user)
     result: dict[str, Any] = await _call(_client().set_model_provider_key(identity, _vendor(vendor), body.key))
+    return result
+
+
+class ProviderAddressIn(BaseModel):
+    base_url: str = Field(max_length=2048)
+
+
+@router.put("/model-providers/{vendor}/base-url")
+async def set_model_provider_address(vendor: str, body: ProviderAddressIn, current_user: OpsUser) -> dict[str, Any]:
+    """Set a local model server's address: its models are offered at once (empty turns it off)."""
+    identity = TenantPrincipal.from_user(current_user)
+    result: dict[str, Any] = await _call(_client().set_model_provider_address(identity, _vendor(vendor), body.base_url))
     return result
 
 

@@ -64,7 +64,7 @@ class LocalModels:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Callable[[], str],
         api_key: Callable[[], str],
         *,
         context_window: int,
@@ -79,30 +79,43 @@ class LocalModels:
         self._lock = threading.Lock()
         self._routes: dict[str, Route] = {}
         self._expires_at = 0.0
+        self._read_from = ""
+        self._error: str | None = None
 
     def routes(self) -> Mapping[str, Route]:
         """``local/<id>`` → route for each model the server lists (empty while it is down)."""
-        if not self._base_url:
+        base_url = self._base_url().strip().rstrip("/")
+        if not base_url:
             return {}
         with self._lock:
-            if self._now() >= self._expires_at:
+            if self._now() >= self._expires_at or base_url != self._read_from:
                 try:
-                    self._routes = self._read()
+                    self._routes, self._error = self._read(base_url), None
                     self._expires_at = self._now() + TTL_S
                 except Exception as exc:  # noqa: BLE001 — any failure: no local models for a while
                     logger.warning("the local model server's list could not be read: %s", exc)
-                    self._routes = {}
+                    self._routes, self._error = {}, _said(exc)
                     self._expires_at = self._now() + FAILURE_TTL_S
+                self._read_from = base_url
             return self._routes
 
-    def _read(self) -> dict[str, Route]:
+    def expire(self) -> None:
+        """Read the list again at the next ask (the server's address or key changed)."""
+        with self._lock:
+            self._expires_at = 0.0
+
+    def error(self) -> str | None:
+        """Why the last read of the server's list failed, or None (it was read, or never asked)."""
+        return self._error
+
+    def _read(self, base_url: str) -> dict[str, Route]:
         key = self._api_key().strip()
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         with (
             httpx.Client(
                 transport=self._transport, timeout=TIMEOUT_S, follow_redirects=False
             ) as client,
-            client.stream("GET", f"{self._base_url}/models", headers=headers) as response,
+            client.stream("GET", f"{base_url}/models", headers=headers) as response,
         ):
             response.raise_for_status()
             body = bytearray()
@@ -125,3 +138,14 @@ class LocalModels:
             )
             routes[LOCAL_PREFIX + model_id] = local_route(model_id, window)
         return routes
+
+
+def _said(exc: Exception) -> str:
+    """A read's failure as a person reads it: refused, unreachable, or not a model list."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"the server answered HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "the server did not answer in time"
+    if isinstance(exc, httpx.HTTPError):
+        return "the server could not be reached"
+    return str(exc)[:200] or type(exc).__name__
