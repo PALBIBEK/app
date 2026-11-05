@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from supervisor.gateway.providers.base import Wire
+from supervisor.gateway.providers.http import ApiKey
 from supervisor.gateway.providers.openai_compat import OpenAICompatProvider
 
 
@@ -17,7 +18,7 @@ class OpenRouterChatProvider(OpenAICompatProvider):
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: ApiKey,
         base_url: str = "https://openrouter.ai/api/v1",
         http_referer: str = "https://prime.local",
         app_title: str = "prime-model-gateway",

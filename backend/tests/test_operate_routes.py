@@ -246,3 +246,36 @@ async def test_supervisor_errors_keep_their_status(db_session, owner, settings, 
     async with _api(db_session, owner, settings, monkeypatch, handler, seen) as api:
         r = await api.get("/api/v1/usage", params={"since_ms": 0, "until_ms": 10**12})
         assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_model_provider_keys_are_for_admins_and_pass_through(db_session, make_user, settings, monkeypatch):
+    vendor = {"id": "deepseek", "configured": True, "source": "set", "ready": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        if (method, path) == ("GET", "/v1/model-providers"):
+            return httpx.Response(200, json={"editable": True, "vendors": [vendor]})
+        if (method, path) in (("PUT", "/v1/model-providers/deepseek/key"), ("DELETE", "/v1/model-providers/deepseek/key")):
+            return httpx.Response(200, json=vendor)
+        if path == "/v1/model-providers/openai/key":
+            return httpx.Response(400, json={"detail": {"code": "KEY_REFUSED", "message": "OpenAI refused this key"}})
+        return httpx.Response(404)
+
+    member = await make_user(email="m@example.com")
+    admin = await make_user(email="a@example.com", role="admin")
+    seen: list[httpx.Request] = []
+    async with _api(db_session, member, settings, monkeypatch, handler, seen) as api:
+        assert (await api.get("/api/v1/model-providers")).status_code == 403
+        assert (await api.put("/api/v1/model-providers/deepseek/key", json={"key": "sk"})).status_code == 403
+    assert seen == []
+    async with _api(db_session, admin, settings, monkeypatch, handler, seen) as api:
+        assert (await api.get("/api/v1/model-providers")).json() == {"editable": True, "vendors": [vendor]}
+        put = await api.put("/api/v1/model-providers/deepseek/key", json={"key": "sk-d"})
+        assert put.json() == vendor and "sk-d" not in put.text
+        assert json.loads(seen[-1].content) == {"key": "sk-d"}
+        assert (await api.delete("/api/v1/model-providers/deepseek/key")).json() == vendor
+        refused = await api.put("/api/v1/model-providers/openai/key", json={"key": "bad"})
+        assert refused.status_code == 400 and refused.json()["detail"]["message"] == "OpenAI refused this key"
+        assert (await api.put("/api/v1/model-providers/deepseek/key", json={"key": ""})).status_code == 422
+        assert (await api.put("/api/v1/model-providers/Bad..x/key", json={"key": "k"})).status_code == 404
