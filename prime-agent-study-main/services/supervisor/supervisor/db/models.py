@@ -48,6 +48,9 @@ class SessionRow(Base):
     harness_version: Mapped[str] = mapped_column(Text, nullable=False, default="")
     manifest: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     composition_pins: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The model the session's owner chose (at creation or with a message); null: the model
+    # its composition pins (supervisor.session.manager_base.session_model).
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     last_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=-1)
     # Memory: who the session belongs to, the exact agent version it pins, and which

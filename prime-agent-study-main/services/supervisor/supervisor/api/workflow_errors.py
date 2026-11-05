@@ -27,6 +27,7 @@ _STATUS: Final[dict[str, int]] = {
     "GrantDenied": 403,
     "NotScopeMember": 403,
     "HarnessVersionMismatch": 422,
+    "ModelNotOffered": 422,
     "UnknownHarness": 422,
     # Absent, deprecated or another tenant's: one answer, as the catalog API gives (F13).
     "HarnessNotOffered": 404,
@@ -85,6 +86,8 @@ def _detail(err: SessionCommandError) -> Any:
             return {"reason": "quota_exceeded", "message": message}
         case "HarnessVersionMismatch":
             return {"code": err.details.get("code", err.kind), "message": message}
+        case "ModelNotOffered":
+            return {"reason": "model_not_offered", "message": message}
         case "SessionTerminated" | "SessionClosed":
             return "session terminated"
         case "ToolOutcomeUnknown":

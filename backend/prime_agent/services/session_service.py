@@ -123,6 +123,7 @@ class SessionService:
                 composition_id=pin.composition_id,
                 composition_digest=pin.composition_digest,
                 scope_id=request.scope_id,
+                model=request.model,
             )
         except AiUpstreamError as exc:
             raise HTTPException(
@@ -304,6 +305,7 @@ class SessionService:
                 text=body.content,
                 command_id=command_id,
                 steer=body.steer,
+                model=body.model,
             )
         except AiUpstreamError as exc:
             code = "AI_UPSTREAM_ERROR"
@@ -803,11 +805,15 @@ class SessionService:
             return self._to_response(link)
         if self._apply(link, detail):
             await db.commit()
-        is_busy = detail.get("is_busy")
-        return self._to_response(link, is_busy=is_busy if isinstance(is_busy, bool) else None)
+        is_busy, model = detail.get("is_busy"), detail.get("model")
+        return self._to_response(
+            link,
+            is_busy=is_busy if isinstance(is_busy, bool) else None,
+            model=model if isinstance(model, str) else None,
+        )
 
     def _to_response(
-        self, link: SessionLink, *, is_busy: bool | None = None
+        self, link: SessionLink, *, is_busy: bool | None = None, model: str | None = None
     ) -> SessionResponse:
         return SessionResponse(
             id=link.id,
@@ -823,6 +829,7 @@ class SessionService:
             total_cost=float(link.total_cost or 0.0),
             last_seq=int(link.last_seq or 0),
             is_busy=is_busy,
+            model=model,
             created_at=link.created_at,
             updated_at=link.updated_at,
             pin=SessionPinSnapshot(

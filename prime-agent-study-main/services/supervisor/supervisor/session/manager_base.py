@@ -157,11 +157,13 @@ async def runs_open(db: Any, session_ids: Sequence[str]) -> set[str]:
     return set(open_runs)
 
 
-def session_model(manifest: HarnessManifest, pins: SessionPins | None) -> str | None:
-    """The model a session names on every call: the composition's pinned route wins
-    over the harness manifest's default model."""
+def session_model(
+    manifest: HarnessManifest, pins: SessionPins | None, chosen: str | None = None
+) -> str | None:
+    """The model a session names on every call: the one its owner chose, else the
+    composition's pinned route, else the harness manifest's default model."""
     route = pins.model_route if pins is not None else None
-    return route or manifest.model
+    return chosen or route or manifest.model
 
 
 def _summarizer_model(profile: MemoryProfile | None) -> str | None:
@@ -264,6 +266,10 @@ class SessionManagerBase:
         self._logins = BrowserLogins(vault) if vault is not None else None
         self._tenant_of: dict[str, str] = {}  # live sessions and brains: whose secrets
         self._key_mints: dict[str, Callable[[], MintedVirtualKey]] = {}
+        # The models each session's key is minted for: [its model, its summarizer's], either
+        # None. Read when a key is minted, so a key minted after a model change covers it.
+        self._key_models: dict[str, list[str | None]] = {}
+        self._key_tokens: dict[str, str] = {}  # the key this worker calls with, by session
         self._key_expiry: dict[str, float] = {}  # this worker's key, by session: when it expires
         # Brains of sessions whose sandbox another worker holds (model steps run anywhere).
         self._brains: OrderedDict[str, Any] = OrderedDict()
@@ -318,9 +324,10 @@ class SessionManagerBase:
         return load_pinned_memory_profile(pins, self._composition_catalog)
 
     def session_model(self, row: SessionRow) -> str | None:
-        """The model a session's calls name: its pinned route, else its manifest's model."""
+        """The model a session's calls name: the one its owner chose, else its pinned route,
+        else its manifest's model."""
         pins = SessionPins.from_dict(dict(row.composition_pins)) if row.composition_pins else None
-        return session_model(self._pinned_manifest(row), pins)
+        return session_model(self._pinned_manifest(row), pins, row.model)
 
     def strict_posture(self, row: SessionRow) -> bool:
         """A session pinned to a read-only sandbox gets no outward capabilities (browser model)."""
@@ -373,7 +380,7 @@ class SessionManagerBase:
                 pins,
                 self._composition_catalog,
                 session_id=session_id,
-                model=session_model(self._pinned_manifest(row), pins),
+                model=session_model(self._pinned_manifest(row), pins, row.model),
             )
             self._seams[session_id] = seams
             return seams

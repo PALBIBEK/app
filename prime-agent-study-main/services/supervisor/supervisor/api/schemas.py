@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SessionMemoryOptions(BaseModel):
@@ -28,6 +28,8 @@ class CreateSessionRequest(BaseModel):
     composition_digest: str | None = None
     scope_id: str | None = None
     memory: SessionMemoryOptions | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=255)
+    """A model (``GET /v1/models``) instead of the one the composition pins."""
 
 
 class CreateSessionResponse(BaseModel):
@@ -59,6 +61,8 @@ class SessionDetailResponse(BaseModel):
     message_count: int = 0
     is_busy: bool | None = None
     total_cost: float = 0.0
+    model: str | None = None
+    """The model the session's next run calls: its owner's choice, else the pinned one."""
 
 
 COMMAND_ID_MAX: int = 200
@@ -80,8 +84,17 @@ class PostMessageRequest(BaseModel):
     steer: bool = False
     """Sent while a run works: join that run at its next step (pi's steering) instead of
     waiting for it to end. Ignored when no run is working."""
+    model: str | None = Field(default=None, min_length=1, max_length=255)
+    """Run this model (``GET /v1/models``) from this message's run on. A run keeps the model
+    it began with, so a steering message cannot change it."""
 
     _text_no_nul = field_validator("text", "command_id")(_no_nul)
+
+    @model_validator(mode="after")
+    def _no_model_with_steer(self) -> PostMessageRequest:
+        if self.steer and self.model is not None:
+            raise ValueError("a steering message joins a run that keeps its model: send model without steer")
+        return self
 
 
 class PostMessageResponse(BaseModel):
