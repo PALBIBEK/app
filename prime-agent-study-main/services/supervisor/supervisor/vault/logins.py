@@ -10,7 +10,8 @@ the fill, in a process the model's code is not part of.
 The page holds the password once it is typed, and code the model writes can read a page,
 so every tool result is cleaned of the tenant's saved passwords before the journal (and so
 the model and every client) gets it: Hermes's model-egress boundary. Encoded copies
-(base64, reversed) pass it; what is closed is the password reaching the model as itself.
+(base64, reversed) pass it, as would a screenshot of a page showing it in clear (a
+password field shows dots); what is closed is the password reaching the model as itself.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlsplit
 
+from supervisor.seams.core.types import split_images, with_images
 from supervisor.vault.store import Owner, Vault
 
 if TYPE_CHECKING:
@@ -126,7 +128,9 @@ class BrowserLogins:
         secrets = [login.password for login in (await self.logins(tenant_id)).values() if len(login.password) >= MIN_REDACTED]
         if not secrets:
             return result
-        payload, error = _scrub(result.payload, secrets), _scrub(result.error, secrets)
+        text, images = split_images(result.payload)  # base64 is not text a password is in
+        payload = with_images(_scrub(text, secrets), images)
+        error = _scrub(result.error, secrets)
         if payload == result.payload and error == result.error:
             return result
         return replace(result, payload=payload, error=error)

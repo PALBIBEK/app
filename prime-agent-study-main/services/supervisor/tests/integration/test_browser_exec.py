@@ -6,6 +6,8 @@ returned."""
 from __future__ import annotations
 
 import asyncio
+import base64
+import importlib
 import threading
 from pathlib import Path
 
@@ -114,6 +116,26 @@ async def test_a_screenshot_is_saved_in_the_workspace(call: Call, tmp_path: Path
     path = Path(shot["output"])
     assert path.is_relative_to((tmp_path / "ws" / ".githi" / "browser" / "screenshots").resolve())
     assert path.read_bytes().startswith(b"\x89PNG")
+
+
+async def test_a_shown_screenshot_comes_back_with_the_result_as_an_image(call: Call, tmp_path: Path) -> None:
+    shown = await call(f"page.set_content({PAGE!r})\nshow_screenshot()\npage.set_content('<h1>later</h1>')\nshow_screenshot()\nshow_screenshot()")
+
+    (image,) = shown["images"][-1:]
+    data = base64.b64decode(image["data"])
+    assert image["mime_type"] == "image/jpeg" and data.startswith(b"\xff\xd8"), "a JPEG"
+    assert len(shown["images"]) == len(shown["screenshots"]) == 2, "the latest two of three"
+    assert (tmp_path / "ws" / shown["screenshots"][-1]).read_bytes() == data
+    assert len(data) < 100 * 1024, "a viewport's JPEG is small enough to show on every call"
+
+
+async def test_a_screenshot_too_large_to_show_stays_a_file(call: Call, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(importlib.import_module("supervisor.tools.builtin.browser_exec"), "MAX_SHOWN_BYTES", 1024)
+
+    shown = await call(f"page.set_content({PAGE!r})\nshow_screenshot(full=True)")
+
+    assert "images" not in shown, "over the bound"
+    assert shown["not_shown"][0].startswith(shown["screenshots"][0]) and "show the viewport" in shown["not_shown"][0]
 
 
 async def test_named_sessions_get_browsers_of_their_own(call: Call) -> None:

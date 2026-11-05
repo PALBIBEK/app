@@ -9,6 +9,9 @@ model what a person would read in a terminal; this does the same.
 Every result is bounded: what a tool returns is re-sent on every later step of the
 run, so an unbounded result is a cost on all of them, not once. The head and the tail
 are kept (a command's answer and a stack trace's last line live at the end).
+
+Images a result carries (a browser's screenshot) are not its text: ``tool_result_images``
+hands them over, to be shown to the model as images.
 """
 
 from __future__ import annotations
@@ -17,9 +20,17 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
+from supervisor.seams.core.types import split_images
 from supervisor.tools.truncate import cut_middle
 
-__all__ = ["MAX_RESULT_CHARS", "MAX_RESULT_LINES", "bound", "tool_result_failed", "tool_result_text"]
+__all__ = [
+    "MAX_RESULT_CHARS",
+    "MAX_RESULT_LINES",
+    "bound",
+    "tool_result_failed",
+    "tool_result_images",
+    "tool_result_text",
+]
 
 MAX_RESULT_CHARS: Final = 50 * 1024 + 1024
 MAX_RESULT_LINES: Final = 2000 + 16
@@ -133,6 +144,11 @@ def _payload(payload: Any) -> str:
     return _value(payload)
 
 
+def tool_result_images(result: Mapping[str, Any] | Any) -> list[dict[str, str]]:
+    """The images one journaled tool result shows the model (``{"mime_type", "data"}``)."""
+    return split_images(result.get("payload"))[1] if isinstance(result, Mapping) else []
+
+
 def tool_result_failed(result: Mapping[str, Any] | Any) -> bool:
     """Whether the model is told this result failed: the tool failed, or (pi's bash)
     the command exited non-zero or timed out."""
@@ -163,7 +179,7 @@ def tool_result_text(result: Mapping[str, Any] | Any, tool: str | None = None) -
         return bound(_value(result))
     if isinstance(result.get("text"), str):
         return bound(result["text"])
-    payload = result.get("payload")
+    payload, _ = split_images(result.get("payload"))
     ok = result.get("ok")
     if ok is False or (ok is None and result.get("error")):
         error = str(result.get("error") or "the tool failed")

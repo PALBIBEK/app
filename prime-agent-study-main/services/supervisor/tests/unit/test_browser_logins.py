@@ -113,3 +113,14 @@ async def test_a_changed_password_is_redacted_once_the_cache_forgets(vault: Vaul
 
     clean = await logins.redact("t1", ToolResult(ok=True, payload="N3w-pass-2026"))
     assert clean.payload == REDACTED
+
+
+async def test_a_results_images_are_not_scrubbed_as_text(vault: Vault) -> None:
+    """Base64 holds any short run of letters: replacing one would break the image."""
+    await vault.put(Owner.tenant("t1"), SHOP, json.dumps({"username": "ada", "password": "AAAA"}))
+    shot = {"mime_type": "image/jpeg", "data": "/9j/AAAA" * 10}
+    result = ToolResult(ok=True, payload={"output": "typed AAAA", "images": [shot]})
+
+    clean = await BrowserLogins(vault).redact("t1", result)
+
+    assert clean.payload == {"output": f"typed {REDACTED}", "images": [shot]}

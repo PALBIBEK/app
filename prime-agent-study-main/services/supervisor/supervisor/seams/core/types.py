@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,33 @@ class ToolResult:
     payload: Any = None
     error: str | None = None
     code: str | None = None
+
+
+RESULT_IMAGES: Final = "images"
+"""The key of a tool payload's images, shown to the model with the result (a list of
+``{"mime_type", "data"}``, ``data`` in base64). They are not the result's text: the text
+is written, bounded and scrubbed without them, and a model that sees images gets them as
+images (``supervisor.models.messages.ToolResultMessage.images``)."""
+
+
+def split_images(payload: Any) -> tuple[Any, list[dict[str, str]]]:
+    """``payload`` without its images, and its well-formed images; ``payload`` itself
+    when it has none."""
+    if not isinstance(payload, Mapping) or RESULT_IMAGES not in payload:
+        return payload, []
+    rest = {k: v for k, v in payload.items() if k != RESULT_IMAGES}
+    shown = payload[RESULT_IMAGES]
+    images = [
+        {"mime_type": image["mime_type"], "data": image["data"]}
+        for image in (shown if isinstance(shown, list) else ())
+        if isinstance(image, Mapping) and isinstance(image.get("mime_type"), str) and isinstance(image.get("data"), str)
+    ]
+    return rest, images
+
+
+def with_images(payload: Any, images: list[dict[str, str]]) -> Any:
+    """``payload`` (as ``split_images`` left it) with ``images`` again."""
+    return {**payload, RESULT_IMAGES: images} if images and isinstance(payload, Mapping) else payload
 
 
 @dataclass
@@ -109,6 +137,9 @@ class ChatMessage:
     # A tool result that failed: providers with a field for it (Anthropic's is_error)
     # are told, as pi tells them; chat completions has none and reads the text.
     is_error: bool = False
+    # Images shown with a user message or a tool result ({"mime_type", "data"}): read by
+    # the native transports; chat-completions callers (``to_wire``) send the text only.
+    images: list[dict[str, str]] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         """OpenAI chat-completions message. Tool calls may be ``{id, name, arguments}``."""

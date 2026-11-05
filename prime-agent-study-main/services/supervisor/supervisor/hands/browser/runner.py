@@ -15,7 +15,8 @@ in the call, where a stop can end it.
 What the code prints is the result. On stderr, after anything the code wrote there, one
 line starting with ``META_MARK`` carries what the tool reports besides: the page the call
 ended on, whether a fresh browser had to be started, the call's error, and what the
-browser's tabs reported since the previous call (dialogs, console errors, page errors).
+browser's tabs reported since the previous call (dialogs, console errors, page errors),
+and the screenshots the code asked to be shown with the result (``show_screenshot``).
 
 ``runner.py fill`` is the other way in, for ``browser_vault``: it types a saved login into
 the current tab. The login arrives in ``FILL_ENV`` from the supervisor, never in code the
@@ -54,6 +55,10 @@ MAX_REPORTED = 20
 FILL_ENV = "GITHI_BROWSER_FILL"
 """``{"origin": …, "targets": {"username"|"password"|"submit": ID or selector}, "values": {…}}``."""
 SNAPSHOT_ID = re.compile(r"\d+-\d+")
+SHOWN_QUALITY = 70
+"""JPEG quality of a screenshot shown to the model: legible text at a fraction of a PNG."""
+MAX_SHOWN = 2
+"""Screenshots one result shows, the latest: one is usually the page as it ended."""
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
 INTERNAL = ("chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://")
 
@@ -127,6 +132,8 @@ class Session:
             _prepare(page)
         self.context.on("page", _prepare)
         self.page = self._current()
+        self.shown: list[str] = []
+        """Screenshots to show with the result, as paths in the workspace folder."""
 
     def _current(self) -> Any:
         """The tab the previous call ended on, else the last real tab, else a new one."""
@@ -183,7 +190,7 @@ class Helpers:
 
     NAMES = (
         "new_tab", "goto_url", "wait_for_load", "page_info", "js", "cdp", "fill_input", "click_at_xy",
-        "capture_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
+        "capture_screenshot", "show_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
         "browser_events", "ensure_real_tab", "snapshot", "act", "settle",
     )
 
@@ -256,12 +263,17 @@ class Helpers:
 
     def capture_screenshot(self, path: str | None = None, full: bool = False) -> str:
         """Save a screenshot (in the workspace by default) and print its path."""
-        if path is None:
-            shots = WORKSPACE / "screenshots"
-            shots.mkdir(parents=True, exist_ok=True)
-            path = str(shots / f"shot-{time.strftime('%Y%m%d-%H%M%S')}-{time.monotonic_ns() % 10**6}.png")
+        path = path or _shot_path("shot", "png")
         self.session.page.screenshot(path=path, full_page=full)
         print(path)
+        return path
+
+    def show_screenshot(self, full: bool = False) -> str:
+        """Screenshot the tab (its viewport, or the whole page) to be shown, as an image,
+        with this call's result; its path in the workspace."""
+        path = _shot_path("shown", "jpg")
+        self.session.page.screenshot(path=path, type="jpeg", quality=SHOWN_QUALITY, full_page=full, scale="css")
+        self.session.shown.append(path)
         return path
 
     def list_tabs(self) -> list[dict[str, str]]:
@@ -337,6 +349,12 @@ def _load_agent_helpers(scope: dict[str, Any]) -> None:
     source = WORKSPACE / "agent_helpers.py"
     if source.exists():
         exec(compile(source.read_text(), str(source), "exec"), scope)  # noqa: S102 — the agent's own file
+
+
+def _shot_path(kind: str, suffix: str) -> str:
+    shots = WORKSPACE / "screenshots"
+    shots.mkdir(parents=True, exist_ok=True)
+    return str(shots / f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}-{time.monotonic_ns() % 10**6}.{suffix}")
 
 
 def _meta(**fields: Any) -> None:
@@ -416,7 +434,8 @@ def main() -> int:
         events: list[dict[str, Any]] = []
         with contextlib.suppress(Exception):
             events = session.reported()
-        _meta(started=session.started, url=url, error=failed, events=events)
+        shown = [str(Path(p).relative_to(WORKSPACE)) for p in session.shown[-MAX_SHOWN:]]
+        _meta(started=session.started, url=url, error=failed, events=events, shown=shown)
     return 1 if failed else 0
 
 

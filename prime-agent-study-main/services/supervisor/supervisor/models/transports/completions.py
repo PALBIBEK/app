@@ -17,6 +17,7 @@ from supervisor.models.messages import (
     AssistantMessage,
     Context,
     IdNormalizer,
+    Image,
     TextBlock,
     ThinkingBlock,
     Tool,
@@ -138,7 +139,11 @@ def convert_messages(context: Context, spec: ModelSpec, compat: ChatCompat) -> l
         params.append(
             {"role": "developer" if developer else "system", "content": context.system_prompt}
         )
+    shown: list[Image] = []  # the images of the tool results just sent
     for message in transform_messages(context.messages, spec, normalize_tool_call_id(spec)):
+        if shown and not isinstance(message, ToolResultMessage):
+            params.append(_tool_images(shown))
+            shown = []
         match message:
             case UserMessage(text, images) if images:
                 parts: list[Body] = [{"type": "text", "text": text}]
@@ -172,11 +177,23 @@ def convert_messages(context: Context, spec: ModelSpec, compat: ChatCompat) -> l
                 if entry["content"] is None and not calls:
                     continue
                 params.append(entry)
-            case ToolResultMessage(call_id, _, text, _):
+            case ToolResultMessage(call_id, _, text, _, images):
                 params.append(
                     {"role": "tool", "content": text or "(no tool output)", "tool_call_id": call_id}
                 )
+                shown += images
+    if shown:
+        params.append(_tool_images(shown))
     return params
+
+
+TOOL_IMAGES_TEXT = "Attached image(s) from tool result:"
+
+
+def _tool_images(images: list[Image]) -> Body:
+    """A tool message holds text only: its images follow the results, as pi sends them."""
+    parts: list[Body] = [{"type": "text", "text": TOOL_IMAGES_TEXT}]
+    return {"role": "user", "content": parts + [{"type": "image_url", "image_url": {"url": i.data_url}} for i in images]}
 
 
 def convert_tools(tools: tuple[Tool, ...], compat: ChatCompat) -> list[Body]:

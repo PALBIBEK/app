@@ -17,6 +17,7 @@ from supervisor.models.messages import (
     AssistantBlock,
     AssistantMessage,
     Context,
+    Image,
     TextBlock,
     ThinkingBlock,
     Tool,
@@ -217,13 +218,7 @@ def convert_messages(context: Context, spec: ModelSpec, control: Body | None) ->
                 blocks: list[Body] = (
                     [{"type": "text", "text": message.text}] if message.text.strip() else []
                 )
-                blocks += [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": i.mime_type, "data": i.data},
-                    }
-                    for i in message.images
-                ]
+                blocks += [_image(i) for i in message.images]
                 params.append({"role": "user", "content": blocks})
             elif message.text.strip():
                 params.append({"role": "user", "content": message.text})
@@ -236,11 +231,15 @@ def convert_messages(context: Context, spec: ModelSpec, control: Body | None) ->
             while i < len(messages) and isinstance(messages[i], ToolResultMessage):
                 result = messages[i]
                 assert isinstance(result, ToolResultMessage)
+                content: str | list[Body] = result.text
+                if result.images:
+                    text = [{"type": "text", "text": result.text}] if result.text.strip() else []
+                    content = text + [_image(i) for i in result.images]
                 results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": result.tool_call_id,
-                        "content": result.text,
+                        "content": content,
                         "is_error": result.is_error,
                     }
                 )
@@ -259,6 +258,10 @@ def convert_messages(context: Context, spec: ModelSpec, control: Body | None) ->
         ):
             last["content"][-1]["cache_control"] = control
     return params
+
+
+def _image(image: Image) -> Body:
+    return {"type": "image", "source": {"type": "base64", "media_type": image.mime_type, "data": image.data}}
 
 
 def _assistant_blocks(blocks: tuple[AssistantBlock, ...], spec: ModelSpec) -> list[Body]:

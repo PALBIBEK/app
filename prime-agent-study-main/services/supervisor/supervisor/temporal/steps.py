@@ -66,7 +66,11 @@ from supervisor.agent.runtimes.githi.classify import (
 )
 from supervisor.agent.runtimes.githi.loop import AgentLoop
 from supervisor.agent.runtimes.githi.prompt import in_pi_order
-from supervisor.agent.runtimes.githi.render import tool_result_failed, tool_result_text
+from supervisor.agent.runtimes.githi.render import (
+    tool_result_failed,
+    tool_result_images,
+    tool_result_text,
+)
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
 from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import BudgetSpec, RecoveryAction
@@ -268,7 +272,8 @@ def conversation(prior: list[dict[str, Any]], run: list[Any]) -> list[dict[str, 
                     "role": "tool",
                     "tool_call_id": event.tool_call_id,
                     "content": [
-                        {"type": "text", "text": tool_result_text(event.result, event.tool_name)}
+                        {"type": "text", "text": tool_result_text(event.result, event.tool_name)},
+                        *({"type": "image", **image} for image in tool_result_images(event.result)),
                     ],
                     # Read back by the provider layer as the result's error flag (pi's
                     # isError: a failed tool, or a command that exited non-zero).

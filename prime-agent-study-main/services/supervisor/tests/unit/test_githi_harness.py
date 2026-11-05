@@ -217,6 +217,28 @@ def test_a_restore_notice_reaches_the_model_after_the_round_it_happened_in() -> 
     assert [m["role"] for m in conversation([], later)][-2:] == ["user", "assistant"]
 
 
+def test_a_results_images_reach_the_model_as_images_not_as_its_text() -> None:
+    from supervisor.agent.events import Envelope, MessageEnd, ToolEnd
+    from supervisor.agent.runtimes.githi.loop import AgentLoop
+    from supervisor.temporal.steps import conversation
+
+    def env(seq: int, payload: object) -> Envelope:
+        return Envelope("s", seq, f"e{seq}", seq, "r1", None, payload)  # type: ignore[arg-type]
+
+    shot = {"mime_type": "image/jpeg", "data": "/9j/4AAQ" * 50}
+    result = {"ok": True, "payload": {"output": "seen", "screenshots": [".githi/browser/screenshots/s.jpg"], "images": [shot]}}
+    run = [
+        env(0, MessageEnd(role="assistant", content=[{"type": "tool_call", "id": "c1", "name": "browser_exec", "arguments": {}}])),
+        env(1, ToolEnd("c1", "browser_exec", result, is_error=False)),
+    ]
+
+    chat = AgentLoop.to_chat_messages(conversation([], run))
+
+    assert chat[-1].role == "tool" and chat[-1].images == [shot]
+    assert shot["data"] not in chat[-1].content and "seen" in chat[-1].content
+    assert tool_result_text(result) == tool_result_text({**result, "payload": {k: v for k, v in result["payload"].items() if k != "images"}})
+
+
 def test_a_tool_call_id_the_run_has_used_is_renamed_before_it_is_journalled() -> None:
     """Calls are journalled by id: a reused id ("call_0" each step) or none at all would
     be answered with an earlier call's result without running."""

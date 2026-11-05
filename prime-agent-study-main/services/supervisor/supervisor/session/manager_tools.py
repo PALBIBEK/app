@@ -28,6 +28,7 @@ from supervisor.seams import (
     ToolProvider,
     ToolResult,
 )
+from supervisor.seams.core.types import split_images, with_images
 from supervisor.seams.interfaces.tool_provider import needs_workspace
 from supervisor.session.errors import (
     SessionAwaitingApproval,
@@ -45,22 +46,38 @@ MAX_KEPT_RESULT_CHARS: Final = 128 * 1024
 """What a session keeps of one tool result (its journal, a direct call's answer). Well
 past what the model reads of it (``render.MAX_RESULT_CHARS``), and far within what one
 item of a workflow's history may hold (2 MB): a direct call's answer goes through it."""
+MAX_KEPT_IMAGE_CHARS: Final = 1024 * 1024
+"""What a session keeps of one result's images (base64), the latest first: with the text,
+still within a workflow history item."""
 
 
 def kept(result: ToolResult) -> ToolResult:
     """``result`` within ``MAX_KEPT_RESULT_CHARS``: a larger payload (a tool that does not
     bound its own output, an MCP server's) is kept as its text's head and tail, and so
-    is a larger error."""
-    payload, error = result.payload, result.error
+    is a larger error. Its images are measured apart, against ``MAX_KEPT_IMAGE_CHARS``."""
+    payload, images = split_images(result.payload)
+    error = result.error
     if payload is not None:
         text = payload if isinstance(payload, str) else json.dumps(payload, default=str, ensure_ascii=False)
         if len(text) > MAX_KEPT_RESULT_CHARS:
             payload = cut_middle(text, MAX_KEPT_RESULT_CHARS)
+    payload = with_images(payload, _latest_within(images, MAX_KEPT_IMAGE_CHARS))
     if error is not None:
         error = cut_middle(error, MAX_KEPT_RESULT_CHARS)
-    if payload is result.payload and error == result.error:
+    if payload == result.payload and error == result.error:
         return result
     return replace(result, payload=payload, error=error)
+
+
+def _latest_within(images: list[dict[str, str]], limit: int) -> list[dict[str, str]]:
+    """The latest of ``images`` whose data, together, is at most ``limit`` characters."""
+    shown: list[dict[str, str]] = []
+    for image in reversed(images):
+        limit -= len(image["data"])
+        if limit < 0:
+            break
+        shown.insert(0, image)
+    return shown
 
 
 @dataclass(frozen=True, slots=True)

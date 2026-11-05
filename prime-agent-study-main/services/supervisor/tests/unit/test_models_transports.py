@@ -13,9 +13,13 @@ from supervisor.models.catalog import admit
 from supervisor.models.client import ModelRouter, RoutedModelClient, completion
 from supervisor.models.endpoints import GatewayConfig
 from supervisor.models.messages import (
+    EARLIER_IMAGE_OMITTED,
+    IMAGE_OMITTED,
+    KEPT_TOOL_IMAGES,
     NO_RESULT,
     AssistantMessage,
     Context,
+    Image,
     TextBlock,
     ThinkingBlock,
     Tool,
@@ -23,13 +27,14 @@ from supervisor.models.messages import (
     ToolResultMessage,
     UserMessage,
     context_from_chat,
+    estimate_context_tokens,
     transform_messages,
 )
 from supervisor.models.registry import resolve_builtin
 from supervisor.models.spec import ModelSpec, WireApi
 from supervisor.models.transports import ModelCallError, RequestOptions, WireCall
 from supervisor.models.transports.anthropic import call_messages
-from supervisor.models.transports.completions import call_completions
+from supervisor.models.transports.completions import TOOL_IMAGES_TEXT, call_completions
 from supervisor.models.transports.responses import call_responses
 from supervisor.seams.core.types import ChatMessage
 
@@ -754,6 +759,118 @@ def test_chat_history_becomes_a_context_with_native_parts() -> None:
     assert result == ToolResultMessage("c1", "read", '{"ok": false, "error": "no"}', is_error=True)
     assert note == UserMessage("a memory note")
     assert context.tools == (Tool("read", "d", {"type": "object"}),)
+
+
+# -- images in tool results (a browser's screenshot) -------------------------------
+
+SHOT = Image("image/jpeg", "/9j/4AAQSkZJRg==")
+
+
+def _looked(*results: ToolResultMessage) -> tuple[Any, ...]:
+    """A turn that called a tool for each result, then the results."""
+    calls = tuple(ToolCallBlock(r.tool_call_id, r.tool_name, {}) for r in results)
+    return (UserMessage("look"), AssistantMessage(calls, model="other/model"), *results)
+
+
+def test_anthropic_shows_a_tool_results_images_inside_the_result() -> None:
+    spec = resolve_builtin("claude-opus-5")
+    assert spec is not None
+    upstream = Upstream(event_stream(ANTHROPIC_STREAM))
+    history = _looked(ToolResultMessage("toolu_1", "browser_exec", "the page", images=(SHOT,)))
+
+    call_messages(call(spec, upstream, Context(messages=history), cache_retention="none"))
+
+    assert upstream.body["messages"][-1]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+                {"type": "text", "text": "the page"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": SHOT.data}},
+            ],
+            "is_error": False,
+        }
+    ]
+
+
+def test_responses_shows_a_tool_results_images_in_its_output() -> None:
+    spec = resolve_builtin("gpt-5.5")
+    assert spec is not None
+    upstream = Upstream(event_stream(RESPONSES_STREAM))
+    history = _looked(ToolResultMessage("call_1", "browser_exec", "the page", images=(SHOT,)))
+
+    call_responses(call(spec, upstream, Context(messages=history)))
+
+    output = next(i for i in upstream.body["input"] if i.get("type") == "function_call_output")
+    assert output["output"] == [
+        {"type": "input_text", "text": "the page"},
+        {"type": "input_image", "detail": "auto", "image_url": SHOT.data_url},
+    ]
+
+
+def test_chat_completions_shows_the_images_of_a_run_of_results_after_it() -> None:
+    """A tool message holds only text: one user message after the results carries their
+    images, and the next turn follows it."""
+    spec = gateway_spec("mixed", supports_vision=True)
+    upstream = Upstream(event_stream(CHAT_STREAM))
+    history = (
+        *_looked(
+            ToolResultMessage("call_1", "browser_exec", "first", images=(SHOT,)),
+            ToolResultMessage("call_2", "read", "second"),
+        ),
+        AssistantMessage((TextBlock("seen"),), model="other/model"),
+    )
+
+    call_completions(call(spec, upstream, Context(messages=history)))
+
+    roles = [m["role"] for m in upstream.body["messages"]]
+    assert roles == ["user", "assistant", "tool", "tool", "user", "assistant"]
+    assert upstream.body["messages"][4]["content"] == [
+        {"type": "text", "text": TOOL_IMAGES_TEXT},
+        {"type": "image_url", "image_url": {"url": SHOT.data_url}},
+    ]
+
+
+def test_a_model_that_does_not_see_images_is_told_one_was_left_out() -> None:
+    spec = gateway_spec("mixed")
+    upstream = Upstream(event_stream(CHAT_STREAM))
+    history = _looked(ToolResultMessage("call_1", "browser_exec", "the page", images=(SHOT,)))
+
+    call_completions(call(spec, upstream, Context(messages=history)))
+
+    assert upstream.body["messages"][-1]["content"] == f"the page\n{IMAGE_OMITTED}"
+    assert SHOT.data not in json.dumps(upstream.body)
+
+
+def test_only_the_latest_tool_images_are_shown_again() -> None:
+    spec = resolve_builtin("claude-opus-5")
+    assert spec is not None
+    results = [ToolResultMessage(f"c{n}", "browser_exec", f"step {n}", images=(SHOT,)) for n in range(5)]
+    history = [m for r in results for m in _looked(r)]
+
+    shown = [m for m in transform_messages(history, spec) if isinstance(m, ToolResultMessage)]
+
+    assert [bool(m.images) for m in shown] == [False, False, True, True, True]
+    assert sum(len(m.images) for m in shown) == KEPT_TOOL_IMAGES
+    assert shown[0].text == f"step 0\n{EARLIER_IMAGE_OMITTED}"
+
+
+def test_chat_images_reach_the_context_and_count_toward_its_size() -> None:
+    image = {"mime_type": SHOT.mime_type, "data": SHOT.data}
+    context = context_from_chat(
+        [
+            ChatMessage("user", "what is this", images=[image]),
+            ChatMessage("assistant", "", tool_calls=[{"id": "c1", "name": "browser_exec", "arguments": {}}]),
+            ChatMessage("tool", "the page", tool_call_id="c1", images=[image]),
+        ],
+        [],
+    )
+    user, _, result = context.messages
+
+    assert user == UserMessage("what is this", (SHOT,))
+    assert result == ToolResultMessage("c1", "browser_exec", "the page", images=(SHOT,))
+    without = replace(context, messages=(UserMessage("what is this"), context.messages[1], replace(result, images=())))
+    assert estimate_context_tokens(context) - estimate_context_tokens(without) >= 2 * 1000
 
 
 # -- the routed client ------------------------------------------------------------

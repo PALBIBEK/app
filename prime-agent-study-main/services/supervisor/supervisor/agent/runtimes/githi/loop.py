@@ -240,13 +240,15 @@ class AgentLoop:
         for m in messages:
             content = m.get("content")
             if isinstance(content, list):
-                text = "".join(
-                    str(part.get("text", ""))
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
+                parts = [p for p in content if isinstance(p, dict)]
+                text = "".join(str(p.get("text", "")) for p in parts if p.get("type") == "text")
             else:
-                text = str(content or "")
+                parts, text = [], str(content or "")
+            images = [
+                {"mime_type": str(p["mime_type"]), "data": str(p["data"])}
+                for p in parts
+                if p.get("type") == "image" and p.get("mime_type") and p.get("data")
+            ]
             out.append(
                 ChatMessage(
                     role=str(m.get("role") or "user"),
@@ -256,6 +258,7 @@ class AgentLoop:
                     parts=m.get("parts") or None,
                     model=m.get("model"),
                     is_error=bool(m.get("is_error")),
+                    images=images or None,
                 )
             )
         return out
