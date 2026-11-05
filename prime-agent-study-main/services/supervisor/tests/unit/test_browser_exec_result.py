@@ -147,3 +147,23 @@ async def test_the_browser_tool_set_is_the_coding_tools_and_the_browser_tools() 
 
     assert set(browser) == set(coding) | BROWSER_TOOLS
     assert all(browser[name] == coding[name] for name in coding), "a coding tool's definition drifted"
+
+
+async def test_the_shipped_browser_agent_reaches_the_web_and_is_told_how_to_browse() -> None:
+    """Its sandbox has a Chromium and the open web (without a network the browser reaches
+    no site), and its prompt is the browser pack's."""
+    from supervisor.catalog.core.types import NetworkMode
+    from supervisor.catalog.services.publish_checks import _check_network
+    from supervisor.catalog.storage.converters import composition_from_dict, prompt_pack_from_dict, sandbox_profile_from_dict
+
+    harness = Path(__file__).resolve().parents[4] / "harness"
+    read = lambda kind, name: json.loads((harness / kind / f"{name}.json").read_text())  # noqa: E731
+    agent = composition_from_dict(read("compositions", "githi-browser-v1"))
+    profile = sandbox_profile_from_dict(read("sandbox_profiles", agent.sandbox_profile.id))
+    prompt = prompt_pack_from_dict(read("prompt_packs", agent.prompt_pack.id))
+
+    assert profile.network is not None and profile.network.mode is NetworkMode.OPEN
+    assert profile.browser == "sandbox-chromium" and "browser" in (profile.image_digest or "")
+    _check_network(profile.name, profile)  # what publishing it checks
+    text = " ".join(s.text for s in prompt.sections)
+    assert prompt.persona == "browser" and "browser_vault" in text and "snapshot()" in text

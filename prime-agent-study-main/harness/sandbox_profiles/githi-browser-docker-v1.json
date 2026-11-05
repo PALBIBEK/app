@@ -1,12 +1,16 @@
 {
   "approval_default": "ask",
-  "digest": "sha256:69eaead38c21cb5dfa3b05fe98de675adc79f4db8b2b7f5802494d180945b0e8",
+  "browser": "sandbox-chromium",
+  "digest": "sha256:7f13acdef4c8130c0de12adf01aba9cd7739ea577272d4fe2abbd23ebad93c84",
   "file_effects": "workspace_write",
   "image_digest": "githi-browser-sandbox:1.56.0",
   "name": "githi-browser-docker-v1",
+  "network": {
+    "mode": "open"
+  },
   "protocol_version": 1,
   "provider": "local_docker",
-  "semver": "1.1.0",
+  "semver": "1.2.0",
   "status": "offered",
   "sticky_eligible": true
 }

@@ -79,8 +79,24 @@ def learned_text(notes: list[LearnedNote]) -> str:
     return "Learnt from earlier runs:\n" + "\n".join(f"- {n.text}" for n in notes)
 
 
+BROWSER_TOOLS = frozenset({"browser_exec", "browser_vault"})
+"""The tools that drive the session's browser (the supervisor's ``hands.browser.BROWSER_TOOLS``)."""
+
+
+class NetworkSpec(BaseModel):
+    """What the sandbox may reach: nothing, the open web, or only ``hosts`` (the
+    supervisor's ``NetworkAccess``). Its provider enforces it; the supervisor refuses, at
+    publish, one the provider cannot enforce or hosts that are not host names."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["none", "open", "allow"] = "none"
+    hosts: list[str] = Field(default_factory=list, max_length=32)
+
+
 class SandboxSpec(BaseModel):
-    """Where the agent's commands run and what they may touch, and when the sandbox lives."""
+    """Where the agent's commands run and what they may touch, when the sandbox lives, what
+    it may reach, and where the browser tools find a browser."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +109,10 @@ class SandboxSpec(BaseModel):
     idle_stop_s: int | None = Field(default=None, ge=0, le=86_400)
     """Stop it after this long unused (its files saved; the next tool call restores them);
     0 never. None: the platform's (15 minutes)."""
+    network: NetworkSpec | None = None
+    """None: the provider's default (nothing, for Docker)."""
+    browser: Literal["sandbox-chromium", "remote-cdp"] | None = None
+    """For the browser tools: a Chromium in the sandbox (None too), or a hosted one over CDP."""
 
 
 class MemorySpec(BaseModel):
@@ -158,7 +178,7 @@ class HarnessManifest(BaseModel):
         if missing := sorted(set(self.policy.require_approval) - set(self.tools)):
             raise ValueError(f"policy.require_approval names tools the harness does not have: {', '.join(missing)}")
         if self.sandbox.provider == "none" and self.tools:
-            needs = {"bash", "edit", "write", "read", "ls", "grep", "git_commit"} & set(self.tools)
+            needs = {"bash", "edit", "write", "read", "ls", "grep", "git_commit", *BROWSER_TOOLS} & set(self.tools)
             if needs:
                 raise ValueError(f"sandbox.provider 'none' cannot run workspace tools: {', '.join(sorted(needs))}")
         return self

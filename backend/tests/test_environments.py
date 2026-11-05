@@ -22,6 +22,11 @@ DOCKER = {"provider": "local_docker", "file_effects": "workspace_write", "approv
           "start": "with_run", "idle_stop_s": 600}
 
 
+def _set(sandbox: dict) -> dict:
+    """A sandbox's settings without the optional ones left unset (shown as null)."""
+    return {k: v for k, v in sandbox.items() if v is not None}
+
+
 async def test_an_environment_is_the_sandbox_of_every_harness_that_names_it(db_session, owner, monkeypatch):
     first, second = await _harness(db_session, owner, "alpha"), await _harness(db_session, owner, "beta")
     supervisor = FakeSupervisor()
@@ -33,7 +38,7 @@ async def test_an_environment_is_the_sandbox_of_every_harness_that_names_it(db_s
             draft = (await api.get(f"/api/v1/harnesses/{h.id}/manifest")).json()["manifest"]
             saved = await api.put(f"/api/v1/harnesses/{h.id}/manifest", json=draft | {"environment_id": env["id"]})
             assert saved.status_code == 200, saved.text
-            assert saved.json()["manifest"]["sandbox"] == DOCKER, "the environment's settings are the sandbox"
+            assert _set(saved.json()["manifest"]["sandbox"]) == DOCKER, "the environment's settings are the sandbox"
 
         published = await api.post(f"/api/v1/harnesses/{first.id}/publish")
         assert published.status_code == 200, published.text
@@ -48,8 +53,8 @@ async def test_an_environment_is_the_sandbox_of_every_harness_that_names_it(db_s
     sandbox_body = next(body for kind, body in supervisor.calls if kind == "sandbox_profile")
     assert (sandbox_body["start"], sandbox_body["idle_stop_s"]) == ("with_run", 600), "copied into the release"
     assert [(u["name"], u["published"]) for u in listed[0]["used_by"]] == [("alpha", True), ("beta", False)]
-    assert put.status_code == 200 and put.json()["sandbox"] == changed
-    assert view["manifest"]["sandbox"] == changed and view["unpublished_changes"] is True
+    assert put.status_code == 200 and _set(put.json()["sandbox"]) == changed
+    assert _set(view["manifest"]["sandbox"]) == changed and view["unpublished_changes"] is True
     assert refused.status_code == 409 and "2 harness" in refused.json()["detail"]
 
 
