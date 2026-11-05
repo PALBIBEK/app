@@ -114,3 +114,29 @@ async def test_an_abort_ends_the_wait(env: Env, model: Callable[..., ScriptedGat
 
     assert time.monotonic() - started < 3.5
     assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+
+
+UNSET = '{"detail": {"error": {"code": "PROVIDER_UNCONFIGURED", "vendor": "anthropic", "message": "Anthropic has no API key: an admin can add it in Policies & secrets"}}}'
+
+
+def test_a_model_whose_provider_is_not_set_up_is_said_plainly_and_not_retried() -> None:
+    unset = ModelGatewayError(424, UNSET)
+
+    assert (unset.code, unset.reason) == ("PROVIDER_UNCONFIGURED", "Anthropic has no API key: an admin can add it in Policies & secrets")
+    assert not is_retryable(unset)
+    assert ModelGatewayError(502, "bad gateway").code is None
+
+
+async def test_a_run_on_a_model_whose_provider_is_not_set_up_ends_at_once_saying_why(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    model(errors_first=[ModelGatewayError(424, UNSET)])
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.submit(sid, Message("c1", "hello"))
+        events = await env.wait_for(state, sid, run_ended())
+
+    (error,) = payloads(events, ErrorEvent)
+    assert (error.error_class, error.detail) == ("PROVIDER_UNCONFIGURED", "Anthropic has no API key: an admin can add it in Policies & secrets")
+    assert not payloads(events, ModelRetry), "asking again changes nothing until someone adds the key"

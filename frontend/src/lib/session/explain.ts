@@ -58,3 +58,22 @@ export function clip(text: string, max = 1200): string {
   const half = Math.floor(max / 2);
   return `${text.slice(0, half)}\n… ${text.length - max} more characters …\n${text.slice(-half)}`;
 }
+
+/** Run errors a person fixes by setting a model provider up (the supervisor's
+ * `SETUP_ERRORS`): a vendor without a key, a local server not set up or not answering. */
+export const SETUP_ERRORS: ReadonlySet<string> = new Set(['PROVIDER_UNCONFIGURED', 'LOCAL_UNREACHABLE']);
+
+const RUN_ERRORS: Record<string, string> = {
+  TurnInterrupted: 'The run was interrupted by a worker failure. Send your message again to carry on.',
+  BudgetExceeded: 'The run stopped: it reached its spending limit.',
+  ModelUnavailable: 'The model’s provider kept failing, so the run stopped. Try again, or pick another model.',
+};
+
+/** A run's error (an `error` event's data) as the chat says it, with its class. */
+export function explainRunError(data: Record<string, unknown>): { text: string; code: string | null } {
+  const code = typeof data.error_class === 'string' ? data.error_class : null;
+  const detail = [data.detail, data.message, data.error].find((v): v is string => typeof v === 'string' && v.trim() !== '');
+  if (code && SETUP_ERRORS.has(code) && detail) return { text: detail.replace(/: an admin can add it in Policies & secrets$/, ''), code };
+  if (code && RUN_ERRORS[code]) return { text: RUN_ERRORS[code], code };
+  return { text: detail ? clip(detail, 300) : code ?? 'The run failed.', code };
+}

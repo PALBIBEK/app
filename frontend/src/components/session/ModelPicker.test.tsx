@@ -1,13 +1,13 @@
 /**
  * The model picker offers what can run now, by vendor; keeps the session's own model listed
- * when it is not offered; and points to Settings when a vendor is not ready.
+ * when it is not offered; and says which vendors cannot run yet, why, and who can fix it.
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModelChoices } from '@/lib/api/types/model.types';
 
-import { groupByVendor, ModelPicker, SETTINGS_HREF } from './ModelPicker';
+import { groupByVendor, ModelPicker, SETTINGS_HREF, SetupHint } from './ModelPicker';
 
 afterEach(cleanup);
 
@@ -22,6 +22,14 @@ const CHOICES: ModelChoices = {
     { id: 'deepseek', label: 'DeepSeek', ready: true },
     { id: 'zai', label: 'Z.ai (GLM)', ready: true },
     { id: 'local', label: 'Local', ready: true },
+  ],
+};
+
+const NO_LOCAL: ModelChoices = {
+  models: [CHOICES.models[0]],
+  providers: [
+    { id: 'deepseek', label: 'DeepSeek', ready: true },
+    { id: 'local', label: 'Local', ready: false },
   ],
 };
 
@@ -53,9 +61,21 @@ describe('ModelPicker', () => {
   it('offers each model under its vendor, marking local ones', () => {
     const { select } = picker();
     const groups = within(select).getAllByRole('group');
-    expect(groups.map((g) => g.getAttribute('label'))).toEqual(['DeepSeek', 'Z.ai (GLM)', 'Local']);
+    expect(groups.map((g) => g.getAttribute('label'))).toEqual(['DeepSeek', 'Z.ai (GLM)', 'Local', 'Anthropic']);
     expect(within(groups[2]).getByRole('option').textContent).toBe('local/qwen3:8b (local)');
     expect(select.value).toBe('gateway/deepseek-flash');
+  });
+
+  it('lists a vendor that cannot run yet, disabled, saying why', () => {
+    const { select } = picker({ choices: { ...CHOICES, providers: [...CHOICES.providers.slice(0, 3), { id: 'local', label: 'Local', ready: false }] } });
+    const disabled = within(select)
+      .getAllByRole('option')
+      .filter((o) => (o as HTMLOptionElement).disabled)
+      .map((o) => [o.closest('optgroup')?.getAttribute('label'), o.textContent]);
+    expect(disabled).toEqual([
+      ['Anthropic', 'Not available: no API key'],
+      ['Local', 'Not available: no local server set up or answering'],
+    ]);
   });
 
   it('says which model was picked', () => {
@@ -70,11 +90,17 @@ describe('ModelPicker', () => {
     expect(within(select).getAllByRole('option')[0].textContent).toBe('echo (this session’s)');
   });
 
-  it('points to Settings while a vendor is not ready', () => {
-    picker();
-    const link = screen.getByRole('link', { name: 'More models in Settings' });
+  it('points an owner or admin to the model providers while a vendor cannot run', () => {
+    picker({ canManage: true });
+    const link = screen.getByRole('link', { name: 'Add model providers' });
     expect(link.getAttribute('href')).toBe(SETTINGS_HREF);
-    expect(link.getAttribute('title')).toBe('Not ready: Anthropic');
+    expect(link.getAttribute('title')).toBe('Not available yet: Anthropic');
+  });
+
+  it('tells anyone else to ask an admin, with no link they cannot use', () => {
+    picker({ choices: NO_LOCAL });
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText('More models: ask an admin')).toBeTruthy();
   });
 
   it('shows nothing before the choices are known, or when nothing can be picked', () => {
@@ -82,5 +108,16 @@ describe('ModelPicker', () => {
     expect(container.innerHTML).toBe('');
     render(<ModelPicker id="m2" value="" current={null} choices={{ models: [], providers: [] }} onChange={() => {}} />);
     expect(screen.queryByLabelText('Model')).toBeNull();
+  });
+});
+
+describe('SetupHint, under a run that could not use its model', () => {
+  it('links an owner or admin to the model providers, and tells anyone else whom to ask', () => {
+    render(<SetupHint canManage />);
+    expect(screen.getByRole('link', { name: 'Set up model providers' }).getAttribute('href')).toBe(SETTINGS_HREF);
+    cleanup();
+    render(<SetupHint canManage={false} />);
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText(/Ask an owner or admin to set it up/)).toBeTruthy();
   });
 });

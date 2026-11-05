@@ -3,7 +3,7 @@
  */
 
 import type { ChatMessage, SessionNoteView, ToolCallView, WireEvent } from '../api/types/session.types';
-import { explainToolResult, readToolResult } from './explain';
+import { explainRunError, explainToolResult, readToolResult } from './explain';
 import { noticeOf } from './subagents';
 
 export interface SessionViewState {
@@ -23,6 +23,8 @@ export interface SessionViewState {
   lastSeq: number;
   settled: boolean;
   error: string | None;
+  /** The last run error's class (`PROVIDER_UNCONFIGURED`: a model provider needs setting up). */
+  errorCode: string | null;
   awaitingApproval: boolean;
   /** A run is open (between run_start and run_end). */
   running: boolean;
@@ -64,6 +66,7 @@ export function createSessionViewState(): SessionViewState {
     lastSeq: -1,
     settled: false,
     error: null,
+    errorCode: null,
     awaitingApproval: false,
     running: false,
     runId: null,
@@ -243,7 +246,9 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       break;
     }
     case 'error': {
-      next.error = String(event.data.message ?? event.data.error ?? 'Session error');
+      const said = explainRunError(event.data);
+      next.error = said.text;
+      next.errorCode = said.code;
       break;
     }
     case 'hand_provisioned':
@@ -261,6 +266,7 @@ export function applyWireEvent(state: SessionViewState, event: WireEvent): Sessi
       next.runSteps = 0;
       next.settled = false;
       next.error = null;
+      next.errorCode = null;
       break;
     }
     case 'model_retry': {

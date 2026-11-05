@@ -43,6 +43,7 @@ from supervisor.gateway.providers.base import (
     ProviderRegistry,
     ProviderUnconfigured,
     UpstreamError,
+    UpstreamUnreachable,
     Wire,
 )
 from supervisor.gateway.routes import Route, RouteConfigError, RouteTable, route_view
@@ -497,7 +498,24 @@ def _dispatch(
             failure = exc
     if isinstance(failure, KeyError):
         raise gateway_error(500, "PROVIDER_MISSING", str(failure))
+    if (unusable := _unusable(failure)) is not None:
+        raise unusable
     raise gateway_error(502, "UPSTREAM_ERROR", str(failure) if failure else "upstream failed")
+
+
+def _unusable(failure: Exception | None) -> HTTPException | None:
+    """A route that cannot run until someone sets it up, as an error a person can act on (424:
+    asking again changes nothing, so callers do not retry it): a vendor without a key, a local
+    server without an address, or a local server that does not answer."""
+    vendor = VENDORS.get(getattr(failure, "vendor", None) or "")
+    if vendor is None:
+        return None
+    if isinstance(failure, ProviderUnconfigured):
+        what = "no local model server is set up" if vendor.address_settable else f"{vendor.label} has no API key"
+        return gateway_error(424, "PROVIDER_UNCONFIGURED", f"{what}: an admin can add it in Policies & secrets", vendor=vendor.id)
+    if isinstance(failure, UpstreamUnreachable) and vendor.address_settable:
+        return gateway_error(424, "LOCAL_UNREACHABLE", "the local model server is not answering", vendor=vendor.id)
+    return None
 
 
 def _charge(store: VirtualKeyStore, caller: Caller, cost: float) -> None:

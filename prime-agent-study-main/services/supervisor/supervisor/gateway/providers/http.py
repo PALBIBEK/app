@@ -9,7 +9,13 @@ from typing import Any
 
 import httpx
 
-from supervisor.gateway.providers.base import SSE, Body, ProviderUnconfigured, UpstreamError
+from supervisor.gateway.providers.base import (
+    SSE,
+    Body,
+    ProviderUnconfigured,
+    UpstreamError,
+    UpstreamUnreachable,
+)
 
 _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
@@ -68,7 +74,7 @@ class HttpUpstream:
 
     def post(self, path: str, body: Body, *, retries: int | None = None) -> Body | SSE:
         if (missing := self.missing()) is not None:
-            raise ProviderUnconfigured(f"{missing} is not configured on the gateway")
+            raise ProviderUnconfigured(f"{missing} is not configured on the gateway", vendor=self.vendor)
         attempts = 1 + max(0, self.retries if retries is None else retries)
         stream = body.get("stream") is True
         for attempt in range(attempts):
@@ -80,8 +86,8 @@ class HttpUpstream:
                 if attempt + 1 < attempts:
                     self._sleep(attempt, None)
                     continue
-                raise UpstreamError(
-                    f"{self.vendor} upstream unreachable: {type(exc).__name__}"
+                raise UpstreamUnreachable(
+                    f"{self.vendor} upstream unreachable: {type(exc).__name__}", vendor=self.vendor
                 ) from exc
             if response.is_success:
                 if stream:

@@ -87,7 +87,7 @@ def test_t3_wrong_token_401(client: TestClient) -> None:
 def test_t4_githi_without_openrouter_readyz_or_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4: githi without OpenRouter key → readyz 503 credentials and/or chat 502."""
+    """T4: githi without OpenRouter key → readyz 503 credentials and/or chat 424 (no key)."""
     configure_app(monkeypatch, openrouter_key="", openai_key="")
     with TestClient(app) as client:
         configure_app(monkeypatch, openrouter_key="", openai_key="")
@@ -100,8 +100,8 @@ def test_t4_githi_without_openrouter_readyz_or_chat(
                 "messages": [{"role": "user", "content": "ping"}],
             },
         )
-    # Documented: ready 503 (credentials) OR chat 502 (upstream / missing key).
-    assert ready.status_code == 503 or chat.status_code in (502, 503)
+    # Documented: ready 503 (credentials) OR chat 424 (missing key) / 502-503 (upstream).
+    assert ready.status_code == 503 or chat.status_code in (424, 502, 503)
     if ready.status_code == 503:
         assert ready.json().get("reason") in (
             "credentials",
@@ -113,6 +113,7 @@ def test_t4_githi_without_openrouter_readyz_or_chat(
         detail = chat.json().get("detail") or {}
         err = detail.get("error") if isinstance(detail, dict) else {}
         assert (err or {}).get("code") in (
+            "PROVIDER_UNCONFIGURED",
             "UPSTREAM_ERROR",
             "PROVIDER_MISSING",
             "AUTH_UNCONFIGURED",

@@ -27,15 +27,21 @@ type SSE = Iterator[bytes]
 
 
 class UpstreamError(Exception):
-    """The upstream call failed; ``status`` is the upstream HTTP status when there was one."""
+    """The upstream call failed; ``status`` is the upstream HTTP status when there was one;
+    ``vendor`` the provider's vendor id, when the failure is about the vendor itself."""
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, vendor: str | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.vendor = vendor
 
 
 class ProviderUnconfigured(UpstreamError):
-    """The provider's vendor credential is not set on the gateway."""
+    """The provider's vendor credential (or a local server's address) is not set on the gateway."""
+
+
+class UpstreamUnreachable(UpstreamError):
+    """The upstream did not answer at all (refused, timed out, no route), after its retries."""
 
 
 @dataclass(frozen=True, slots=True)
