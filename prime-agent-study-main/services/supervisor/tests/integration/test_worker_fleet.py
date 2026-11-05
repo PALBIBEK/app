@@ -60,8 +60,8 @@ async def test_a_worker_reports_its_slots_and_load_and_leaves_cleanly(
             await _until(api, lambda b: b["slots_busy"] == 0)
 
             metrics = (await api.get("/v1/ops/workers/metrics")).text
-            assert f'yal_worker_slots{{task_queue="{env.queue}"}} 3' in metrics
-            assert f'yal_workers_serving{{task_queue="{env.queue}"}} 1' in metrics
+            assert f'prime_worker_slots{{task_queue="{env.queue}"}} 3' in metrics
+            assert f'prime_workers_serving{{task_queue="{env.queue}"}} 1' in metrics
             stop.set()
             await beats
             gone = await _until(api, lambda b: not b["workers"])
@@ -84,7 +84,7 @@ async def test_without_workers_the_fleet_is_down_and_waiting_work_raises_a_backl
         metrics = (await api.get("/v1/ops/workers/metrics")).text
     await env.client.get_workflow_handle(workflow_id(sid)).terminate("test over")
     assert waiting["status"] == "down" and waiting["backlog"] >= 1 and waiting["backlog_age_s"] >= 1.0
-    assert "yal_workers_serving" in metrics and 'yal_task_queue_backlog{task_queue="nobody-' in metrics
+    assert "prime_workers_serving" in metrics and 'prime_task_queue_backlog{task_queue="nobody-' in metrics
 
 
 def _now() -> int:

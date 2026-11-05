@@ -56,16 +56,16 @@ def test_the_event_is_on_the_span_the_projector_exported(events: InMemoryLogReco
         proj.project(e)
     root = next(s for s in sink.spans if s.parent_span_id is None)
 
-    emit_evaluation(session_id="s-e", run_id=root.yal_run_id, name="answers", label="fail", value=0.0,
+    emit_evaluation(session_id="s-e", run_id=root.prime_run_id, name="answers", label="fail", value=0.0,
                     explanation="it guessed", source="judge", evaluator="judge:answers@v1")
     (record,) = _emitted(events)
     assert record.event_name == EVENT
-    assert (f"{record.trace_id:032x}", f"{record.span_id:016x}") == (root.yal_run_id, root.span_id)
+    assert (f"{record.trace_id:032x}", f"{record.span_id:016x}") == (root.prime_run_id, root.span_id)
     assert dict(record.attributes) == {
         "gen_ai.evaluation.name": "answers", "gen_ai.evaluation.score.value": 0.0,
         "gen_ai.evaluation.score.label": "fail", "gen_ai.evaluation.explanation": "it guessed",
-        "yal.evaluation.source": "judge", "yal.session.id": "s-e", "yal.run.id": root.yal_run_id,
-        "yal.evaluation.evaluator": "judge:answers@v1",
+        "prime.evaluation.source": "judge", "prime.session.id": "s-e", "prime.run.id": root.prime_run_id,
+        "prime.evaluation.evaluator": "judge:answers@v1",
     }
 
 
@@ -73,7 +73,7 @@ def test_a_run_id_that_is_not_a_trace_id_still_names_its_run(events: InMemoryLog
     emit_evaluation(session_id="s", run_id="r1", name="feedback", label="good", value=1.0, explanation=None,
                     source="person", evaluator="person")
     (record,) = _emitted(events)
-    assert not record.trace_id and record.attributes["yal.run.id"] == "r1"
+    assert not record.trace_id and record.attributes["prime.run.id"] == "r1"
     assert "gen_ai.evaluation.explanation" not in record.attributes, "only what there is"
 
 
@@ -86,7 +86,7 @@ async def test_checks_judges_and_people_each_emit_one(api: Api, events: InMemory
     await after_run(api.factory, JournalReader(api.factory), sid, "r1",
                     lambda s: FakeModelGatewayClient(assistant_text='{"verdict": "pass", "reason": "fine"}'))
     await api.client.put(f"/v1/sessions/{sid}/runs/r1/feedback", json={"good": False, "comment": "slow"}, headers=ALICE)
-    by = [(r.attributes["yal.evaluation.source"], r.attributes["gen_ai.evaluation.name"],
+    by = [(r.attributes["prime.evaluation.source"], r.attributes["gen_ai.evaluation.name"],
            r.attributes.get("gen_ai.evaluation.score.label")) for r in _emitted(events)]
     assert ("check", "tool_errors", "fail") in by
     assert by[-2:] == [("judge", "answers", "pass"), ("person", "feedback", "bad")]

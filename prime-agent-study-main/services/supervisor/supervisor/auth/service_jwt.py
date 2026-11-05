@@ -23,7 +23,7 @@ class ServiceJwtVerifier:
         self,
         *,
         secret: str,
-        audience: str = "yal-supervisor",
+        audience: str = "prime-supervisor",
         issuer: str = "prime-agent-api",
         algorithm: str = "HS256",
     ) -> None:

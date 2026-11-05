@@ -83,7 +83,7 @@ async def platform_metrics(request: Request) -> PlainTextResponse:
     responses: ResponseCounts | None = getattr(request.app.state, "responses", None)
     lines = list(
         counter_lines(
-            "yal_api_responses_total",
+            "prime_api_responses_total",
             "Responses this supervisor API sent, by status code.",
             responses.snapshot() if responses is not None else {},
         )

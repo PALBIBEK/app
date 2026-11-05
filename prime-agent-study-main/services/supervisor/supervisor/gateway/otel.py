@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 _provider: Any | None = None
 
 
-def setup_tracing(service_name: str = "yal-model-gateway") -> None:
+def setup_tracing(service_name: str = "prime-model-gateway") -> None:
     """Configure TracerProvider + OTLP exporter when ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set.
 
     Soft-fail: missing deps, bad endpoint, or export errors never raise — agent
@@ -29,7 +29,7 @@ def setup_tracing(service_name: str = "yal-model-gateway") -> None:
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
         from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
-        sample_ratio = float(os.environ.get("YAL_OTEL_SAMPLE_RATIO", "1.0"))
+        sample_ratio = float(os.environ.get("PRIME_OTEL_SAMPLE_RATIO", "1.0"))
         sample_ratio = max(0.0, min(1.0, sample_ratio))
         resource = Resource.create({"service.name": name})
         provider = TracerProvider(
@@ -40,7 +40,7 @@ def setup_tracing(service_name: str = "yal-model-gateway") -> None:
         provider.add_span_processor(
             BatchSpanProcessor(
                 exporter,
-                max_queue_size=int(os.environ.get("YAL_OTEL_MAX_QUEUE", "2048")),
+                max_queue_size=int(os.environ.get("PRIME_OTEL_MAX_QUEUE", "2048")),
                 max_export_batch_size=512,
                 schedule_delay_millis=5000,
                 export_timeout_millis=10000,

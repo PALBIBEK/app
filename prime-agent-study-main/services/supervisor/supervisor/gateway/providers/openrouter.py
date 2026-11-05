@@ -19,8 +19,8 @@ class OpenRouterChatProvider(OpenAICompatProvider):
         *,
         api_key: str,
         base_url: str = "https://openrouter.ai/api/v1",
-        http_referer: str = "https://yal.local",
-        app_title: str = "yal-model-gateway",
+        http_referer: str = "https://prime.local",
+        app_title: str = "prime-model-gateway",
         transport: httpx.BaseTransport | None = None,
         retries: int = 1,
     ) -> None:

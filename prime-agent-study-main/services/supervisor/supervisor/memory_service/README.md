@@ -1,6 +1,6 @@
-# yal-memory-service
+# prime-memory-service
 
-Independent durable **Memory Service** for the YAL agent platform (Tier 1 session log + Tier 2 semantic bank).
+Independent durable **Memory Service** for the PRIME agent platform (Tier 1 session log + Tier 2 semantic bank).
 
 - Imports nothing from the rest of `supervisor` (`tests/memory_store` checks it).
 

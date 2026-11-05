@@ -1,4 +1,4 @@
-"""YAL model-gateway — OpenAI-compat sibling service (no supervisor imports)."""
+"""PRIME model-gateway — OpenAI-compat sibling service (no supervisor imports)."""
 
 from __future__ import annotations
 

@@ -49,7 +49,7 @@ async def test_t8_chat_content_not_in_span_attributes(supervisor_stack) -> None:
     assert sink.spans, "expected projected spans to redact against"
 
     blob = span_attr_blob(
-        [s for s in sink.spans if s.yal_session_id == sid or s.yal_run_id == TRACE_ID]
+        [s for s in sink.spans if s.prime_session_id == sid or s.prime_run_id == TRACE_ID]
     )
     assert SECRET not in blob, (
         f"chat content leaked into span attributes/names: {SECRET!r} found in {blob[:500]}"
@@ -80,7 +80,7 @@ async def test_t8_chat_content_not_in_span_attributes(supervisor_stack) -> None:
             assert key not in attrs, f"forbidden chat attr {key!r} on span {s.name!r}"
             # also block nested-looking keys
         for key in attrs:
-            assert "content" not in str(key).lower() or key.startswith("yal."), (
+            assert "content" not in str(key).lower() or key.startswith("prime."), (
                 f"content-like attribute key forbidden: {key!r}"
             )
             val = attrs[key]

@@ -324,7 +324,7 @@ async def test_git_commit(host: ToolContext, tmp_path: Path) -> None:
     out = await _run("git_commit", host, message="it's done")
     assert out["committed"] is True, out
     assert (
-        await asyncio.to_thread(_git, tmp_path, "log", "--format=%s|%an") == "it's done|YAL agent"
+        await asyncio.to_thread(_git, tmp_path, "log", "--format=%s|%an") == "it's done|PRIME agent"
     )
 
 

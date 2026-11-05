@@ -60,11 +60,11 @@ async def test_t1_inbound_traceparent_seeds_journal_and_spans(
     run_spans = [
         s
         for s in sink.spans
-        if s.yal_session_id == sid
-        or (s.attributes or {}).get("yal.session.id") == sid
+        if s.prime_session_id == sid
+        or (s.attributes or {}).get("prime.session.id") == sid
     ]
-    assert run_spans, f"no spans for session {sid}; got sessions={[s.yal_session_id for s in sink.spans]}"
+    assert run_spans, f"no spans for session {sid}; got sessions={[s.prime_session_id for s in sink.spans]}"
     for s in run_spans:
-        assert s.yal_run_id == TRACE_ID, (
-            f"span {s.name!r} yal_run_id={s.yal_run_id!r} must equal inbound trace_id"
+        assert s.prime_run_id == TRACE_ID, (
+            f"span {s.name!r} prime_run_id={s.prime_run_id!r} must equal inbound trace_id"
         )

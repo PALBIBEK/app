@@ -63,7 +63,7 @@ class Keyring:
             if deployment in _STRICT_ENVS:
                 raise VaultKeyError("VAULT_KEYS must be set in production and staging")
             logger.warning("VAULT_KEYS is not set: using the development vault key")
-            dev = hashlib.sha256(b"yal-supervisor development vault key").digest()
+            dev = hashlib.sha256(b"prime-supervisor development vault key").digest()
             return cls({_DEV_KEY_ID: dev}, active=_DEV_KEY_ID)
         keys: dict[str, bytes] = {}
         order: list[str] = []

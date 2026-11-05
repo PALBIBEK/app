@@ -101,7 +101,7 @@ class BrowserGrant:
 
 
 def signing_key_id(secret: str) -> str:
-    digest = hmac.new(secret.encode(), b"yal-signing-key-id", hashlib.sha256).digest()
+    digest = hmac.new(secret.encode(), b"prime-signing-key-id", hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")[:8]
 
 

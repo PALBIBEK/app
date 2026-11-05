@@ -282,6 +282,6 @@ def test_the_otlp_projector_gives_spans_the_ids_and_kinds_the_trace_view_uses() 
     for kind in (SpanKind.AGENT, SpanKind.TOOL, SpanKind.LLM, SpanKind.APPROVAL, SpanKind.STEP):
         for span in by_kind(trace, kind):
             assert span.id in exported, (kind, span.name)
-            assert exported[span.id].attributes["yal.span.kind"] == kind.value
+            assert exported[span.id].attributes["prime.span.kind"] == kind.value
     tool = by_kind(trace, SpanKind.TOOL)[0]
     assert exported[tool.id].attributes["openinference.span.kind"] == "TOOL"

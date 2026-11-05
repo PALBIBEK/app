@@ -2,8 +2,6 @@
  * useHarnesses.ts
  *
  * GREEN Phase: React Query hooks for Harnesses API
- * Reference: FRONTEND_BUILD_CONFIG.md (TanStack Query patterns)
- * Reference: 08-testing-patterns.md
  *
  * Pattern Applied:
  * - Query key factory for cache management

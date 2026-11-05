@@ -29,9 +29,9 @@ class _LoggingSink:
                 "span name=%s op=%s session=%s run=%s",
                 s.name,
                 s.attributes.get("gen_ai.operation.name")
-                or s.attributes.get("yal.operation.name"),
-                s.yal_session_id,
-                s.yal_run_id,
+                or s.attributes.get("prime.operation.name"),
+                s.prime_session_id,
+                s.prime_run_id,
             )
 
 
@@ -175,7 +175,7 @@ class ProjectorHub:
 
 
 def setup_tracing(
-    service_name: str = "yal-supervisor",
+    service_name: str = "prime-supervisor",
     *,
     tenant_id: str = "default",
     harness_id: str = "unknown",
@@ -262,8 +262,8 @@ def _build_otlp_sink(service_name: str) -> SpanSink:
     global _provider
 
     endpoint = os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-    max_queue = int(os.environ.get("YAL_OTEL_MAX_QUEUE", "2048"))
-    sample_ratio = float(os.environ.get("YAL_OTEL_SAMPLE_RATIO", "1.0"))
+    max_queue = int(os.environ.get("PRIME_OTEL_MAX_QUEUE", "2048"))
+    sample_ratio = float(os.environ.get("PRIME_OTEL_SAMPLE_RATIO", "1.0"))
     sample_ratio = max(0.0, min(1.0, sample_ratio))
 
     resource = Resource.create({"service.name": service_name})
@@ -285,7 +285,7 @@ def _build_otlp_sink(service_name: str) -> SpanSink:
     trace.set_tracer_provider(provider)
     _provider = provider
     _setup_logs(endpoint, resource)
-    tracer = trace.get_tracer("yal-supervisor")
+    tracer = trace.get_tracer("prime-supervisor")
     logger.info("OTLP exporter configured endpoint=%s sample_ratio=%s", endpoint, sample_ratio)
     return OtlpBridgeSink(tracer)
 
@@ -324,11 +324,11 @@ def make_inmemory_otlp_projector(
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider(
-        resource=Resource.create({"service.name": "yal-supervisor-test"}),
+        resource=Resource.create({"service.name": "prime-supervisor-test"}),
         id_generator=_ForcedIdGenerator(),
     )
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("yal-test")
+    tracer = provider.get_tracer("prime-test")
     sink = OtlpBridgeSink(tracer)
     proj = JournalProjector(
         sink=sink,

@@ -1,4 +1,4 @@
-"""RED → GREEN: yal.run.id resolver (Phase1 §3.3a)."""
+"""RED → GREEN: prime.run.id resolver (Phase1 §3.3a)."""
 
 from __future__ import annotations
 

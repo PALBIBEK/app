@@ -76,7 +76,7 @@ def _resolve_service_identity(
         try:
             identity = ServiceJwtVerifier(
                 secret=jwt_secret,
-                audience=getattr(state, "service_jwt_audience", "yal-supervisor"),
+                audience=getattr(state, "service_jwt_audience", "prime-supervisor"),
                 issuer=getattr(state, "service_jwt_issuer", "prime-agent-api"),
             ).verify(raw)
         except ValueError as exc:

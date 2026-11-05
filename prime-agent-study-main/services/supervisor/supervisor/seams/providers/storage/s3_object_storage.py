@@ -257,7 +257,7 @@ def build_boto3_s3_client(
         from botocore.client import Config
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "boto3 required for S3 ObjectStorage (pip install 'yal-supervisor[s3]')"
+            "boto3 required for S3 ObjectStorage (pip install 'prime-supervisor[s3]')"
         ) from exc
     return boto3.client(
         "s3",

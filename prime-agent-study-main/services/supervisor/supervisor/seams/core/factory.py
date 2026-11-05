@@ -169,7 +169,7 @@ def build_runtime_seams(
     prompts: PromptAssembler = (
         prompt_assembler
         if prompt_assembler is not None
-        else StaticPromptAssembler("YAL default system prompt")
+        else StaticPromptAssembler("PRIME default system prompt")
     )
     gateway = _resolve_gateway(
         model_gateway=model_gateway,

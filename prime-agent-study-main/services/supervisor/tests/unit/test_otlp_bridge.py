@@ -76,11 +76,11 @@ def test_echo_shaped_run_in_memory_otlp() -> None:
 
     by_name = {s.name: s for s in spans}
     root = next(s for s in spans if "invoke_agent" in s.name)
-    assert root.attributes.get("yal.run.id") == TRACE
-    # TraceId matches yal.run.id (§3.3a)
+    assert root.attributes.get("prime.run.id") == TRACE
+    # TraceId matches prime.run.id (§3.3a)
     assert format(root.context.trace_id, "032x") == TRACE
 
-    turn_span = by_name["yal.turn"]
+    turn_span = by_name["prime.turn"]
     chat = by_name["chat"]
     next(s for s in spans if s.name.startswith("execute_tool"))
 
@@ -92,8 +92,8 @@ def test_echo_shaped_run_in_memory_otlp() -> None:
     # Profiles
     assert chat.attributes.get("gen_ai.provider.name")
     assert turn_span.attributes.get("gen_ai.provider.name") is None
-    assert turn_span.attributes.get("yal.operation.name") == "turn"
-    assert chat.attributes.get("yal.operation.name") is None
+    assert turn_span.attributes.get("prime.operation.name") == "turn"
+    assert chat.attributes.get("prime.operation.name") is None
     assert chat.attributes.get("gen_ai.operation.name") == "chat"
 
     # Token nesting
@@ -105,8 +105,8 @@ def test_echo_shaped_run_in_memory_otlp() -> None:
     assert SECRET_PATH not in blob
 
     # Deep-link coords
-    assert chat.attributes.get("yal.session.id") == "s1"
-    assert chat.attributes.get("yal.journal.seq") == 2
+    assert chat.attributes.get("prime.session.id") == "s1"
+    assert chat.attributes.get("prime.journal.seq") == 2
 
 
 def test_otlp_setup_without_endpoint_is_noop_logging() -> None:

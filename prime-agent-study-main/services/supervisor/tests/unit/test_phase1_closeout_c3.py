@@ -80,10 +80,10 @@ def test_resume_creates_new_run_same_session() -> None:
     ]
     assert len(roots) == 2
     r2 = roots[1]
-    assert r1.yal_session_id == r2.yal_session_id == "s1"
-    assert r1.yal_run_id == t1
-    assert r2.yal_run_id == t2
-    assert r1.yal_run_id != r2.yal_run_id
+    assert r1.prime_session_id == r2.prime_session_id == "s1"
+    assert r1.prime_run_id == t1
+    assert r2.prime_run_id == t2
+    assert r1.prime_run_id != r2.prime_run_id
 
 
 def test_subagent_nests_under_parent_run() -> None:
@@ -125,10 +125,10 @@ def test_subagent_nests_under_parent_run() -> None:
         if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
         and s.parent_span_id is None
     )
-    child = next(s for s in sink.spans if s.yal_run_id == child_run)
+    child = next(s for s in sink.spans if s.prime_run_id == child_run)
     assert child.parent_span_id == parent.span_id
-    assert child.yal_session_id == parent.yal_session_id
-    assert child.yal_run_id != parent.yal_run_id
+    assert child.prime_session_id == parent.prime_session_id
+    assert child.prime_run_id != parent.prime_run_id
     assert child.attributes.get("gen_ai.operation.name") == "invoke_agent"
 
 

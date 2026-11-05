@@ -104,9 +104,9 @@ async def test_the_api_reports_its_responses_and_its_dependencies(api: AsyncClie
     await api.get("/healthz")
     await api.get("/v1/sessions/nope", headers={"X-Tenant-Id": "t1"})
     text = (await api.get("/v1/ops/metrics")).text
-    assert "# TYPE yal_api_responses_total counter" in text
-    assert _value(text, 'yal_api_responses_total{code="200"}') == 1
-    assert _value(text, 'yal_api_responses_total{code="404"}') == 1
-    assert "# TYPE yal_dependency_up gauge" in text
-    assert _value(text, 'yal_dependency_up{dependency="database"}') == 1
+    assert "# TYPE prime_api_responses_total counter" in text
+    assert _value(text, 'prime_api_responses_total{code="200"}') == 1
+    assert _value(text, 'prime_api_responses_total{code="404"}') == 1
+    assert "# TYPE prime_dependency_up gauge" in text
+    assert _value(text, 'prime_dependency_up{dependency="database"}') == 1
     assert "tenant" not in text and "t1" not in text  # counts only

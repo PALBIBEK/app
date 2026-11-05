@@ -54,7 +54,7 @@ def _version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return version("yal-supervisor")
+        return version("prime-supervisor")
     except PackageNotFoundError:
         return ""
 

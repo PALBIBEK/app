@@ -22,7 +22,7 @@ def _mint(
     *,
     tenant_id: str,
     principal_id: str,
-    aud: str = "yal-supervisor",
+    aud: str = "prime-supervisor",
     token_type: str = "service",
     secret: str = SECRET,
 ) -> str:

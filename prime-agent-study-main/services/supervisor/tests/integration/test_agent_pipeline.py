@@ -97,7 +97,7 @@ async def boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
 
         async def start() -> Pipeline:
             compositions = bootstrap_composition_catalog(default_catalog_dir())
-            await hydrate_composition_catalog(compositions, factory)  # YAL_PERSIST_CATALOG
+            await hydrate_composition_catalog(compositions, factory)  # PRIME_PERSIST_CATALOG
             sandboxes = TrackingProvider()
             state = build_supervisor(
                 session_factory=factory,
@@ -319,6 +319,6 @@ async def test_tool_set_with_forged_tool_digest_is_refused(pipeline: Pipeline) -
 def test_catalog_persistence_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from supervisor.config import Settings
 
-    monkeypatch.delenv("YAL_PERSIST_CATALOG", raising=False)
+    monkeypatch.delenv("PRIME_PERSIST_CATALOG", raising=False)
     assert Settings().persist_composition_catalog
     assert Settings.from_env().persist_composition_catalog

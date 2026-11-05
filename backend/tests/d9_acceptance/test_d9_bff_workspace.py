@@ -24,7 +24,7 @@ def _principal_from_request(request: httpx.Request) -> str:
             auth[7:],
             SECRET,
             algorithms=["HS256"],
-            audience="yal-supervisor",
+            audience="prime-supervisor",
             issuer="prime-agent-api",
         )
         return str(payload.get("principal_id", ""))

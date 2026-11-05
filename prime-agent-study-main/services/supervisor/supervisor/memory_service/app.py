@@ -522,7 +522,7 @@ def create_app(
             await app.state.memory.aclose()
 
     app = FastAPI(
-        title="yal-memory-service",
+        title="prime-memory-service",
         version="0.1.0",
         lifespan=lifespan,
         dependencies=[Depends(_guard)],

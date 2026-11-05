@@ -4,7 +4,6 @@
  * Runtime validation with Zod + TypeScript types
  *
  * References:
- * - FRONTEND_BUILD_CONFIG.md (TypeScript strict mode)
  * - Backend service models analysis
  */
 

@@ -1,4 +1,4 @@
-# YAL agent catalog
+# PRIME agent catalog
 
 The versioned, digest-pinned artifacts a supervisor session is composed from.
 Sessions run on githi, the supervisor's own agent runtime (or `echo` for
@@ -58,6 +58,3 @@ resolvable after a release replaces it:
 | `githi-v1` | `githi` | required (built on first use) | sticky |
 | `kg-v1` | `echo` (dev / lightweight) | none | stateless |
 
-## Contracts
-
-- Supervisor [`../services/supervisor/PROGRESS.md`](../services/supervisor/PROGRESS.md)

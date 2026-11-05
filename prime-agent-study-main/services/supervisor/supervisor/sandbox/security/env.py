@@ -193,7 +193,7 @@ _SAFE_HOSTS: Final[frozenset[str]] = frozenset({
     "localhost",
     "127.0.0.1",
     "gateway",
-    "yal-gateway",
+    "prime-gateway",
     "litellm",
     "ollama",
 })
@@ -363,7 +363,7 @@ def is_allowed_gateway_inject(key: str, value: str) -> bool:
     Allowed Patterns:
         - OPENAI_BASE_URL: Must point to internal/gateway host (not vendor APIs)
         - OPENAI_API_KEY: Must start with "vk_" (virtual key prefix)
-        - YAL_VK_BIND_PATH: Any non-empty path
+        - PRIME_VK_BIND_PATH: Any non-empty path
         - OPENAI_API_KEY_FILE: Any non-empty path
         - BROWSE_LAB_MODEL_TOKEN: A compact signed token (the browser capability)
 
@@ -386,7 +386,7 @@ def is_allowed_gateway_inject(key: str, value: str) -> bool:
         # Only virtual keys (vk_ prefix) are allowed
         return text.startswith("vk_")
 
-    if upper in ("YAL_VK_BIND_PATH", "OPENAI_API_KEY_FILE"):
+    if upper in ("PRIME_VK_BIND_PATH", "OPENAI_API_KEY_FILE"):
         # Path to key file - any non-empty value is acceptable
         return bool(text.strip())
 

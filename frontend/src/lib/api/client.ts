@@ -6,10 +6,6 @@
  * - Token refresh on 401
  * - Error handling
  * - TypeScript type safety
- *
- * References:
- * - FRONTEND_BUILD_CONFIG.md (TypeScript patterns)
- * - 06-authentication-and-authorization.md (JWT handling)
  */
 
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';

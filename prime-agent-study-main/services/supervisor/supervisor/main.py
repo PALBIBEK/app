@@ -211,7 +211,7 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
 
 
 def create_app(*, state: SupervisorState | None = None) -> FastAPI:
-    app = FastAPI(title="YAL Supervisor", lifespan=lifespan)
+    app = FastAPI(title="PRIME Supervisor", lifespan=lifespan)
     if state is not None:
         app.state.supervisor = state
     app.middleware("http")(_reject_nul_in_url)

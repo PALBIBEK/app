@@ -1,7 +1,7 @@
 [project]
-name = "yal-supervisor"
+name = "prime-supervisor"
 version = "0.1.0"
-description = "YAL agent session supervisor"
+description = "PRIME agent session supervisor"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",

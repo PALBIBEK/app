@@ -2,8 +2,6 @@
  * auth.test.ts
  *
  * RED Phase: Write failing tests first
- * Reference: 08-testing-patterns.md (AAA Pattern)
- * Reference: 06-authentication-and-authorization.md
  *
  * Test Strategy:
  * 1. Test login with valid credentials

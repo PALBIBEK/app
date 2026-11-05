@@ -18,7 +18,7 @@ from prime_agent.security.service_jwt import ServiceJwtMinter
 
 # D13: outbound W3C traceparent toward supervisor (explicit seed or OTel context).
 _outbound_traceparent: ContextVar[str | None] = ContextVar(
-    "yal_outbound_traceparent", default=None
+    "prime_outbound_traceparent", default=None
 )
 
 

@@ -19,7 +19,7 @@ def apply_runtime_model_route(pinned: str | None) -> str | None:
     that silently resolves to another model breaks the promise that a composition
     decides its model:
 
-    - ``YAL_MODEL_ROUTE`` wins when set (ops / local demo);
+    - ``PRIME_MODEL_ROUTE`` wins when set (ops / local demo);
     - a pin other than ``echo`` is kept;
     - an ``echo`` pin (the shipped placeholder) is upgraded by ``MODEL_GATEWAY_DEFAULT_ROUTE``
       (when not ``echo``) or ``GATEWAY_VENDOR_READY`` (to ``githi``).
@@ -35,7 +35,7 @@ def apply_runtime_model_route(pinned: str | None) -> str | None:
 
 
 def _effective(pinned: str | None) -> str | None:
-    explicit = os.environ.get("YAL_MODEL_ROUTE", "").strip()
+    explicit = os.environ.get("PRIME_MODEL_ROUTE", "").strip()
     if explicit:
         return explicit
     if pinned and pinned != "echo":

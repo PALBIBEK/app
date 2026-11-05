@@ -36,7 +36,7 @@ fi
 set -a; source "$ROOT/.env.local"; set +a
 export -n OPENROUTER_API_KEY 2>/dev/null || true  # never inherited: only the gateway reads it, from the file
 
-PG_PORT="${DEV_PG_PORT:-5433}" PG_USER="${DEV_PG_USER:-yal}" PG_PASSWORD="${DEV_PG_PASSWORD:-yal}"
+PG_PORT="${DEV_PG_PORT:-5433}" PG_USER="${DEV_PG_USER:-prime}" PG_PASSWORD="${DEV_PG_PASSWORD:-prime}"
 PG="postgresql+asyncpg://$PG_USER:$PG_PASSWORD@127.0.0.1:$PG_PORT"
 SPY="${SUPERVISOR_PYTHON:-$SUP/.venv/bin/python}"
 BPY="${BACKEND_PYTHON:-$ROOT/backend/.venv/bin/python}"
@@ -151,12 +151,12 @@ CAPABILITY_SECRET='$CAPABILITY_SECRET' SUPERVISOR_PUBLIC_URL=http://127.0.0.1:80
 GATEWAY_BASE_URL=http://model-gateway:8090 GATEWAY_TOKEN='$GATEWAY_TOKEN'
 MODEL_GATEWAY_URL=http://model-gateway:8090 MODEL_GATEWAY_API_KEY='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key
 ${OPENROUTER_API_KEY:+MODEL_GATEWAY_DEFAULT_ROUTE=free}
-OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace OBJECT_STORAGE_PUBLIC_ENDPOINT=http://127.0.0.1:8333
+OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=prime-workspace OBJECT_STORAGE_PUBLIC_ENDPOINT=http://127.0.0.1:8333
 OBJECT_STORAGE_ACCESS_KEY=dev OBJECT_STORAGE_SECRET_KEY=dev OBJECT_STORAGE_REGION=us-east-1
 WORKSPACE_STORE=postgres GRANT_STORE=postgres DATABASE_URL='$PG/supervisor'
-YAL_CATALOG_DIR='$STUDY/harness' HARNESS_VERSIONS_DIR='$STATE/harness-versions' YAL_CONTRACTS_DIR='$STUDY/contracts'
-YAL_LOAD_COMPOSITION_CATALOG=true YAL_PERSIST_CATALOG=true
-BLOB_DIR='$STATE/blobs' YAL_SESSION_WORKSPACES='$STATE/workspaces'
+PRIME_CATALOG_DIR='$STUDY/harness' HARNESS_VERSIONS_DIR='$STATE/harness-versions' PRIME_CONTRACTS_DIR='$STUDY/contracts'
+PRIME_LOAD_COMPOSITION_CATALOG=true PRIME_PERSIST_CATALOG=true
+BLOB_DIR='$STATE/blobs' PRIME_SESSION_WORKSPACES='$STATE/workspaces'
 SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-local_process}
 MEMORY_SERVICE_URL=http://127.0.0.1:8092 MEMORY_SERVICE_TOKEN='$MEMORY_SERVICE_TOKEN'
 MEMORY_DATABASE_URL='$PG/memory' MEMORY_PORT=8092 MEMORY_HOST=127.0.0.1 MEMORY_ALLOW_STATIC_TOKEN=1
@@ -190,22 +190,22 @@ import boto3
 s3 = boto3.client("s3", endpoint_url="http://127.0.0.1:8333", aws_access_key_id="dev",
                   aws_secret_access_key="dev", region_name="us-east-1")
 try:
-    s3.create_bucket(Bucket="yal-workspace")
+    s3.create_bucket(Bucket="prime-workspace")
 except Exception:
     pass
-s3.put_bucket_cors(Bucket="yal-workspace", CORSConfiguration={"CORSRules": [{
+s3.put_bucket_cors(Bucket="prime-workspace", CORSConfiguration={"CORSRules": [{
     "AllowedOrigins": ["http://localhost:3000", "http://127.0.0.1:3000"],
     "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600}]})
 EOF
 
   say "starting the supervisor (API :8080, memory :8092) and its worker"
-  # Workers register as one version of the yal-dev worker deployment (supervisor.temporal.rollout):
+  # Workers register as one version of the prime-dev worker deployment (supervisor.temporal.rollout):
   # the git commit, so `python -m supervisor rollout status` shows what each restart runs.
   BUILD_ID=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
-  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 WORKER_DEPLOYMENT_NAME=yal-dev '$SPY' -m supervisor api"
+  start supervisor "cd '$SUP' && env -u OPENROUTER_API_KEY $senv PORT=8080 SERVE_MODEL_GATEWAY=0 WORKER_DEPLOYMENT_NAME=prime-dev '$SPY' -m supervisor api"
   wait_http supervisor http://127.0.0.1:8080/readyz 120
-  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv WORKER_HEALTH_PORT=8091 WORKER_DEPLOYMENT_NAME=yal-dev WORKER_BUILD_ID=$BUILD_ID '$SPY' -m supervisor worker"
+  start worker "cd '$SUP' && env -u OPENROUTER_API_KEY $senv WORKER_HEALTH_PORT=8091 WORKER_DEPLOYMENT_NAME=prime-dev WORKER_BUILD_ID=$BUILD_ID '$SPY' -m supervisor worker"
 
   say "starting the backend (:8000) and the frontend (:3000)"
   start backend "cd '$ROOT/backend' && env -u OPENROUTER_API_KEY ENVIRONMENT=development \
@@ -237,8 +237,8 @@ case "${1:-up}" in
           pg_up && echo "postgres: up" || echo "postgres: down"
           # The worker fleet as the API sees it (Temporal's pollers and backlog, workers' heartbeats).
           fleet=$(curl -fsS --max-time 5 http://127.0.0.1:8080/v1/ops/workers/metrics 2>/dev/null) && echo "$fleet" | awk '
-            /^yal_workers_serving/ {u=$NF} /^yal_worker_slots_busy/ {b=$NF} /^yal_worker_slots\{/ {m=$NF}
-            /^yal_task_queue_backlog\{/ {q=$NF} /^yal_task_queue_backlog_age/ {a=$NF}
+            /^prime_workers_serving/ {u=$NF} /^prime_worker_slots_busy/ {b=$NF} /^prime_worker_slots\{/ {m=$NF}
+            /^prime_task_queue_backlog\{/ {q=$NF} /^prime_task_queue_backlog_age/ {a=$NF}
             END {printf "workers: %s, %s/%s runs busy, %s waiting (oldest %ss)\n", (u == 1 ? "serving" : "none serving"), b, m, q, a}' ;;
   logs) [ -n "${2:-}" ] || die "usage: ./dev.sh logs <name>"; tail -n 100 -f "$STATE/logs/$2.log" ;;
   reset)

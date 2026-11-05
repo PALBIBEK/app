@@ -81,7 +81,7 @@ def test_full_run_projects_nested_tree() -> None:
 
     names = [s.name for s in sink.spans]
     assert "invoke_agent" in names[0] or sink.spans[0].attributes.get("gen_ai.operation.name") == "invoke_agent"
-    ops = [s.attributes.get("gen_ai.operation.name") or s.attributes.get("yal.operation.name") for s in sink.spans]
+    ops = [s.attributes.get("gen_ai.operation.name") or s.attributes.get("prime.operation.name") for s in sink.spans]
     assert "invoke_agent" in ops
     assert "turn" in ops
     assert "chat" in ops
@@ -120,8 +120,8 @@ def test_unpaired_tool_closes_unknown_not_error() -> None:
 
     tool = next(s for s in sink.spans if s.attributes.get("gen_ai.operation.name") == "execute_tool")
     assert tool.status == SpanStatus.UNSET
-    assert tool.attributes.get("yal.tool.outcome") == "unknown"
-    assert tool.attributes.get("yal.tool.unpaired") is True
+    assert tool.attributes.get("prime.tool.outcome") == "unknown"
+    assert tool.attributes.get("prime.tool.unpaired") is True
     assert tool.end_ms is not None
 
 

@@ -558,7 +558,7 @@ class E2BProvider(SandboxProvider):
             from e2b import AsyncSandbox  # type: ignore[import-untyped]
         except ImportError as exc:
             raise RuntimeError(
-                "e2b package not installed; pip install 'yal-supervisor[e2b]'"
+                "e2b package not installed; pip install 'prime-supervisor[e2b]'"
             ) from exc
         return AsyncSandbox
 

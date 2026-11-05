@@ -135,7 +135,7 @@ never verifies as this one."""
 def derive_virtual_key_secret(service_token: str) -> bytes:
     """The signing secret, from the service token every gateway process already shares:
     whoever holds that token can mint keys anyway, so it may sign them too."""
-    return hmac.new(service_token.encode(), b"yal virtual keys v1", hashlib.sha256).digest()
+    return hmac.new(service_token.encode(), b"prime virtual keys v1", hashlib.sha256).digest()
 
 
 def _b64(data: bytes) -> str:

@@ -1,7 +1,7 @@
 """
 Service layer for Prime Agent.
 
-Following corridor-platforms pattern with:
+With:
 - Base service class
 - Domain-specific services
 - Lifecycle hooks

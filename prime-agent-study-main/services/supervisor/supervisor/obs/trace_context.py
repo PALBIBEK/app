@@ -15,7 +15,7 @@ _TRACEPARENT = re.compile(
 
 # D13 B: supervisor → gateway W3C propagation (set on RunStart, cleared on RunEnd).
 _outbound_traceparent: ContextVar[str | None] = ContextVar(
-    "yal_outbound_traceparent", default=None
+    "prime_outbound_traceparent", default=None
 )
 
 

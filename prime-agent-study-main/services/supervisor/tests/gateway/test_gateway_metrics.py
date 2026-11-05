@@ -39,7 +39,7 @@ def _metric(client: TestClient, series: str) -> float:
 
 
 def test_model_calls_are_counted_by_status_and_nothing_else_is(client: TestClient) -> None:
-    ok, refused = 'yal_gateway_responses_total{code="200"}', 'yal_gateway_responses_total{code="401"}'
+    ok, refused = 'prime_gateway_responses_total{code="200"}', 'prime_gateway_responses_total{code="401"}'
     before = _metric(client, ok), _metric(client, refused)
     mint = {"tenant_id": "t1", "session_id": "s1", "principal_id": "alice", "allowed_models": ["echo"]}
     token = client.post("/v1/virtual-keys", json=mint, headers=SERVICE).json()["token"]
@@ -53,9 +53,9 @@ def test_model_calls_are_counted_by_status_and_nothing_else_is(client: TestClien
 def test_every_charge_counts_toward_the_platforms_spend(client: TestClient) -> None:
     store = SignedVirtualKeyStore(derive_virtual_key_secret("svc-test"))
     key = store.mint(MintRequest(tenant_id="t1", session_id="s1", principal_id="alice", allowed_models=("echo",)))
-    before = _metric(client, "yal_gateway_spend_usd_total")
+    before = _metric(client, "prime_gateway_spend_usd_total")
     gateway._charge(store, Caller(claims=key), 0.25)  # a session's call
     gateway._charge(store, Caller(), 0.5)  # a service's own call, with no key
     gateway._charge(store, Caller(), 0.0)
-    assert _metric(client, "yal_gateway_spend_usd_total") == pytest.approx(before + 0.75)
+    assert _metric(client, "prime_gateway_spend_usd_total") == pytest.approx(before + 0.75)
     assert store.spent_usd(key.token) == pytest.approx(0.25)

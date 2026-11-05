@@ -3,8 +3,8 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.0-pg16  # Postgres 16 with pgvector: memory bank recall
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-yal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yal}
+      POSTGRES_USER: ${POSTGRES_USER:-prime}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prime}
       POSTGRES_DB: ${POSTGRES_DB:-supervisor}
     ports:
       - "5433:5432"
@@ -12,7 +12,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-yal} -d ${POSTGRES_DB:-supervisor}",
+          "pg_isready -U ${POSTGRES_USER:-prime} -d ${POSTGRES_DB:-supervisor}",
         ]
       interval: 5s
       timeout: 3s
@@ -47,7 +47,7 @@ services:
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-supervisor-sessions}
       # Workers register as versions of this worker deployment (python -m supervisor rollout).
-      WORKER_DEPLOYMENT_NAME: ${WORKER_DEPLOYMENT_NAME:-yal-supervisor}
+      WORKER_DEPLOYMENT_NAME: ${WORKER_DEPLOYMENT_NAME:-prime-supervisor}
       # PROFILE=dev: local stack may run with auth relaxed. Staging/prod must not.
       PROFILE: ${PROFILE:-dev}
       ENV: ${ENV:-development}
@@ -58,37 +58,37 @@ services:
       GATEWAY_TOKEN: ${MODEL_GATEWAY_TOKEN:-dev-local-gateway-token}
       # D13: export spans to Jaeger (OTLP). Soft-fail if Jaeger is down.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
-      YAL_OTEL_SAMPLE_RATIO: ${YAL_OTEL_SAMPLE_RATIO:-1.0}
-      YAL_REAPER_INTERVAL_S: ${YAL_REAPER_INTERVAL_S:-300}
+      PRIME_OTEL_SAMPLE_RATIO: ${PRIME_OTEL_SAMPLE_RATIO:-1.0}
+      PRIME_REAPER_INTERVAL_S: ${PRIME_REAPER_INTERVAL_S:-300}
       # Object store credentials (OBJECT_STORAGE default set below with D9 SoT pins).
       OBJECT_STORAGE_ENDPOINT: http://seaweed-s3:8333
-      OBJECT_STORAGE_BUCKET: yal-workspace
+      OBJECT_STORAGE_BUCKET: prime-workspace
       OBJECT_STORAGE_ACCESS_KEY: any
       OBJECT_STORAGE_SECRET_KEY: any
       # Grants default memory for local; staging compose pins postgres.
       GRANT_STORE: ${GRANT_STORE:-memory}
       # D5 E1: keys stay on model-gateway. Signal non-echo Test without copying vendor keys:
-      #   OPENROUTER_API_KEY=… (gateway) GATEWAY_VENDOR_READY=1 YAL_MODEL_ROUTE=githi
+      #   OPENROUTER_API_KEY=… (gateway) GATEWAY_VENDOR_READY=1 PRIME_MODEL_ROUTE=githi
       #   or MODEL_GATEWAY_DEFAULT_ROUTE=githi on both services.
-      YAL_MODEL_ROUTE: ${YAL_MODEL_ROUTE:-}
+      PRIME_MODEL_ROUTE: ${PRIME_MODEL_ROUTE:-}
       GATEWAY_VENDOR_READY: ${GATEWAY_VENDOR_READY:-0}
       MODEL_GATEWAY_DEFAULT_ROUTE: ${MODEL_GATEWAY_DEFAULT_ROUTE:-echo}
       # Docker image tree is shallow — pin paths to mounted / writable dirs.
-      YAL_CATALOG_DIR: ${YAL_CATALOG_DIR:-/harness}
+      PRIME_CATALOG_DIR: ${PRIME_CATALOG_DIR:-/harness}
       HARNESS_VERSIONS_DIR: ${HARNESS_VERSIONS_DIR:-/harness/versions}
-      YAL_CONTRACTS_DIR: ${YAL_CONTRACTS_DIR:-/contracts}
+      PRIME_CONTRACTS_DIR: ${PRIME_CONTRACTS_DIR:-/contracts}
       # Only used with OBJECT_STORAGE=memory: with shared object storage (below) the journal keeps
       # its large payloads in the bucket, where every replica and worker reads them.
-      BLOB_DIR: ${BLOB_DIR:-/tmp/yal-blobs}
-      # Local demo: load harness compositions from YAL_CATALOG_DIR (/harness mount).
-      # Escape hatch (skip catalog / incomplete harness): YAL_LOAD_COMPOSITION_CATALOG=false
-      YAL_LOAD_COMPOSITION_CATALOG: ${YAL_LOAD_COMPOSITION_CATALOG:-true}
+      BLOB_DIR: ${BLOB_DIR:-/tmp/prime-blobs}
+      # Local demo: load harness compositions from PRIME_CATALOG_DIR (/harness mount).
+      # Escape hatch (skip catalog / incomplete harness): PRIME_LOAD_COMPOSITION_CATALOG=false
+      PRIME_LOAD_COMPOSITION_CATALOG: ${PRIME_LOAD_COMPOSITION_CATALOG:-true}
       # D10: local docker sandbox for coding/githi (override via SANDBOX_PROVIDER).
       SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-local_docker}
       # D9 durable SoT defaults (override to memory for single-container without Postgres).
       WORKSPACE_STORE: ${WORKSPACE_STORE:-postgres}
       OBJECT_STORAGE: seaweed
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/${POSTGRES_DB:-supervisor}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prime}:${POSTGRES_PASSWORD:-prime}@postgres:5432/${POSTGRES_DB:-supervisor}
       # Long-term memory (remember, durable recall); calls carry a service JWT.
       MEMORY_SERVICE_URL: http://memory-service:8092
       MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-dev-local-memory-token}
@@ -151,8 +151,8 @@ services:
     environment:
       POSTGRES_SEEDS: postgres
       DB_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-yal}
-      SQL_PASSWORD: ${POSTGRES_PASSWORD:-yal}
+      POSTGRES_USER: ${POSTGRES_USER:-prime}
+      SQL_PASSWORD: ${POSTGRES_PASSWORD:-prime}
     volumes:
       - ./deploy/temporal:/scripts:ro
     depends_on:
@@ -165,8 +165,8 @@ services:
       DB: postgres12
       DB_PORT: 5432
       POSTGRES_SEEDS: postgres
-      POSTGRES_USER: ${POSTGRES_USER:-yal}
-      POSTGRES_PWD: ${POSTGRES_PASSWORD:-yal}
+      POSTGRES_USER: ${POSTGRES_USER:-prime}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-prime}
       BIND_ON_IP: 0.0.0.0
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports:
@@ -229,7 +229,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # D13 B: gateway child spans → Jaeger (soft-fail if collector down).
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
-      OTEL_SERVICE_NAME: yal-model-gateway
+      OTEL_SERVICE_NAME: prime-model-gateway
     depends_on:
       - jaeger
 
@@ -245,7 +245,7 @@ services:
       SERVE_SUPERVISOR_API: "0"
       SERVE_MODEL_GATEWAY: "0"
       ENV: ${ENV:-development}
-      MEMORY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yal}:${POSTGRES_PASSWORD:-yal}@postgres:5432/memory
+      MEMORY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prime}:${POSTGRES_PASSWORD:-prime}@postgres:5432/memory
       # Verifies the supervisor's service JWTs (same secret as the supervisor).
       SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET:-dev-local-service-jwt-secret-32b!!}
       MEMORY_SERVICE_TOKEN: ${MEMORY_SERVICE_TOKEN:-dev-local-memory-token}

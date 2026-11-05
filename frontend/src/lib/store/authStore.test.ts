@@ -2,8 +2,6 @@
  * authStore.test.ts
  *
  * RED Phase: Write failing tests first
- * Reference: 08-testing-patterns.md (AAA Pattern)
- * Reference: FRONTEND_BUILD_CONFIG.md (Zustand for state)
  *
  * Test Strategy:
  * 1. Test initial state is unauthenticated
@@ -22,8 +20,6 @@ import { useAuthStore } from './authStore';
  * authStore.test.ts
  *
  * GREEN Phase: Tests passing with implementation
- * Reference: 08-testing-patterns.md (AAA Pattern)
- * Reference: FRONTEND_BUILD_CONFIG.md (Zustand for state)
  */
 
 /** Calls made on localStorage itself: the store may use sessionStorage (CSRF), never localStorage. */

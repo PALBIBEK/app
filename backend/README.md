@@ -15,7 +15,7 @@ A model change needs a migration:
 
 ```bash
 cd backend
-DATABASE_URL=postgresql://yal:yal@127.0.0.1:5433/prime_agent .venv/bin/alembic revision --autogenerate -m "what changed"
+DATABASE_URL=postgresql://prime:prime@127.0.0.1:5433/prime_agent .venv/bin/alembic revision --autogenerate -m "what changed"
 ```
 
 Review the generated file, then run `tests/test_migrations.py` against a Postgres.

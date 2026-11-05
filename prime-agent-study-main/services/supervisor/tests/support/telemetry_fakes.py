@@ -32,7 +32,7 @@ class FakeSpanSink:
                 # light check: must have an operation attr
                 if (
                     "gen_ai.operation.name" not in s.attributes
-                    and "yal.operation.name" not in s.attributes
+                    and "prime.operation.name" not in s.attributes
                 ):
                     from supervisor.telemetry_contract.validate import ValidationError
 

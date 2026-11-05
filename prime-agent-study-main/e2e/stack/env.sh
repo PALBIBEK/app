@@ -7,7 +7,7 @@ export SVC="$REPO/services"
 export E2E_RUN_DIR="${E2E_RUN_DIR:-$E2E_DIR/.run}"
 export PY="${E2E_PYTHON:-$SVC/supervisor/.venv/bin/python}"
 export TEMPORAL_CLI="${TEMPORAL_CLI:-temporal}"
-export PG_HOST="${PG_HOST:-127.0.0.1}" PG_PORT="${PG_PORT:-5433}" PG_USER="${PG_USER:-yal}" PG_PASSWORD="${PG_PASSWORD:-yal}"
+export PG_HOST="${PG_HOST:-127.0.0.1}" PG_PORT="${PG_PORT:-5433}" PG_USER="${PG_USER:-prime}" PG_PASSWORD="${PG_PASSWORD:-prime}"
 
 # --- model gateway (the supervisor image with SERVE_MODEL_GATEWAY only, :8090) ---------------
 export GW_ENV="PROFILE=dev ENV=development MODEL_GATEWAY_TOKEN=dev-local-gateway-token \
@@ -32,16 +32,16 @@ export MODEL_GATEWAY_URL=http://model-gateway:8090 MODEL_GATEWAY_API_KEY=dev-loc
 # The stages publish compositions that bind the gateway by address.
 export PLUG_ALLOWED_HOSTS=127.0.0.1
 export SUPERVISOR_PUBLIC_URL=http://127.0.0.1:8080 CAPABILITY_SECRET='dev-local-capability-secret-32bytes!'
-export OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=yal-workspace \
+export OBJECT_STORAGE=s3 OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:8333 OBJECT_STORAGE_BUCKET=prime-workspace \
   OBJECT_STORAGE_ACCESS_KEY=any OBJECT_STORAGE_SECRET_KEY=any OBJECT_STORAGE_REGION=us-east-1
 export WORKSPACE_STORE=postgres GRANT_STORE=postgres
 export DATABASE_URL="postgresql+asyncpg://$PG_USER:$PG_PASSWORD@$PG_HOST:$PG_PORT/supervisor"
-export YAL_CATALOG_DIR=$REPO/harness HARNESS_VERSIONS_DIR=$E2E_RUN_DIR/harness-versions YAL_CONTRACTS_DIR=$REPO/contracts
-export YAL_LOAD_COMPOSITION_CATALOG=true YAL_PERSIST_CATALOG=true
-export BLOB_DIR=$E2E_RUN_DIR/blobs YAL_SESSION_WORKSPACES=$E2E_RUN_DIR/workspaces
+export PRIME_CATALOG_DIR=$REPO/harness HARNESS_VERSIONS_DIR=$E2E_RUN_DIR/harness-versions PRIME_CONTRACTS_DIR=$REPO/contracts
+export PRIME_LOAD_COMPOSITION_CATALOG=true PRIME_PERSIST_CATALOG=true
+export BLOB_DIR=$E2E_RUN_DIR/blobs PRIME_SESSION_WORKSPACES=$E2E_RUN_DIR/workspaces
 export SANDBOX_PROVIDER=local_process   # Docker and e2b sandboxes are covered by the compose job
 export MEMORY_SERVICE_URL=http://memory-service:8092 MEMORY_SERVICE_TOKEN=dev-local-memory-token
-export OTEL_EXPORTER_OTLP_ENDPOINT= YAL_REAPER_INTERVAL_S=300
+export OTEL_EXPORTER_OTLP_ENDPOINT= PRIME_REAPER_INTERVAL_S=300
 export ALLOW_LAB_ECHO=0   # production subagent default: nested sessions through the gateway
 
 # --- memory service (the supervisor image with SERVE_MEMORY_SERVICE only, :8092) --------------

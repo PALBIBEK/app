@@ -38,7 +38,7 @@ class Export:
     genai_operation: str | None
     """``gen_ai.operation.name`` (OpenTelemetry GenAI conventions); None where they define none."""
     platform_operation: str | None
-    """``yal.operation.name`` for what the conventions do not cover."""
+    """``prime.operation.name`` for what the conventions do not cover."""
     openinference: str
     """``openinference.span.kind``."""
 

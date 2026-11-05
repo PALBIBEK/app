@@ -35,7 +35,7 @@ pytestmark = pytest.mark.asyncio
 
 SCOPE = "ws-1"
 LIMIT = 100
-BUCKET = "yal-workspace"
+BUCKET = "prime-workspace"
 
 
 @pytest.fixture

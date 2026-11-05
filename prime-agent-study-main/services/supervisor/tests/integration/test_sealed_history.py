@@ -25,6 +25,7 @@ from supervisor.temporal.sessions import SessionWorkflows
 from supervisor.temporal.worker import session_worker
 from tests.support.githi_env import FAST, WRITE, Env, payloads, run_ended
 from tests.support.scripted import ScriptedGateway
+from tests.support.waits import until
 
 pytestmark = [pytest.mark.asyncio(loop_scope="session"), pytest.mark.usefixtures("memory_service_url")]
 
@@ -68,7 +69,9 @@ async def test_the_server_keeps_only_ciphertext_and_the_key_replays_it(
         await sessions.submit(sid, Message("c1", f"write a note; the token is {SECRET}"))
         events = await env.wait_for(state, sid, run_ended())
         assert payloads(events, TurnEnd)[-1].stop_reason == "stop"
-        assert (await sessions.status(sid)).turns_completed == 1  # the key reads it back
+        # The journal can say the run ended a moment before the workflow's own state does.
+        status = await until(lambda: sessions.status(sid), lambda st: st.turns_completed == 1)
+        assert status.turns_completed == 1  # the key reads it back
         found = await sessions.startup(sid)
         assert found is not None and found[1] == {"tenant_id": "t1", "principal_id": "alice"}
 

@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from supervisor.models.spec import ModelSpec, WireApi
 
 GATEWAY_MODEL_PREFIX = "gateway/"
-GATEWAY_PROVIDER = "yal:gateway"
+GATEWAY_PROVIDER = "prime:gateway"
 
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _ENV_NAMES = (

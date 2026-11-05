@@ -31,7 +31,7 @@ def token(tenant: str = "t1", principal: str = "alice") -> str:
         {
             "sub": "prime-agent-api",
             "iss": "prime-agent-api",
-            "aud": "yal-supervisor",
+            "aud": "prime-supervisor",
             "type": "service",
             "tenant_id": tenant,
             "principal_id": principal,

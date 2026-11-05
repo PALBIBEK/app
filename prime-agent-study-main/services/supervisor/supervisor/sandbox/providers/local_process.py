@@ -338,7 +338,7 @@ class LocalProcessProvider(SandboxProvider):
         base_dir: Path | None = None,
         hydrator: WorkspaceHydrator | None = None,
     ) -> None:
-        self._base = base_dir or Path(tempfile.gettempdir()) / "yal-local-sandboxes"
+        self._base = base_dir or Path(tempfile.gettempdir()) / "prime-local-sandboxes"
         self._base.mkdir(parents=True, exist_ok=True)
         self._hydrator = hydrator
         self._sandboxes: dict[str, LocalProcessSandbox] = {}

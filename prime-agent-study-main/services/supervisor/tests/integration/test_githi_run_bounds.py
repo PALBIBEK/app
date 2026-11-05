@@ -156,10 +156,11 @@ async def test_a_session_past_its_time_bound_runs_no_step_and_idle_time_is_free(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
     """pi-temporal's session time bound: the time the session's runs take, idle time not
-    counted. The bound is 2 s and each run's write takes 1.2 s."""
+    counted. The bound is 5 s and each run's write takes 3.2 s: one run fits with room for a
+    slow runner, two do not, and the 3 s idle between them would tip the first past it."""
     gateway = model(WRITE)
     state = await env.state()
-    with slow_tool("write", 1.2):
+    with slow_tool("write", 3.2):
         async with session_worker(env.client, state, task_queue=env.queue):
             sid = await env.create(state, "githi-session-time")
             await env.sessions.submit(sid, Message("c1", "write"))
@@ -177,7 +178,7 @@ async def test_a_session_past_its_time_bound_runs_no_step_and_idle_time_is_free(
             used = (await env.sessions.status(sid)).seconds_used
     assert len(gateway.seen) == asked, "a session past its bound asked the model"
     assert [e.error_class for e in payloads(events, ErrorEvent)] == ["SessionTimeLimit"] * 2
-    assert 2.4 <= used < 5, used
+    assert 6.4 <= used < 9, used  # both writes, and not the 3 s idle (that would be 9.4 or more)
 
 
 async def test_a_model_calls_cost_is_counted_once(

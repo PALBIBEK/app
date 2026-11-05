@@ -18,7 +18,7 @@ from supervisor.seams.providers.storage.memory_object_storage import MemoryObjec
 from supervisor.seams.providers.storage.s3_object_storage import S3ObjectStorage
 from supervisor.seams.providers.workspace.memory_workspace_store import MemoryWorkspaceStore
 
-BUCKET = "yal-workspace"
+BUCKET = "prime-workspace"
 SCOPE = "ws-1"
 DATA = b"def add(a, b):\n    return a + b\n"
 SHA = hashlib.sha256(DATA).hexdigest()

@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 from supervisor.memory_service.app import create_app
 
 JWT_SECRET = "d7-prod-memory-jwt-secret-at-least-32b!!"
-JWT_AUD = "yal-memory"
+JWT_AUD = "prime-memory"
 JWT_ISS = "prime-agent-api"
 STATIC_TOKEN = "d7-prod-static-token-should-not-be-primary"
 

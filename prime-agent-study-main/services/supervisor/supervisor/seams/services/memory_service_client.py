@@ -33,12 +33,12 @@ def memory_service_credential(tenant_id: str) -> str | None:
 
         now = datetime.now(UTC)
         aud = (
-            os.environ.get("MEMORY_JWT_AUDIENCE", "yal-memory").split(",")[0].strip()
-            or "yal-memory"
+            os.environ.get("MEMORY_JWT_AUDIENCE", "prime-memory").split(",")[0].strip()
+            or "prime-memory"
         )
         payload = {
-            "sub": os.environ.get("MEMORY_JWT_SUB", "yal-supervisor").strip()
-            or "yal-supervisor",
+            "sub": os.environ.get("MEMORY_JWT_SUB", "prime-supervisor").strip()
+            or "prime-supervisor",
             "iss": os.environ.get("MEMORY_JWT_ISSUER", "prime-agent-api").strip()
             or "prime-agent-api",
             "aud": aud,

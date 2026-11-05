@@ -53,7 +53,7 @@ def load_supported_protocol_versions(
 
     Searches for protocol_versions.yaml in multiple locations:
     1. Explicit path argument
-    2. YAL_CONTRACTS_DIR / CONTRACTS_DIR environment variable
+    2. PRIME_CONTRACTS_DIR / CONTRACTS_DIR environment variable
     3. /contracts/protocol_versions.yaml (Docker mount)
     4. contracts/protocol_versions.yaml (local)
     5. Relative to this file (host checkout)

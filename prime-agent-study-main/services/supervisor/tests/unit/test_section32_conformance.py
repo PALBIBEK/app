@@ -112,17 +112,17 @@ def test_section_32_cheat_sheet_projections() -> None:
 
     names = {s.name for s in sink.spans}
     assert any(n.startswith("invoke_agent") for n in names)
-    assert "yal.turn" in names
+    assert "prime.turn" in names
     assert "chat" in names
     assert any(n.startswith("execute_tool") for n in names)
-    assert "yal.approval" in names
-    assert "yal.compaction" in names
+    assert "prime.approval" in names
+    assert "prime.compaction" in names
     assert "search_memory" in names
-    assert "yal.job" in names
+    assert "prime.job" in names
     # ErrorEvent must not create a dedicated span
     assert not any("error" == n.lower() for n in names)
     # Sandbox never projected
     assert not any("sandbox" in n for n in names)
 
-    turn_span = next(s for s in sink.spans if s.name == "yal.turn")
+    turn_span = next(s for s in sink.spans if s.name == "prime.turn")
     assert turn_span.attributes.get("error.type") == "protocol"

@@ -3,7 +3,7 @@ name = "prime-agent"
 version = "0.1.0"
 description = "Production-grade FastAPI backend for AI agent platform"
 authors = [
-    {name = "Corridor Platforms Team"}
+    {name = "Prime Agent Team"}
 ]
 readme = "README.md"
 requires-python = ">=3.11"

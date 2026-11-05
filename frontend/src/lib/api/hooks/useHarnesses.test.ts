@@ -2,8 +2,6 @@
  * useHarnesses.test.ts
  *
  * RED Phase: Write failing tests first
- * Reference: 08-testing-patterns.md (AAA Pattern)
- * Reference: FRONTEND_BUILD_CONFIG.md (TanStack Query hooks)
  *
  * Test Strategy:
  * 1. Test query key factory

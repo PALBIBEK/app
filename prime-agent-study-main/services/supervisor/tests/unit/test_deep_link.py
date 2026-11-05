@@ -46,8 +46,8 @@ def test_span_coords_resolve_to_journal_row() -> None:
         proj.project(e)
 
     chat = next(s for s in sink.spans if s.name == "chat")
-    sid = chat.attributes["yal.session.id"]
-    seq = chat.attributes["yal.journal.seq"]
+    sid = chat.attributes["prime.session.id"]
+    seq = chat.attributes["prime.journal.seq"]
     row = next(e for e in journal if e.session_id == sid and e.seq == seq)
     assert isinstance(row.payload, MessageEnd)
     assert row.event_id == "e2"

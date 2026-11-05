@@ -36,7 +36,7 @@ def evaluation_attributes(
     *, name: str, label: str | None, value: float | None, explanation: str | None, source: str,
     evaluator: str | None, session_id: str, run_id: str,
 ) -> dict[str, Any]:
-    """The event's attributes: the convention's, then which verdict it is (``yal.*``)."""
+    """The event's attributes: the convention's, then which verdict it is (``prime.*``)."""
     attrs: dict[str, Any] = {"gen_ai.evaluation.name": name}
     if value is not None:
         attrs["gen_ai.evaluation.score.value"] = float(value)
@@ -44,9 +44,9 @@ def evaluation_attributes(
         attrs["gen_ai.evaluation.score.label"] = label
     if explanation:
         attrs["gen_ai.evaluation.explanation"] = explanation[:1000]
-    attrs.update({"yal.evaluation.source": source, "yal.session.id": session_id, "yal.run.id": run_id})
+    attrs.update({"prime.evaluation.source": source, "prime.session.id": session_id, "prime.run.id": run_id})
     if evaluator:
-        attrs["yal.evaluation.evaluator"] = evaluator
+        attrs["prime.evaluation.evaluator"] = evaluator
     return attrs
 
 
@@ -75,7 +75,7 @@ def emit_evaluation(
     try:
         from opentelemetry._logs import LogRecord, get_logger
 
-        get_logger("yal-supervisor").emit(
+        get_logger("prime-supervisor").emit(
             LogRecord(
                 event_name=EVENT,
                 attributes=evaluation_attributes(

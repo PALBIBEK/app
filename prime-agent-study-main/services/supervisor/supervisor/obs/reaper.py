@@ -49,10 +49,10 @@ class ReaperConfig:
     @classmethod
     def from_env(cls) -> ReaperConfig:
         return cls(
-            run_idle_timeout_ms=_env_ms("YAL_RUN_IDLE_TIMEOUT_MS", 60 * 60 * 1000),
-            span_max_age_ms=_env_ms("YAL_SPAN_MAX_AGE_MS", 24 * 60 * 60 * 1000),
-            reaper_interval_s=float(os.environ.get("YAL_REAPER_INTERVAL_S", str(5 * 60))),
-            tool_idle_timeout_ms=_env_ms("YAL_TOOL_IDLE_TIMEOUT_MS", 30 * 60 * 1000),
+            run_idle_timeout_ms=_env_ms("PRIME_RUN_IDLE_TIMEOUT_MS", 60 * 60 * 1000),
+            span_max_age_ms=_env_ms("PRIME_SPAN_MAX_AGE_MS", 24 * 60 * 60 * 1000),
+            reaper_interval_s=float(os.environ.get("PRIME_REAPER_INTERVAL_S", str(5 * 60))),
+            tool_idle_timeout_ms=_env_ms("PRIME_TOOL_IDLE_TIMEOUT_MS", 30 * 60 * 1000),
         )
 
 

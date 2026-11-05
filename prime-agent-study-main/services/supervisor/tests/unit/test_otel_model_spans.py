@@ -60,7 +60,7 @@ def test_the_exported_model_calls_are_the_product_traces() -> None:
     projector = JournalProjector(sink=sink, tenant_id="t", harness_id="h", harness_version="v1")
     for e in _events():
         projector.project(e)
-    exported = {s.span_id: (s.start_ms, s.end_ms) for s in sink.spans if s.attributes.get("yal.span.kind") == "llm"}
+    exported = {s.span_id: (s.start_ms, s.end_ms) for s in sink.spans if s.attributes.get("prime.span.kind") == "llm"}
     trace = build_run_trace("s-m", "t1", _events())
     assert trace is not None
     product = {s.id: (s.start_ms, s.end_ms) for s in trace.spans if s.kind == "llm"}

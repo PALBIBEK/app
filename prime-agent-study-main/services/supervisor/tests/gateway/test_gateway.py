@@ -111,7 +111,7 @@ def test_mg_c2_no_supervisor_imports() -> None:
 def test_mg_i1_round_trip(client: TestClient) -> None:
     r = client.post(
         "/v1/chat/completions",
-        headers={"X-YAL-Route-Id": "fake"},
+        headers={"X-PRIME-Route-Id": "fake"},
         json={"messages": [{"role": "user", "content": "solo-dev"}]},
     )
     assert r.status_code == 200

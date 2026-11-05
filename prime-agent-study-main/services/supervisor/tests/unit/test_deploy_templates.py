@@ -49,20 +49,20 @@ def _env(container: dict[str, Any]) -> dict[str, str]:
 def test_only_the_gateway_holds_provider_keys() -> None:
     secrets = _secrets()
     holders = {name for name, keys in secrets.items() if keys & VENDOR_KEYS}
-    assert holders == {"yal-gateway-credentials"}
-    readers = {name for name, c in _containers().items() if _secret_of(c) == "yal-gateway-credentials"}
-    assert readers == {"yal-model-gateway"}
+    assert holders == {"prime-gateway-credentials"}
+    readers = {name for name, c in _containers().items() if _secret_of(c) == "prime-gateway-credentials"}
+    assert readers == {"prime-model-gateway"}
 
 
 def test_each_service_reads_a_secret_with_what_it_needs() -> None:
     secrets, containers = _secrets(), _containers()
-    supervisor = secrets[_secret_of(containers["yal-supervisor"])]
+    supervisor = secrets[_secret_of(containers["prime-supervisor"])]
     assert {"DATABASE_URL", "SERVICE_JWT_SECRET", "VAULT_KEYS", "TEMPORAL_CODEC_KEY"} <= supervisor
-    assert _secret_of(containers["yal-supervisor-worker"]) == _secret_of(containers["yal-supervisor"])
-    memory = secrets[_secret_of(containers["yal-memory"])]
+    assert _secret_of(containers["prime-supervisor-worker"]) == _secret_of(containers["prime-supervisor"])
+    memory = secrets[_secret_of(containers["prime-memory"])]
     assert memory == {"MEMORY_DATABASE_URL", "SERVICE_JWT_SECRET"}
 
 
 def test_the_services_run_under_production_rules() -> None:
-    for name in ("yal-supervisor", "yal-supervisor-worker", "yal-memory", "yal-model-gateway"):
+    for name in ("prime-supervisor", "prime-supervisor-worker", "prime-memory", "prime-model-gateway"):
         assert _env(_containers()[name]).get("ENV") == "production", name

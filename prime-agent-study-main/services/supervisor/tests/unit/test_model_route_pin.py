@@ -12,7 +12,7 @@ import pytest
 
 from supervisor.catalog.providers.model_route import apply_runtime_model_route
 
-SIGNALS = ("YAL_MODEL_ROUTE", "MODEL_GATEWAY_DEFAULT_ROUTE", "GATEWAY_VENDOR_READY")
+SIGNALS = ("PRIME_MODEL_ROUTE", "MODEL_GATEWAY_DEFAULT_ROUTE", "GATEWAY_VENDOR_READY")
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def test_a_provider_key_in_the_environment_does_not_change_the_pin(monkeypatch: 
 
 @pytest.mark.parametrize(
     ("signal", "value", "expected"),
-    [("YAL_MODEL_ROUTE", "githi", "githi"), ("MODEL_GATEWAY_DEFAULT_ROUTE", "githi", "githi"),
+    [("PRIME_MODEL_ROUTE", "githi", "githi"), ("MODEL_GATEWAY_DEFAULT_ROUTE", "githi", "githi"),
      ("GATEWAY_VENDOR_READY", "1", "githi")],
 )
 def test_explicit_signals_still_upgrade_the_echo_placeholder_and_say_so(
@@ -45,5 +45,5 @@ def test_explicit_signals_still_upgrade_the_echo_placeholder_and_say_so(
 def test_a_real_pin_is_kept_unless_ops_force_a_route(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODEL_GATEWAY_DEFAULT_ROUTE", "githi")
     assert apply_runtime_model_route("or-free") == "or-free"
-    monkeypatch.setenv("YAL_MODEL_ROUTE", "githi")
+    monkeypatch.setenv("PRIME_MODEL_ROUTE", "githi")
     assert apply_runtime_model_route("or-free") == "githi"

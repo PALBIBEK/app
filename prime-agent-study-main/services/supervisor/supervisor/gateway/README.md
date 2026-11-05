@@ -1,4 +1,4 @@
-# YAL Model Gateway
+# PRIME Model Gateway
 
 Independently deployable model access service. It serves the LiteLLM end-user
 contract a QM-style client discovers and calls — model listing and model-group
@@ -72,7 +72,7 @@ route when the table lacks it: `githi` (OpenRouter), `gpt-5.5` (OpenAI),
 
 Inference bodies are relayed with only `model` rewritten, so signed thinking,
 encrypted reasoning and `service_tier` reach the upstream intact. Every wire
-streams (`"stream": true`) in its own SSE format. Header `X-YAL-Route-Id`
+streams (`"stream": true`) in its own SSE format. Header `X-PRIME-Route-Id`
 overrides the body's `model`.
 
 ## Providers
@@ -114,7 +114,7 @@ pins use `githi` instead of catalog `echo`:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
-export GATEWAY_VENDOR_READY=1          # or YAL_MODEL_ROUTE=githi
+export GATEWAY_VENDOR_READY=1          # or PRIME_MODEL_ROUTE=githi
 export MODEL_GATEWAY_DEFAULT_ROUTE=githi   # optional; mirror on gateway + supervisor
 docker compose up --build
 ```
