@@ -37,6 +37,7 @@ class AnthropicProvider:
                 api_key=api_key,
                 base_url=base_url,
                 key_env_name="ANTHROPIC_API_KEY",
+                base_url_env_name="ANTHROPIC_BASE_URL",
                 auth=auth,
                 transport=transport,
                 retries=retries,

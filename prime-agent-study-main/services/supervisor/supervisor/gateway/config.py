@@ -6,10 +6,11 @@ import re
 import secrets
 from functools import cached_property
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from supervisor.gateway.routes import DEFAULT_ROUTES, VENDOR_ROUTES, RouteTable
+from supervisor.gateway.vendors import VENDORS, Vendor, parse_base_url
 from supervisor.gateway.virtual_keys import derive_virtual_key_secret
 
 _HEADER_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
@@ -19,7 +20,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
     model_gateway_token: str = Field(default="", alias="MODEL_GATEWAY_TOKEN")
-    model_gateway_virtual_key_secret: str = Field(default="", alias="MODEL_GATEWAY_VIRTUAL_KEY_SECRET")
+    model_gateway_virtual_key_secret: str = Field(
+        default="", alias="MODEL_GATEWAY_VIRTUAL_KEY_SECRET"
+    )
     """Signs session virtual keys (at least 32 characters); derived from the service token
     when unset. Every gateway process needs the same one, so keys outlive a restart."""
     model_gateway_api_key_header: str = Field(
@@ -31,14 +34,41 @@ class Settings(BaseSettings):
     model_gateway_default_route: str = Field(default="echo", alias="MODEL_GATEWAY_DEFAULT_ROUTE")
     model_gateway_routes_json: str = Field(default="", alias="MODEL_GATEWAY_ROUTES_JSON")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
+    openai_base_url: str = Field(default=VENDORS["openai"].base_url, alias="OPENAI_BASE_URL")
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
     openrouter_base_url: str = Field(
-        default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
+        default=VENDORS["openrouter"].base_url, alias="OPENROUTER_BASE_URL"
     )
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    anthropic_base_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_BASE_URL")
+    anthropic_base_url: str = Field(
+        default=VENDORS["anthropic"].base_url, alias="ANTHROPIC_BASE_URL"
+    )
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field(default=VENDORS["deepseek"].base_url, alias="DEEPSEEK_BASE_URL")
+    zai_api_key: str = Field(default="", alias="ZAI_API_KEY")
+    zai_base_url: str = Field(default=VENDORS["zai"].base_url, alias="ZAI_BASE_URL")
+    dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
+    dashscope_base_url: str = Field(default=VENDORS["qwen"].base_url, alias="DASHSCOPE_BASE_URL")
+    local_model_api_key: str = Field(default="", alias="LOCAL_MODEL_API_KEY")
+    """Optional: a local server started with a key (vLLM ``--api-key``); Ollama needs none."""
+    local_model_base_url: str = Field(default="", alias="LOCAL_MODEL_BASE_URL")
+    """A local OpenAI-compatible server (``http://localhost:11434/v1`` for Ollama); unset, the
+    ``local`` vendor is off."""
     port: int = Field(default=8090, alias="PORT")
+
+    @field_validator(
+        "openai_base_url",
+        "openrouter_base_url",
+        "anthropic_base_url",
+        "deepseek_base_url",
+        "zai_base_url",
+        "dashscope_base_url",
+        "local_model_base_url",
+    )
+    @classmethod
+    def _base_url(cls, value: str, info: ValidationInfo) -> str:
+        field = cls.model_fields[info.field_name or ""]
+        return parse_base_url(str(field.alias), value)
 
     @field_validator("model_gateway_api_key_header")
     @classmethod
@@ -63,12 +93,20 @@ class Settings(BaseSettings):
             return True
         return self.environment.strip().lower() in ("production", "staging")
 
+    def _setting(self, env_name: str) -> str:
+        """The value of the setting read from the environment variable ``env_name``."""
+        name = next(n for n, f in type(self).model_fields.items() if f.alias == env_name)
+        return str(getattr(self, name)).strip()
+
+    def vendor_key(self, vendor: Vendor) -> str:
+        return self._setting(vendor.key_env)
+
+    def vendor_base_url(self, vendor: Vendor) -> str:
+        return self._setting(vendor.base_url_env)
+
     def vendor_keys(self) -> dict[str, str]:
-        return {
-            "openai": self.openai_api_key.strip(),
-            "openrouter": self.openrouter_api_key.strip(),
-            "anthropic": self.anthropic_api_key.strip(),
-        }
+        """Each vendor's key (empty when unset)."""
+        return {vendor.id: self.vendor_key(vendor) for vendor in VENDORS.values()}
 
     @cached_property
     def route_table(self) -> RouteTable:
@@ -79,7 +117,7 @@ class Settings(BaseSettings):
         raw = self.model_gateway_routes_json.strip()
         table = RouteTable.from_json(raw) if raw else RouteTable(DEFAULT_ROUTES)
         for vendor, key in self.vendor_keys().items():
-            if key:
+            if key and vendor in VENDOR_ROUTES:
                 table = table.with_defaults(VENDOR_ROUTES[vendor])
         return table
 

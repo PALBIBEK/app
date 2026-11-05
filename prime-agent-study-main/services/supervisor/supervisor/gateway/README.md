@@ -20,6 +20,10 @@ DB, catalog, or harness imports required.
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | empty / `https://api.openai.com/v1` | `openai` provider (chat completions + Responses) |
 | `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` | empty / `https://openrouter.ai/api/v1` | `openrouter` provider (chat completions) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | empty / `https://api.anthropic.com` | `anthropic` provider (Messages + its OpenAI-compatible chat) |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | empty / `https://api.deepseek.com` | `deepseek` provider (chat completions) |
+| `ZAI_API_KEY` / `ZAI_BASE_URL` | empty / `https://api.z.ai/api/paas/v4` | `zai` provider: GLM (chat completions) |
+| `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` | empty / `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen` provider: Alibaba Cloud Model Studio (chat completions) |
+| `LOCAL_MODEL_BASE_URL` / `LOCAL_MODEL_API_KEY` | empty / empty | `local` provider: an OpenAI-compatible server you run (Ollama: `http://localhost:11434/v1`). Off until the URL is set; the key is optional |
 | `PORT` | `8090` | Listen port |
 
 ## Routes
@@ -56,7 +60,17 @@ Default routes (when `MODEL_GATEWAY_ROUTES_JSON` is unset): `echo`, `fake`
 (echo, priced at 0.0005 USD/token so budgets move) and `githi` (OpenRouter
 `anthropic/claude-sonnet-4`). Each vendor key that is set adds its default
 route when the table lacks it: `githi` (OpenRouter), `gpt-5.5` (OpenAI),
-`claude-sonnet-5` (Anthropic).
+`claude-sonnet-5` (Anthropic), `deepseek-flash` (DeepSeek), `glm-5.2` (Z.ai) and
+`qwen3.7-plus` (Qwen). A local server has no default route: name the models it runs,
+for example
+
+```json
+{"qwen3-local": {"provider": "local", "upstream_model": "qwen3:8b", "context_window": 40960,
+  "max_output_tokens": 8192, "input_cost_per_token": 0, "output_cost_per_token": 0}}
+```
+
+Every `*_BASE_URL` must be an http(s) URL without credentials, a query string or a
+fragment; anything else stops the gateway at start.
 
 ## API
 

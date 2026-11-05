@@ -31,4 +31,5 @@ class OpenRouterChatProvider(OpenAICompatProvider):
             extra_headers={"HTTP-Referer": http_referer, "X-Title": app_title},
             retries=retries,
             key_env_name="OPENROUTER_API_KEY",
+            base_url_env_name="OPENROUTER_BASE_URL",
         )
