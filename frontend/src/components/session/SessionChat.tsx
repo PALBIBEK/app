@@ -17,19 +17,20 @@ import { Card, StatusPill, type StatusKind } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { useSubagentApprovals } from '@/lib/api/hooks/useSubagentApprovals';
 import { useSubagents } from '@/lib/api/hooks/useSubagents';
-import type { Session, ToolCallView } from '@/lib/api/types/session.types';
+import type { Session } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
-import { anyActive, SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
+import { anyActive, subagentName } from '@/lib/session/subagents';
 import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { useAuthStore } from '@/lib/store/authStore';
 import { cn, formatMoney } from '@/lib/utils';
 
-import { ApprovalCard, MessageBubble, ToolCard } from './parts';
+import { ApprovalCard, MessageBubble } from './parts';
 import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
-import { SubagentCallCard, SubagentNoticeLine, SubagentsSection } from './subagents';
+import { SubagentNoticeLine, SubagentsSection } from './subagents';
+import { useToolRenderer } from './tools';
 import { SessionNoteLine } from './SessionNoteLine';
 
 const ENDED = new Set(['terminated', 'failed', 'budget_exceeded']);
@@ -118,12 +119,11 @@ export function SessionChat({
   const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
     active: state.running || anyActive(subagents ?? []), // only a working subagent asks
   });
-  const renderTool = (tool: ToolCallView): JSX.Element =>
-    SUBAGENT_TOOLS.has(tool.name) ? (
-      <SubagentCallCard key={tool.id} tool={tool} sessionId={session.id} startedId={state.subagentOf.get(tool.id)} />
-    ) : (
-      <ToolCard key={tool.id} tool={tool} />
-    );
+  const renderTool = useToolRenderer({
+    sessionId: session.id,
+    subagentOf: state.subagentOf,
+    tools: [...state.messages.flatMap((m) => m.toolCalls ?? []), ...pendingTools],
+  });
 
   useEffect(() => setStatus(session.status), [session.status]);
   const wasRunning = useRef(false);

@@ -1,56 +1,53 @@
-"""SSE event stream with Last-Event-ID resume.
+"""Our wire's SSE event stream, with Last-Event-ID resume.
 
-Subscribe to live *before* journal replay; filter seq <= cursor so the
-handover race yields neither gaps nor duplicates.
-
-A session that has ended (or was erased) has nothing more to say: once every event of it
-was sent, the stream sends ``event: end`` and closes, and a client stops reconnecting on
-it. It used to poll the finished session's journal for as long as the page stayed open.
+What a session says comes from ``supervisor.api.stream``'s followers; this writes it as our
+wire's frames: each journalled event with its seq as the SSE id, the reply being written as
+a ``partial_output`` event without one (it is not in the journal, so a reconnect resumes after
+the last journalled event and never replays it), a comment to keep the connection open, and
+``event: end`` once a session that has ended has said everything, so a client stops
+reconnecting on it.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
+from supervisor.agent.events import Envelope
 from supervisor.api import deps
+from supervisor.api.stream import (
+    ENDED_CHECK_SECS,
+    JOURNAL_POLL_SECS,
+    PAGE,
+    Ended,
+    Item,
+    Ping,
+    follow_journal,
+    follow_live,
+)
 from supervisor.api.wire import WIRE_VERSION, envelope_to_wire
 from supervisor.journal.partials import Partial, PartialOutputs
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.watch import JournalWatch
-from supervisor.session import Dropped, LiveSubscription, SessionManager
+from supervisor.session import SessionManager
 from supervisor.temporal.contracts import CLOSED_STATUSES
 
-logger = logging.getLogger(__name__)
+__all__ = ["PAGE", "SSE_END", "iter_journal_sse", "iter_sse", "sse_response", "stream_cursor"]
+
 router = APIRouter(prefix="/v1/sessions", tags=["events"])
 
 _HEARTBEAT_SECS = 20.0
-PAGE = 500
-"""Events read at once to send: a client starting from the beginning of a long session gets
-it a page at a time, not the whole journal in one read held in memory."""
-_JOURNAL_POLL_SECS = 0.25
-_ENDED_CHECK_SECS = 2.0
-"""How often a quiet stream asks whether its session has ended."""
-
+"""A quiet stream's keep-alive: a comment after this long with nothing to send."""
 SSE_END = "event: end\ndata: {}\n\n"
 """The last frame of the stream of a session that has ended: nothing will follow."""
+SSE_PING = ": ping\n\n"
 
 
 def _sse_data(wire_json: str, *, event_id: int) -> str:
     return f"id: {event_id}\ndata: {wire_json}\n\n"
-
-
-async def _partial(partials: PartialOutputs, session_id: str) -> Partial | None:
-    try:
-        return await partials.get(session_id)
-    except Exception:
-        logger.debug("partial output read failed session=%s", session_id, exc_info=True)
-        return None
 
 
 def _partial_wire(partial: Partial, cursor: int) -> str:
@@ -69,8 +66,21 @@ def _partial_wire(partial: Partial, cursor: int) -> str:
     )
 
 
-def _sse_comment(text: str) -> str:
-    return f": {text}\n\n"
+async def _frames(items: AsyncIterator[Item], cursor: int, max_events: int | None) -> AsyncIterator[str]:
+    """``items`` as our wire's SSE frames; ``max_events`` (a test hook) ends it after N events."""
+    emitted = 0
+    async for item in items:
+        if isinstance(item, Envelope):
+            yield _sse_data(envelope_to_wire(item).model_dump_json(), event_id=item.seq)
+            cursor, emitted = item.seq, emitted + 1
+            if max_events is not None and emitted >= max_events:
+                return
+        elif isinstance(item, Partial):
+            yield f"data: {_partial_wire(item, cursor)}\n\n"
+        elif isinstance(item, Ping):
+            yield SSE_PING
+        elif isinstance(item, Ended):
+            yield SSE_END
 
 
 async def iter_sse(
@@ -83,55 +93,17 @@ async def iter_sse(
     heartbeat_secs: float | None = None,
     max_events: int | None = None,
 ) -> AsyncIterator[str]:
-    """Resumable SSE body. Subscribe before replay; skip seq <= cursor on live.
-
-    ``max_events`` is a test hook to end the stream after N data events.
-    """
-    hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
-
-    def _gone() -> bool:
-        if is_disconnected is None:
-            return False
-        return is_disconnected()
-
-    sub: LiveSubscription = manager.subscribe_live(session_id)
-    live_cursor = cursor
-    emitted = 0
-    try:
-        while page := await reader.read(session_id, since=live_cursor, limit=PAGE):
-            for env in page:
-                if _gone():
-                    return
-                wire = envelope_to_wire(env)
-                yield _sse_data(wire.model_dump_json(), event_id=env.seq)
-                live_cursor = env.seq
-                emitted += 1
-                if max_events is not None and emitted >= max_events:
-                    return
-
-        while True:
-            if sub.dropped or _gone():
-                if sub.dropped:
-                    logger.info("dropping slow SSE client session=%s", session_id)
-                return
-            try:
-                item = await asyncio.wait_for(sub.queue.get(), timeout=hb)
-            except TimeoutError:
-                yield _sse_comment("ping")
-                continue
-            if isinstance(item, Dropped):
-                return
-            env = item  # type: ignore[assignment]
-            if env.seq <= live_cursor:
-                continue
-            wire = envelope_to_wire(env)
-            yield _sse_data(wire.model_dump_json(), event_id=env.seq)
-            live_cursor = env.seq
-            emitted += 1
-            if max_events is not None and emitted >= max_events:
-                return
-    finally:
-        manager.unsubscribe_live(session_id, sub)
+    """An in-process session's SSE body (``follow_live``)."""
+    live = follow_live(
+        session_id=session_id,
+        cursor=cursor,
+        manager=manager,
+        reader=reader,
+        is_disconnected=is_disconnected,
+        heartbeat_secs=_HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs,
+    )
+    async for frame in _frames(live, cursor, max_events):
+        yield frame
 
 
 async def iter_journal_sse(
@@ -142,115 +114,68 @@ async def iter_journal_sse(
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     has_ended: Callable[[], Awaitable[bool]] | None = None,
     heartbeat_secs: float | None = None,
-    poll_secs: float = _JOURNAL_POLL_SECS,
-    ended_check_secs: float = _ENDED_CHECK_SECS,
+    poll_secs: float = JOURNAL_POLL_SECS,
+    ended_check_secs: float = ENDED_CHECK_SECS,
     max_events: int | None = None,
     partials: PartialOutputs | None = None,
     watch: JournalWatch | None = None,
 ) -> AsyncIterator[str]:
-    """Resumable SSE body that follows the journal, so it works for sessions running
-    in any worker and from any API replica.
+    """A session's SSE body that follows its journal (``follow_journal``), so it works for
+    sessions running in any worker and from any API replica."""
+    items = follow_journal(
+        session_id=session_id,
+        cursor=cursor,
+        reader=reader,
+        is_disconnected=is_disconnected,
+        has_ended=has_ended,
+        heartbeat_secs=_HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs,
+        poll_secs=poll_secs,
+        ended_check_secs=ended_check_secs,
+        partials=partials,
+        watch=watch,
+    )
+    async for frame in _frames(items, cursor, max_events):
+        yield frame
 
-    With ``partials``, the reply the model is writing is sent too, as it grows: a
-    ``partial_output`` event with no ``id`` (it is not in the journal, so a reconnect
-    resumes after the last journalled event and never replays one).
 
-    With ``has_ended``, a quiet stream asks every ``ended_check_secs`` whether the session
-    has ended; once it has, the journal is read once more (what was written before it
-    ended is sent first), then ``SSE_END``, and the stream stops. With
-    ``is_disconnected``, a client that went away stops the polling within a poll.
+def session_items(request: Request, session_id: str, cursor: int) -> AsyncIterator[Item]:
+    """What the session says after ``cursor``, as the deployment serves it: its journal
+    (sessions on Temporal, in any worker) or its manager's live queue (in-process)."""
+    manager = deps.get_manager(request)
+    reader = deps.get_reader(request)
+    if deps.get_workflows(request) is None:
+        return follow_live(session_id=session_id, cursor=cursor, manager=manager, reader=reader, heartbeat_secs=_HEARTBEAT_SECS)
 
-    With ``watch`` (the process's ``JournalWatch``), the stream reads only when its
-    session changed, and learns that from the one watcher every stream shares; without
-    it, it polls on its own every ``poll_secs`` (tests, a caller without one).
-    """
-    hb = _HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
-    if watch is not None:
-        async for frame in _watched_sse(
-            session_id=session_id,
-            cursor=cursor,
-            reader=reader,
-            watch=watch,
-            is_disconnected=is_disconnected,
-            ended_from_status=has_ended is not None,
-            heartbeat_secs=hb,
-            max_events=max_events,
-            partials=partials,
-        ):
-            yield frame
-        return
-    emitted, idle, unchecked = 0, 0.0, ended_check_secs  # asks on the first quiet poll
-    ending = False
-    shown: tuple[str, int, int] | None = None  # the partial last sent: run, step, updated
-    while is_disconnected is None or not await is_disconnected():
-        batch = await reader.read(session_id, since=cursor, limit=PAGE)
-        for env in batch:
-            yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
-            cursor, emitted = env.seq, emitted + 1
-            if max_events is not None and emitted >= max_events:
+    async def has_ended() -> bool:
+        status = await manager.session_status(session_id)
+        return status is None or status in CLOSED_STATUSES  # None: erased
+
+    return follow_journal(
+        session_id=session_id,
+        cursor=cursor,
+        reader=reader,
+        is_disconnected=request.is_disconnected,
+        has_ended=has_ended,
+        heartbeat_secs=_HEARTBEAT_SECS,
+        partials=PartialOutputs(reader.session_factory),
+        watch=deps.get_watch(request),
+    )
+
+
+def sse_response(request: Request, frames: AsyncIterator[str], media_type: str = "text/event-stream") -> StreamingResponse:
+    """``frames`` as a streaming response that stops when its client goes away."""
+
+    async def body() -> AsyncIterator[str]:
+        async for frame in frames:
+            if await request.is_disconnected():
                 return
-        if batch:
-            idle = 0.0
-            continue
-        if ending:
-            yield SSE_END
-            return
-        if has_ended is not None and unchecked >= ended_check_secs:
-            unchecked = 0.0
-            if ending := await has_ended():
-                continue
-        if partials is not None and (partial := await _partial(partials, session_id)) is not None:
-            key = (partial.run_id, partial.step, partial.updated_ms)
-            if key != shown:
-                shown, idle = key, 0.0
-                yield f"data: {_partial_wire(partial, cursor)}\n\n"
-                continue
-        if idle >= hb:
-            yield _sse_comment("ping")
-            idle = 0.0
-        await asyncio.sleep(poll_secs)
-        idle += poll_secs
-        unchecked += poll_secs
+            yield frame
 
-
-async def _watched_sse(
-    *,
-    session_id: str,
-    cursor: int,
-    reader: JournalReader,
-    watch: JournalWatch,
-    is_disconnected: Callable[[], Awaitable[bool]] | None,
-    ended_from_status: bool,
-    heartbeat_secs: float,
-    max_events: int | None,
-    partials: PartialOutputs | None,
-) -> AsyncIterator[str]:
-    """``iter_journal_sse`` woken by the shared watch: the journal is read when the
-    session's last seq passed the cursor, the partial reply when it grew, and the session
-    has ended when its status is a closed one (or it is gone)."""
-    emitted = 0
-    shown: tuple[str, int, int] | None = None
-    seen = await watch.changed(session_id, None, timeout=heartbeat_secs)
-    while is_disconnected is None or not await is_disconnected():
-        if seen.last_seq > cursor and (batch := await reader.read(session_id, since=cursor, limit=PAGE)):
-            for env in batch:
-                yield _sse_data(envelope_to_wire(env).model_dump_json(), event_id=env.seq)
-                cursor, emitted = env.seq, emitted + 1
-                if max_events is not None and emitted >= max_events:
-                    return
-            continue  # what was written while those were sent
-        if ended_from_status and (seen.status is None or seen.status in CLOSED_STATUSES):
-            yield SSE_END
-            return
-        if partials is not None and seen.partial_ms is not None:
-            partial = await _partial(partials, session_id)
-            if partial is not None and (key := (partial.run_id, partial.step, partial.updated_ms)) != shown:
-                shown = key
-                yield f"data: {_partial_wire(partial, cursor)}\n\n"
-        now = await watch.changed(session_id, seen, timeout=heartbeat_secs)
-        if now == seen:
-            yield _sse_comment("ping")
-        seen = now
+    return StreamingResponse(
+        body(),
+        media_type=media_type,
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 def stream_cursor(last_event_id: str | None, since: int | None) -> int:
@@ -283,42 +208,8 @@ async def stream_events(
     since: int | None = Query(default=None, description="Send events after this seq"),
 ) -> StreamingResponse:
     await deps.require_session_access(tenant_id, session_id, request)
-    manager = deps.get_manager(request)
-    reader = deps.get_reader(request)
     cursor = stream_cursor(last_event_id, since)
-
-    async def has_ended() -> bool:
-        status = await manager.session_status(session_id)
-        return status is None or status in CLOSED_STATUSES  # None: erased
-
-    async def gen() -> AsyncIterator[str]:
-        body = (
-            iter_journal_sse(
-                session_id=session_id,
-                cursor=cursor,
-                reader=reader,
-                is_disconnected=request.is_disconnected,
-                has_ended=has_ended,
-                partials=PartialOutputs(reader.session_factory),
-                watch=deps.get_watch(request),
-            )
-            if deps.get_workflows(request) is not None
-            else iter_sse(session_id=session_id, cursor=cursor, manager=manager, reader=reader)
-        )
-        async for chunk in body:
-            if await request.is_disconnected():
-                return
-            yield chunk
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return sse_response(request, _frames(session_items(request, session_id, cursor), cursor, None))
 
 
 @router.get("/{session_id}/hand-logs/{ref}")

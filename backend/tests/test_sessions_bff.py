@@ -975,3 +975,113 @@ async def test_a_chosen_model_goes_to_the_supervisor_and_the_session_shows_it(
     assert bodies[0]["model"] == "gateway/deepseek-flash"
     assert bodies[1]["model"] == "gateway/local/qwen3:8b"
     assert shown.json()["model"] == "gateway/local/qwen3:8b"
+
+
+# AG-UI: the session as an AG-UI agent, its thread being this session ---------------------
+
+
+async def _agui_link(db_session, owner, harness) -> SessionLink:
+    link = SessionLink(
+        id=str(uuid4()), user_id=owner.id, harness_id=harness.id, ai_session_id="ai-agui", tenant_id=owner.id,
+        harness_version="githi-v1", runtime="githi", status="active", created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    db_session.add(link)
+    await db_session.flush()
+    return link
+
+
+def _as(db_session, user) -> httpx.AsyncClient:
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+def _run_input(thread_id: str) -> dict:
+    return {"threadId": thread_id, "runId": "r1", "messages": [{"id": "m1", "role": "user", "content": "hi"}], "tools": [], "context": []}
+
+
+AGUI_RUN = (
+    b'data: {"type":"RUN_STARTED","threadId":"ai-agui","runId":"r1"}\n\n'
+    b'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"m","delta":"ai-agui is a word here"}\n\n'
+    b'id: 7\ndata: {"type":"RUN_FINISHED","threadId":"ai-agui","runId":"r1"}\n\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_an_agui_run_is_asked_of_the_supervisors_session_and_answered_as_this_one(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    link = await _agui_link(db_session, owner, harness)
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1/sessions/ai-agui/agui":
+            sent.update(json.loads(request.content))
+            return httpx.Response(200, content=AGUI_RUN, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    async with _as(db_session, owner) as api:
+        r = await api.post(f"/api/v1/sessions/{link.id}/agui", json=_run_input(link.id))
+
+    assert r.status_code == 200 and "text/event-stream" in r.headers["content-type"]
+    assert sent["threadId"] == "ai-agui" and sent["messages"][0]["content"] == "hi"
+    events = [json.loads(line[len("data: "):]) for line in r.text.splitlines() if line.startswith("data: ")]
+    assert [e.get("threadId") for e in events] == [link.id, None, link.id]
+    assert events[1]["delta"] == "ai-agui is a word here", "only an event's thread is renamed"
+    assert "id: 7" in r.text, "resume ids pass through"
+
+
+@pytest.mark.asyncio
+async def test_an_agui_run_of_another_thread_or_session_is_refused(db_session, owner, harness, session_settings, monkeypatch, make_user):
+    link = await _agui_link(db_session, owner, harness)
+    called: list[str] = []
+    _patch_session(monkeypatch, session_settings, lambda request: called.append(request.url.path) or httpx.Response(500))
+    stranger = await make_user(email="stranger@example.com", name="Stranger")
+
+    async with _as(db_session, owner) as api:
+        other_thread = await api.post(f"/api/v1/sessions/{link.id}/agui", json=_run_input("some-other-thread"))
+    async with _as(db_session, stranger) as api:
+        not_theirs = await api.post(f"/api/v1/sessions/{link.id}/agui", json=_run_input(link.id))
+        not_theirs_follow = await api.get(f"/api/v1/sessions/{link.id}/agui")
+
+    assert other_thread.status_code == 400 and "threadId must be this session" in other_thread.text
+    assert not_theirs.status_code == 404 and not_theirs_follow.status_code == 404
+    assert called == [], "nothing reached the supervisor"
+
+
+@pytest.mark.asyncio
+async def test_following_a_session_as_agui_resumes_where_the_client_was(db_session, owner, harness, session_settings, monkeypatch):
+    link = await _agui_link(db_session, owner, harness)
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1/sessions/ai-agui/agui":
+            seen["last"] = request.headers.get("last-event-id", "")
+            return httpx.Response(200, content=AGUI_RUN, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    async with _as(db_session, owner) as api:
+        r = await api.get(f"/api/v1/sessions/{link.id}/agui", headers={"Last-Event-ID": "6"})
+
+    assert r.status_code == 200 and seen["last"] == "6"
+    assert f'"threadId":"{link.id}"' in r.text and '"threadId":"ai-agui"' not in r.text
+
+
+@pytest.mark.asyncio
+async def test_a_thread_is_renamed_even_when_its_event_arrives_in_pieces():
+    from prime_agent.services.session_service import rethreaded
+
+    async def pieces():
+        for at in range(0, len(AGUI_RUN), 7):  # split mid-line, mid-word
+            yield AGUI_RUN[at:at + 7]
+
+    out = b"".join([chunk async for chunk in rethreaded(pieces(), "ai-agui", "s-1")])
+
+    assert out == AGUI_RUN.replace(b'"threadId":"ai-agui"', b'"threadId":"s-1"')

@@ -143,6 +143,15 @@ class JournalReader:
             ).scalars().all()
         return await self._envelopes(rows)
 
+    async def first_seq(self, session_id: str, turn_id: str) -> int | None:
+        """The seq of run ``turn_id``'s first event; None while it has none (it waits)."""
+        async with self._factory() as db:
+            return (
+                await db.execute(
+                    select(func.min(EventRow.seq)).where(EventRow.session_id == session_id, EventRow.turn_id == turn_id)
+                )
+            ).scalar()
+
     async def read_run_window(self, session_id: str, turn_id: str) -> list[Envelope]:
         """One run's events plus the session's own events (those with no run) that happened
         while it ran: a sandbox starting or being saved belongs to the run it served."""

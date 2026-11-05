@@ -290,6 +290,14 @@ async def post_message(
     request: Request,
     tenant_id: str = Depends(deps.current_tenant),
 ) -> PostMessageResponse:
+    return await submit_message(request, tenant_id, session_id, body)
+
+
+async def submit_message(
+    request: Request, tenant_id: str, session_id: str, body: PostMessageRequest
+) -> PostMessageResponse:
+    """Give the session ``body``'s message, once per command id: what ``POST /messages`` does,
+    and an AG-UI run (``supervisor.api.agui``) too. Refusals are HTTP errors."""
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     await deps.require_session_access(tenant_id, session_id, request)

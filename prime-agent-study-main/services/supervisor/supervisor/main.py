@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from supervisor.api import (
+    agui,
     approvals,
     catalog,
     events,
@@ -226,6 +227,7 @@ def create_app(*, state: SupervisorState | None = None) -> FastAPI:
     app.include_router(sessions.router)
     app.include_router(principals.router)
     app.include_router(events.router)
+    app.include_router(agui.router)
     app.include_router(approvals.router)
     app.include_router(tools.router)
     app.include_router(harness.router)

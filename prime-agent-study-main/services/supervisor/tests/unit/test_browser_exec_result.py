@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from supervisor.genui import SHOW_UI
 from supervisor.hands.browser import BROWSER_TOOLS, META_MARK, runtime_payload
 from supervisor.tools import InvalidArguments, default_registry
 from supervisor.tools.builtin.browser_exec import MAX_CODE_BYTES
@@ -128,7 +129,7 @@ async def test_empty_or_oversized_code_is_refused_before_anything_runs(tmp_path:
     assert not workspace.sent
 
 
-@pytest.mark.parametrize("name", sorted(BROWSER_TOOLS))
+@pytest.mark.parametrize("name", sorted(BROWSER_TOOLS | {SHOW_UI}))
 async def test_the_shipped_tool_set_offers_the_browser_tools_as_implemented(name: str) -> None:
     """The catalog's copy of each tool (what sessions pin) is the implementation's own
     definition: a changed description or schema needs the tool set regenerated."""
@@ -138,14 +139,15 @@ async def test_the_shipped_tool_set_offers_the_browser_tools_as_implemented(name
     assert definition == default_registry()[name].definition()
 
 
-async def test_the_browser_tool_set_is_the_coding_tools_and_the_browser_tools() -> None:
+async def test_the_browser_tool_set_is_the_coding_tools_the_browser_tools_and_reports() -> None:
     """A tool added to the coding tools (and to the harness's recovery list) belongs in the
-    browser tool set too, or its composition is skipped at boot."""
+    browser tool set too, or its composition is skipped at boot; a browser agent also shows
+    what it found as a report (``show_ui``)."""
     sets = Path(__file__).resolve().parents[4] / "harness/tool_sets"
     coding = json.loads((sets / "githi-coding-tools.json").read_text())["definitions"]
     browser = json.loads((sets / "githi-browser-tools.json").read_text())["definitions"]
 
-    assert set(browser) == set(coding) | BROWSER_TOOLS
+    assert set(browser) == set(coding) | BROWSER_TOOLS | {SHOW_UI}
     assert all(browser[name] == coding[name] for name in coding), "a coding tool's definition drifted"
 
 
