@@ -167,12 +167,18 @@ def convert_input(context: Context, spec: ModelSpec) -> list[Body]:
                                     "arguments": json.dumps(dict(arguments)),
                                 }
                             )
-            case ToolResultMessage(call_id, _, text, _):
+            case ToolResultMessage(call_id, _, text, _, images):
+                output: str | list[Body] = text or "(no tool output)"
+                if images:
+                    output = [{"type": "input_text", "text": output}] + [
+                        {"type": "input_image", "detail": "auto", "image_url": i.data_url}
+                        for i in images
+                    ]
                 items.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id.split("|", 1)[0],
-                        "output": text or "(no tool output)",
+                        "output": output,
                     }
                 )
     return items

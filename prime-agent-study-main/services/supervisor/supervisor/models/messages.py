@@ -7,7 +7,8 @@ blocks, OpenAI's encrypted reasoning items) is replayed exactly as it was receiv
 native reasoning only goes back to the model that produced it; for any other
 model it becomes plain text (or is dropped when opaque), tool call ids are
 re-spelled for the target protocol, and a tool call left without a result gets a
-synthetic one so every protocol accepts the history.
+synthetic one so every protocol accepts the history. Images go only to a model that
+sees them, and of the images tool results returned, only the latest few.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from supervisor.seams.core.types import ChatMessage, invalid_arguments
 TEXT, REASONING, TOOL_CALL = "text", "reasoning", "tool_call"
 NO_RESULT = "No result provided"
 IMAGE_OMITTED = "(image omitted: model does not support images)"
+EARLIER_IMAGE_OMITTED = "(image omitted: an earlier tool result's; the latest ones are shown)"
+KEPT_TOOL_IMAGES = 3
+"""How many of the latest tool-result images a model is shown: a browser's earlier
+screenshots are stale, and each costs as much as a long page of text."""
 _CHARS_PER_TOKEN = 4
 _IMAGE_CHARS = 4800
 
@@ -87,6 +92,9 @@ class ToolResultMessage:
     tool_name: str
     text: str
     is_error: bool = False
+    images: tuple[Image, ...] = ()
+    """Shown with the result: Anthropic and Responses put them in the result itself, chat
+    completions in a user message after the results (as pi does)."""
 
 
 type Message = UserMessage | AssistantMessage | ToolResultMessage
@@ -213,7 +221,7 @@ def context_from_chat(
         if message.role == "system" and not body:
             system.append(message.content)
         elif message.role in ("system", "user"):
-            body.append(UserMessage(message.content))
+            body.append(UserMessage(message.content, _images(message)))
         elif message.role == "assistant":
             assistant = _assistant(message)
             names.update({b.id: b.name for b in assistant.blocks if isinstance(b, ToolCallBlock)})
@@ -226,6 +234,7 @@ def context_from_chat(
                     names.get(call_id, ""),
                     message.content,
                     bool(getattr(message, "is_error", False)) or _tool_failed(message.content),
+                    _images(message),
                 )
             )
     return Context(
@@ -233,6 +242,10 @@ def context_from_chat(
         messages=tuple(body),
         tools=tuple(_tool(t) for t in tools),
     )
+
+
+def _images(message: ChatMessage) -> tuple[Image, ...]:
+    return tuple(Image(i["mime_type"], i["data"]) for i in message.images or ())
 
 
 def _tool(schema: Mapping[str, Any]) -> Tool:
@@ -266,7 +279,8 @@ def transform_messages(
             first.append(UserMessage("\n".join(t for t in (message.text, IMAGE_OMITTED) if t)))
         elif isinstance(message, ToolResultMessage):
             new_id = renamed.get(message.tool_call_id)
-            first.append(replace(message, tool_call_id=new_id) if new_id else message)
+            message = replace(message, tool_call_id=new_id) if new_id else message
+            first.append(message if sees_images else _without_images(message, IMAGE_OMITTED))
         elif isinstance(message, AssistantMessage):
             first.append(_for_model(message, spec, normalize_id, renamed))
         else:
@@ -299,7 +313,25 @@ def transform_messages(
             close_pending()
             result.append(message)
     close_pending()
-    return result
+    return _latest_tool_images(result)
+
+
+def _without_images(message: ToolResultMessage, note: str) -> ToolResultMessage:
+    if not message.images:
+        return message
+    return replace(message, text="\n".join(t for t in (message.text, note) if t), images=())
+
+
+def _latest_tool_images(messages: list[Message]) -> list[Message]:
+    """``messages`` with only the ``KEPT_TOOL_IMAGES`` latest tool-result images."""
+    seen = 0
+    for at in range(len(messages) - 1, -1, -1):
+        message = messages[at]
+        if isinstance(message, ToolResultMessage) and message.images:
+            if seen >= KEPT_TOOL_IMAGES:
+                messages[at] = _without_images(message, EARLIER_IMAGE_OMITTED)
+            seen += len(message.images)
+    return messages
 
 
 def _for_model(
@@ -346,8 +378,8 @@ def estimate_context_tokens(context: Context) -> int:
         match message:
             case UserMessage(text, images):
                 chars += len(text) + _IMAGE_CHARS * len(images)
-            case ToolResultMessage(_, _, text, _):
-                chars += len(text)
+            case ToolResultMessage(_, _, text, _, images):
+                chars += len(text) + _IMAGE_CHARS * len(images)
             case AssistantMessage(blocks):
                 for block in blocks:
                     match block:

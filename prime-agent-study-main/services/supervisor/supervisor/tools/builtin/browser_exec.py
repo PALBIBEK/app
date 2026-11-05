@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import shlex
 from typing import Any, Final
@@ -14,6 +15,7 @@ from supervisor.hands.browser import (
     runner_env,
     runtime_command,
 )
+from supervisor.seams.core.types import RESULT_IMAGES
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
@@ -27,6 +29,9 @@ MAX_CODE_BYTES: Final = 48 * 1024
 """The code travels packed (compressed, then base64) inside the one shell argument a
 command is, which Linux caps at 128 KiB, beside the packed runtime (about 16 KiB)."""
 MAX_STDERR_CHARS: Final = 4000
+MAX_SHOWN_BYTES: Final = 384 * 1024
+"""The largest screenshot a result shows (a viewport's JPEG is a tenth of it); a larger
+one, a long page's whole length, stays a file in the workspace."""
 _GRACE_S: Final = 2.0
 """Kept back from the call's budget, as ``bash`` does, so a slow call is cut by its own
 timeout (and returns what it printed) before the tool call times out."""
@@ -52,7 +57,7 @@ class BrowserExecArgs(ToolArgs):
 
 @tool(tool_class=ToolClass.NON_ATOMIC)
 async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains="text") narrows it to the matches and their groups); act(("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; browser_vault types a login the user saved (list them first), otherwise ask the user.
+    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains="text") narrows it to the matches and their groups); act(("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, show_screenshot() (full=True for the whole page) attaches a screenshot to this result for you to see when layout, images or canvas matter more than text, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; browser_vault types a login the user saved (list them first), otherwise ask the user.
 
     Code mode, as Hermes's ``browser_exec`` and Stagehand's ``run``: the runner
     (``supervisor.hands.browser.runner``) is shipped into the sandbox and runs the code
@@ -105,6 +110,8 @@ async def _payload(ctx: ToolContext, args: BrowserExecArgs, result: Any, timeout
         payload["events"] = meta["events"]  # since the previous call: dialogs (and their answers), console and page errors
     if meta.get("url"):
         payload["url"] = meta["url"]
+    if meta.get("shown"):
+        payload.update(await _screenshots(ctx, meta["shown"]))
     if meta.get("started"):
         payload["browser_started"] = True  # a fresh browser: earlier tabs and logins are gone
     if args.session:
@@ -119,6 +126,20 @@ async def _payload(ctx: ToolContext, args: BrowserExecArgs, result: Any, timeout
         payload["timeout_s"] = timeout
         payload["hint"] = "The code ran out of time; the browser keeps its state. Split the work into calls that append to workspace files."
     return payload
+
+
+async def _screenshots(ctx: ToolContext, shown: list[str]) -> dict[str, Any]:
+    """The screenshots the code asked to show: their paths, and those small enough as
+    images (``RESULT_IMAGES``) for the model to see."""
+    paths = [f"{WORKSPACE_DIR}/{name}" for name in shown]
+    images, too_large = [], []
+    for path in paths:
+        data = await ctx.workspace.read_bytes(path)
+        if len(data) > MAX_SHOWN_BYTES:
+            too_large.append(f"{path} ({len(data) // 1024} KiB, over {MAX_SHOWN_BYTES // 1024} KiB: show the viewport)")
+        else:
+            images.append({"mime_type": "image/jpeg", "data": base64.b64encode(data).decode("ascii")})
+    return {"screenshots": paths, **({"not_shown": too_large} if too_large else {}), **({RESULT_IMAGES: images} if images else {})}
 
 
 def _stdout_of(full: bytes) -> bytes:

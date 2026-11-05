@@ -41,6 +41,24 @@ async def test_a_browser_agent_built_from_the_seams_browses_in_its_sandbox(
     assert "button: b" in result["output"]
 
 
+async def test_a_screenshot_the_code_shows_reaches_the_model_as_an_image(
+    env: Env, model: Callable[..., ScriptedGateway], default_browsers: Path
+) -> None:
+    code = "page.set_content('<h1 style=\"color:red\">Sale</h1>')\nshow_screenshot()\nprint('looked')"
+    gateway = model(("browser_exec", {"code": code}))
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await browser_session(env, state, browser="sandbox-chromium")
+        await env.sessions.submit(sid, Message("c1", "what colour is the heading?"))
+        events = await env.wait_for(state, sid, run_ended(), timeout=60)
+
+    (end,) = [e for e in payloads(events, ToolEnd) if e.tool_name == "browser_exec"]
+    (shot,) = end.result["payload"]["images"]
+    (seen,) = [m for chat in gateway.seen for m in chat if m.role == "tool"]
+    assert seen.images == [shot], "the model was not shown the screenshot"
+    assert shot["data"] not in seen.content and "looked" in seen.content, "the image is not its text"
+
+
 async def test_a_profile_whose_network_its_provider_cannot_enforce_is_refused(env: Env) -> None:
     state = await env.state()
     async with session_worker(env.client, state, task_queue=env.queue):
