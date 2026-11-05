@@ -18,6 +18,7 @@ from prime_agent.db.models.harness_release import HarnessRelease
 from prime_agent.db.models.session_link import SessionLink
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.session import (
+    BrowserScreenResponse,
     CreateSessionFromHarness,
     ForkSessionRequest,
     ForkSessionResponse,
@@ -233,6 +234,21 @@ class SessionService:
     async def cancel_run(self, *, session_id: str, run_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession) -> RunResponse:
         raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.cancel_run(identity, sid, run_id))
         return RunResponse.model_validate(raw)
+
+    async def browser_screen(
+        self, *, session_id: str, user_id: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> BrowserScreenResponse:
+        """The session's browser, as the person sees it."""
+        raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.browser_screen(identity, sid))
+        return BrowserScreenResponse.model_validate(raw)
+
+    async def browser_input(
+        self, *, session_id: str, action: dict[str, Any], user_id: str, identity: TenantPrincipal, db: AsyncSession
+    ) -> BrowserScreenResponse:
+        """The person's input on the session's browser; the browser after it. The supervisor
+        checks the input, and refuses it while the agent is working."""
+        raw = await self._run_call(session_id, user_id, identity, db, lambda sid: self._client.browser_input(identity, sid, action))
+        return BrowserScreenResponse.model_validate(raw)
 
     async def pins(
         self,

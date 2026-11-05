@@ -21,10 +21,16 @@ and the screenshots the code asked to be shown with the result (``show_screensho
 ``runner.py fill`` is the other way in, for ``browser_vault``: it types a saved login into
 the current tab. The login arrives in ``FILL_ENV`` from the supervisor, never in code the
 model wrote, and the answer says what was filled, never with what.
+
+``runner.py live`` is the person's way in (``supervisor.hands.browser.live``): the current
+tab as a JPEG, after their click, typing, key or scroll if ``LIVE_ENV`` carries one. It
+never starts a browser, and leaves what a call reads (the tab it ended on, the browser's
+generation, the event cursor) as it was.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import functools
 import importlib.util
@@ -54,6 +60,13 @@ REPORTED = ("dialog", "console", "pageerror")
 MAX_REPORTED = 20
 FILL_ENV = "GITHI_BROWSER_FILL"
 """``{"origin": …, "targets": {"username"|"password"|"submit": ID or selector}, "values": {…}}``."""
+LIVE_ENV = "GITHI_BROWSER_LIVE"
+"""``{"input": {"kind": "click"|"type"|"key"|"scroll", ...}}`` or ``{}`` (the screen only)."""
+LIVE_QUALITY = 60
+"""JPEG quality of the live view: refreshed every second or so, so small over sharp."""
+LIVE_KEY = re.compile(r"^(?:(?:Control|Shift|Alt|Meta)\+)*(?:[A-Za-z0-9]|F\d{1,2}|Enter|Tab|Escape|Backspace|Delete|Space|"
+                      r"Home|End|PageUp|PageDown|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Insert)$")
+"""Keys a person may press in the live view, in Playwright's names, with modifiers."""
 SNAPSHOT_ID = re.compile(r"\d+-\d+")
 SHOWN_QUALITY = 70
 """JPEG quality of a screenshot shown to the model: legible text at a fraction of a PNG."""
@@ -137,12 +150,7 @@ class Session:
 
     def _current(self) -> Any:
         """The tab the previous call ended on, else the last real tab, else a new one."""
-        pages = [p for p in self.context.pages if not p.url.startswith(INTERNAL)]
-        saved = _state_file("tab").read_text() if _state_file("tab").exists() else ""
-        for page in pages:
-            if _target_id(page) == saved:
-                return page
-        return pages[-1] if pages else self.context.new_page()
+        return current_tab(self.context) or self.context.new_page()
 
     def remember(self) -> None:
         with contextlib.suppress(Exception):
@@ -158,6 +166,16 @@ class Session:
             {k: v for k, v in e.items() if k not in ("seq", "at")} for e in answer["events"] if e["kind"] in REPORTED
         ]
         return _distinct(events)[-MAX_REPORTED:]
+
+
+def current_tab(context: Any) -> Any | None:
+    """The tab the last call ended on, else the last real tab; None if there is none."""
+    pages = [p for p in context.pages if not p.url.startswith(INTERNAL)]
+    saved = _state_file("tab").read_text() if _state_file("tab").exists() else ""
+    for page in pages:
+        if _target_id(page) == saved:
+            return page
+    return pages[-1] if pages else None
 
 
 def _distinct(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -417,9 +435,67 @@ def fill() -> int:
     return 0
 
 
+def live() -> int:
+    """The current tab as the person sees it (``{"url", "title", "width", "height", "image"}``,
+    the image a base64 JPEG), after their input if they gave one; ``{"error": ...}`` when no
+    browser is open or the input is not one this takes."""
+    request = json.loads(os.environ.pop(LIVE_ENV, "") or "{}")
+    try:
+        endpoint = ask("hello")["endpoint"]
+    except (OSError, RuntimeError):
+        print(json.dumps({"error": "no browser is open: the agent has not used one in this sandbox"}))
+        return 1
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.connect_over_cdp(endpoint)
+        page = current_tab(browser.contexts[0]) if browser.contexts else None
+        if page is None:
+            print(json.dumps({"error": "the browser has no tab open"}))
+            return 1
+        if (action := request.get("input")) is not None:
+            if problem := _person_acts(page, action):
+                print(json.dumps({"error": problem}))
+                return 1
+            SNAPSHOT.quiet_wait(page, 1_000)  # what the input started, briefly: the next look shows the rest
+        viewport = page.viewport_size or page.evaluate("({width: innerWidth, height: innerHeight})")
+        image = page.screenshot(type="jpeg", quality=LIVE_QUALITY, timeout=ACTION_TIMEOUT_MS)
+        print(json.dumps({
+            "url": page.url,
+            "title": page.title(),
+            "width": viewport["width"],
+            "height": viewport["height"],
+            "image": base64.b64encode(image).decode("ascii"),
+        }))
+    return 0
+
+
+def _person_acts(page: Any, action: Any) -> str | None:
+    """Do what the person did on the live view; why not, if it is not something it takes.
+    Points are in the page's CSS pixels (the live image's size)."""
+    kind = action.get("kind") if isinstance(action, dict) else None
+    try:
+        if kind == "click":
+            page.mouse.click(float(action["x"]), float(action["y"]))
+        elif kind == "type" and isinstance(action.get("text"), str) and len(action["text"]) <= 1_000:
+            page.keyboard.type(action["text"])
+        elif kind == "key" and isinstance(action.get("key"), str) and LIVE_KEY.match(action["key"]):
+            page.keyboard.press(action["key"])
+        elif kind == "scroll":
+            page.mouse.move(float(action.get("x", 0)), float(action.get("y", 0)))
+            page.mouse.wheel(float(action.get("dx", 0)), float(action.get("dy", 0)))
+        else:
+            return f"not an input the live view takes: {json.dumps(action)[:200]}"
+    except (KeyError, TypeError, ValueError):
+        return f"an input with what it needs (a click's x and y, a key's name): {json.dumps(action)[:200]}"
+    return None
+
+
 def main() -> int:
     if sys.argv[1:] == ["fill"]:
         return fill()
+    if sys.argv[1:] == ["live"]:
+        return live()
     code = sys.stdin.read()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     Path(DAEMON.HOME).mkdir(parents=True, exist_ok=True)

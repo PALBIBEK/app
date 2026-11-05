@@ -12,6 +12,7 @@ from prime_agent.config import get_settings
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.session import (
     RUN_TERMINAL,
+    BrowserScreenResponse,
     CreateSessionFromHarness,
     ForkSessionRequest,
     ForkSessionResponse,
@@ -90,6 +91,29 @@ async def list_sessions(
 def _run_answer(run: RunResponse) -> JSONResponse:
     """202 while the run is queued or going, 200 once it has ended (the body is the run)."""
     return JSONResponse(status_code=200 if run.status in RUN_TERMINAL else 202, content=run.model_dump())
+
+
+@router.get("/{session_id}/browser/screen", response_model=BrowserScreenResponse)
+async def session_browser_screen(session_id: str, db: DbSession, current_user: CurrentUser) -> BrowserScreenResponse:
+    """The session's browser as you see it: its current tab, whenever the agent has one open."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().browser_screen(session_id=session_id, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
+
+
+@router.post("/{session_id}/browser/input", response_model=BrowserScreenResponse)
+async def session_browser_input(
+    session_id: str, db: DbSession, current_user: CurrentUser, action: Annotated[dict[str, Any], Body()]
+) -> BrowserScreenResponse:
+    """Your click, typing, key or scroll on the session's browser, while the agent is not
+    working in it; the browser after it."""
+    identity = TenantPrincipal.from_user(current_user)
+    try:
+        return await _service().browser_input(session_id=session_id, action=action, user_id=current_user.id, identity=identity, db=db)
+    except SessionNotFoundError as exc:
+        raise_session_not_found_http(exc)
 
 
 @router.get("/{session_id}/runs", response_model=list[RunResponse])

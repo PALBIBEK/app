@@ -57,7 +57,8 @@ async def test_a_row_is_stamped_while_the_work_runs_and_no_longer_after(tmp_path
         first = await beat_at()
         await asyncio.sleep(0.1)
         second = await beat_at()
-    assert first is not None and second is not None and second > first, "stamped again and again"
+    last = await beat_at()  # a beat may land between the read above and the block's end
     await asyncio.sleep(0.1)
-    assert await beat_at() == second, "the beat stops with the work"
+    assert first is not None and second is not None and second > first, "stamped again and again"
+    assert await beat_at() == last, "the beat stops with the work"
     await engine.dispose()

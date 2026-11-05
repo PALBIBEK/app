@@ -20,6 +20,7 @@ import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
+import { usedBrowser } from '@/lib/session/liveBrowser';
 import { currentTask } from '@/lib/session/task';
 import type { ReportAction } from '@/lib/session/useReports';
 import { anyActive, subagentName } from '@/lib/session/subagents';
@@ -33,6 +34,7 @@ import { RunHistory } from './RunHistory';
 import { SessionRail } from './SessionRail';
 import { SubagentNoticeLine, SubagentsSection } from './subagents';
 import { useToolRenderer } from './tools';
+import { LiveBrowserSection } from './LiveBrowser';
 import { SessionNoteLine } from './SessionNoteLine';
 import { TaskPanel } from './TaskPanel';
 
@@ -169,9 +171,14 @@ export function SessionChat({
       toast.error(tooLong); // kept in the box, so nothing is lost
       return;
     }
+    setInput('');
+    await say(text);
+  }
+
+  /** Tell the session `text`, as the person's message (the composer's, or handing the browser back). */
+  async function say(text: string): Promise<void> {
     setSending(true);
     addLocalMessage(text);
-    setInput('');
     try {
       const sent = await sessionsAPI.sendMessage(session.id, text);
       if (sent.queued) setQueuedRuns((q) => new Map(q).set(text, { runId: sent.turn_id, cancelled: false }));
@@ -506,6 +513,7 @@ export function SessionChat({
           lead={
             <>
               <TaskPanel task={task} />
+              {usedBrowser(state.messages) ? <LiveBrowserSection sessionId={session.id} agentWorking={state.running} onHandBack={say} /> : null}
               <SubagentsSection sessionId={session.id} subagents={subagents} loading={subagentsLoading} />
             </>
           }
