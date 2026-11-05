@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import (
     BaseModel,
@@ -56,6 +56,11 @@ class Route(BaseModel):
     supports_reasoning: bool = False
     supports_adaptive_thinking: bool = False
     supported_openai_params: tuple[str, ...] = ()
+    label: str | None = None
+    """The model's name as a person reads it (``Claude Opus 5.5``); the route id otherwise."""
+    min_reasoning_effort: Literal["minimal", "low"] | None = None
+    """For a model whose reasoning cannot be turned off (GPT-6 Astra, GPT-6.1 Sol refuse
+    ``none``): the effort it is asked for when thinking is off."""
     retries: NonNegativeInt | None = None
     """Extra attempts on a transient upstream failure; ``None`` keeps the provider default."""
     fallback_route_ids: tuple[str, ...] = ()
@@ -85,6 +90,8 @@ class Route(BaseModel):
             "supports_reasoning": self.supports_reasoning,
             "supports_adaptive_thinking": self.supports_adaptive_thinking,
             "supported_openai_params": list(self.supported_openai_params),
+            **({"label": self.label} if self.label else {}),
+            **({"min_reasoning_effort": self.min_reasoning_effort} if self.min_reasoning_effort else {}),
         }
 
 
@@ -187,6 +194,59 @@ DEFAULT_ROUTES: Mapping[str, Route] = {
 """Routes served when ``MODEL_GATEWAY_ROUTES_JSON`` is unset."""
 
 
+_OPENAI_PARAMS: Final = ("max_completion_tokens", "reasoning_effort", "tools", "tool_choice", "service_tier")
+_CLAUDE_PARAMS: Final = ("max_tokens", "tools", "tool_choice", "reasoning_effort")
+_LONG_PROMPT: Final = 272_000
+"""OpenAI bills a GPT-6 prompt over 272K input tokens at 2x input and 1.5x output for the whole
+request; a route has one price, so it holds the standard tier and its window stops there."""
+
+
+def _openai(
+    model: str, label: str, *, input: float, output: float, cache_read: float,
+    cache_write: float | None = None, min_effort: Literal["minimal", "low"] | None = None,
+) -> Route:
+    """An OpenAI model on the Responses wire (tool calls need it for GPT-6), with its list price
+    per million tokens (developers.openai.com/api/docs/pricing and the model's page)."""
+    return Route(
+        provider="openai",
+        upstream_model=model,
+        label=label,
+        context_window=_LONG_PROMPT,
+        max_output_tokens=128_000,
+        input_cost_per_token=input / 1e6,
+        output_cost_per_token=output / 1e6,
+        cache_read_input_token_cost=cache_read / 1e6,
+        cache_creation_input_token_cost=None if cache_write is None else cache_write / 1e6,
+        supports_vision=True,
+        supports_reasoning=True,
+        supported_openai_params=_OPENAI_PARAMS,
+        min_reasoning_effort=min_effort,
+    )
+
+
+def _claude(
+    model: str, label: str, *, input: float, output: float, cache_read: float, cache_write: float,
+    context_window: int = 1_000_000, max_output: int = 128_000,
+) -> Route:
+    """An Anthropic model (adaptive thinking, steered by effort), with its list price per
+    million tokens (platform.claude.com/docs/en/about-claude/pricing; the 5-minute cache write)."""
+    return Route(
+        provider="anthropic",
+        upstream_model=model,
+        label=label,
+        context_window=context_window,
+        max_output_tokens=max_output,
+        input_cost_per_token=input / 1e6,
+        output_cost_per_token=output / 1e6,
+        cache_read_input_token_cost=cache_read / 1e6,
+        cache_creation_input_token_cost=cache_write / 1e6,
+        supports_vision=True,
+        supports_reasoning=True,
+        supports_adaptive_thinking=True,
+        supported_openai_params=_CLAUDE_PARAMS,
+    )
+
+
 VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
     "openrouter": {"githi": DEFAULT_ROUTES["githi"]},
     "openai": {
@@ -207,7 +267,14 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
                 "tool_choice",
                 "service_tier",
             ),
+            label="GPT-5.5",
         ),
+        # The GPT-6 family (developers.openai.com/api/docs/guides/latest-model): Astra and 6.1 Sol
+        # refuse reasoning effort ``none``, so with thinking off they are asked for ``low``.
+        "gpt-6-astra": _openai("gpt-6-astra", "GPT-6 Astra", input=10, output=50, cache_read=1, cache_write=12.5, min_effort="low"),
+        "gpt-6.1-sol": _openai("gpt-6.1-sol", "GPT-6.1 Sol", input=2, output=10, cache_read=0.1, cache_write=2.5, min_effort="low"),
+        "gpt-6.1-terra": _openai("gpt-6.1-terra", "GPT-6.1 Terra", input=1, output=5, cache_read=0.05),
+        "gpt-6-luna": _openai("gpt-6-luna", "GPT-6 Luna", input=0.1, output=0.5, cache_read=0.01, cache_write=0.125),
     },
     "anthropic": {
         "claude-sonnet-5": Route(
@@ -223,6 +290,15 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
             supports_reasoning=True,
             supports_adaptive_thinking=True,
             supported_openai_params=("max_tokens", "tools", "tool_choice", "reasoning_effort"),
+            label="Claude Sonnet 5",
+        ),
+        "claude-opus-5-5": _claude("claude-opus-5-5", "Claude Opus 5.5", input=4, output=20, cache_read=0.2, cache_write=5),
+        "claude-sonnet-5-5": _claude("claude-sonnet-5-5", "Claude Sonnet 5.5", input=2, output=10, cache_read=0.1, cache_write=2.5),
+        # Haiku 5.5's price rises above 100K prompt tokens ($0.50 / $2.50): the route holds the
+        # first tier, so its window stops at 100K.
+        "claude-haiku-5-5": _claude(
+            "claude-haiku-5-5", "Claude Haiku 5.5", input=0.1, output=0.5, cache_read=0.01, cache_write=0.125,
+            context_window=100_000, max_output=32_000,
         ),
     },
     # Limits and list prices as each vendor publishes them. DeepSeek: api-docs.deepseek.com
@@ -239,6 +315,7 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
             supports_vision=True,
             supports_reasoning=True,
             supported_openai_params=("max_tokens", "tools", "tool_choice"),
+            label="DeepSeek Flash",
         ),
     },
     # Z.ai's pay-as-you-go API rates for GLM-5.2 (pi.dev/models/zai/glm-5-2).
@@ -253,6 +330,7 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
             cache_read_input_token_cost=0.26e-6,
             supports_reasoning=True,
             supported_openai_params=("max_tokens", "tools", "tool_choice"),
+            label="GLM-5.2",
         ),
     },
     # Model Studio's international list price for qwen3.7-plus
@@ -270,6 +348,7 @@ VENDOR_ROUTES: Mapping[str, Mapping[str, Route]] = {
             cache_read_input_token_cost=0.08e-6,
             supports_reasoning=True,
             supported_openai_params=("max_tokens", "tools", "tool_choice"),
+            label="Qwen3.7 Plus",
         ),
     },
 }

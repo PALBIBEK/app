@@ -56,6 +56,25 @@ function modelLabel(m: ModelChoice): string {
   return m.label || m.name || m.id;
 }
 
+const dollars = (n: number): string => `$${Number(n.toFixed(3))}`;
+const PRICE_TITLE = 'Price per million tokens: input / output';
+
+/** A model's list price per million tokens, input / output, as the picker shows it. */
+export function priceLabel(m: ModelChoice): string | null {
+  const input = m.cost?.input;
+  const output = m.cost?.output;
+  if (typeof input !== 'number' || typeof output !== 'number') return null;
+  return input === 0 && output === 0 ? 'free' : `${dollars(input)} / ${dollars(output)}`;
+}
+
+/** What a model is, in one line: its name, then its price (per million input / output tokens). */
+export function optionText(m: ModelChoice): string {
+  const price = priceLabel(m);
+  const where = m.vendor === 'local' ? 'local' : null;
+  const extra = [where, price].filter(Boolean).join(', ');
+  return extra ? `${modelLabel(m)} (${extra})` : modelLabel(m);
+}
+
 export interface ModelPickerProps {
   /** The model selected for the next message. */
   value: string;
@@ -90,9 +109,8 @@ export function ModelPicker({ value, current, choices, onChange, disabled, id, c
         {groups.map((g) => (
           <optgroup key={g.vendor} label={g.label}>
             {g.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {modelLabel(m)}
-                {m.vendor === 'local' ? ' (local)' : ''}
+              <option key={m.id} value={m.id} title={PRICE_TITLE}>
+                {optionText(m)}
               </option>
             ))}
           </optgroup>

@@ -7,14 +7,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModelChoices } from '@/lib/api/types/model.types';
 
-import { groupByVendor, ModelPicker, SETTINGS_HREF, SetupHint } from './ModelPicker';
+import { groupByVendor, ModelPicker, optionText, SETTINGS_HREF, SetupHint } from './ModelPicker';
 
 afterEach(cleanup);
 
 const CHOICES: ModelChoices = {
   models: [
     { id: 'gateway/deepseek-flash', label: 'deepseek-flash', vendor: 'deepseek' },
-    { id: 'gateway/local/qwen3:8b', label: 'local/qwen3:8b', vendor: 'local' },
+    { id: 'gateway/local/qwen3:8b', label: 'local/qwen3:8b', vendor: 'local', cost: { input: 0, output: 0 } },
     { id: 'gateway/glm-5.2', label: 'glm-5.2', vendor: 'zai' },
   ],
   providers: [
@@ -62,7 +62,7 @@ describe('ModelPicker', () => {
     const { select } = picker();
     const groups = within(select).getAllByRole('group');
     expect(groups.map((g) => g.getAttribute('label'))).toEqual(['DeepSeek', 'Z.ai (GLM)', 'Local', 'Anthropic']);
-    expect(within(groups[2]).getByRole('option').textContent).toBe('local/qwen3:8b (local)');
+    expect(within(groups[2]).getByRole('option').textContent).toBe('local/qwen3:8b (local, free)');
     expect(select.value).toBe('gateway/deepseek-flash');
   });
 
@@ -119,5 +119,14 @@ describe('SetupHint, under a run that could not use its model', () => {
     render(<SetupHint canManage={false} />);
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.getByText(/Ask an owner or admin to set it up/)).toBeTruthy();
+  });
+});
+
+describe('a model’s line in the picker', () => {
+  it('names it, then says its price per million tokens, or that it is free', () => {
+    expect(optionText({ id: 'gateway/claude-opus-5-5', label: 'Claude Opus 5.5', vendor: 'anthropic', cost: { input: 4, output: 20 } })).toBe('Claude Opus 5.5 ($4 / $20)');
+    expect(optionText({ id: 'gateway/gpt-6-luna', label: 'GPT-6 Luna', vendor: 'openai', cost: { input: 0.1, output: 0.5 } })).toBe('GPT-6 Luna ($0.1 / $0.5)');
+    expect(optionText({ id: 'gateway/local/llama3', label: 'local/llama3', vendor: 'local', cost: { input: 0, output: 0 } })).toBe('local/llama3 (local, free)');
+    expect(optionText({ id: 'gateway/echo' })).toBe('gateway/echo');
   });
 });
