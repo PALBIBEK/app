@@ -35,6 +35,20 @@ await box.press('Enter');
 await p.getByText('echo:hello there').waitFor({ timeout: 30000 });
 console.log('1 reply shown; bar:', (await p.getByTestId('session-bar').innerText()).replace(/\n/g, ' | '));
 
+// Pick another model in the composer: the next message runs it, and the session says so after.
+const picker = p.getByLabel('Model', { exact: true });
+const pinnedModel = await picker.inputValue();
+await picker.selectOption('gateway/fake');
+await box.fill('switch models');
+await box.press('Enter');
+await p.getByText('echo:switch models').waitFor({ timeout: 30000 });
+const listed = await (await fetch(`${API}/sessions?harness_id=${hid}`, { headers: A })).json();
+check(listed.data.length === 1, `one session for the harness (${listed.data.length})`);
+const shown = await (await fetch(`${API}/sessions/${listed.data[0].id}`, { headers: A })).json();
+check(shown.model === 'gateway/fake', `the session runs the picked model (${pinnedModel} -> ${shown.model})`);
+check((await picker.inputValue()) === 'gateway/fake', 'the picker shows the model the session runs now');
+console.log('1a model switched in the composer:', pinnedModel, '->', shown.model);
+
 // Upload a file: straight to storage over a signed URL, then the agent reads it.
 const marker = 'uploaded-' + Date.now().toString(36);  // new bytes, so a real upload (no dedupe)
 const directPuts = [];

@@ -629,6 +629,14 @@ class AiClient:
         payload = await self._json_request("GET", "/v1/models", identity)
         return list(payload.get("models") or []) if isinstance(payload, dict) else []
 
+    async def model_choices(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """GET /v1/models whole: the models a session can run now, each with its vendor, and
+        every vendor with whether it is ready (so a picker can say which needs a key)."""
+        payload = await self._json_request("GET", "/v1/models", identity)
+        if not isinstance(payload, dict):
+            return {"models": [], "providers": []}
+        return {"models": list(payload.get("models") or []), "providers": list(payload.get("providers") or [])}
+
     async def publish_artifact(
         self, identity: TenantPrincipal, kind: str, body: dict[str, Any]
     ) -> dict[str, Any]:
