@@ -38,6 +38,7 @@ from ag_ui.core import (
     RunFinishedCancelledOutcome,
     RunFinishedEvent,
     RunStartedEvent,
+    StateSnapshotEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
     TextMessageContentEvent,
@@ -71,13 +72,16 @@ from supervisor.agent.runtimes.githi.render import (
 from supervisor.api.wire import wire_data, wire_type
 from supervisor.genui import SHOW_UI, surface_of
 from supervisor.journal.partials import Partial
+from supervisor.tools.builtin.update_task import task_of
 
-__all__ = ["A2UI_ACTIVITY", "A2UI_OPERATIONS", "AgUiTranslator"]
+__all__ = ["A2UI_ACTIVITY", "A2UI_OPERATIONS", "TASK_STATE", "AgUiTranslator"]
 
 A2UI_ACTIVITY: Final = "a2ui-surface"
 """The activity type CopilotKit's A2UI renderer draws (``@copilotkit/react-core``)."""
 A2UI_OPERATIONS: Final = "a2ui_operations"
 """The key of an A2UI activity's content that holds the surface's A2UI messages."""
+TASK_STATE: Final = "task"
+"""The key of the session's state that holds the task the agent shows (``update_task``)."""
 _FAILED_STOPS: Final = frozenset({"error", "timeout"})
 _CANCELLED_STOPS: Final = frozenset({"aborted", "cancelled"})
 
@@ -241,7 +245,11 @@ class AgUiTranslator:
         )
         drawn = self._ui_calls.pop(p.tool_call_id, [])
         ok = not (p.is_error or tool_result_failed(p.result))
-        return [result, *(self._draw(drawn) if ok else [])]
+        if not ok:
+            return [result]
+        task = task_of(p)
+        state = [StateSnapshotEvent(type=EventType.STATE_SNAPSHOT, snapshot={TASK_STATE: task})] if task is not None else []
+        return [result, *self._draw(drawn), *state]
 
     def _draw(self, messages: list[dict[str, Any]]) -> Events:
         """Each surface ``messages`` touched, as all its operations so far: an activity is a

@@ -15,7 +15,7 @@ import pytest
 from ag_ui.core import Event
 from httpx import AsyncClient
 
-from supervisor.agui import A2UI_ACTIVITY, A2UI_OPERATIONS
+from supervisor.agui import A2UI_ACTIVITY, A2UI_OPERATIONS, TASK_STATE
 from supervisor.genui import CATALOG_ID
 from supervisor.temporal.worker import session_worker
 from tests.support.api import supervisor_api
@@ -124,6 +124,24 @@ async def test_a_run_asked_for_streams_to_its_end_with_the_view_it_drew(
     assert (activity["activityType"], activity["content"]) == (A2UI_ACTIVITY, {A2UI_OPERATIONS: REPORT})
     assert kinds.index("ACTIVITY_SNAPSHOT") > kinds.index("TOOL_CALL_RESULT"), "drawn once it was accepted"
     assert [e["type"] for _, e in again] == kinds, "sent again, the run is streamed again, not run twice"
+
+
+async def test_the_task_the_agent_shows_is_the_sessions_state_now_and_when_followed_later(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    task = {"goal": "Cheapest paper towels", "steps": [{"title": "Search Shop A", "status": "doing"}]}
+    model(("update_task", task))
+    state = await env.state()
+    state.workflows = env.sessions
+    async with session_worker(env.client, state, task_queue=env.queue), supervisor_api(state) as api:
+        sid = await browser_session(env, state)  # the browser tool set offers update_task
+        streamed = await _run(api, sid, "r-task", "find the cheapest paper towels")
+        assert (await api.delete(f"/v1/sessions/{sid}")).status_code == 204
+        followed = frames((await api.get(f"/v1/sessions/{sid}/agui")).text)
+
+    shown = {TASK_STATE: {**task, "found": [], "steps": [{"title": "Search Shop A", "status": "doing"}]}}
+    assert [e["snapshot"] for _, e in streamed if e["type"] == "STATE_SNAPSHOT"] == [shown]
+    assert [e["snapshot"] for _, e in followed if e["type"] == "STATE_SNAPSHOT"] == [shown], "read back from the journal"
 
 
 async def test_a_followed_session_resumes_after_the_last_event_it_had(env: Env, model: Callable[..., ScriptedGateway]) -> None:

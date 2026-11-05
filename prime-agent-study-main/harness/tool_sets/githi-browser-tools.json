@@ -342,6 +342,92 @@
       },
       "tool_class": "pure"
     },
+    "update_task": {
+      "description": "Show the user the task you are working on, beside the conversation: its goal, your steps with their status (todo, doing, done, failed, skipped) and what you have found so far. Use it on tasks of several steps: once when you have a plan, then whenever a step starts or ends or you find something. Send the whole task every time (it replaces the last one); keep it short, it is for the user to scan.",
+      "digest": "sha256:7a2802fd609643e0fbe63095cb1a589d433673106c75802183694318205c8e35",
+      "name": "update_task",
+      "parameters": {
+        "properties": {
+          "found": {
+            "description": "What you have found so far that the answer depends on",
+            "items": {
+              "properties": {
+                "label": {
+                  "description": "What it is (e.g. \"Shop A, 6 rolls\")",
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "source": {
+                  "description": "Optional: the page it was found on",
+                  "maxLength": 500,
+                  "pattern": "^https?://",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "What was found (e.g. \"\u00a33.00\")",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "type": "object"
+            },
+            "maxItems": 30,
+            "type": "array"
+          },
+          "goal": {
+            "description": "The task, as the user asked it, in one line",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "steps": {
+            "description": "Your plan, in order, each with its status",
+            "items": {
+              "properties": {
+                "note": {
+                  "description": "Optional: what came of it, or why it failed",
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "todo",
+                    "doing",
+                    "done",
+                    "failed",
+                    "skipped"
+                  ],
+                  "type": "string"
+                },
+                "title": {
+                  "description": "The step in a few words (e.g. \"Search Shop A\")",
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "type": "object"
+      },
+      "tool_class": "pure"
+    },
     "write": {
       "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
       "digest": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a",
@@ -368,7 +454,7 @@
   },
   "name": "githi-browser-tools",
   "protocol_version": 1,
-  "semver": "1.5.0",
+  "semver": "1.6.0",
   "status": "offered",
   "tools": {
     "bash": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
@@ -384,6 +470,7 @@
     "read": "sha256:518c394f56a1436189ca8d774a758ca75d3867514ebc950bf1d675d93270c07a",
     "remember": "sha256:a3b3a6117c9fba738dbcc8c1da69877138b3e1760b44b30ffe32898c41254419",
     "show_ui": "sha256:fc91c3c2883b84f6eb92fbc4636c0ecaa428ef581e711368e68a0d067b07ec16",
+    "update_task": "sha256:7a2802fd609643e0fbe63095cb1a589d433673106c75802183694318205c8e35",
     "write": "sha256:722854ea4965cf49e47a2f921763f4e6ef718eaf39ca9840a2b4d881b57dff8a"
   }
 }

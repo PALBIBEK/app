@@ -12,6 +12,7 @@ import { useCallback, useMemo } from 'react';
 import type { ChatMessage, ToolCallView } from '@/lib/api/types/session.types';
 import { BROWSER_EXEC, BROWSER_VAULT } from '@/lib/session/browserSteps';
 import { reportCalls, SHOW_UI } from '@/lib/session/reports';
+import { UPDATE_TASK } from '@/lib/session/task';
 import { SUBAGENT_TOOLS } from '@/lib/session/subagents';
 import { useReports, type ReportAction, type Reports } from '@/lib/session/useReports';
 import { useSurfaceAnswers, type SurfaceAnswers } from '@/lib/session/useSurfaceAnswers';
@@ -20,6 +21,7 @@ import { ToolCard } from '../parts';
 import { SubagentCallCard } from '../subagents';
 import { BrowserStepCard, VaultCard } from './BrowserCards';
 import { ReportCard } from './ReportCard';
+import { TaskCard } from './TaskCard';
 
 /** What a card may need beyond its call. */
 export interface ToolRenderContext {
@@ -40,6 +42,7 @@ const subagentCard: ToolCardComponent = ({ tool, context }) => (
 const CARDS: Readonly<Record<string, ToolCardComponent>> = {
   [BROWSER_EXEC]: ({ tool }) => <BrowserStepCard tool={tool} />,
   [BROWSER_VAULT]: ({ tool }) => <VaultCard tool={tool} />,
+  [UPDATE_TASK]: ({ tool }) => <TaskCard tool={tool} />,
   [SHOW_UI]: ({ tool, context }) => <ReportCard tool={tool} reports={context.reports} answers={context.answers} />,
   ...Object.fromEntries([...SUBAGENT_TOOLS].map((name) => [name, subagentCard])),
 };
