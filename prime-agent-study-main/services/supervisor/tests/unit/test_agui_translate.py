@@ -27,7 +27,7 @@ from supervisor.agent.events import (
     TurnStart,
     UnknownEvent,
 )
-from supervisor.agui import A2UI_ACTIVITY, A2UI_OPERATIONS, AgUiTranslator
+from supervisor.agui import A2UI_ACTIVITY, A2UI_OPERATIONS, TASK_STATE, AgUiTranslator
 from supervisor.genui import CATALOG_ID
 from supervisor.journal.partials import Partial
 
@@ -198,6 +198,20 @@ def test_a_deleted_surface_is_drawn_empty() -> None:
     events = translated(j(_show("c1", CREATE, ROOT)), j(ToolEnd("c1", "show_ui", ok)), j(_show("c2", gone)), j(ToolEnd("c2", "show_ui", ok)))
 
     assert [e["content"] for e in events if e["type"] == "ACTIVITY_SNAPSHOT"][-1] == {A2UI_OPERATIONS: []}
+
+
+def test_the_task_the_agent_shows_is_the_sessions_state() -> None:
+    """Each successful ``update_task`` replaces the state: an AG-UI client (CopilotKit's shared
+    state) reads the task from ``STATE_SNAPSHOT``; a refused call changes nothing."""
+    j = Journal()
+    task = {"goal": "Cheapest paper towels", "steps": [{"title": "Search Shop A", "status": "done"}], "found": []}
+
+    events = translated(
+        j(ToolEnd("c1", "update_task", {"ok": True, "payload": {"task": task}})),
+        j(ToolEnd("c2", "update_task", {"ok": False, "error": "bad"}, is_error=True)),
+    )
+
+    assert [e["snapshot"] for e in events if e["type"] == "STATE_SNAPSHOT"] == [{TASK_STATE: task}]
 
 
 def test_a_call_only_its_start_announces_is_announced_once() -> None:

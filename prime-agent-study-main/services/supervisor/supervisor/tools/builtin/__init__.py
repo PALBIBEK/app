@@ -18,5 +18,6 @@ from supervisor.tools.builtin import (  # noqa: F401 — imported to register
     read,
     remember,
     show_ui,
+    update_task,
     write,
 )

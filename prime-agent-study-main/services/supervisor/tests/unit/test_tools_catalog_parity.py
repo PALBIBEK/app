@@ -8,6 +8,7 @@ they publish, not the other way round.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -74,4 +75,6 @@ def _sample(prop: str, schema: dict[str, Any], index: int) -> Any:
     if schema["type"] == "array":  # one item, each of its own fields sampled
         item = schema["items"]
         return [{k: _sample(k, v, i) for i, (k, v) in enumerate(item.get("properties", {}).items())}]
+    if schema["type"] == "string" and (pattern := schema.get("pattern")):  # a value it matches (a URL, say)
+        return next(v for v in (f"value-of-{prop}", f"https://value-of-{prop}.example") if re.search(pattern, v))
     return {"string": f"value-of-{prop}", "integer": 10 + index, "boolean": True}[schema["type"]]

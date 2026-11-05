@@ -15,6 +15,7 @@ from supervisor.genui import SHOW_UI
 from supervisor.hands.browser import BROWSER_TOOLS, META_MARK, runtime_payload
 from supervisor.tools import InvalidArguments, default_registry
 from supervisor.tools.builtin.browser_exec import MAX_CODE_BYTES
+from supervisor.tools.builtin.update_task import NAME as UPDATE_TASK
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import STDERR_SEPARATOR, CommandResult, HostWorkspace
 
@@ -129,7 +130,7 @@ async def test_empty_or_oversized_code_is_refused_before_anything_runs(tmp_path:
     assert not workspace.sent
 
 
-@pytest.mark.parametrize("name", sorted(BROWSER_TOOLS | {SHOW_UI}))
+@pytest.mark.parametrize("name", sorted(BROWSER_TOOLS | {SHOW_UI, UPDATE_TASK}))
 async def test_the_shipped_tool_set_offers_the_browser_tools_as_implemented(name: str) -> None:
     """The catalog's copy of each tool (what sessions pin) is the implementation's own
     definition: a changed description or schema needs the tool set regenerated."""
@@ -147,7 +148,7 @@ async def test_the_browser_tool_set_is_the_coding_tools_the_browser_tools_and_re
     coding = json.loads((sets / "githi-coding-tools.json").read_text())["definitions"]
     browser = json.loads((sets / "githi-browser-tools.json").read_text())["definitions"]
 
-    assert set(browser) == set(coding) | BROWSER_TOOLS | {SHOW_UI}
+    assert set(browser) == set(coding) | BROWSER_TOOLS | {SHOW_UI, UPDATE_TASK}
     assert all(browser[name] == coding[name] for name in coding), "a coding tool's definition drifted"
 
 

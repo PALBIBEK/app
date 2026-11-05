@@ -7,7 +7,7 @@
  * rail shows its sandboxes and what it has used.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 import { CircleNotch, ClockCounterClockwise, GitBranch, Stop, TerminalWindow, Trash, XCircle } from '@phosphor-icons/react';
@@ -20,6 +20,7 @@ import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
+import { currentTask } from '@/lib/session/task';
 import type { ReportAction } from '@/lib/session/useReports';
 import { anyActive, subagentName } from '@/lib/session/subagents';
 import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
@@ -33,6 +34,7 @@ import { SessionRail } from './SessionRail';
 import { SubagentNoticeLine, SubagentsSection } from './subagents';
 import { useToolRenderer } from './tools';
 import { SessionNoteLine } from './SessionNoteLine';
+import { TaskPanel } from './TaskPanel';
 
 const ENDED = new Set(['terminated', 'failed', 'budget_exceeded']);
 
@@ -120,6 +122,7 @@ export function SessionChat({
   const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
     active: state.running || anyActive(subagents ?? []), // only a working subagent asks
   });
+  const task = useMemo(() => currentTask(state.messages), [state.messages]);
   const sendAction = useCallback((action: ReportAction) => sessionsAPI.sendUiAction(session.id, action), [session.id]);
   const renderTool = useToolRenderer({
     sessionId: session.id,
@@ -500,7 +503,12 @@ export function SessionChat({
           maxSteps={maxSteps}
           maxCost={maxCost}
           sessionCost={session.total_cost}
-          lead={<SubagentsSection sessionId={session.id} subagents={subagents} loading={subagentsLoading} />}
+          lead={
+            <>
+              <TaskPanel task={task} />
+              <SubagentsSection sessionId={session.id} subagents={subagents} loading={subagentsLoading} />
+            </>
+          }
         >
           {railExtra}
         </SessionRail>
