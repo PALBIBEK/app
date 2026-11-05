@@ -17,5 +17,6 @@ from supervisor.tools.builtin import (  # noqa: F401 — imported to register
     note_for_session,
     read,
     remember,
+    show_ui,
     write,
 )

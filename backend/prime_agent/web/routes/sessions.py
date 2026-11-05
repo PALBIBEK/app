@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Body, Header, Query, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from prime_agent.config import get_settings
@@ -239,6 +239,42 @@ async def stream_events(
             identity=identity,
             last_event_id=last_event_id,
             db=db,
+        ),
+    )
+
+
+@router.get("/{session_id}/agui")
+async def follow_session_agui(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """The session as AG-UI events (https://docs.ag-ui.com), resumable by Last-Event-ID: what
+    an AG-UI client, CopilotKit's among them, follows."""
+    identity = TenantPrincipal.from_user(current_user)
+    return await _event_stream(
+        current_user.id,
+        lambda: _service().stream_agui(
+            session_id=session_id, user_id=current_user.id, identity=identity, last_event_id=last_event_id, db=db
+        ),
+    )
+
+
+@router.post("/{session_id}/agui")
+async def run_session_agui(
+    session_id: str,
+    db: DbSession,
+    current_user: CurrentUser,
+    run_input: Annotated[dict[str, Any], Body(description="An AG-UI RunAgentInput; its threadId is this session")],
+) -> StreamingResponse:
+    """An AG-UI run of the session: its last user message is sent, and the run's events stream
+    until it ends."""
+    identity = TenantPrincipal.from_user(current_user)
+    return await _event_stream(
+        current_user.id,
+        lambda: _service().run_agui(
+            session_id=session_id, user_id=current_user.id, identity=identity, run_input=run_input, db=db
         ),
     )
 

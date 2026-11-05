@@ -41,7 +41,8 @@ const SUBAGENT_UI = [
 describe('D12 subagents: where people find them, and BFF-only', () => {
   it('the session shows its subagents in the conversation and the rail, and each has a page', () => {
     const chat = read('components/session/SessionChat.tsx');
-    expect(chat).toMatch(/SubagentCallCard/);
+    expect(chat).toMatch(/useToolRenderer/); // its tool calls draw by name: a subagent call as one
+    expect(read('components/session/tools/index.tsx')).toMatch(/SubagentCallCard/);
     expect(chat).toMatch(/SubagentNoticeLine/);
     expect(chat).toMatch(/SubagentsSection/);
     expect(existsSync(join(root, 'app/sessions/[id]/subagents/[subagentId]/page.tsx'))).toBe(true);

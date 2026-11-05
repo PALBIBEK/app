@@ -22,6 +22,10 @@ dependencies = [
   "alembic>=1.13",
   # The vault seals secrets with AES-256-GCM (supervisor.vault).
   "cryptography>=43",
+  # Sessions as AG-UI agents: the protocol's own event models and encoder (supervisor.agui).
+  "ag-ui-protocol>=1.0,<2",
+  # A2UI messages checked against the spec's own JSON schemas (supervisor.genui).
+  "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]

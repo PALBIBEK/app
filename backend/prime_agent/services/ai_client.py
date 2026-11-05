@@ -5,7 +5,7 @@ Routes never assemble Bearer strings; this service owns auth headers.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -993,11 +993,38 @@ class AiClient:
         ai_session_id: str,
         *,
         last_event_id: str | None = None,
-    ):
-        """Yield raw SSE byte chunks from supervisor (no full-body buffer)."""
-        from collections.abc import AsyncIterator
+    ) -> AsyncIterator[bytes]:
+        """The session's events (our wire), as raw SSE byte chunks (no full-body buffer)."""
+        return await self._stream(
+            "GET", f"/v1/sessions/{ai_session_id}/events", identity, last_event_id=last_event_id, what="events"
+        )
 
-        url = f"{self._require_base_url()}/v1/sessions/{ai_session_id}/events"
+    async def stream_session_agui(
+        self, identity: TenantPrincipal, ai_session_id: str, *, last_event_id: str | None = None
+    ) -> AsyncIterator[bytes]:
+        """The session as AG-UI events (``GET /v1/sessions/{id}/agui``), as raw SSE chunks."""
+        return await self._stream(
+            "GET", f"/v1/sessions/{ai_session_id}/agui", identity, last_event_id=last_event_id, what="AG-UI"
+        )
+
+    async def run_session_agui(
+        self, identity: TenantPrincipal, ai_session_id: str, run_input: dict[str, Any]
+    ) -> AsyncIterator[bytes]:
+        """An AG-UI run (``POST /v1/sessions/{id}/agui``): its events, as raw SSE chunks."""
+        return await self._stream("POST", f"/v1/sessions/{ai_session_id}/agui", identity, json=run_input, what="AG-UI run")
+
+    async def _stream(
+        self,
+        method: str,
+        path: str,
+        identity: TenantPrincipal,
+        *,
+        last_event_id: str | None = None,
+        json: dict[str, Any] | None = None,
+        what: str,
+    ) -> AsyncIterator[bytes]:
+        """A streamed response's body as it arrives; the connection closes with the iterator.
+        A refusal is ``AiUpstreamError`` with the supervisor's status (a 5xx as 503)."""
         headers = self._auth_headers(identity)
         if last_event_id:
             headers["Last-Event-ID"] = last_event_id
@@ -1005,13 +1032,14 @@ class AiClient:
         timeout = httpx.Timeout(connect=connect, read=None, write=30.0, pool=30.0)
         client = httpx.AsyncClient(transport=self._transport, timeout=timeout)
         try:
-            request = client.build_request("GET", url, headers=headers)
+            request = client.build_request(method, f"{self._require_base_url()}{path}", headers=headers, json=json)
             response = await client.send(request, stream=True)
             if response.status_code >= 400:
+                detail = (await response.aread()).decode("utf-8", errors="replace")[:500]
                 await response.aclose()
                 await client.aclose()
                 raise AiUpstreamError(
-                    "AI session events stream failed",
+                    f"AI session {what} stream failed: {detail}" if detail else f"AI session {what} stream failed",
                     status_code=503 if response.status_code >= 500 else response.status_code,
                 )
 
@@ -1028,7 +1056,6 @@ class AiClient:
         except httpx.HTTPError as exc:
             await client.aclose()
             raise AiUpstreamError("AI supervisor unreachable", status_code=503) from exc
-
 
     async def list_subagents(self, identity: TenantPrincipal, ai_session_id: str) -> list[dict[str, Any]]:
         """GET /v1/sessions/{id}/subagents: every subagent below the session."""
