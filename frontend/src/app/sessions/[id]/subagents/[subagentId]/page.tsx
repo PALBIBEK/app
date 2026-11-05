@@ -24,6 +24,7 @@ import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Subagent, ToolCallView } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { kindLabel, statusLabel, SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
+import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
 import { useSessionStream } from '@/lib/session/useSessionStream';
 import { formatMoney } from '@/lib/utils';
 
@@ -64,10 +65,7 @@ function SubagentPageContent(): JSX.Element {
   useEffect(() => {
     void refetch(); // its run started or ended: its status and answer changed
   }, [state.running, refetch]);
-  useEffect(
-    () => endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
-    [state.messages.length, pendingTools.length],
-  );
+  useScrollToEnd(endRef, [state.messages.length, pendingTools.length]);
 
   if (isLoading) {
     return (

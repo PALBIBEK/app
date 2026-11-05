@@ -21,6 +21,7 @@ import type { Session, ToolCallView } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
 import { anyActive, SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
+import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
 import { useAuthStore } from '@/lib/store/authStore';
 import { cn, formatMoney } from '@/lib/utils';
@@ -134,10 +135,7 @@ export function SessionChat({
     }
     wasRunning.current = state.running;
   }, [state.running, onRunEnd, refetchSubagents]);
-  useEffect(
-    () => endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
-    [state.messages.length, pendingTools.length, state.pendingApprovals.length],
-  );
+  useScrollToEnd(endRef, [state.messages.length, pendingTools.length, state.pendingApprovals.length]);
 
   // The stream saying the session ended is enough to stop sending: the status that says
   // how it ended is fetched after, and the badge already shows Ended meanwhile.
