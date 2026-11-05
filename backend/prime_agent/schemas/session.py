@@ -24,6 +24,8 @@ class CreateSessionFromHarness(BaseModel):
 
     harness_id: str = Field(..., min_length=1)
     scope_id: str | None = Field(default=None, min_length=1)
+    # A model the supervisor offers (GET /api/v1/catalog/models) instead of the agent's own.
+    model: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class SessionPinSnapshot(BaseModel):
@@ -51,6 +53,9 @@ class SessionResponse(BaseModel):
     total_cost: float = 0.0
     last_seq: int = 0
     is_busy: bool | None = None
+    # The model the session's next run calls (its owner's choice, else the agent's); None when
+    # the supervisor did not say.
+    model: str | None = None
     created_at: datetime
     updated_at: datetime
     pin: SessionPinSnapshot
@@ -109,6 +114,8 @@ class SessionMessageRequest(BaseModel):
     command_id: str | None = Field(default=None, min_length=1)
     # Sent while a run works: join it at its next step (steering) instead of queueing.
     steer: bool = False
+    # Run this model from this message's run on (not with steer: a run keeps its model).
+    model: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class SessionMessageResponse(BaseModel):

@@ -57,6 +57,7 @@ from supervisor.memory.client import (
     UnavailableNotebooks,
 )
 from supervisor.models import model_router
+from supervisor.models.choice import require_offered
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.policy.guards import GuardAction, call_hash
 from supervisor.sandbox.network import check_network
@@ -122,7 +123,10 @@ class SessionManager(UpkeepOps):
         principal_id: str | None = None,
         memory: MemoryRequest | dict[str, Any] | None = None,
         session_id: str | None = None,
+        model: str | None = None,
     ) -> str:
+        if model is not None:
+            await asyncio.to_thread(require_offered, model)
         await sync_harness_version(self._catalog, self._db, harness_version)
         if not harness_visible_to(await harness_owner(self._db, harness_version), tenant_id):
             raise UnknownHarness(harness_version)  # another tenant's registered version
@@ -217,6 +221,7 @@ class SessionManager(UpkeepOps):
                 runtime_name=runtime_name,
                 manifest=manifest,
                 pins=pins,
+                chosen=model,
                 sandbox_profile=profile,
                 memory_profile=memory_profile,
                 tenant_id=tenant_id,
@@ -279,6 +284,7 @@ class SessionManager(UpkeepOps):
                 row.harness_version = harness_version
                 row.manifest = snap
                 row.composition_pins = pins_json
+                row.model = model
                 row.tenant_id = tenant_id
                 row.scope_id = scope_id
                 row.status = "active"
@@ -338,6 +344,7 @@ class SessionManager(UpkeepOps):
         runtime_name: str,
         manifest: HarnessManifest,
         pins: SessionPins | None,
+        chosen: str | None,
         sandbox_profile: Any | None,
         memory_profile: Any | None,
         tenant_id: str,
@@ -350,7 +357,7 @@ class SessionManager(UpkeepOps):
         (bound once, every model-calling seam on the session's gateway key), its
         sandbox, and the hook that marks the workspace dirty when a tool changes it.
         """
-        model = session_model(manifest, pins)
+        model = session_model(manifest, pins, chosen)
         self._long_term.setdefault(
             session_id,
             (
@@ -420,12 +427,13 @@ class SessionManager(UpkeepOps):
         def group(name: str) -> str:
             return (router.target_for(name) if router is not None else None) or name
 
-        allowed = (
-            list(dict.fromkeys(group(m) for m in (model, summarizer_model) if m)) if model else []
-        )
+        # Read at each mint: after the session's model changes (use_model), the next key
+        # covers the new one.
+        models = self._key_models[session_id] = [model, summarizer_model]
         client = self._vk_client
 
         def mint() -> MintedVirtualKey:
+            allowed = list(dict.fromkeys(group(m) for m in models if m)) if models[0] else []
             minted = client.mint(
                 tenant_id=tenant_id,
                 session_id=session_id,
@@ -442,7 +450,7 @@ class SessionManager(UpkeepOps):
             token = (await asyncio.to_thread(mint)).token
         else:
             token = await self._current_key(session_id, mint)
-        ws_state.virtual_key_token = token
+        ws_state.virtual_key_token = self._key_tokens[session_id] = token
         return token
 
     async def _current_key(
@@ -503,6 +511,7 @@ class SessionManager(UpkeepOps):
             token = await self._current_key(session_id, mint, replacing=refused)
         if token == old:
             return False
+        self._key_tokens[session_id] = token
         if ws_state is not None:
             ws_state.virtual_key_token = token
         seams = self._seams.get(session_id)
@@ -514,6 +523,44 @@ class SessionManager(UpkeepOps):
                 "session %s: gateway key renewed but its runtime cannot take it", session_id
             )
         return True
+
+    async def current_model(self, session_id: str) -> str | None:
+        """The model the session's next run calls: its owner's choice, else the pinned one."""
+        return self.session_model(await self._get_session_row(session_id))
+
+    async def choose_model(self, session_id: str, model: str) -> None:
+        """Run ``model`` from the session's next run on (its owner chose it): checked to be
+        offered now, then kept on the session. A run already working keeps its model."""
+        async with self._db() as db:
+            row = await db.get(SessionRow, session_id)
+            if row is None:
+                raise SessionNotFound(session_id)
+            if model == self.session_model(row):
+                return
+            await asyncio.to_thread(require_offered, model)
+            row.model = model
+            await db.commit()
+
+    async def use_model(self, session_id: str, model: str | None) -> None:
+        """Call ``model`` on this worker from now on (a run's model): the runtime names it, the
+        gateway client defaults to it, and the session's key is replaced by one that covers it
+        (or by the one another worker already made)."""
+        runtime = self._registry.get(session_id) or self._brains.get(session_id)
+        if model is None or runtime is None or getattr(runtime, "model", model) == model:
+            return
+        use = getattr(runtime, "use_model", None)
+        if callable(use):
+            use(model)
+        client = getattr(getattr(runtime, "seams", None), "model_gateway", None)
+        if client is not None and hasattr(client, "default_model"):
+            client.default_model = model
+        models = self._key_models.get(session_id)
+        if models is None:
+            return
+        models[0] = model
+        # The key this worker holds covers the old model: replace it, unless another worker
+        # already did (then that worker's key, which covers the new one, is taken).
+        await self.renew_gateway_key(session_id, refused=self._key_tokens.get(session_id))
 
     async def brain(self, session_id: str) -> Any:
         """The session's brain for a model step: on this worker, whoever holds its sandbox.
@@ -546,7 +593,7 @@ class SessionManager(UpkeepOps):
             else None
         )
         principal = Principal(id=row.owner_principal_id or row.tenant_id, tenant_id=row.tenant_id)
-        model = session_model(manifest, pins)
+        model = session_model(manifest, pins, row.model)
         owner, agent = self._long_term.setdefault(
             session_id,
             (
@@ -726,8 +773,12 @@ class SessionManager(UpkeepOps):
         *,
         command_id: str,
         inbound_trace_id: str | None = None,
+        model: str | None = None,
     ) -> None:
+        if model is not None:
+            await self.choose_model(session_id, model)
         await self.prepare_turn(session_id)
+        await self.use_model(session_id, self.session_model(await self._get_session_row(session_id)))
         self._budget.begin_turn(session_id)
         runtime = self._registry.get(session_id)
         mode = self._modes.get(session_id)
@@ -820,6 +871,7 @@ class SessionManager(UpkeepOps):
             runtime_name=row.runtime,
             manifest=harness,
             pins=pins,
+            chosen=row.model,
             sandbox_profile=profile,
             memory_profile=memory_profile,
             tenant_id=row.tenant_id,

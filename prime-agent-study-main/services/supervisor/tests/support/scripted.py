@@ -89,6 +89,8 @@ class ScriptedGateway:
     # takes: a call made with one is refused as an unknown key (401 AUTH_INVALID).
     token: str | None = None
     refused_tokens: set[str] = dataclasses.field(default_factory=set)
+    # The model each call named, in order (one-shots and summaries too).
+    models: list[str | None] = dataclasses.field(default_factory=list)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
     def rekey(self, token: str) -> None:
@@ -105,6 +107,7 @@ class ScriptedGateway:
     ) -> Completion:
         if self.token is not None and self.token in self.refused_tokens:
             raise ModelGatewayError(401, '{"detail":{"error":{"code":"AUTH_INVALID","message":"unknown virtual key"}}}')
+        self.models.append(model)
         self.tool_choices.append(tool_choice)
         if self.stream_chunks and on_delta is not None and tools:
             for chunk in self.stream_chunks:

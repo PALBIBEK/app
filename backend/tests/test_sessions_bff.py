@@ -930,3 +930,48 @@ async def test_a_session_erased_upstream_is_forgotten_here(
         erased_later.add("ai-ended")  # erased since: opening it says not found, and forgets it
         assert (await api.get(f"/api/v1/sessions/{kept['ai-ended']}")).status_code == 404
     assert [link.ai_session_id for link in (await db_session.scalars(select(SessionLink))).all()] == ["ai-new"]
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_model_goes_to_the_supervisor_and_the_session_shows_it(
+    db_session, owner, harness, session_settings, monkeypatch
+):
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if cat := _catalog_ok(request):
+            return cat
+        if request.method == "POST" and request.url.path.endswith("/v1/sessions"):
+            bodies.append(json.loads(request.content.decode()))
+            return httpx.Response(
+                201,
+                json={"session_id": "ai-model-1", "harness_version": "githi-v1", "runtime": "githi", "status": "active"},
+            )
+        if request.url.path.endswith("/messages"):
+            bodies.append(json.loads(request.content.decode()))
+            return httpx.Response(202, json={"turn_id": "turn-1", "status": "accepted"})
+        if request.method == "GET" and request.url.path.endswith("/v1/sessions/ai-model-1"):
+            return httpx.Response(
+                200,
+                json={"session_id": "ai-model-1", "status": "active", "harness_version": "githi-v1",
+                      "runtime": "githi", "last_seq": 3, "model": "gateway/local/qwen3:8b"},
+            )
+        return httpx.Response(404)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    app = create_app()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+        created = await api.post("/api/v1/sessions", json={"harness_id": harness.id, "model": "gateway/deepseek-flash"})
+        sid = created.json()["id"]
+        sent = await api.post(f"/api/v1/sessions/{sid}/messages", json={"content": "hi", "model": "gateway/local/qwen3:8b"})
+        shown = await api.get(f"/api/v1/sessions/{sid}")
+    assert created.status_code == 201 and sent.status_code == 202
+    assert bodies[0]["model"] == "gateway/deepseek-flash"
+    assert bodies[1]["model"] == "gateway/local/qwen3:8b"
+    assert shown.json()["model"] == "gateway/local/qwen3:8b"

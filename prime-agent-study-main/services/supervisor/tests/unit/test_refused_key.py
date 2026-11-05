@@ -13,6 +13,7 @@ from supervisor.seams.core.types import ModelGatewayError
     [
         (401, "AUTH_INVALID", True),  # unknown key: another signing secret
         (403, "VIRTUAL_KEY_EXPIRED", True),
+        (403, "VIRTUAL_KEY_MODEL_DENIED", True),  # minted for the session's previous model
         (403, "VIRTUAL_KEY_REVOKED", False),  # the session ended
         (429, "VIRTUAL_KEY_BUDGET_EXCEEDED", False),
         (401, "AUTH_REQUIRED", False),  # no key sent at all

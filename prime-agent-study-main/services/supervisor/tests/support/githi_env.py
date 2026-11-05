@@ -81,6 +81,7 @@ class Env:
         principal: str = "alice",
         memory: dict[str, Any] | None = None,
         timing: Timing = FAST,
+        model: str | None = None,
     ) -> str:
         """A githi session from the shipped composition, re-pinned to ``harness``."""
         name, digest = await self.composition(state, harness)
@@ -94,6 +95,7 @@ class Env:
                 composition_digest=digest,
                 principal_id=principal,
                 memory=memory,
+                model=model,
             ),
             timing=timing,
         )

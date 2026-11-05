@@ -135,6 +135,7 @@ NON_RETRYABLE = (
     "DigestMissing",
     "HarnessVersionMismatch",
     "HarnessNotOffered",
+    "ModelNotOffered",
     "IncompatibleHarness",
     "CatalogError",
     "QuotaExceeded",
@@ -178,6 +179,8 @@ class CreateSession:
     principal_id: str | None = None
     # The session's memory binding request (supervisor.memory.binding.MemoryRequest).
     memory: dict[str, Any] | None = None
+    # The model its owner chose, instead of the one its composition pins.
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +218,8 @@ class Message:
     notice_run: str | None = None
     notice_text: str | None = None
     notice_output: str | None = None  # a report's own words, unframed (for people)
+    # The model the user chose with this message: the session runs it from this run on.
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -177,6 +177,9 @@ def is_retryable(error: BaseException) -> bool:
 _REFUSED_KEY: Final = (
     (401, "AUTH_INVALID"),  # the gateway does not know the key (another signing secret)
     (403, "VIRTUAL_KEY_EXPIRED"),
+    # The key was minted for the session's previous model (another worker made it before the
+    # owner chose this one): a key minted now covers the model the session calls.
+    (403, "VIRTUAL_KEY_MODEL_DENIED"),
 )
 
 

@@ -63,8 +63,12 @@ class GithiRuntime:
 
     @property
     def model(self) -> str | None:
-        """The pinned model (route) every model call names."""
+        """The model every model call names: the pinned route, or the one chosen since."""
         return self._model
+
+    def use_model(self, model: str) -> None:
+        """Name ``model`` from the next model call on (the session's owner chose it)."""
+        self._model = model
 
     @property
     def workspace(self) -> Workspace | None:

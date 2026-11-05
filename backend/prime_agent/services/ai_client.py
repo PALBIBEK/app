@@ -402,11 +402,14 @@ class AiClient:
         composition_id: str | None = None,
         composition_digest: str | None = None,
         scope_id: str | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "harness_version": harness_version,
             "runtime": runtime,
         }
+        if model is not None:
+            body["model"] = model
         if composition_id is not None:
             body["composition_id"] = composition_id
         if composition_digest is not None:
@@ -508,10 +511,13 @@ class AiClient:
         text: str,
         command_id: str,
         steer: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"text": text, "command_id": command_id}
         if steer:
             body["steer"] = True
+        if model is not None:
+            body["model"] = model
         return await self._json_request(
             "POST",
             f"/v1/sessions/{ai_session_id}/messages",

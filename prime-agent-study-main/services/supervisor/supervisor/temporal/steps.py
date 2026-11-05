@@ -413,6 +413,11 @@ def _since_a_counted_reply(messages: Sequence[Envelope]) -> bool:
     return any(isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and e.payload.usage for e in messages)
 
 
+def _run_model(run: list[Envelope]) -> str | None:
+    """The model a run began with (its ``RunStart``); None for a run recorded before runs named it."""
+    return next((e.payload.model for e in run if isinstance(e.payload, RunStart)), None)
+
+
 def _user_text(run: list[Any]) -> str:
     for envelope in run:
         event = envelope.payload
@@ -482,13 +487,16 @@ class GithiSteps:
     async def begin_run(self, req: TurnRequest) -> RunPlan:
         session_id, message = req.session_id, req.message
         run_id = run_id_for(session_id, message.command_id)
+        if message.model is not None:
+            await self._manager.choose_model(session_id, message.model)
         await self._manager.prepare_turn(session_id)
         runtime = self._manager._registry.get(session_id)
         if not self._is_stepped(runtime):
             return RunPlan(run_id, stepped=False)
         await self._close_interrupted_run(session_id, run_id)
         self._manager._budget.begin_turn(session_id)
-        await self._record(session_id, run_id, "start", RunStart(), trace_id=message.trace_id)
+        model = self._manager.session_model(await self._manager._get_session_row(session_id))
+        await self._record(session_id, run_id, "start", RunStart(model=model), trace_id=message.trace_id)
         await self._record(session_id, run_id, "user", await self._said(session_id, message))
         await self._memory.checkpoint(session_id, run_id, self._record)
         manifest = await self._manifest(session_id)
@@ -648,6 +656,8 @@ class GithiSteps:
             loop = runtime.loop()
             await self._record(sid, run_id, f"{req.step}:turn", TurnStart())
             run = await self._reader.read_turn(sid, run_id)
+            # Every step of a run calls the model it began with, on whichever worker runs it.
+            await self._manager.use_model(sid, _run_model(run) or runtime.model)
             if req.step == 0:
                 await self._memory.recall(sid, run_id, _user_text(run), self._record)
                 await self._pinned.recall(sid, run_id, _user_text(run))

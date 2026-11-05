@@ -72,6 +72,9 @@ ZERO_USAGE = Usage(0, 0)
 
 @dataclass(frozen=True)
 class RunStart:
+    # The model the run calls, fixed as it begins (a model chosen meanwhile is the next run's);
+    # None in runs recorded before runs named theirs.
+    model: str | None = None
     category: EventCategory = field(default=EventCategory.LIFECYCLE, repr=False)
 
 

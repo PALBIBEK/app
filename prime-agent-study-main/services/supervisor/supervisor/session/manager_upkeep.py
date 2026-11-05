@@ -312,6 +312,8 @@ class UpkeepOps(ChildOps):
             except Exception:
                 logger.exception("virtual key revoke failed session=%s", session_id)
         self._key_mints.pop(session_id, None)
+        self._key_models.pop(session_id, None)
+        self._key_tokens.pop(session_id, None)
         self._key_expiry.pop(session_id, None)
         if self._session_keys is not None:
             try:

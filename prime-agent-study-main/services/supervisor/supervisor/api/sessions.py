@@ -23,6 +23,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.api.session_ops import domain_http_error, run_op
 from supervisor.api.workflow_errors import to_http
+from supervisor.models.choice import ModelNotOffered, require_offered
 from supervisor.policy.budget import BudgetExceeded
 from supervisor.seams.services import Principal
 from supervisor.session import (
@@ -65,6 +66,16 @@ class StartupOut(BaseModel):
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
 
+async def _require_offered(model: str) -> None:
+    """Refuse at once a model the session could not run (422), before any work is started."""
+    try:
+        await asyncio.to_thread(require_offered, model)
+    except ModelNotOffered as exc:
+        raise HTTPException(
+            status_code=422, detail={"reason": "model_not_offered", "message": str(exc)}
+        ) from exc
+
+
 @router.post("", status_code=201, response_model=CreateSessionResponse)
 async def create_session(
     body: CreateSessionRequest,
@@ -80,6 +91,8 @@ async def create_session(
     if deps.is_draining(request):
         raise HTTPException(status_code=503, detail="draining")
     manager = deps.get_manager(request)
+    if body.model is not None:
+        await _require_offered(body.model)
     if (workflows := deps.get_workflows(request)) is not None:
         session_id = uuid4().hex
         spec = CreateSession(
@@ -91,6 +104,7 @@ async def create_session(
             scope_id=body.scope_id,
             principal_id=principal.id,
             memory=body.memory.model_dump() if body.memory else None,
+            model=body.model,
         )
         respond_async = "respond-async" in (prefer or "").lower()
         try:
@@ -125,6 +139,7 @@ async def create_session(
             scope_id=body.scope_id,
             principal_id=principal.id,
             memory=body.memory.model_dump() if body.memory else None,
+            model=body.model,
         )
     except Exception as exc:
         # The same statuses as the workflow path: one table (api.workflow_errors).
@@ -210,6 +225,7 @@ async def get_session(
         message_count=info.message_count,
         is_busy=info.is_busy,
         total_cost=info.total_cost,
+        model=await manager.current_model(session_id),
     )
 
 
@@ -280,6 +296,8 @@ async def post_message(
     manager = deps.get_manager(request)
     if (refusal := await manager.refuses_messages(session_id)) is not None:
         raise HTTPException(status_code=409, detail={"reason": "not_messageable", "message": refusal})
+    if body.model is not None:
+        await _require_offered(body.model)
 
     existing = await deps.recorded_command(request, session_id, body.command_id, body.text)
     if existing is not None:
@@ -301,6 +319,7 @@ async def post_message(
                     body.text,
                     parse_traceparent(request.headers.get("traceparent")),
                     steer=body.steer,
+                    model=body.model,
                 ),
             )
         except (SessionCommandError, TemporalUnavailable) as exc:
@@ -363,6 +382,7 @@ async def post_message(
             body.text,
             command_id=body.command_id,
             inbound_trace_id=inbound,
+            model=body.model,
         )
     except SessionNotFound as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
