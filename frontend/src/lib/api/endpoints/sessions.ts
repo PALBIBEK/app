@@ -2,6 +2,10 @@
  * sessionsAPI — product BFF only (never supervisor host).
  */
 
+import { z } from 'zod';
+
+import type { BrowserInput, BrowserScreen } from '@/lib/session/liveBrowser';
+
 import { apiClient } from '../client';
 import type { SessionPins } from '../types/catalog.types';
 import type { SessionStartup } from '@/lib/session/startup';
@@ -51,6 +55,14 @@ async function refusal(response: Response): Promise<string> {
   return `The request failed (${response.status}).`;
 }
 
+const BrowserScreenSchema = z.object({
+  url: z.string(),
+  title: z.string(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  image: z.string(),
+});
+
 export const sessionsAPI = {
   list: async (params?: {
     harness_id?: string;
@@ -87,6 +99,18 @@ export const sessionsAPI = {
       }
     );
     return SessionMessageResponseSchema.parse(response);
+  },
+
+  /** The agent's browser as you see it: its current tab, whenever one is open. */
+  browserScreen: async (sessionId: string): Promise<BrowserScreen> => {
+    const response = await apiClient.get<unknown>(`/sessions/${encodeURIComponent(sessionId)}/browser/screen`);
+    return BrowserScreenSchema.parse(response);
+  },
+
+  /** Your input on the agent's browser, while it is not working there; the browser after it. */
+  browserInput: async (sessionId: string, input: BrowserInput): Promise<BrowserScreen> => {
+    const response = await apiClient.post<unknown>(`/sessions/${encodeURIComponent(sessionId)}/browser/input`, input);
+    return BrowserScreenSchema.parse(response);
   },
 
   /** The session's runs, newest first. */

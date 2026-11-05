@@ -72,6 +72,17 @@ class SessionStartupResponse(BaseModel):
     kind: str | None = None
 
 
+class BrowserScreenResponse(BaseModel):
+    """The session's browser as a person sees it: its current tab, as a base64 JPEG of the
+    viewport (``width`` by ``height`` CSS pixels), with the tab's URL and title."""
+
+    url: str
+    title: str
+    width: int
+    height: int
+    image: str
+
+
 RUN_TERMINAL = frozenset({"completed", "failed", "cancelled", "incomplete"})
 
 

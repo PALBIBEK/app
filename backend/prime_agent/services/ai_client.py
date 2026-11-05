@@ -94,6 +94,10 @@ SAFE_READY_REASONS = frozenset(
 )
 
 
+BROWSER_LIVE_TIMEOUT_S = 30.0
+"""A look at the session's browser, or an input and the look after it (the supervisor's
+own bound is 20 s): a few seconds of work in the sandbox, not the usual quick call."""
+
 LONG_CALL_TIMEOUT_S = 300.0
 """For calls that answer only when work finishes (a tool call, a command): the
 usual short timeout turned a slow but healthy run into a 503."""
@@ -445,6 +449,20 @@ class AiClient:
         return await self._json_request(
             "POST", f"/v1/sessions/{quote(ai_session_id, safe='')}/runs/{quote(run_id, safe='')}/cancel",
             identity, expected=(200, 202), timeout=15.0,
+        )
+
+    async def browser_screen(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:
+        """GET /v1/sessions/{id}/browser/screen: the session's browser, as a person sees it."""
+        return await self._json_request(
+            "GET", f"/v1/sessions/{quote(ai_session_id, safe='')}/browser/screen", identity, expected=(200,),
+            timeout=BROWSER_LIVE_TIMEOUT_S,
+        )
+
+    async def browser_input(self, identity: TenantPrincipal, ai_session_id: str, action: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/sessions/{id}/browser/input: a person's input on the session's browser."""
+        return await self._json_request(
+            "POST", f"/v1/sessions/{quote(ai_session_id, safe='')}/browser/input", identity, json_body=action,
+            expected=(200,), timeout=BROWSER_LIVE_TIMEOUT_S,
         )
 
     async def session_startup(self, identity: TenantPrincipal, ai_session_id: str) -> dict[str, Any]:

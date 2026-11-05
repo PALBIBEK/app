@@ -36,7 +36,7 @@ from supervisor.session.errors import (
     ToolInvokeNotConfigured,
 )
 from supervisor.session.manager_approvals import ApprovalOps
-from supervisor.session.manager_base import ToolInvokeOutcome
+from supervisor.session.manager_base import ToolInvokeOutcome, run_open
 from supervisor.tools import WorkspaceReset
 from supervisor.tools.truncate import cut_middle
 
@@ -78,6 +78,16 @@ def _latest_within(images: list[dict[str, str]], limit: int) -> list[dict[str, s
             break
         shown.insert(0, image)
     return shown
+
+
+@dataclass(frozen=True, slots=True)
+class LiveBrowser:
+    """The session's browser, for a person: the sandbox it runs in, how the runtime reaches
+    it, and whether the agent is working (a person only watches then)."""
+
+    workspace: HandWorkspace
+    env: dict[str, str]
+    agent_working: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +242,17 @@ class ToolOps(ApprovalOps):
         profile = self._sandbox_profile_for_row(row)
         env = await self._browser_env(session_id, profile) if tool in BROWSER_TOOLS else {}
         return {**env, **self._model_access_env(session_id, row, profile)}
+
+    async def live_browser(self, session_id: str) -> LiveBrowser | None:
+        """Where a person sees and acts on the session's browser (``supervisor.hands.browser
+        .live``); None while no sandbox serves the session (the browser went with it)."""
+        if self._hands.sandbox(session_id) is None:
+            return None
+        row = await self._get_session_row(session_id)
+        env = await self._browser_env(session_id, self._sandbox_profile_for_row(row))
+        async with self._db() as db:
+            working = await run_open(db, session_id)
+        return LiveBrowser(self.hand_workspace(session_id), env, working)
 
     async def _browser_env(self, session_id: str, profile: SandboxProfile | None) -> dict[str, str]:
         """How the runner reaches the session's browser (the profile's provider); why not,

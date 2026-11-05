@@ -1104,3 +1104,49 @@ async def test_a_thread_is_renamed_even_when_its_event_arrives_in_pieces():
     out = b"".join([chunk async for chunk in rethreaded(pieces(), "ai-agui", "s-1")])
 
     assert out == AGUI_RUN.replace(b'"threadId":"ai-agui"', b'"threadId":"s-1"')
+
+
+# The session's browser: watched, and taken over --------------------------------------
+
+SCREEN = {"url": "https://shop.example/checkout", "title": "Verify", "width": 1280, "height": 720, "image": "/9j/AAAA"}
+
+
+@pytest.mark.asyncio
+async def test_the_browser_is_shown_and_a_persons_input_reaches_it_through_the_supervisors_session(
+    db_session, owner, harness, session_settings, monkeypatch, make_user
+):
+    link = await _agui_link(db_session, owner, harness)
+    seen: list[tuple[str, str, dict | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        return httpx.Response(200, json=SCREEN)
+
+    _patch_session(monkeypatch, session_settings, handler)
+    stranger = await make_user(email="watcher@example.com", name="Watcher")
+    async with _as(db_session, owner) as api:
+        shown = await api.get(f"/api/v1/sessions/{link.id}/browser/screen")
+        clicked = await api.post(f"/api/v1/sessions/{link.id}/browser/input", json={"kind": "click", "x": 10, "y": 20})
+    async with _as(db_session, stranger) as api:
+        not_theirs = await api.get(f"/api/v1/sessions/{link.id}/browser/screen")
+
+    assert shown.status_code == 200 and shown.json() == SCREEN
+    assert clicked.status_code == 200 and clicked.json()["title"] == "Verify"
+    assert seen == [
+        ("GET", "/v1/sessions/ai-agui/browser/screen", None),
+        ("POST", "/v1/sessions/ai-agui/browser/input", {"kind": "click", "x": 10, "y": 20}),
+    ]
+    assert not_theirs.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_an_input_while_the_agent_works_is_refused_saying_so(db_session, owner, harness, session_settings, monkeypatch):
+    link = await _agui_link(db_session, owner, harness)
+    reason = "the agent is working in the browser: wait for its turn to end, or stop it, to take control"
+    _patch_session(monkeypatch, session_settings, lambda request: httpx.Response(409, json={"detail": reason}))
+
+    async with _as(db_session, owner) as api:
+        r = await api.post(f"/api/v1/sessions/{link.id}/browser/input", json={"kind": "key", "key": "Enter"})
+
+    assert r.status_code == 409 and r.json()["detail"]["message"] == reason
