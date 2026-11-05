@@ -9,7 +9,7 @@ import pytest
 
 from supervisor.genui import (
     CATALOG_ID,
-    DISPLAY_COMPONENTS,
+    COMPONENTS,
     MAX_PROBLEMS,
     catalog_summary,
     problems,
@@ -66,13 +66,34 @@ def test_what_is_wrong_is_said_where_it_is(messages: list[dict[str, Any]], said:
     assert found[0].startswith("messages[0]: ")
 
 
-def test_a_component_that_takes_input_is_refused_until_input_reaches_the_agent() -> None:
-    button = {"id": "root", "component": "Button", "child": "x", "action": {"event": {"name": "buy"}}}
+ASK = report(
+    {"id": "root", "component": "Column", "children": ["pick", "note", "go"]},
+    {"id": "pick", "component": "ChoicePicker", "options": [{"label": "Shop A", "value": "a"}], "value": {"path": "/pick"}},
+    {"id": "note", "component": "TextField", "label": "Anything else?", "value": {"path": "/note"}},
+    {"id": "go", "component": "Button", "child": "go_label", "action": {"event": {"name": "chosen", "context": {"pick": {"path": "/pick"}}}}},
+    {"id": "go_label", "component": "Text", "text": "Choose"},
+)
 
-    (found,) = problems(components(button))
 
-    assert "is 'Button'" in found and "a person's input does not reach you yet" in found
-    assert "Button" not in DISPLAY_COMPONENTS
+def test_a_choice_with_a_button_that_sends_it_is_valid() -> None:
+    assert problems(ASK) == []
+    assert {"Button", "ChoicePicker", "TextField"} <= COMPONENTS
+
+
+@pytest.mark.parametrize(
+    ("component", "said"),
+    [
+        (
+            {"id": "root", "component": "Button", "child": "x", "action": {"functionCall": {"call": "openUrl", "args": {"url": "https://a.example"}}}},
+            "its action must be an event",
+        ),
+        ({"id": "root", "component": "Modal", "trigger": "a", "content": "b"}, "is 'Modal': this platform draws"),
+    ],
+)
+def test_what_would_act_without_the_agent_is_refused(component: dict[str, Any], said: str) -> None:
+    (found,) = problems(components(component))
+
+    assert said in found, found
 
 
 def test_problems_are_bounded() -> None:

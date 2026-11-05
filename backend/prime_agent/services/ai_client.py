@@ -1035,12 +1035,13 @@ class AiClient:
             request = client.build_request(method, f"{self._require_base_url()}{path}", headers=headers, json=json)
             response = await client.send(request, stream=True)
             if response.status_code >= 400:
-                detail = (await response.aread()).decode("utf-8", errors="replace")[:500]
+                await response.aread()
                 await response.aclose()
                 await client.aclose()
+                refused = response.status_code < 500  # the request was wrong: say why, as the supervisor did
                 raise AiUpstreamError(
-                    f"AI session {what} stream failed: {detail}" if detail else f"AI session {what} stream failed",
-                    status_code=503 if response.status_code >= 500 else response.status_code,
+                    _refusal_message(response) if refused else f"AI session {what} stream failed",
+                    status_code=response.status_code if refused else 503,
                 )
 
             async def _gen() -> AsyncIterator[bytes]:

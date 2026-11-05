@@ -2,7 +2,9 @@
 
 ``POST /v1/sessions/{id}/agui`` is an AG-UI run: the body is the protocol's ``RunAgentInput``
 (its thread is the session, its last user message is what the session is told), and the
-response streams that run's events until it ends. ``GET /v1/sessions/{id}/agui`` follows the
+response streams that run's events until it ends. A run whose ``forwardedProps`` carry a
+person's action on a surface the agent drew (``a2uiAction.userAction``, AG-UI's A2UI
+convention) tells the session that action instead (``supervisor.genui.actions``). ``GET /v1/sessions/{id}/agui`` follows the
 session as our ``/events`` does, resumable by ``Last-Event-ID``: a client that drew the
 conversation once keeps following it. Both are SSE in the protocol's own encoding
 (``ag_ui.encoder.EventEncoder``); the last AG-UI event of each journalled one carries its seq as
@@ -11,8 +13,9 @@ the SSE id, so a reconnect never replays nor skips one.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator, Iterable
-from typing import Any
+from typing import Any, Final
 
 from ag_ui.core import BaseEvent, RunAgentInput, UserMessage
 from ag_ui.encoder import EventEncoder
@@ -24,12 +27,16 @@ from supervisor.agent.events import Envelope, RunEnd
 from supervisor.agui import AgUiTranslator
 from supervisor.api import deps
 from supervisor.api.events import SSE_PING, session_items, sse_response, stream_cursor
-from supervisor.api.schemas import PostMessageRequest
+from supervisor.api.schemas import COMMAND_ID_MAX, PostMessageRequest
 from supervisor.api.sessions import submit_message
 from supervisor.api.stream import Ended, Item, Ping
+from supervisor.genui.actions import JOURNAL_TYPES, Drawing, action_problem, action_text, drawings
 from supervisor.journal.partials import Partial
 
 __all__ = ["router"]
+
+A2UI_ACTION: Final = ("a2uiAction", "userAction")
+"""Where a run's ``forwardedProps`` carry a person's A2UI action."""
 
 router = APIRouter(prefix="/v1/sessions", tags=["ag-ui"])
 
@@ -51,17 +58,21 @@ async def follow_session(
 
 @router.post("/{session_id}/agui")
 async def run_session(session_id: str, request: Request, tenant_id: str = Depends(deps.current_tenant)) -> StreamingResponse:
-    """An AG-UI run: the input's last user message, told to the session; then that run's
-    events, until it ends. The run's id is the command's, so sending the same run again is
-    the same message, not a second one, and streams that run again from its start."""
+    """An AG-UI run: the input's last user message (or the person's action it forwards), told
+    to the session; then that run's events, until it ends. A message's command id is the
+    run's (an action's, the drawing's it answers), so sending the same run again is the same
+    message, not a second one, and streams that run again from its start."""
     run = _run_input(await request.json())
     if run.thread_id != session_id:
         raise HTTPException(status_code=400, detail=f"threadId is {run.thread_id!r}: this session is {session_id!r}")
-    text = _last_user_text(run.messages)
     await deps.require_session_access(tenant_id, session_id, request)
     reader = deps.get_reader(request)
     cursor = await reader.last_seq(session_id)  # before it is told: nothing of the run is missed
-    accepted = await submit_message(request, tenant_id, session_id, PostMessageRequest(text=text, command_id=run.run_id))
+    if (action := _forwarded_action(run.forwarded_props)) is not None:
+        told = await _answer(request, session_id, action)
+    else:
+        told = PostMessageRequest(text=_last_user_text(run.messages), command_id=run.run_id)
+    accepted = await submit_message(request, tenant_id, session_id, told)
     if (first := await reader.first_seq(session_id, accepted.turn_id)) is not None:
         cursor = min(cursor, first - 1)  # the run was sent before, and has begun
     translator = AgUiTranslator(session_id, run_ids={accepted.turn_id: run.run_id})
@@ -74,6 +85,38 @@ def _run_input(body: Any) -> RunAgentInput:
         return RunAgentInput.model_validate(body)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
+
+
+def _forwarded_action(props: Any) -> Any | None:
+    """The person's action a run's ``forwardedProps`` carry, if they carry one."""
+    outer = props.get(A2UI_ACTION[0]) if isinstance(props, dict) else None
+    return outer.get(A2UI_ACTION[1]) if isinstance(outer, dict) else None
+
+
+async def _answer(request: Request, session_id: str, action: Any) -> PostMessageRequest:
+    """``action`` as the message the session is told: 422 unless it is from a button on a
+    surface the session shows, 409 if that drawing was answered otherwise."""
+    surfaces = drawings(await deps.get_reader(request).of_types(session_id, JOURNAL_TYPES))
+    if (problem := action_problem(action, surfaces)) is not None:
+        raise HTTPException(status_code=422, detail=f"the action cannot be taken: {problem}")
+    drawing = surfaces[action["surfaceId"]]
+    told = PostMessageRequest(text=action_text(action), command_id=_answer_id(drawing))
+    try:
+        await deps.recorded_command(request, session_id, told.command_id, told.text)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            detail = f"surface {drawing.surface_id!r} was answered already: the agent has to draw it again for another answer"
+            raise HTTPException(status_code=409, detail=detail) from exc
+        raise
+    return told
+
+
+def _answer_id(drawing: Drawing) -> str:
+    """One command id per surface and drawing: the same click sent again is the same message,
+    and another answer to the same drawing a conflict (a surface id too long for a command id
+    is named by its hash)."""
+    named = f"a2ui:{drawing.seq}:{drawing.surface_id}"
+    return named if len(named) <= COMMAND_ID_MAX else f"a2ui:{drawing.seq}:{hashlib.sha256(drawing.surface_id.encode()).hexdigest()}"
 
 
 def _last_user_text(messages: Iterable[Any]) -> str:

@@ -7,7 +7,7 @@
  * rail shows its sandboxes and what it has used.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 import { CircleNotch, ClockCounterClockwise, GitBranch, Stop, TerminalWindow, Trash, XCircle } from '@phosphor-icons/react';
@@ -20,6 +20,7 @@ import { useSubagents } from '@/lib/api/hooks/useSubagents';
 import type { Session } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
 import { runToStop, sandboxLabel } from '@/lib/session/runs';
+import type { ReportAction } from '@/lib/session/useReports';
 import { anyActive, subagentName } from '@/lib/session/subagents';
 import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
 import { useSessionStream, type Connection } from '@/lib/session/useSessionStream';
@@ -119,10 +120,13 @@ export function SessionChat({
   const { approvals: subagentApprovals, answered: subagentAnswered } = useSubagentApprovals(session.id, {
     active: state.running || anyActive(subagents ?? []), // only a working subagent asks
   });
+  const sendAction = useCallback((action: ReportAction) => sessionsAPI.sendUiAction(session.id, action), [session.id]);
   const renderTool = useToolRenderer({
     sessionId: session.id,
     subagentOf: state.subagentOf,
-    tools: [...state.messages.flatMap((m) => m.toolCalls ?? []), ...pendingTools],
+    messages: state.messages,
+    pendingTools,
+    sendAction,
   });
 
   useEffect(() => setStatus(session.status), [session.status]);

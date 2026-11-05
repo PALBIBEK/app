@@ -8,9 +8,11 @@ them; ``catalog.json`` is filed as ``basic_catalog.json``), and drawn by A2UI's 
 in the frontend, or by any AG-UI client that draws A2UI (``supervisor.agui``). No code the
 agent writes runs: the client draws components from its catalog, in its own styling.
 
-The surface may use the basic catalog's display components. Its interactive ones (buttons,
-text fields, pickers) need a person's actions to reach the agent, which this platform does
-not send yet, so they are refused rather than drawn to do nothing.
+A surface may use the basic catalog's components except ``Modal``: display ones, and inputs
+(text fields, pickers, check boxes, sliders, dates) whose values a ``Button`` sends. A
+button's action must be an event, which reaches the agent as the person's answer
+(``supervisor.genui.actions``); a client-side function call would act without the agent
+knowing.
 """
 
 from __future__ import annotations
@@ -24,15 +26,19 @@ from typing import Any, Final
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError, best_match
 from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 __all__ = [
     "CATALOG_ID",
+    "COMPONENTS",
     "DISPLAY_COMPONENTS",
+    "INPUT_COMPONENTS",
     "SHOW_UI",
     "SPEC_VERSION",
     "catalog_summary",
     "problems",
     "surface_of",
+    "validator",
 ]
 
 SHOW_UI: Final = "show_ui"
@@ -42,7 +48,11 @@ CATALOG_ID: Final = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.
 DISPLAY_COMPONENTS: Final = frozenset(
     {"Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List", "Card", "Tabs", "Divider"}
 )
-"""The basic catalog's components that only show something (the rest take a person's input)."""
+"""The basic catalog's components that only show something."""
+INPUT_COMPONENTS: Final = frozenset({"Button", "TextField", "CheckBox", "ChoicePicker", "Slider", "DateTimeInput"})
+"""The ones a person acts with: a button sends the agent an event, with the inputs' values."""
+COMPONENTS: Final = DISPLAY_COMPONENTS | INPUT_COMPONENTS
+"""What a surface may use: the basic catalog but ``Modal`` (a dialog over the chat)."""
 _SPEC: Final = "https://a2ui.org/specification/v0_9/"
 _KINDS: Final = ("createSurface", "updateComponents", "updateDataModel", "deleteSurface")
 MAX_PROBLEMS: Final = 5
@@ -61,6 +71,8 @@ def _registry() -> Registry:
         [
             (f"{_SPEC}server_to_client.json", Resource.from_contents(_schema("server_to_client.json"))),
             (f"{_SPEC}common_types.json", Resource.from_contents(_schema("common_types.json"))),
+            # The one schema that names no draft: it is written to 2020-12, as the others say they are.
+            (f"{_SPEC}client_to_server.json", DRAFT202012.create_resource(_schema("client_to_server.json"))),
             (CATALOG_ID, catalog),
             (f"{_SPEC}catalog.json", catalog),
         ]
@@ -68,7 +80,8 @@ def _registry() -> Registry:
 
 
 @functools.cache
-def _validator(ref: str) -> Draft202012Validator:
+def validator(ref: str) -> Draft202012Validator:
+    """A validator for the schema at ``ref``: a vendored schema's id, with a JSON pointer."""
     return Draft202012Validator({"$ref": ref}, registry=_registry())
 
 
@@ -90,7 +103,7 @@ def surface_of(message: Mapping[str, Any]) -> str | None:
 
 def problems(messages: list[Any]) -> list[str]:
     """What is wrong with ``messages`` as A2UI the platform draws (at most ``MAX_PROBLEMS``);
-    none when every one is a valid v0.9 message on the basic catalog's display components."""
+    none when every one is a valid v0.9 message on the basic catalog's ``COMPONENTS``."""
     found: list[str] = []
     for at, message in enumerate(messages):
         found += [f"messages[{at}]: {p}" for p in _message_problems(message)]
@@ -123,20 +136,19 @@ def _message_problems(message: Any) -> Iterator[str]:
 
 def _component_problems(component: Mapping[str, Any]) -> Iterator[str]:
     name, ident = component.get("component"), component.get("id")
-    if name not in DISPLAY_COMPONENTS:
-        yield (
-            f"component {ident!r} is {name!r}: this platform draws {', '.join(sorted(DISPLAY_COMPONENTS))} "
-            "(a person's input does not reach you yet)"
-        )
+    if name not in COMPONENTS:
+        yield f"component {ident!r} is {name!r}: this platform draws {', '.join(sorted(COMPONENTS))}"
     elif (error := _first(_component(str(name)), component)) is not None:
         yield f"component {ident!r} ({name}): {_said(error)}"
+    elif name == "Button" and "event" not in component["action"]:
+        yield f"component {ident!r} (Button): its action must be an event (\"action\": {{\"event\": {{\"name\": ...}}}}), which reaches you"
 
 
 def _first(ref: str, instance: Any) -> ValidationError | None:
     """The most relevant error of ``instance`` against ``ref``. An error elsewhere leaves the
     properties around it unevaluated, so "unevaluated properties" is the cause only when
     nothing else is wrong."""
-    errors = list(_validator(ref).iter_errors(instance))
+    errors = list(validator(ref).iter_errors(instance))
     causes = [e for e in errors if e.validator != "unevaluatedProperties"]
     return best_match(causes or errors)
 
@@ -149,11 +161,11 @@ def _said(error: ValidationError) -> str:
 
 @functools.cache
 def catalog_summary() -> str:
-    """The display components and their properties (required ones marked *), from the
-    vendored catalog itself, so what the model is told cannot drift from what is checked."""
+    """The components a surface may use and their properties (required ones marked *), from
+    the vendored catalog itself, so what the model is told cannot drift from what is checked."""
     components = _schema("basic_catalog.json")["components"]
     lines = []
-    for name in sorted(DISPLAY_COMPONENTS):
+    for name in sorted(COMPONENTS):
         parts = components[name].get("allOf", [components[name]])
         properties = {k for part in parts for k in part.get("properties", {}) if k != "component"}
         required = {k for part in parts for k in part.get("required", [])}

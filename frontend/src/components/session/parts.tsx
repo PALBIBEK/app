@@ -26,6 +26,7 @@ import {
 
 import type { ChatMessage, ToolCallView } from '@/lib/api/types/session.types';
 import { clip } from '@/lib/session/explain';
+import { describeUiAction, uiActionOf } from '@/lib/session/reports';
 import { cn } from '@/lib/utils';
 
 const messageVariants = {
@@ -255,6 +256,8 @@ export function MessageBubble({
   renderTool?: (tool: ToolCallView) => JSX.Element;
 }): JSX.Element {
   const isUser = message.role === 'user';
+  /** A person's answer to a report: shown as what they sent, not as the JSON the agent reads. */
+  const action = isUser ? uiActionOf(message.content) : null;
   const [copied, setCopied] = useState(false);
   const ts = new Date(message.timestamp);
   return (
@@ -306,7 +309,13 @@ export function MessageBubble({
         </div>
         {message.content ? (
           <div className={cn('leading-relaxed', isUser ? 'w-fit max-w-full rounded-[10px] border border-line-soft bg-canvas px-3.5 py-2.5' : '', cancelled && 'text-ink-3 line-through')}>
-            <MessageContent content={message.content} />
+            {action ? (
+              <span data-testid="ui-action" className="text-ink-2">
+                {describeUiAction(action)} in a report
+              </span>
+            ) : (
+              <MessageContent content={message.content} />
+            )}
           </div>
         ) : null}
         {message.toolCalls?.length ? (
