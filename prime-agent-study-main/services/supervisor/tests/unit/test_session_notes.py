@@ -53,7 +53,7 @@ async def test_a_sessions_notes_are_its_own_once_each_the_latest(api: Api) -> No
     assert "bad" not in notes and "theirs" not in notes and notes.count("note 5") == 1
 
 
-async def test_notes_from_many_sessions_reach_the_reflection_most_shared_first_never_from_excluded(api: Api) -> None:
+async def test_notes_from_many_sessions_reach_the_reflection_most_shared_first_never_from_a_replay(api: Api) -> None:
     a, b, replay = await api.session(), await api.session(), await api.session()
     for sid in (a, b, replay):
         await api.run(sid, "r1", "fix it", start=1_000)
@@ -62,8 +62,10 @@ async def test_notes_from_many_sessions_reach_the_reflection_most_shared_first_n
     await api.journal(a, "r1", (2_000, _noted("Use make test.")), (2_001, _noted("Only here.")))
     await api.journal(b, "r1", (2_000, _noted("Use make test.")))
     await api.journal(replay, "r1", (2_000, _noted("From a replay.")))
+    marked = await api.client.put(f"/v1/sessions/{replay}/evaluation", json={"experiment_id": "e"}, headers=ALICE)
+    assert marked.status_code == 204
     found = await composition_notes(api.factory, JournalReader(api.factory), tenant_id="t1", principal_id="alice",
-                                    composition_id="githi-v1", exclude_sessions=[replay])
+                                    composition_id="githi-v1", exclude_sessions=[])
     assert found == [{"note": "Use make test.", "sessions": 2}, {"note": "Only here.", "sessions": 1}]
     assert shared_notes_text(found).startswith("- Use make test. (noted in 2 sessions)")
     assert shared_notes_text([]) == "None."

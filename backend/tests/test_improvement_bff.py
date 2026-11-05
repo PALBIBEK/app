@@ -740,3 +740,110 @@ def test_the_parent_is_drawn_by_gepa_itself() -> None:
     for seed in range(20):
         assert pareto_parent(pool, set(), random.Random(seed)) == select_program_candidate_from_pareto_front(
             fronts, means, random.Random(seed))
+
+
+@pytest.mark.asyncio
+async def test_a_proposal_a_server_stop_cut_off_no_longer_blocks_its_agent(db_session, owner, settings, monkeypatch):
+    """It stops beating, so the next read settles it as failed and a new change can start."""
+    from datetime import timedelta
+
+    from prime_agent.db.models.evaluation import Proposal
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+    started: list = []
+    async with _api(db_session, owner, fake, monkeypatch, started) as api:
+        first = await api.post(f"/api/v1/traces/agents/{agent.id}/proposals", json={"dataset_id": ds.id})
+        assert first.status_code == 202
+        busy = await api.post(f"/api/v1/traces/agents/{agent.id}/proposals", json={"dataset_id": ds.id})
+        assert busy.status_code == 409 and busy.json()["detail"]["error_code"] == "PROPOSAL_RUNNING", "it is beating"
+
+        row = await db_session.get(Proposal, first.json()["id"])
+        row.heartbeat_at = datetime.now(UTC) - timedelta(minutes=3)  # the process that ran it stopped
+        await db_session.commit()
+        shown = (await api.get(f"/api/v1/traces/proposals/{row.id}")).json()
+        assert shown["status"] == "failed" and shown["error"].startswith("cut off: the server stopped")
+        again = await api.post(f"/api/v1/traces/agents/{agent.id}/proposals", json={"dataset_id": ds.id})
+        assert again.status_code == 202, "the agent is no longer blocked"
+
+
+@pytest.mark.asyncio
+async def test_the_database_allows_one_active_proposal_per_agent(db_session, owner, settings, monkeypatch):
+    """Two requests that both pass the check (a person and the automatic check) cannot both
+    start one: the partial unique index refuses the second."""
+    from sqlalchemy.exc import IntegrityError
+
+    from prime_agent.db.models.evaluation import Proposal
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+
+    def proposal(status: str) -> Proposal:
+        return Proposal(user_id=owner.id, harness_id=agent.id, dataset_id=ds.id, status=status, base_version=1,
+                        base_manifest={})
+
+    db_session.add_all([proposal("refused"), proposal("approved"), proposal("drafting")])
+    await db_session.commit()  # any number of settled ones beside one active
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            db_session.add(proposal("evaluating"))
+
+    # the race itself: the check passes for both, the second insert is refused as busy
+    service = ImprovementService(config.get_settings(), client=AiClient(config.get_settings(), transport=httpx.MockTransport(fake)))
+    monkeypatch.setattr(ImprovementService, "settle_stalled", staticmethod(lambda *a, **k: _none()))
+    real_execute = db_session.execute
+    calls = {"n": 0}
+
+    async def busy_check_sees_nothing(statement, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if "trace_proposals.status IN" in str(statement) and calls["n"] == 0:
+            calls["n"] += 1
+            return await real_execute(statement.where(Proposal.id == "none"), *args, **kwargs)
+        return await real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", busy_check_sees_nothing)
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as raised:
+        await service.propose(user_id=owner.id, agent_id=agent.id, dataset_id=ds.id, notes=None, db=db_session)
+    assert raised.value.status_code == 409 and raised.value.detail["error_code"] == "PROPOSAL_RUNNING"
+    assert calls["n"] == 1, "the check saw nothing: the index refused it"
+
+
+async def _none() -> int:
+    return 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_automatic_attempt_waits_for_its_cooldown(db_session, owner, settings, monkeypatch):
+    """Prime Agent stamps the cooldown on a failed attempt too: it is noted, not retried every check."""
+    from prime_agent.db.models.evaluation import AutoImprove
+    from prime_agent.services.auto_improve_service import AutoImprover
+
+    fake = FakeSupervisor(candidate="ok")
+    agent, ds = await _published_agent(db_session, owner, fake)
+    link = SessionLink(id=str(uuid4()), user_id=owner.id, harness_id=agent.id, ai_session_id="ai-live", tenant_id=owner.id,
+                       harness_version="x", runtime="githi", composition_id=agent.composition_id,
+                       composition_digest=agent.composition_digest, status="active",
+                       created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+    db_session.add(link)
+    db_session.add(AutoImprove(harness_id=agent.id, user_id=owner.id, dataset_id=ds.id, min_runs=2, cooldown_minutes=60))
+    await db_session.commit()
+    plain, composition, agent_id = fake.__call__, agent.composition_id, agent.id
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/traces/issues":
+            return httpx.Response(200, json={"issues": [{
+                "key": f"{composition}:check:x:", "composition_id": composition, "title": "x failed",
+                "source": "check", "name": "x", "topic": None, "runs": 5, "last_seen_ms": 1, "versions": [],
+                "examples": [{"session_id": "ai-live", "run_id": "r1"}]}]})
+        if request.url.path == "/v1/traces/issues/runs":
+            return httpx.Response(503, json={"detail": "the supervisor is restarting"})
+        return plain(request)
+
+    started: list[str] = []
+    auto = AutoImprover(config.get_settings(), client=AiClient(config.get_settings(), transport=httpx.MockTransport(handler)))
+    assert await auto.tick(_same(db_session), lambda s, pid, i: started.append(pid)) == []
+    row = await db_session.get(AutoImprove, agent_id)
+    assert row.last_attempt_at is not None, "the failed attempt stamped the cooldown"
+    assert "could not start a change" in row.last_note
+    assert await auto.tick(_same(db_session), lambda s, pid, i: started.append(pid)) == [] and started == []

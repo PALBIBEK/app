@@ -131,6 +131,8 @@ class FakeSupervisor:
         if "/runs/" in path and path.endswith("/cancel"):
             self.cancelled.append(sid)
             return httpx.Response(200, json={"status": "cancelled"})
+        if "/runs/broken/" in path:  # a run the supervisor fails on
+            return httpx.Response(500, json={"detail": "boom"})
         if "/runs/" in path and path.endswith("/trace"):
             return httpx.Response(200, json=self.trace(sid, path.split("/")[5]))
         if "/runs/" in path and "/trace/spans/" in path:
@@ -430,7 +432,7 @@ async def test_an_issues_runs_are_saved_and_every_third_saved_run_is_held_out(
     fake = FakeSupervisor({V1: "fail", V2: "ok"})
     src = await _source_run(db_session, owner, agent)
     key = "h-reviewer:check:finished:"
-    fake.issues[key] = [*({"session_id": "ai-src", "run_id": r} for r in ("r1", "r2", "r3", "r4")),
+    fake.issues[key] = [*({"session_id": "ai-src", "run_id": r} for r in ("r1", "r2", "broken", "r3", "r4")),
                         {"session_id": "ai-someone-elses", "run_id": "r9"}]
     async with _api(db_session, owner, settings, monkeypatch, fake, []) as api:
         ds = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "from an issue"})).json()
@@ -441,7 +443,9 @@ async def test_an_issues_runs_are_saved_and_every_third_saved_run_is_held_out(
         assert saved.status_code == 201, saved.text
         body = saved.json()
         assert [(i["source_run_id"], i["held_out"]) for i in body["added"]] == [("r2", False), ("r3", True), ("r4", False)]
-        assert (body["skipped"], body["left_out"]) == (2, 0), "r1 was already saved; r9 is not a session of the user's"
+        assert (body["skipped"], body["left_out"]) == (3, 0), (
+            "r1 was already saved; the supervisor failed on one run, which never stops the rest; "
+            "r9 is not a session of the user's")
 
         r4 = body["added"][2]["id"]
         flipped = await api.patch(f"/api/v1/traces/datasets/{ds['id']}/items/{r4}", json={"held_out": True})
@@ -457,7 +461,7 @@ async def test_an_issues_runs_are_saved_and_every_third_saved_run_is_held_out(
         monkeypatch.setattr("prime_agent.services.evaluation_service.MAX_ITEMS", 2)
         small = (await api.post(f"/api/v1/traces/agents/{agent.id}/datasets", json={"name": "small"})).json()
         filled = (await api.post(f"/api/v1/traces/datasets/{small['id']}/issue", json={"issue_key": key})).json()
-        assert ([i["source_run_id"] for i in filled["added"]], filled["left_out"]) == (["r1", "r2"], 3)
+        assert ([i["source_run_id"] for i in filled["added"]], filled["left_out"]) == (["r1", "r2"], 4)
         full = await api.post(f"/api/v1/traces/datasets/{small['id']}/issue", json={"issue_key": key})
         assert full.status_code == 409
 
@@ -465,3 +469,26 @@ async def test_an_issues_runs_are_saved_and_every_third_saved_run_is_held_out(
     async with _api(db_session, stranger, settings, monkeypatch, fake, []) as api:
         assert (await api.post(f"/api/v1/traces/datasets/{ds['id']}/issue", json={"issue_key": key})).status_code == 404
         assert (await api.patch(f"/api/v1/traces/datasets/{ds['id']}/items/{r4}", json={"held_out": False})).status_code == 404
+
+
+
+@pytest.mark.asyncio
+async def test_an_experiment_is_cut_off_only_when_its_heartbeat_stops(db_session, owner, agent, settings):
+    """A long replay is not a stall: the beat goes on beside it (procrastinate's heartbeat)."""
+    service = EvaluationService(settings, client=AiClient(settings, transport=httpx.MockTransport(lambda r: httpx.Response(404))))
+    ds = Dataset(user_id=owner.id, harness_id=agent.id, name="beats")
+    db_session.add(ds)
+    await db_session.flush()
+    long_ago = datetime.now(UTC) - timedelta(hours=1)
+    alive = Experiment(dataset_id=ds.id, user_id=owner.id, harness_id=agent.id, label="v1", status="running",
+                       harness_version="h", runtime="githi", composition_id="c", composition_digest=V1,
+                       started_at=long_ago, heartbeat_at=datetime.now(UTC) - timedelta(seconds=20))
+    gone = Experiment(dataset_id=ds.id, user_id=owner.id, harness_id=agent.id, label="v2", status="running",
+                      harness_version="h", runtime="githi", composition_id="c", composition_digest=V2,
+                      started_at=long_ago, heartbeat_at=long_ago)
+    db_session.add_all([alive, gone])
+    await db_session.flush()
+    await service._settle_stale(alive, db_session)  # noqa: SLF001
+    await service._settle_stale(gone, db_session)  # noqa: SLF001
+    assert alive.status == "running", "an hour in, but it beat 20 s ago"
+    assert gone.status == "failed" and gone.error.startswith("cut off")

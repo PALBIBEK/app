@@ -46,7 +46,8 @@ class AddIssueRequest(BaseModel):
 class AddIssueResult(BaseModel):
     added: list[DatasetItemOut]
     skipped: int
-    """Runs already saved, with no message to replay, or of a session you cannot open."""
+    """Runs already saved, with no message to replay, of a session you cannot open, or that
+    could not be read."""
     left_out: int = 0
     """Runs not tried because the dataset filled up."""
 

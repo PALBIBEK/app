@@ -156,6 +156,13 @@ async def test_reflecting_on_failing_runs_proposes_a_change(api: Api, monkeypatc
     r = await api.client.post("/v1/traces/reflect", json=body, headers=BOB)
     assert r.status_code == 409
 
+    # a replay is never evidence even when the caller's list does not name it (a list can be cut
+    # short): the supervisor marks replays itself
+    marked = await api.client.put(f"/v1/sessions/{sid}/evaluation", json={"experiment_id": "e"}, headers=ALICE)
+    assert marked.status_code == 204
+    r = await api.client.post("/v1/traces/reflect", json=body, headers=ALICE)
+    assert r.status_code == 409 and r.json()["detail"]["error_code"] == "NO_EVIDENCE"
+
 
 async def test_a_reply_that_is_not_a_proposal_is_refused_with_why(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = await api.session()

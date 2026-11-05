@@ -38,6 +38,7 @@ from fastapi import HTTPException
 from gepa.gepa_utils import select_program_candidate_from_pareto_front
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prime_agent.config import Settings, get_settings
@@ -69,6 +70,7 @@ from prime_agent.services.evaluation_service import (
     SessionFactory,
 )
 from prime_agent.services.harness_publish_service import HarnessPublisher, PublishError
+from prime_agent.services.heartbeat import beating, stalled
 
 __all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate", "pareto_fronts", "pareto_parent"]
 
@@ -259,9 +261,27 @@ class ImprovementService:
             created_at=row.created_at, decided_at=row.decided_at,
         )
 
+    @staticmethod
+    async def settle_stalled(db: AsyncSession, *, user_id: str | None = None, agent_id: str | None = None) -> int:
+        """Fail the active proposals whose heartbeat stopped (a server stop cut them off), so
+        they no longer block their agent; how many. procrastinate settles the jobs of stalled
+        workers the same way (``select_stalled_jobs_by_heartbeat``)."""
+        query = select(Proposal).where(Proposal.status.in_(ACTIVE))
+        if user_id:
+            query = query.where(Proposal.user_id == user_id)
+        if agent_id:
+            query = query.where(Proposal.harness_id == agent_id)
+        cut = [p for p in (await db.execute(query)).scalars() if stalled(p.heartbeat_at, p.updated_at or p.created_at)]
+        for p in cut:
+            p.status, p.error = "failed", "cut off: the server stopped while it ran; propose it again"
+        if cut:
+            await db.commit()
+        return len(cut)
+
     async def list_proposals(
         self, *, user_id: str, db: AsyncSession, agent_id: str | None = None, status: str | None = None
     ) -> list[ProposalOut]:
+        await self.settle_stalled(db, user_id=user_id, agent_id=agent_id)
         query = select(Proposal).where(Proposal.user_id == user_id)
         if agent_id:
             query = query.where(Proposal.harness_id == agent_id)
@@ -274,6 +294,8 @@ class ImprovementService:
         self, *, identity: TenantPrincipal, user_id: str, proposal_id: str, db: AsyncSession
     ) -> ProposalDetail:
         row = await self._proposal(db, user_id, proposal_id)
+        if row.status in ACTIVE and await self.settle_stalled(db, agent_id=row.harness_id):
+            await db.refresh(row)
         out = await self._out(row, db)
         base = _prompt(row.base_manifest)
         assert base is not None
@@ -309,21 +331,30 @@ class ImprovementService:
         if has_items is None:
             raise HTTPException(status_code=409, detail={"error_code": "EMPTY_DATASET",
                                                          "message": "save some runs to the dataset first: they are what a change is measured on"})
+        await self.settle_stalled(db, agent_id=agent_id)  # one a server stop cut off no longer blocks
         busy = (
             await db.execute(select(Proposal.id).where(Proposal.harness_id == agent_id, Proposal.status.in_(ACTIVE)))
         ).first()
         if busy is not None:
-            raise HTTPException(status_code=409, detail={"error_code": "PROPOSAL_RUNNING",
-                                                         "message": "a change for this agent is still being worked on"})
+            raise self._running()
         live = await self._live(db, agent_id)
         if live is None:
             raise HTTPException(status_code=409, detail={"error_code": "NO_SUCH_VERSION", "message": "publish the agent first"})
         row = Proposal(user_id=user_id, harness_id=agent_id, dataset_id=dataset_id, status="drafting",
                        notes=(notes or "").strip() or None, base_version=live.version, base_manifest=live.manifest,
-                       max_rounds=rounds, issue_key=issue_key)
-        db.add(row)
-        await db.commit()
+                       max_rounds=rounds, issue_key=issue_key, heartbeat_at=_now())
+        try:
+            async with db.begin_nested():  # the index refuses a second active one started meanwhile
+                db.add(row)
+            await db.commit()
+        except IntegrityError as exc:
+            raise self._running() from exc
         return row
+
+    @staticmethod
+    def _running() -> HTTPException:
+        return HTTPException(status_code=409, detail={"error_code": "PROPOSAL_RUNNING",
+                                                      "message": "a change for this agent is still being worked on"})
 
     @staticmethod
     async def _live(db: AsyncSession, agent_id: str) -> HarnessRelease | None:
@@ -336,7 +367,10 @@ class ImprovementService:
 
     async def _unseen_sessions(self, db: AsyncSession, agent_id: str) -> list[str]:
         """Supervisor ids of the sessions the optimizer must not read: each held-out saved run's
-        (first, so a cap never drops them) and every one an experiment of this agent replayed in."""
+        first, so the request's cap of 5,000 never drops one, then this agent's replays, the
+        newest first. The supervisor leaves out every replay it marked by itself
+        (``session_evaluations``), so a replay cut off by the cap is still never evidence; the
+        list only matters for replays made before replays were marked."""
         held = await db.execute(
             select(SessionLink.ai_session_id)
             .join(DatasetItem, DatasetItem.source_session_id == SessionLink.id)
@@ -348,6 +382,7 @@ class ImprovementService:
             .join(ExperimentRun, ExperimentRun.session_id == SessionLink.id)
             .join(Experiment, Experiment.id == ExperimentRun.experiment_id)
             .where(Experiment.harness_id == agent_id)
+            .order_by(Experiment.created_at.desc())
         )
         ids = [str(s) for s in [*held.scalars().all(), *replays.scalars().all()] if s]
         return list(dict.fromkeys(ids))[:5000]
@@ -427,13 +462,17 @@ class ImprovementService:
         poll_s: float = 1.0,
         timeout_s: float = ITEM_TIMEOUT_S,
     ) -> None:
-        """Draft, publish, measure and gate one proposal (a background task)."""
+        """Draft, publish, measure and gate one proposal (a background task), beating while it
+        runs (``services.heartbeat``) so a reader can tell it from one a server stop cut off."""
         async with session_factory() as db:
             row = await db.get(Proposal, proposal_id)
             if row is None or row.status != "drafting":
                 return
+            row.heartbeat_at = _now()
+            await db.commit()
             try:
-                await self._run(row, identity, db, session_factory, poll_s=poll_s, timeout_s=timeout_s)
+                async with beating(session_factory, Proposal, proposal_id):
+                    await self._run(row, identity, db, session_factory, poll_s=poll_s, timeout_s=timeout_s)
             except Exception as exc:
                 logger.exception("proposal %s failed", proposal_id)
                 await db.rollback()

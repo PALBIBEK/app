@@ -402,7 +402,8 @@ class ReflectIn(BaseModel):
     since_ms: int | None = None
     model: str | None = Field(default=None, max_length=255)
     exclude_sessions: list[str] = Field(default_factory=list, max_length=5000)
-    """Sessions that are not evidence: the replays a candidate is measured on, so the
+    """Sessions that are not evidence beyond the replays, which are always left out here (the
+    supervisor marks them: ``session_evaluations``): the held-out saved runs' sessions, so the
     reflection never sees what it will be graded on."""
     focus_issue: str | None = Field(default=None, max_length=600)
     """An issue the change is for (its key): read first, wherever it ranks."""
@@ -502,11 +503,12 @@ async def reflect(body: ReflectIn, request: Request, tenant_id: str = Depends(de
     principal = deps.request_principal_id(request, tenant_id)
     issues = await list_issues(factory, tenant_id=tenant_id, principal_id=principal,
                                composition_id=body.composition_id, since_ms=body.since_ms, limit=8,
-                               exclude_sessions=body.exclude_sessions)
+                               exclude_sessions=body.exclude_sessions, exclude_replays=True)
     if body.focus_issue:
         focused = await list_issues(factory, tenant_id=tenant_id, principal_id=principal,
                                     composition_id=body.composition_id, since_ms=body.since_ms, limit=1,
-                                    exclude_sessions=body.exclude_sessions, key=body.focus_issue)
+                                    exclude_sessions=body.exclude_sessions, exclude_replays=True,
+                                    key=body.focus_issue)
         issues = [*focused, *(i for i in issues if i["key"] != body.focus_issue)][:8]
     if not issues and not (body.notes or "").strip():  # session notes alone are not evidence
         raise HTTPException(status_code=409, detail={"error_code": "NO_EVIDENCE",

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -50,6 +50,7 @@ from prime_agent.schemas.evaluation import (
     Verdict,
 )
 from prime_agent.services.ai_client import AiClient, AiUpstreamError
+from prime_agent.services.heartbeat import beating, stalled
 from prime_agent.services.trace_service import TraceNotFoundError, TraceService
 
 __all__ = ["HELD_OUT_EVERY", "MAX_ITEMS", "EvaluationNotFoundError", "EvaluationService", "Pin"]
@@ -85,8 +86,7 @@ ITEM_TIMEOUT_S = 300.0
 STARTUP_TIMEOUT_S = 120.0
 JUDGE_WAIT_S = 120.0
 """How long a finished replay waits for its agent's judges, which give verdicts after a run ends."""
-STALE_AFTER = timedelta(minutes=15)
-"""An experiment ``running`` with no progress for this long was cut off (the server restarted)."""
+
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -277,13 +277,14 @@ class EvaluationService:
             if session_id is None or not run_id:  # a session the user has no link to
                 skipped += 1
                 continue
-            try:
+            try:  # one run that cannot be read (gone, or the supervisor failed on it) never stops the rest
                 trace = await self._traces.run(identity=identity, user_id=user_id, session_id=session_id,
                                                run_id=run_id, db=db)
-            except TraceNotFoundError:
+                item = await self._item(identity, user_id, dataset_id, session_id, run_id, trace, None, db)
+            except (TraceNotFoundError, HTTPException):
+                logger.warning("saving run %s of issue %s skipped it", run_id, issue_key, exc_info=True)
                 skipped += 1
                 continue
-            item = await self._item(identity, user_id, dataset_id, session_id, run_id, trace, None, db)
             if trace.agent_id != dataset.harness_id or item is None or not await self._save(db, item):
                 skipped += 1
                 continue
@@ -454,8 +455,8 @@ class EvaluationService:
             await db.commit()
 
     async def _settle_stale(self, exp: Experiment, db: AsyncSession) -> None:
-        beat = _aware(exp.heartbeat_at or exp.started_at or exp.created_at)
-        if exp.status in ("queued", "running") and beat is not None and _now() - beat > STALE_AFTER:
+        """An experiment whose heartbeat stopped (``services.heartbeat``) was cut off: failed."""
+        if exp.status in ("queued", "running") and stalled(exp.heartbeat_at, exp.started_at or exp.created_at):
             exp.status, exp.error, exp.finished_at = "failed", "cut off: the server restarted while it ran", _now()
             await db.commit()
 
@@ -598,29 +599,36 @@ class EvaluationService:
                 )
             ).scalars().all()
             try:
-                for run in runs:
-                    await db.refresh(exp)
-                    if exp.status == "cancelled":
-                        return
-                    if run.status != "pending":
-                        continue
-                    item = await db.get(DatasetItem, run.item_id)
-                    if item is None:
-                        run.status, run.error = "failed", "the item was removed from the dataset"
-                        continue
-                    try:
-                        await self._replay(identity, exp, item, dataset, run, db, poll_s=poll_s, timeout_s=timeout_s)
-                    except Exception as exc:  # one item failing never stops the rest
-                        logger.warning("experiment %s item %s failed", experiment_id, item.id, exc_info=True)
-                        run.status, run.error, run.finished_at = "failed", str(exc)[:500] or type(exc).__name__, _now()
-                    exp.heartbeat_at = _now()
-                    await db.commit()
+                async with beating(session_factory, Experiment, experiment_id):
+                    await self._replay_all(exp, runs, dataset, identity, db, poll_s=poll_s, timeout_s=timeout_s)
                 await db.refresh(exp)
                 if exp.status == "running":
                     exp.status, exp.finished_at = "done", _now()
             except Exception as exc:
                 logger.exception("experiment %s failed", experiment_id)
                 exp.status, exp.error, exp.finished_at = "failed", str(exc)[:500], _now()
+            await db.commit()
+
+    async def _replay_all(
+        self, exp: Experiment, runs: Sequence[ExperimentRun], dataset: Dataset, identity: TenantPrincipal,
+        db: AsyncSession, *, poll_s: float, timeout_s: float,
+    ) -> None:
+        """Replay each pending run in order; stops when the experiment is cancelled."""
+        for run in runs:
+            await db.refresh(exp)
+            if exp.status == "cancelled":
+                return
+            if run.status != "pending":
+                continue
+            item = await db.get(DatasetItem, run.item_id)
+            if item is None:
+                run.status, run.error = "failed", "the item was removed from the dataset"
+                continue
+            try:
+                await self._replay(identity, exp, item, dataset, run, db, poll_s=poll_s, timeout_s=timeout_s)
+            except Exception as exc:  # one item failing never stops the rest
+                logger.warning("experiment %s item %s failed", exp.id, item.id, exc_info=True)
+                run.status, run.error, run.finished_at = "failed", str(exc)[:500] or type(exc).__name__, _now()
             await db.commit()
 
     # --- results -----------------------------------------------------------------------

@@ -143,6 +143,7 @@ class AutoImprover:
         user = await db.get(User, row.user_id) if row is not None else None
         if row is None or user is None or not row.enabled:
             return None
+        await self._improver.settle_stalled(db, agent_id=agent_id)  # a cut-off round no longer counts as running
         busy = (
             await db.execute(select(Proposal.id).where(Proposal.harness_id == agent_id, Proposal.status.in_(ACTIVE)))
         ).first()
@@ -165,34 +166,50 @@ class AutoImprover:
             await db.commit()
             return None
 
-        row.last_attempt_at = now  # every attempt stamps the cooldown, whatever it comes to
+        # Every attempt stamps the cooldown before it does anything, whatever it comes to: PA's
+        # consume_compact_auto_refine stamps it on a failed review or refinement run too
+        # ("cooldown stamped either way"), so a failing attempt is not retried every check.
         note = f"“{top.title}” failed {top.runs} runs since {since:%Y-%m-%d %H:%M} UTC"
+        row.last_attempt_at, row.last_note = now, f"{note}: starting a change"
+        await db.commit()
         try:
-            saved = await self._evals.add_issue(identity=identity, user_id=user.id, dataset_id=row.dataset_id,
-                                                issue_key=top.key, db=db)
-            added = len(saved.added)
-        except HTTPException as exc:  # a full dataset still measures the change on what it holds
-            if exc.status_code != 409:
-                raise
-            added = 0
-        try:
+            added = await self._save_issue(identity, user.id, row.dataset_id, top.key, db)
             proposal = await self._improver.propose(
                 user_id=user.id, agent_id=agent_id, dataset_id=row.dataset_id, rounds=row.rounds, db=db,
                 notes=f"Started automatically: {note}. Fix what makes these runs fail.", issue_key=top.key,
             )
-        except (HTTPException, ImprovementNotFoundError) as exc:
-            detail = exc.detail if isinstance(exc, HTTPException) else "the agent or dataset is gone"
+        except Exception as exc:  # noted for the owner; the next attempt waits for the cooldown
+            await db.rollback()
+            detail = exc.detail if isinstance(exc, HTTPException) else (
+                "the agent or dataset is gone" if isinstance(exc, (ImprovementNotFoundError, EvaluationNotFoundError))
+                else str(exc) or type(exc).__name__)
             message = detail.get("message") if isinstance(detail, dict) else str(detail)
             row = await db.get(AutoImprove, agent_id) or row
-            row.last_attempt_at, row.last_note = now, f"{note}; could not start a change: {message}"
+            row.last_note = f"{note}; could not start a change: {message}"[:1000]
             await db.commit()
+            if not isinstance(exc, (HTTPException, ImprovementNotFoundError, EvaluationNotFoundError)):
+                logger.warning("auto-improve attempt for agent %s failed", agent_id, exc_info=True)
             return None
         row = await db.get(AutoImprove, agent_id) or row
-        row.last_attempt_at, row.last_proposal_id = now, proposal.id
+        row.last_proposal_id = proposal.id
         row.last_note = f"{note}: started a change" + (f", {added} of its runs saved to the dataset" if added else "")
         await db.commit()
         start(self._improver, proposal.id, identity)
         return proposal.id
+
+    async def _save_issue(
+        self, identity: TenantPrincipal, user_id: str, dataset_id: str, issue_key: str, db: AsyncSession
+    ) -> int:
+        """Save the issue's runs to the dataset; how many. A full dataset is no failure: the change
+        is measured on what it holds."""
+        try:
+            saved = await self._evals.add_issue(identity=identity, user_id=user_id, dataset_id=dataset_id,
+                                                issue_key=issue_key, db=db)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            return 0
+        return len(saved.added)
 
     async def run_forever(self, session_factory: SessionFactory, start: Start) -> None:
         """Check every ``auto_improve_interval_s`` until cancelled (the app's lifespan)."""

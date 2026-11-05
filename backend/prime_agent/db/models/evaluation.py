@@ -9,7 +9,7 @@ phases a candidate), each in a fresh session, so versions are compared on the sa
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, false
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from prime_agent.db import Base
@@ -134,6 +134,14 @@ class Proposal(Base):
     """
 
     __tablename__ = "trace_proposals"
+    __table_args__ = (
+        # One change at a time per agent, enforced by the database: two requests (a person and
+        # the automatic check) cannot both start one. procrastinate's queueing lock is the same
+        # partial unique index (sql/schema.sql: UNIQUE (queueing_lock) WHERE status = 'todo').
+        Index("uq_trace_proposals_active", "harness_id", unique=True,
+              postgresql_where=text("status IN ('drafting', 'evaluating')"),
+              sqlite_where=text("status IN ('drafting', 'evaluating')")),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -181,6 +189,9 @@ class Proposal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """Stamped while it is drafted and measured (``services.heartbeat``): one that stops beating
+    was cut off (the server stopped) and is settled as failed."""
 
 
 class AutoImprove(Base):
