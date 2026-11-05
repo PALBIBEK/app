@@ -125,15 +125,10 @@ jobs:
         run: npx next build
 
   tests:
-    # The suite in two halves, on two runners, each half on four workers: one runner took 9 to 21
-    # minutes, the longest job of the run. pytest-split deals the tests out by their recorded
-    # durations, and without a record (.test_durations) by count, which spreads the slow
-    # integration tests over both halves as it does every other directory.
-    name: tests (${{ matrix.group }} of 2)
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [1, 2]
+    # One job. Split in two with pytest-split, which deals a module's tests out to both halves,
+    # two tests that pass in the whole suite hung for five minutes in one half, different ones
+    # each run. The job's slow part was its setup (up to 13 minutes of apt for Chromium's
+    # libraries, now gone); the tests take 8 to 10 minutes on four workers, as long as e2e.
     # Chromium's libraries come with the runner image's Chrome, by the names Ubuntu 24.04 has:
     # on ubuntu-latest, now Ubuntu 26, several of them are gone.
     runs-on: ubuntu-24.04
@@ -173,11 +168,9 @@ jobs:
         run: |
           set -o pipefail
           # Four workers (pytest-xdist): the tests mostly wait on Temporal, sandboxes and timers, so
-          # four share the runner's CPUs well (19 minutes one at a time, about 9 like this), on this
-          # job's half of the suite. A run still going after 30 minutes is stuck: stop it and say
-          # where, instead of holding the job.
-          timeout --signal=INT --kill-after=60 30m pytest -q -rfE -n 4 \
-            --splits 2 --group ${{ matrix.group }} --splitting-algorithm least_duration 2>&1 | tee pytest.out || {
+          # four share the runner's CPUs well (19 minutes one at a time, about 9 like this). A run
+          # still going after 30 minutes is stuck: stop it and say where, instead of holding the job.
+          timeout --signal=INT --kill-after=60 30m pytest -q -rfE -n 4 2>&1 | tee pytest.out || {
             status=$?
             esc() { sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}'; }
             # The shell stops at the first failing command (-e, pipefail): a grep finding nothing is one.
