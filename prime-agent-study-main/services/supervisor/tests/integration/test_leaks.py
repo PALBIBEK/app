@@ -43,8 +43,9 @@ def test_api_does_not_import_runtimes() -> None:
 
 
 def test_api_journal_only_in_events_deps_wire() -> None:
-    """sessions/health must not touch journal; events may for replay."""
-    allow = {"events.py", "deps.py", "wire.py"}
+    """sessions/health must not touch journal; the event streams may, for replay: ours
+    (events, and stream, which follows the journal for it) and AG-UI's (agui)."""
+    allow = {"events.py", "deps.py", "wire.py", "stream.py", "agui.py"}
     api = SRC / "api"
     leaks: list[str] = []
     for path in api.rglob("*.py"):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -457,20 +459,30 @@ class SessionService:
         db: AsyncSession,
     ):
         link = await self._get_owned(session_id, user_id, db)
-        try:
-            return await self._client.stream_session_events(
-                identity,
-                link.ai_session_id,
-                last_event_id=last_event_id,
-            )
-        except AiUpstreamError as exc:
+        return await _upstream(self._client.stream_session_events(identity, link.ai_session_id, last_event_id=last_event_id))
+
+    async def stream_agui(
+        self, *, session_id: str, user_id: str, identity: TenantPrincipal, last_event_id: str | None, db: AsyncSession
+    ) -> AsyncIterator[bytes]:
+        """The session as AG-UI events (the supervisor's ``/agui``), its thread being this session."""
+        link = await self._get_owned(session_id, user_id, db)
+        stream = self._client.stream_session_agui(identity, link.ai_session_id, last_event_id=last_event_id)
+        return rethreaded(await _upstream(stream), link.ai_session_id, session_id)
+
+    async def run_agui(
+        self, *, session_id: str, user_id: str, identity: TenantPrincipal, run_input: dict[str, Any], db: AsyncSession
+    ) -> AsyncIterator[bytes]:
+        """An AG-UI run of this session: its thread is this session, which the supervisor knows
+        by its own id, so the input names that one and the events this one."""
+        if run_input.get("threadId") != session_id:
             raise HTTPException(
-                status_code=exc.status_code or 503,
-                detail={
-                    "error_code": "AI_UPSTREAM_ERROR",
-                    "message": str(exc),
-                },
-            ) from exc
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error_code": "THREAD_MISMATCH", "message": f"threadId must be this session, {session_id!r}"},
+            )
+        link = await self._get_owned(session_id, user_id, db)
+        upstream = {**run_input, "threadId": link.ai_session_id}
+        stream = self._client.run_session_agui(identity, link.ai_session_id, upstream)
+        return rethreaded(await _upstream(stream), link.ai_session_id, session_id)
 
     async def abort(
         self,
@@ -832,3 +844,38 @@ class SessionService:
                 composition_digest=link.composition_digest,
             ),
         )
+
+
+async def _upstream(opened: Awaitable[AsyncIterator[bytes]]) -> AsyncIterator[bytes]:
+    """A supervisor stream, once opened; a refusal as the HTTP error it was."""
+    try:
+        return await opened
+    except AiUpstreamError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 503, detail={"error_code": "AI_UPSTREAM_ERROR", "message": str(exc)}
+        ) from exc
+
+
+async def rethreaded(chunks: AsyncIterator[bytes], upstream_id: str, session_id: str) -> AsyncIterator[bytes]:
+    """AG-UI SSE ``chunks`` with the supervisor's session id, where an event names its thread,
+    replaced by this session's. Frames can be split across chunks, so lines are rewritten
+    whole; anything else passes through unchanged."""
+    pending = b""
+    async for chunk in chunks:
+        pending += chunk
+        *lines, pending = pending.split(b"\n")
+        yield b"".join(_rethreaded_line(line, upstream_id, session_id) + b"\n" for line in lines)
+    if pending:
+        yield _rethreaded_line(pending, upstream_id, session_id)
+
+
+def _rethreaded_line(line: bytes, upstream_id: str, session_id: str) -> bytes:
+    if not line.startswith(b"data: "):
+        return line
+    try:
+        event = json.loads(line[len(b"data: "):])
+    except ValueError:
+        return line
+    if not isinstance(event, dict) or event.get("threadId") != upstream_id:
+        return line
+    return b"data: " + json.dumps({**event, "threadId": session_id}, ensure_ascii=False, separators=(",", ":")).encode()

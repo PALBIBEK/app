@@ -14,16 +14,17 @@ import { CircleNotch, GitBranch, Stop } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/layout/AppShell';
-import { ApprovalCard, MessageBubble, ToolCard } from '@/components/session/parts';
-import { statusKind, SubagentCallCard, SubagentNoticeLine, subagentHref } from '@/components/session/subagents';
+import { ApprovalCard, MessageBubble } from '@/components/session/parts';
+import { statusKind, SubagentNoticeLine, subagentHref } from '@/components/session/subagents';
+import { useToolRenderer } from '@/components/session/tools';
 import { Card, ErrorNote, Mono, StatusPill } from '@/components/ui';
 import { sessionsAPI } from '@/lib/api/endpoints/sessions';
 import { useHarness } from '@/lib/api/hooks/useHarnesses';
 import { useSession } from '@/lib/api/hooks/useSessions';
 import { useSubagents } from '@/lib/api/hooks/useSubagents';
-import type { Subagent, ToolCallView } from '@/lib/api/types/session.types';
+import type { Subagent } from '@/lib/api/types/session.types';
 import { messageTooLong } from '@/lib/session/messageLimit';
-import { kindLabel, statusLabel, SUBAGENT_TOOLS, subagentName } from '@/lib/session/subagents';
+import { kindLabel, statusLabel, subagentName } from '@/lib/session/subagents';
 import { useScrollToEnd } from '@/lib/session/useScrollToEnd';
 import { useSessionStream } from '@/lib/session/useSessionStream';
 import { formatMoney } from '@/lib/utils';
@@ -66,6 +67,11 @@ function SubagentPageContent(): JSX.Element {
     void refetch(); // its run started or ended: its status and answer changed
   }, [state.running, refetch]);
   useScrollToEnd(endRef, [state.messages.length, pendingTools.length]);
+  const renderTool = useToolRenderer({
+    sessionId,
+    subagentOf: state.subagentOf,
+    tools: [...state.messages.flatMap((m) => m.toolCalls ?? []), ...pendingTools],
+  });
 
   if (isLoading) {
     return (
@@ -88,12 +94,6 @@ function SubagentPageContent(): JSX.Element {
   const nameOf = new Map((subagents ?? []).map((s) => [s.id, subagentName(s)]));
   const working = state.running || subagent.status === 'running' || subagent.status === 'starting';
   const takesMessages = subagent.kind === 'continuable' && subagent.open;
-  const renderTool = (tool: ToolCallView): JSX.Element =>
-    SUBAGENT_TOOLS.has(tool.name) ? (
-      <SubagentCallCard key={tool.id} tool={tool} sessionId={sessionId} startedId={state.subagentOf.get(tool.id)} />
-    ) : (
-      <ToolCard key={tool.id} tool={tool} />
-    );
 
   async function send(e?: React.FormEvent): Promise<void> {
     e?.preventDefault();

@@ -30,7 +30,7 @@ from supervisor.agent.events import (
 from supervisor.api.schemas import WIRE_VERSION, WireEvent
 from supervisor.journal.serde import encode_event
 
-__all__ = ["WIRE_VERSION", "envelope_to_wire", "wire_data"]
+__all__ = ["WIRE_VERSION", "envelope_to_wire", "wire_data", "wire_type"]
 
 _INTERNAL: Final[dict[type, frozenset[str]]] = {
     RunEnd: frozenset({"messages"}),
@@ -44,7 +44,8 @@ _INTERNAL: Final[dict[type, frozenset[str]]] = {
 """Fields of an event clients are not sent."""
 
 
-def _wire_type(payload: AgentEvent) -> str:
+def wire_type(payload: AgentEvent) -> str:
+    """``payload``'s type as clients are sent it: snake case, ``error`` for an ``ErrorEvent``."""
     if isinstance(payload, ErrorEvent):
         return "error"
     name = payload.type_name if isinstance(payload, UnknownEvent) else type(payload).__name__
@@ -66,7 +67,7 @@ def envelope_to_wire(env: Envelope) -> WireEvent:
         seq=env.seq,
         event_id=env.event_id,
         turn_id=env.turn_id,
-        type=_wire_type(env.payload),
+        type=wire_type(env.payload),
         ts_ms=env.ts_ms,
         data=wire_data(env.payload),
     )
