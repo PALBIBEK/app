@@ -8,24 +8,45 @@ Chromium); ``needs_browser`` skips them elsewhere. CI installs it.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import os
 import shutil
 import signal
 import subprocess
 import threading
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from supervisor.catalog import DigestRef, FileEffects, SandboxProviderName
+from supervisor.catalog.repository import persist_offer
+from supervisor.temporal.contracts import CreateSession
 from supervisor.tools import default_registry
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import HostWorkspace
 
-__all__ = ["BROWSERS_ENV", "Call", "Site", "call", "kill", "needs_browser", "site", "stop_browsers"]
+if TYPE_CHECKING:
+    from supervisor.app import SupervisorState
+    from tests.support.githi_env import Env
+
+__all__ = [
+    "BROWSERS_ENV",
+    "Call",
+    "Site",
+    "browser_session",
+    "call",
+    "default_browsers",
+    "kill",
+    "needs_browser",
+    "site",
+    "stop_browsers",
+]
 
 needs_browser = pytest.mark.skipif(
     subprocess.run(["python3", "-c", "import playwright"], capture_output=True, check=False).returncode != 0,
@@ -112,3 +133,64 @@ def site() -> Iterator[Site]:
     threading.Thread(target=served.server.serve_forever, daemon=True).start()
     yield served
     served.server.shutdown()
+
+
+# A githi session with a browser, from the seams -------------------------------------
+
+
+async def browser_session(env: Env, state: SupervisorState, **profile_changes: Any) -> str:
+    """A session on the shipped composition, with the browser tool set and a host-process
+    sandbox profile changed by ``profile_changes``. A host process isolates nothing, so a
+    tool that acts outside the workspace runs there only on ``danger_full_access``."""
+    catalog = state.composition_catalog
+    assert catalog is not None
+    latest = lambda kind, name: catalog.get(kind, name, catalog.list_versions(kind, name)[-1])
+    base, tools = latest("composition", "githi-v1"), latest("tool_set", "githi-browser-tools")
+    profile = catalog.offer(
+        dataclasses.replace(
+            latest("sandbox_profile", "githi-docker-v1"),
+            name=f"browser-{uuid.uuid4().hex[:6]}",
+            digest="",
+            provider=SandboxProviderName.LOCAL_PROCESS,
+            image_digest=f"sha256:{hashlib.sha256(b'host').hexdigest()}",
+            file_effects=FileEffects.DANGER_FULL_ACCESS,
+            **profile_changes,
+        )
+    )
+    await persist_offer(env.factory, catalog, "sandbox_profile", profile.name, profile.digest)  # type: ignore[arg-type]
+    composition = catalog.offer(
+        dataclasses.replace(
+            base,
+            name=f"browser-agent-{uuid.uuid4().hex[:6]}",
+            digest="",
+            tool_set=DigestRef(id=tools.name, digest=tools.digest),
+            sandbox_profile=DigestRef(id=profile.name, digest=profile.digest),
+        )
+    )
+    await persist_offer(env.factory, catalog, "composition", composition.name, composition.digest)  # type: ignore[arg-type]
+    sid = uuid.uuid4().hex
+    await env.sessions.create(
+        sid, CreateSession("t1", "githi-v1", composition_id=composition.name, composition_digest=composition.digest, principal_id="alice")
+    )
+    return sid
+
+
+@pytest.fixture
+def default_browsers() -> Iterator[Path]:
+    """A host-process sandbox runs commands with a scrubbed environment and the real HOME,
+    so its runner finds Playwright's browsers where Playwright looks by default: point that
+    at this machine's for the test (a sandbox image has its own). The browser home the
+    runner then uses is its default; the test stops only the browsers it started there."""
+    default = Path.home() / ".cache" / "ms-playwright"
+    made = not default.exists()
+    if made:
+        default.parent.mkdir(parents=True, exist_ok=True)
+        default.symlink_to(BROWSERS_ENV["PLAYWRIGHT_BROWSERS_PATH"])
+    home = Path("/tmp/githi-browser")
+    before = {p.read_text() for p in home.glob("*/daemon.pid")}
+    yield home
+    for pid_file in home.glob("*/daemon.pid"):
+        if pid_file.read_text() not in before:
+            kill(int(pid_file.read_text()))
+    if made:
+        default.unlink()

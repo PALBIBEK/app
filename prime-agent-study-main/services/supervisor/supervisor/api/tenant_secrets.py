@@ -3,6 +3,9 @@
 A value goes in and never comes out: listing returns names and expiry only.
 ``mcp:<origin>`` (``mcp:https://tools.example.com``) authenticates the MCP
 server at that origin for every session of the tenant (``supervisor.vault.credentials``).
+``login:<origin>`` (``login:https://shop.example.com``, the value
+``{"username": "…", "password": "…"}``) is a browser login ``browser_vault`` can type into
+that site for any of the tenant's sessions (``supervisor.vault.logins``).
 
 Who in a tenant may change its secrets is the caller's decision (the product's
 settings RBAC); this API takes the tenant from the verified service identity.
@@ -18,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from supervisor.api import deps
 from supervisor.vault import Owner, Vault
+from supervisor.vault.logins import LOGIN_PREFIX, InvalidLogin, parse_login
 
 router = APIRouter(prefix="/v1/secrets", tags=["secrets"])
 
@@ -46,9 +50,13 @@ def _vault(request: Request) -> Vault:
 
 
 def _forget(request: Request, tenant_id: str, name: str) -> None:
-    credentials = getattr(deps.get_manager(request), "_credentials", None)
+    manager = deps.get_manager(request)
+    credentials = getattr(manager, "_credentials", None)
     if credentials is not None:
         credentials.forget(tenant_id, name)
+    logins = getattr(manager, "_logins", None)
+    if logins is not None and name.startswith(LOGIN_PREFIX):
+        logins.forget(tenant_id)
 
 
 @router.get("", response_model=SecretList)
@@ -64,6 +72,11 @@ async def put_secret(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> SecretOut:
     _check_name(name)
+    if name.startswith(LOGIN_PREFIX):
+        try:
+            parse_login(name, body.value)
+        except InvalidLogin as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
     await _vault(request).put(Owner.tenant(tenant_id), name, body.value, expires_at=body.expires_at)
     _forget(request, tenant_id, name)
     return SecretOut(name=name)

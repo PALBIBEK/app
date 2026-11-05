@@ -203,7 +203,7 @@ class Snapshots:
     def act(self, page: Any, tab: str, steps: tuple[tuple[Any, ...], ...]) -> None:
         """Run steps like ("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"),
         ("check", "0-3"), ("press", "0-7", "Enter"), every ID checked first; then settle."""
-        locators = [self._locate(page, tab, step[1]) for step in steps]
+        locators = [self.locate(page, tab, step[1]) for step in steps]
         for (op, _, *args), locator in zip(steps, locators, strict=True):
             run = ACTIONS.get(op)
             if run is None:
@@ -211,7 +211,9 @@ class Snapshots:
             run(locator, *args)
         self.settle(page)
 
-    def _locate(self, page: Any, tab: str, gid: str) -> Any:
+    def locate(self, page: Any, tab: str, gid: str) -> Any:
+        """A Playwright locator for the element an ID of the tab's latest snapshot names;
+        ``StaleSnapshot`` (with what to do) when it cannot be trusted."""
         state_file = self.home / f"snapshot-{tab}.json"
         if not state_file.exists():
             raise StaleSnapshot("no snapshot of this tab yet: call snapshot() first")

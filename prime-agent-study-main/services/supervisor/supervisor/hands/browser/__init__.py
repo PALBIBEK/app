@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import functools
 import hashlib
+import shlex
 import zlib
 from importlib import resources
 from typing import Final
@@ -29,28 +30,35 @@ from supervisor.hands.browser.providers import (
     SandboxChromium,
     browser_providers_from_env,
 )
-from supervisor.hands.browser.runner import META_MARK
+from supervisor.hands.browser.runner import FILL_ENV, META_MARK
 
 __all__ = [
     "BROWSER_ERROR_ENV",
     "BROWSER_PROVIDERS",
     "BROWSER_TOOLS",
+    "FILL_ENV",
     "META_MARK",
     "RUNNER_DIR",
     "UNPACK",
+    "WORKSPACE_DIR",
     "BrowserProvider",
     "BrowserUnreachable",
     "RemoteCdp",
     "SandboxChromium",
     "browser_providers_from_env",
     "pack",
+    "runner_env",
+    "runtime_command",
     "runtime_payload",
 ]
 
-BROWSER_TOOLS: Final = frozenset({"browser_exec"})
+BROWSER_TOOLS: Final = frozenset({"browser_exec", "browser_vault"})
 """The tools that need the session's browser provider: only their calls ask it."""
 BROWSER_ERROR_ENV: Final = "GITHI_BROWSER_ERROR"
 """Why the session's browser provider could not serve this call, for the runner to report."""
+WORKSPACE_DIR: Final = ".githi/browser"
+"""The browser's folder in the session's workspace: saved with the session, so batch
+files and the agent's own helpers survive a lost sandbox (the open tabs do not)."""
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
 RUNTIME_FILES: Final = ("runner.py", "daemon.py", "snapshot.py")
@@ -73,3 +81,20 @@ def pack(data: bytes) -> str:
 
 UNPACK: Final = "import base64,sys,zlib;sys.stdout.buffer.write(zlib.decompress(base64.b64decode(sys.argv[1])))"
 """The sandbox's side of ``pack``: Python's own, as the runtime needs Python anyway."""
+
+
+def runtime_command(run: str) -> str:
+    """A shell command that stores the runtime in the sandbox once per version (in ``$d``),
+    then runs ``run``, which finds the runner at ``"$d/runner.py"``."""
+    folder, sources = runtime_payload()
+    unpack = shlex.quote(UNPACK)
+    store = " && ".join(
+        f'python3 -c {unpack} {source} > "$d/{name}.$$" && mv "$d/{name}.$$" "$d/{name}"'
+        for name, source in sources.items()
+    )
+    return f'd={shlex.quote(folder)}\n[ -f "$d/runner.py" ] || {{ mkdir -p "$d" && {store}; }}\n{run}'
+
+
+def runner_env(session: str | None) -> dict[str, str]:
+    """What the runner is told about the call: its workspace folder, and its browser's name."""
+    return {"BROWSER_WORKSPACE": WORKSPACE_DIR, **({"GITHI_BROWSER_NAME": session} if session else {})}

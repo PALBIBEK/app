@@ -50,6 +50,7 @@ class GithiRuntime:
         self._workspace: Workspace | None = None
         self._on_mutate: Callable[[], None] | None = None
         self._identity: dict[str, str] = {}
+        self._logins: object | None = None
         self._history: list[dict[str, Any]] = []
         self._busy = False
         self._abort_requested = False
@@ -82,6 +83,10 @@ class GithiRuntime:
         """Whose session this is and which agent runs it: tools scope long-term memory by them."""
         self._identity = {"owner": owner, "agent": agent}
 
+    def set_logins(self, logins: object) -> None:
+        """The tenant's saved browser logins, for ``browser_vault`` (``ToolContext.logins``)."""
+        self._logins = logins
+
     def loop(self, *, should_abort: Callable[[], bool] = lambda: False) -> AgentLoop:
         """Turn pieces bound to this session's seams and workspace."""
         return AgentLoop(
@@ -90,6 +95,7 @@ class GithiRuntime:
             workspace=self._workspace,
             on_mutate=self._on_mutate,
             identity=self._identity,
+            logins=self._logins,
             should_abort=should_abort,
         )
 

@@ -88,6 +88,7 @@ from supervisor.session.registry import SessionRegistry
 from supervisor.session.tool_outbox import ToolOutbox
 from supervisor.vault import Vault
 from supervisor.vault.credentials import ToolCredentials
+from supervisor.vault.logins import BrowserLogins
 from supervisor.vault.session_keys import SessionKeys
 
 logger = logging.getLogger(__name__)
@@ -259,6 +260,8 @@ class SessionManagerBase:
         self._session_keys = SessionKeys(vault) if vault is not None else None
         # Tenant secrets that authenticate tool servers, sent by the supervisor itself.
         self._credentials = ToolCredentials(vault) if vault is not None else None
+        # Saved browser logins: typed into pages by browser_vault, cleaned from every result.
+        self._logins = BrowserLogins(vault) if vault is not None else None
         self._tenant_of: dict[str, str] = {}  # live sessions and brains: whose secrets
         self._key_mints: dict[str, Callable[[], MintedVirtualKey]] = {}
         self._key_expiry: dict[str, float] = {}  # this worker's key, by session: when it expires

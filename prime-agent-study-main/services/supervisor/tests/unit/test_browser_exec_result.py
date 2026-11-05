@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from supervisor.hands.browser import META_MARK, runtime_payload
+from supervisor.hands.browser import BROWSER_TOOLS, META_MARK, runtime_payload
 from supervisor.tools import InvalidArguments, default_registry
 from supervisor.tools.builtin.browser_exec import MAX_CODE_BYTES
 from supervisor.tools.context import ToolContext
@@ -128,21 +128,22 @@ async def test_empty_or_oversized_code_is_refused_before_anything_runs(tmp_path:
     assert not workspace.sent
 
 
-async def test_the_shipped_tool_set_offers_browser_exec_as_implemented() -> None:
-    """The catalog's copy of the tool (what sessions pin) is the implementation's own
+@pytest.mark.parametrize("name", sorted(BROWSER_TOOLS))
+async def test_the_shipped_tool_set_offers_the_browser_tools_as_implemented(name: str) -> None:
+    """The catalog's copy of each tool (what sessions pin) is the implementation's own
     definition: a changed description or schema needs the tool set regenerated."""
     shipped = json.loads((Path(__file__).resolve().parents[4] / "harness/tool_sets/githi-browser-tools.json").read_text())
-    definition = {k: v for k, v in shipped["definitions"]["browser_exec"].items() if k != "digest"}
+    definition = {k: v for k, v in shipped["definitions"][name].items() if k != "digest"}
 
-    assert definition == default_registry()["browser_exec"].definition()
+    assert definition == default_registry()[name].definition()
 
 
-async def test_the_browser_tool_set_is_the_coding_tools_and_browser_exec() -> None:
+async def test_the_browser_tool_set_is_the_coding_tools_and_the_browser_tools() -> None:
     """A tool added to the coding tools (and to the harness's recovery list) belongs in the
     browser tool set too, or its composition is skipped at boot."""
     sets = Path(__file__).resolve().parents[4] / "harness/tool_sets"
     coding = json.loads((sets / "githi-coding-tools.json").read_text())["definitions"]
     browser = json.loads((sets / "githi-browser-tools.json").read_text())["definitions"]
 
-    assert set(browser) == set(coding) | {"browser_exec"}
+    assert set(browser) == set(coding) | BROWSER_TOOLS
     assert all(browser[name] == coding[name] for name in coding), "a coding tool's definition drifted"

@@ -24,8 +24,8 @@
       "tool_class": "non_atomic"
     },
     "browser_exec": {
-      "description": "Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains=\"text\") narrows it to the matches and their groups); act((\"click\", \"0-42\"), (\"fill\", \"0-7\", \"Ada\"), (\"select\", \"0-9\", \"Tech\"), (\"check\", \"0-3\"), (\"press\", \"0-7\", \"Enter\")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs(\"accept\") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; ask the user.",
-      "digest": "sha256:1c153330797d94b4321f1752a79632fd91978fb4654b8c7fb56a7adacb2c1a86",
+      "description": "Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains=\"text\") narrows it to the matches and their groups); act((\"click\", \"0-42\"), (\"fill\", \"0-7\", \"Ada\"), (\"select\", \"0-9\", \"Tech\"), (\"check\", \"0-3\"), (\"press\", \"0-7\", \"Enter\")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs(\"accept\") before an action that opens a native alert/confirm/prompt (dialogs are dismissed otherwise), wait_for_network_idle(), browser_events(). Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors. Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; browser_vault types a login the user saved (list them first), otherwise ask the user.",
+      "digest": "sha256:ac2de291fa0782221d03499880cc2262fcbf2b034a7d4e5f7a83f1c2d78920bf",
       "name": "browser_exec",
       "parameters": {
         "properties": {
@@ -46,6 +46,49 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "tool_class": "non_atomic"
+    },
+    "browser_vault": {
+      "description": "Use a login the user saved, without seeing it: list the sites that have one, or fill one into the browser's current tab (it must be on that site) by naming the username and password fields (snapshot IDs or CSS selectors) and, optionally, what to click to submit. The values are typed for you and never shown to you; never ask the user for a password the vault holds, and never type one yourself.",
+      "digest": "sha256:60cd359bab34140a2d448e5adfb72122138908e0ea45c273e768d32cf6a441ca",
+      "name": "browser_vault",
+      "parameters": {
+        "properties": {
+          "action": {
+            "description": "list: the sites with a saved login; fill: type one into the current tab",
+            "enum": [
+              "list",
+              "fill"
+            ],
+            "type": "string"
+          },
+          "login": {
+            "description": "fill: the site whose login to use, as list names it (e.g. https://shop.example.com)",
+            "type": "string"
+          },
+          "password": {
+            "description": "fill: the password field, by snapshot ID or CSS selector",
+            "type": "string"
+          },
+          "session": {
+            "description": "The named browser, as browser_exec's session (omit for the default one)",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "submit": {
+            "description": "fill: what to click after filling (optional), by snapshot ID or CSS selector",
+            "type": "string"
+          },
+          "username": {
+            "description": "fill: the username field, by snapshot ID (\"0-12\") or CSS selector",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
         ],
         "type": "object"
       },
@@ -301,11 +344,12 @@
   },
   "name": "githi-browser-tools",
   "protocol_version": 1,
-  "semver": "1.0.0",
+  "semver": "1.1.0",
   "status": "offered",
   "tools": {
     "bash": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
-    "browser_exec": "sha256:1c153330797d94b4321f1752a79632fd91978fb4654b8c7fb56a7adacb2c1a86",
+    "browser_exec": "sha256:ac2de291fa0782221d03499880cc2262fcbf2b034a7d4e5f7a83f1c2d78920bf",
+    "browser_vault": "sha256:60cd359bab34140a2d448e5adfb72122138908e0ea45c273e768d32cf6a441ca",
     "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
     "edit": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
     "find": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",
