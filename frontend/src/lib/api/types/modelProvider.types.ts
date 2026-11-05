@@ -21,6 +21,9 @@ export const ModelProviderSchema = z
     ready: z.boolean(),
     /** On a save only: whether the vendor accepted the key (false: kept unchecked). */
     checked: z.boolean().optional(),
+    /** The local server only: the models it runs, and why its list could not be read. */
+    models: z.array(z.string()).optional(),
+    error: z.string().nullish(),
   })
   .passthrough();
 

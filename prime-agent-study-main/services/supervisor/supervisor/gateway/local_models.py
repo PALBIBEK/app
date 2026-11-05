@@ -59,6 +59,17 @@ def local_route(upstream: str, context_window: int) -> Route:
     )
 
 
+def _reason(exc: Exception) -> str:
+    """Why the list could not be read, in words a person can act on (no URL or body echoed)."""
+    if isinstance(exc, httpx.ConnectError):
+        return "nothing answers at the local server's address: is it running?"
+    if isinstance(exc, httpx.TimeoutException):
+        return "the local server did not answer in time"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"the local server answered HTTP {exc.response.status_code} for its model list"
+    return "the local server's answer is not an OpenAI model list"
+
+
 class LocalModels:
     """The routes of the models the local server lists, re-read when stale."""
 
@@ -79,6 +90,21 @@ class LocalModels:
         self._lock = threading.Lock()
         self._routes: dict[str, Route] = {}
         self._expires_at = 0.0
+        self._error: str | None = None
+
+    @property
+    def error(self) -> str | None:
+        """Why the last read of the server's list failed (None after a success, or before any)."""
+        return self._error
+
+    def expire(self) -> None:
+        """Read the server's list again at the next look (a model was just pulled)."""
+        with self._lock:
+            self._expires_at = 0.0
+
+    def models(self) -> list[str]:
+        """The ids of the models the server runs, as it lists them."""
+        return [route.upstream_model for route in self.routes().values()]
 
     def routes(self) -> Mapping[str, Route]:
         """``local/<id>`` → route for each model the server lists (empty while it is down)."""
@@ -87,11 +113,11 @@ class LocalModels:
         with self._lock:
             if self._now() >= self._expires_at:
                 try:
-                    self._routes = self._read()
+                    self._routes, self._error = self._read(), None
                     self._expires_at = self._now() + TTL_S
                 except Exception as exc:  # noqa: BLE001 — any failure: no local models for a while
                     logger.warning("the local model server's list could not be read: %s", exc)
-                    self._routes = {}
+                    self._routes, self._error = {}, _reason(exc)
                     self._expires_at = self._now() + FAILURE_TTL_S
             return self._routes
 

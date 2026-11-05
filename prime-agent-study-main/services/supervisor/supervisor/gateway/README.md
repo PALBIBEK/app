@@ -67,7 +67,9 @@ route when the table lacks it: `githi` (OpenRouter), `gpt-5.5` (OpenAI),
 `qwen3.7-plus` (Qwen). A local server's models are offered without naming them: each model its
 `GET /models` lists becomes the route `local/<model id>`, free, with the context window the
 server reports or `LOCAL_MODEL_CONTEXT_WINDOW` (a quarter of it for the answer). The list is
-re-read every five minutes, and thirty seconds after a failure. Name a local model in the
+re-read every five minutes, and thirty seconds after a failure; `POST
+/v1/vendors/local/refresh` (service token) reads it now, after a model was pulled. `GET
+/v1/vendors` shows the local server's models and, when its list could not be read, why. Name a local model in the
 table to give it other limits, for example
 
 ```json

@@ -84,6 +84,16 @@ async def list_providers(_tenant: str = Depends(deps.current_tenant)) -> dict[st
     return await asyncio.to_thread(call_gateway, _router(), "GET", "/v1/vendors")
 
 
+@router.post("/local/refresh")
+async def refresh_local(_tenant: str = Depends(deps.current_tenant)) -> dict[str, Any]:
+    """Read the local server's model list now (a model was just pulled); its models are offered
+    at the next listing."""
+    routed = _router()
+    result = await asyncio.to_thread(call_gateway, routed, "POST", "/v1/vendors/local/refresh")
+    routed.catalog.expire()
+    return result
+
+
 @router.put("/{vendor}/key")
 async def set_provider_key(
     vendor: str, body: ProviderKeyIn, request: Request, tenant: str = Depends(deps.current_tenant)

@@ -48,3 +48,8 @@ export function useRemoveModelProviderKey() {
     onSuccess: invalidate,
   });
 }
+
+export function useRefreshLocalModels() {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn: () => modelProvidersAPI.refreshLocal(), onSuccess: invalidate });
+}

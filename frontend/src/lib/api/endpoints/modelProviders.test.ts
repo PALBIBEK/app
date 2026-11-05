@@ -42,6 +42,12 @@ describe('modelProvidersAPI', () => {
     expect(apiClient.delete).toHaveBeenCalledWith('/model-providers/a%2Fb/key');
   });
 
+  it('asks the gateway to read the local server again', async () => {
+    (apiClient.post as Mock).mockResolvedValue({ ...VENDOR, id: 'local', models: ['qwen3:8b'], error: null });
+    expect((await modelProvidersAPI.refreshLocal()).models).toEqual(['qwen3:8b']);
+    expect(apiClient.post).toHaveBeenCalledWith('/model-providers/local/refresh');
+  });
+
   it('refuses an answer that is not a vendor list', async () => {
     (apiClient.get as Mock).mockResolvedValue({ vendors: [{ id: 'x' }] });
     await expect(modelProvidersAPI.list()).rejects.toThrow();

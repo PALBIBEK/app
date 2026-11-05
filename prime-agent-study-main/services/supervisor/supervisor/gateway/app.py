@@ -279,7 +279,14 @@ def _vendor_view(request: Request, vendor: Vendor) -> dict[str, Any]:
         "updated_at": status.updated_at,
         "updated_by": status.updated_by,
         "ready": provider is not None and provider.credential_ok(),
+        **(_local_view(request) if vendor.id == "local" else {}),
     }
+
+
+def _local_view(request: Request) -> dict[str, Any]:
+    """The local server's models as it lists them now, and why it could not be read."""
+    local: LocalModels = request.app.state.local_models
+    return {"models": local.models(), "error": local.error}
 
 
 def _editable(request: Request) -> VendorKeys:
@@ -316,6 +323,15 @@ def set_vendor_key(vendor_id: str, body: VendorKeyIn, request: Request) -> dict[
         )
     keys.set(vendor, key, by=body.updated_by)
     return {**_vendor_view(request, vendor), "checked": checked is KeyCheck.ACCEPTED}
+
+
+@app.post("/v1/vendors/local/refresh")
+def refresh_local(request: Request) -> dict[str, Any]:
+    """Read the local server's model list now (a model was just pulled), not in five minutes."""
+    require_service_token(request)
+    local: LocalModels = request.app.state.local_models
+    local.expire()
+    return _vendor_view(request, VENDORS["local"])
 
 
 @app.delete("/v1/vendors/{vendor_id}/key")

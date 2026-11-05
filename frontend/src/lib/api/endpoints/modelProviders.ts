@@ -19,6 +19,9 @@ export const modelProvidersAPI = {
   /** The vendor checks the key first; a key it refuses is not kept (the error says so). */
   setKey: async (vendor: string, key: string): Promise<ModelProvider> =>
     ModelProviderSchema.parse(await apiClient.put(`/model-providers/${seg(vendor)}/key`, { key })),
+  /** Read the local server's model list now (a model was just pulled). */
+  refreshLocal: async (): Promise<ModelProvider> =>
+    ModelProviderSchema.parse(await apiClient.post('/model-providers/local/refresh')),
   /** The vendor is off from now, even with a key in the gateway's environment. */
   removeKey: async (vendor: string): Promise<ModelProvider> =>
     ModelProviderSchema.parse(await apiClient.delete(`/model-providers/${seg(vendor)}/key`)),

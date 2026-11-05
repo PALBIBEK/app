@@ -357,6 +357,13 @@ async def list_model_providers(current_user: OpsUser) -> dict[str, Any]:
     return result
 
 
+@router.post("/model-providers/local/refresh")
+async def refresh_local_models(current_user: OpsUser) -> dict[str, Any]:
+    """Read the local server's models now (one was just pulled), not at the next five minutes."""
+    result: dict[str, Any] = await _call(_client().refresh_local_models(TenantPrincipal.from_user(current_user)))
+    return result
+
+
 @router.put("/model-providers/{vendor}/key")
 async def set_model_provider_key(vendor: str, body: ProviderKeyIn, current_user: OpsUser) -> dict[str, Any]:
     """Set a vendor's key; the vendor checks it first, and a key it refuses is not kept."""

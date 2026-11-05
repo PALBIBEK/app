@@ -205,3 +205,19 @@ def test_a_local_servers_models_reach_the_picker_free(
     )
     assert (local["cost"]["input"], local["cost"]["output"]) == (0.0, 0.0)
     assert {p["id"]: p["ready"] for p in listing["providers"]}["local"] is True
+
+
+@pytest.mark.parametrize("gateway_env", [{"LOCAL_MODEL_BASE_URL": LOCAL}], indirect=True)
+def test_a_refresh_offers_a_just_pulled_local_model_at_once(
+    gateway: TestClient, supervisor: TestClient
+) -> None:
+    pulled = [{"id": "qwen3:8b"}]
+    ollama = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": pulled}))
+    gateway.app.state.local_models = LocalModels(
+        LOCAL, lambda: "", context_window=8192, transport=ollama
+    )
+    assert "gateway/local/qwen3:8b" in _models(supervisor)
+    pulled.append({"id": "llama3.2"})
+    refreshed = supervisor.post("/v1/model-providers/local/refresh", headers=ADMIN)
+    assert refreshed.status_code == 200 and refreshed.json()["models"] == ["qwen3:8b", "llama3.2"]
+    assert "gateway/local/llama3.2" in _models(supervisor)

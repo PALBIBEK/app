@@ -314,6 +314,11 @@ class AiClient:
         )
         return payload if isinstance(payload, dict) else {}
 
+    async def refresh_local_models(self, identity: TenantPrincipal) -> dict[str, Any]:
+        """Have the gateway read the local server's model list now."""
+        payload = await self._json_request("POST", "/v1/model-providers/local/refresh", identity)
+        return payload if isinstance(payload, dict) else {}
+
     async def remove_model_provider_key(self, identity: TenantPrincipal, vendor: str) -> dict[str, Any]:
         payload = await self._json_request("DELETE", f"/v1/model-providers/{quote(vendor, safe='')}/key", identity)
         return payload if isinstance(payload, dict) else {}

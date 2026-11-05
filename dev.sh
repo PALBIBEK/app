@@ -35,6 +35,7 @@ if [ ! -f "$ROOT/.env.local" ]; then
 fi
 set -a; source "$ROOT/.env.local"; set +a
 export -n OPENROUTER_API_KEY 2>/dev/null || true  # never inherited: only the gateway reads it, from the file
+export -n LOCAL_MODEL_API_KEY 2>/dev/null || true  # the same: the gateway alone is given it
 
 PG_PORT="${DEV_PG_PORT:-5433}" PG_USER="${DEV_PG_USER:-prime}" PG_PASSWORD="${DEV_PG_PASSWORD:-prime}"
 PG="postgresql+asyncpg://$PG_USER:$PG_PASSWORD@127.0.0.1:$PG_PORT"
@@ -178,10 +179,16 @@ up() {
   start s3 "'$SPY' -m moto.server -H 127.0.0.1 -p 8333"
   # The gateway is the only process given the provider key. Keys set in the product's
   # settings are sealed in its own file (sealed with GATEWAY_TOKEN), read by no other process.
-  start gateway "cd '$SUP' && export OPENROUTER_API_KEY=\"\$(grep -s '^OPENROUTER_API_KEY=' '$ROOT/.env.local' | cut -d= -f2-)\" && exec env PROFILE=dev ENV=development HOST=127.0.0.1 \
+  # The local model's settings reach it only when set (an empty one from .env.local is dropped).
+  start gateway "cd '$SUP' && export OPENROUTER_API_KEY=\"\$(grep -s '^OPENROUTER_API_KEY=' '$ROOT/.env.local' | cut -d= -f2-)\" \
+    LOCAL_MODEL_API_KEY=\"\$(grep -s '^LOCAL_MODEL_API_KEY=' '$ROOT/.env.local' | cut -d= -f2-)\" \
+    && exec env -u LOCAL_MODEL_BASE_URL -u LOCAL_MODEL_CONTEXT_WINDOW \
+    PROFILE=dev ENV=development HOST=127.0.0.1 \
     MODEL_GATEWAY_TOKEN='$GATEWAY_TOKEN' MODEL_GATEWAY_API_KEY_HEADER=x-litellm-api-key \
     MODEL_GATEWAY_DEFAULT_ROUTE=echo MODEL_GATEWAY_ROUTES_JSON='$(routes_json)' \
     MODEL_GATEWAY_KEYS_FILE='$STATE/gateway-keys.json' \
+    ${LOCAL_MODEL_BASE_URL:+LOCAL_MODEL_BASE_URL='$LOCAL_MODEL_BASE_URL'} \
+    ${LOCAL_MODEL_CONTEXT_WINDOW:+LOCAL_MODEL_CONTEXT_WINDOW='$LOCAL_MODEL_CONTEXT_WINDOW'} \
     SERVE_SUPERVISOR_API=0 SERVE_MEMORY_SERVICE=0 '$SPY' -m supervisor api"
   wait_http s3 http://127.0.0.1:8333 60
   wait_http gateway http://127.0.0.1:8090/v1/healthz 60

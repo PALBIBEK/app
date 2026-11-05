@@ -16,6 +16,7 @@ import { Button } from '@/components/ui';
 import {
   canManageModelProviders,
   useModelProviders,
+  useRefreshLocalModels,
   useRemoveModelProviderKey,
   useSetModelProviderKey,
 } from '@/lib/api/hooks/useModelProviders';
@@ -39,6 +40,56 @@ export function vendorStatus(v: ModelProvider): { label: string; ready: boolean 
 
 function when(at: number | null | undefined): string {
   return at ? new Date(at * 1000).toLocaleString() : '';
+}
+
+/** A local server: how to set one up, else what it runs and a way to look again after a pull. */
+function LocalModels({ vendor }: { vendor: ModelProvider }): JSX.Element {
+  const refresh = useRefreshLocalModels();
+  if (!vendor.base_url) {
+    return (
+      <div className="text-sm text-ink-2" data-testid="local-setup">
+        <p>Run a model on this machine, at no cost. With Ollama:</p>
+        <pre className="mt-1.5 overflow-x-auto rounded-md bg-line-soft px-2.5 py-1.5 font-mono text-xs text-ink">
+          {'OLLAMA_CONTEXT_LENGTH=32768 ollama serve\nollama pull qwen3:8b'}
+        </pre>
+        <p className="mt-1.5">
+          Then give the model gateway its address, <code className="text-xs">LOCAL_MODEL_BASE_URL=http://localhost:11434/v1</code>, and
+          the same context length, <code className="text-xs">LOCAL_MODEL_CONTEXT_WINDOW=32768</code> (with ./dev.sh: in .env.local,
+          then restart). vLLM and LM Studio work the same way.
+        </p>
+      </div>
+    );
+  }
+  const models = vendor.models ?? [];
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="local-models">
+      <span className={vendor.error ? 'text-red-600' : 'text-ink-2'}>
+        {vendor.error
+          ? `Not reachable: ${vendor.error}`
+          : models.length
+            ? `Runs ${models.join(', ')}`
+            : 'Runs no models yet: pull one (ollama pull qwen3:8b)'}
+      </span>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={refresh.isPending}
+        onClick={async () => {
+          try {
+            const found = await refresh.mutateAsync();
+            toast.success(
+              found.error ? `Still not reachable: ${found.error}` : `${(found.models ?? []).length} local model(s) can be picked.`,
+            );
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Could not look for local models');
+          }
+        }}
+      >
+        Find models
+      </Button>
+    </div>
+  );
 }
 
 function VendorCard({ vendor, editable }: { vendor: ModelProvider; editable: boolean }): JSX.Element {
@@ -66,6 +117,7 @@ function VendorCard({ vendor, editable }: { vendor: ModelProvider; editable: boo
           {vendor.base_url || 'no address'}
         </span>
       </div>
+      {vendor.id === 'local' ? <LocalModels vendor={vendor} /> : null}
       {vendor.updated_by ? (
         <p className="text-xs text-ink-3">
           Changed {when(vendor.updated_at)} by {vendor.updated_by}

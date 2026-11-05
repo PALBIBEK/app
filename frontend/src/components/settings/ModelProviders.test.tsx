@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   listing: undefined as Listing | undefined,
   setKey: vi.fn(),
   removeKey: vi.fn(),
+  refresh: vi.fn(),
 }));
 
 vi.mock('@/lib/store/authStore', () => ({
@@ -22,6 +23,7 @@ vi.mock('@/lib/api/hooks/useModelProviders', async (original) => ({
   useModelProviders: () => ({ data: state.listing, isLoading: false, isError: false, error: null }),
   useSetModelProviderKey: () => ({ mutateAsync: state.setKey, isPending: false }),
   useRemoveModelProviderKey: () => ({ mutateAsync: state.removeKey, isPending: false }),
+  useRefreshLocalModels: () => ({ mutateAsync: state.refresh, isPending: false }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -58,7 +60,17 @@ beforeEach(() => {
   };
   state.setKey.mockReset();
   state.removeKey.mockReset();
+  state.refresh.mockReset();
 });
+
+const LOCAL_URL = 'http://localhost:11434/v1';
+
+function withLocal(over: Partial<ModelProvider>): void {
+  state.listing = {
+    editable: true,
+    vendors: [vendor({ id: 'local', label: 'Local', key_required: false, base_url: LOCAL_URL, ready: true, ...over })],
+  };
+}
 afterEach(cleanup);
 
 describe('vendorStatus', () => {
@@ -135,5 +147,33 @@ describe('ModelProviders', () => {
     render(<ModelProviders />);
     expect(screen.getByText(/Only owners and admins/)).toBeTruthy();
     expect(screen.queryByTestId('vendor-deepseek')).toBeNull();
+  });
+
+  it('tells how to run a model on this machine while there is no local server', () => {
+    render(<ModelProviders />);
+    const setup = screen.getByTestId('local-setup');
+    expect(setup.textContent).toContain('ollama pull qwen3:8b');
+    expect(setup.textContent).toContain('LOCAL_MODEL_BASE_URL=http://localhost:11434/v1');
+  });
+
+  it('shows what the local server runs, and looks again on request', async () => {
+    withLocal({ models: ['qwen3:8b'], error: null });
+    state.refresh.mockResolvedValue({ ...state.listing!.vendors[0], models: ['qwen3:8b', 'llama3.2'] });
+    render(<ModelProviders />);
+    expect(screen.getByTestId('local-models').textContent).toContain('Runs qwen3:8b');
+    fireEvent.click(screen.getByRole('button', { name: 'Find models' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('2 local model(s) can be picked.'));
+  });
+
+  it('says why the local server cannot be read', () => {
+    withLocal({ models: [], error: "nothing answers at the local server's address: is it running?" });
+    render(<ModelProviders />);
+    expect(screen.getByTestId('local-models').textContent).toContain('Not reachable: nothing answers');
+  });
+
+  it('says when the local server runs no model yet', () => {
+    withLocal({ models: [], error: null });
+    render(<ModelProviders />);
+    expect(screen.getByTestId('local-models').textContent).toContain('Runs no models yet');
   });
 });

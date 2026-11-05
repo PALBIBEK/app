@@ -167,3 +167,34 @@ def test_without_the_local_url_its_routes_are_not_offered(
         routes = [r["id"] for r in client.get("/v1/routes", headers=SVC).json()["routes"]]
     assert listed == ["echo"]
     assert routes == ["echo", "local/qwen3:8b"]
+
+
+def test_a_failed_read_says_why_and_a_success_clears_it() -> None:
+    server, clock = _Server([{"id": "a"}]), _Clock()
+    local = _local(server, clock)
+    server.down = True
+    assert (
+        local.models() == []
+        and local.error == "nothing answers at the local server's address: is it running?"
+    )
+    server.down = False
+    local.expire()  # a person asks again: read now, not in thirty seconds
+    assert local.models() == ["a"] and local.error is None
+
+
+def test_the_vendor_list_shows_the_local_servers_models_and_a_refresh_reads_them_now(
+    gateway: TestClient,
+) -> None:
+    server = _Server([{"id": "qwen3:8b"}])
+    gateway.app.state.local_models = _local(server)
+
+    def local() -> dict[str, Any]:
+        listing = gateway.get("/v1/vendors", headers=SVC).json()["vendors"]
+        return next(v for v in listing if v["id"] == "local")
+
+    assert (local()["models"], local()["error"], local()["ready"]) == (["qwen3:8b"], None, True)
+    server.models = [{"id": "qwen3:8b"}, {"id": "llama3.2"}]
+    assert local()["models"] == ["qwen3:8b"]  # cached
+    refreshed = gateway.post("/v1/vendors/local/refresh", headers=SVC)
+    assert refreshed.status_code == 200 and refreshed.json()["models"] == ["qwen3:8b", "llama3.2"]
+    assert gateway.post("/v1/vendors/local/refresh").status_code == 401  # the service token only
