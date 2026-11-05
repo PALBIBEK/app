@@ -3,7 +3,7 @@
  * builder's Sandbox tab and the Environments page.
  */
 
-import type { SandboxSpec } from '@/lib/api/types/manifest.types';
+import type { NetworkSpec, SandboxSpec } from '@/lib/api/types/manifest.types';
 
 export const PROVIDERS: { id: SandboxSpec['provider']; label: string; hint: string }[] = [
   { id: 'local_docker', label: 'Docker', hint: 'A container per session. Isolated; needs Docker where the supervisor runs.' },
@@ -28,6 +28,44 @@ export const IDLE_STOPS: { value: number | ''; label: string }[] = [
   { value: 0, label: 'Never' },
 ];
 
+/** The tools that drive the session's browser (the supervisor's BROWSER_TOOLS). */
+export const BROWSER_TOOLS = ['browser_exec', 'browser_vault'];
+
+/** Providers that enforce a network setting; elsewhere a profile names none. */
+export const NETWORKED: SandboxSpec['provider'][] = ['local_docker', 'e2b'];
+
+export const NETWORKS: { value: NetworkSpec['mode'] | ''; label: string }[] = [
+  { value: '', label: 'Platform default (nothing, for Docker)' },
+  { value: 'none', label: 'Nothing' },
+  { value: 'open', label: 'The open web' },
+  { value: 'allow', label: 'Only these hosts' },
+];
+
+export const BROWSERS: { value: NonNullable<SandboxSpec['browser']>; label: string; hint: string }[] = [
+  { value: 'sandbox-chromium', label: 'Chromium in the sandbox', hint: 'Runs next to the code; the sandbox needs the web, or the sites’ hosts.' },
+  { value: 'remote-cdp', label: 'A remote browser (CDP)', hint: 'A hosted browser the platform is set up with; the sandbox needs only its host.' },
+];
+
+/** Host names typed as a list ("a.com, b.com" or one per line). */
+export function parseHosts(text: string): string[] {
+  return text.split(/[\s,]+/).map((h) => h.trim().toLowerCase()).filter(Boolean);
+}
+
+export function networkLabel(network: NetworkSpec | null | undefined): string | null {
+  if (!network) return null;
+  if (network.mode === 'none') return 'no network';
+  if (network.mode === 'open') return 'the open web';
+  return `reaches ${(network.hosts ?? []).join(', ') || 'no host'}`;
+}
+
+/** Why browser tools would not reach any site, or null: a Chromium in the sandbox with no network. */
+export function browserCannotBrowse(s: SandboxSpec, tools: string[]): string | null {
+  const inSandbox = (s.browser ?? 'sandbox-chromium') === 'sandbox-chromium';
+  if (!tools.some((t) => BROWSER_TOOLS.includes(t)) || !inSandbox || !NETWORKED.includes(s.provider)) return null;
+  if (s.network?.mode === 'open' || s.network?.mode === 'allow') return null;
+  return 'The browser runs in the sandbox, and the sandbox reaches nothing: choose the open web, or the sites’ hosts.';
+}
+
 const EFFECTS: Record<SandboxSpec['file_effects'], string> = {
   read_only: 'read only',
   workspace_write: 'writes its workspace',
@@ -47,7 +85,8 @@ export function describeSandbox(s: SandboxSpec): string {
   const provider = PROVIDERS.find((p) => p.id === s.provider)?.label ?? s.provider;
   if (s.provider === 'none') return `${provider} · the agent can only talk`;
   const start = s.start === 'with_run' ? 'starts with each run' : 'starts on first tool';
-  return [provider, EFFECTS[s.file_effects], start, idleLabel(s.idle_stop_s)].join(' · ');
+  const network = NETWORKED.includes(s.provider) ? networkLabel(s.network) : null;
+  return [provider, EFFECTS[s.file_effects], network, start, idleLabel(s.idle_stop_s)].filter(Boolean).join(' · ');
 }
 
 export const PRESETS: { name: string; description: string; sandbox: SandboxSpec }[] = [
@@ -55,6 +94,14 @@ export const PRESETS: { name: string; description: string; sandbox: SandboxSpec 
     name: 'Docker, ready on each run',
     description: 'An isolated container, built while the model thinks; stopped after 15 minutes unused.',
     sandbox: { provider: 'local_docker', file_effects: 'workspace_write', approval_default: 'ask', start: 'with_run', idle_stop_s: 900 },
+  },
+  {
+    name: 'Docker with a browser',
+    description: 'For browser agents: a container with Chromium that reaches the open web.',
+    sandbox: {
+      provider: 'local_docker', file_effects: 'workspace_write', approval_default: 'ask', start: 'with_run', idle_stop_s: 900,
+      network: { mode: 'open' }, browser: 'sandbox-chromium',
+    },
   },
   {
     name: 'Docker, read only',

@@ -9,6 +9,12 @@ export const PromptSectionSchema = z.object({
   text: z.string(),
 });
 
+/** What a sandbox may reach: nothing, the open web, or only `hosts` (its provider enforces it). */
+export const NetworkSpecSchema = z.object({
+  mode: z.enum(['none', 'open', 'allow']),
+  hosts: z.array(z.string()).optional(),
+});
+
 export const SandboxSpecSchema = z.object({
   provider: z.enum(['none', 'local_process', 'local_docker', 'e2b']),
   file_effects: z.enum(['read_only', 'workspace_write', 'danger_full_access']),
@@ -17,6 +23,10 @@ export const SandboxSpecSchema = z.object({
   start: z.enum(['with_run', 'on_first_tool']).nullable().optional(),
   /** Stop after this long unused (files saved, restored on the next tool call); 0 never; unset: platform's. */
   idle_stop_s: z.number().nullable().optional(),
+  /** What the sandbox may reach; unset: the provider's default (nothing, for Docker). */
+  network: NetworkSpecSchema.nullable().optional(),
+  /** Where the browser tools find a browser: a Chromium in the sandbox (unset too), or a hosted one over CDP. */
+  browser: z.enum(['sandbox-chromium', 'remote-cdp']).nullable().optional(),
 });
 
 export const ManifestSchema = z.object({
@@ -105,3 +115,4 @@ export const SECTIONS = ['prompt', 'tools', 'model', 'sandbox', 'memory', 'polic
 export type Section = (typeof SECTIONS)[number];
 
 export type SandboxSpec = z.infer<typeof SandboxSpecSchema>;
+export type NetworkSpec = z.infer<typeof NetworkSpecSchema>;

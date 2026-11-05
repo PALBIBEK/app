@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:fa9a074619254eb5d9d07577dbe44bb9b956b6477c571d29eb0431415a750b68",
+  "digest": "sha256:cd86ef8c9498c1a777c9b4899378b1a15e8616320eafc2889d7898e23795e139",
   "harness_version": "githi-v1",
   "memory_profile": {
     "digest": "sha256:6beabe3ba67110c3026b9ad604d3bc6cf91197ac3c7c67d2ef6be5f7be8c6189",
@@ -11,15 +11,15 @@
     "model_route": "echo"
   },
   "prompt_pack": {
-    "digest": "sha256:1c24041c9328e5f11d3b8e0c6b5270adbef0aa2cd4b8f1027194f3b174de2b02",
-    "id": "coding-prompt"
+    "digest": "sha256:7180b78c9d8d0c452d22c143c30ee2b485e674ae00adcdfbb119586f8c27ceb1",
+    "id": "browser-prompt"
   },
   "protocol_version": 1,
   "sandbox_profile": {
-    "digest": "sha256:69eaead38c21cb5dfa3b05fe98de675adc79f4db8b2b7f5802494d180945b0e8",
+    "digest": "sha256:7f13acdef4c8130c0de12adf01aba9cd7739ea577272d4fe2abbd23ebad93c84",
     "id": "githi-browser-docker-v1"
   },
-  "semver": "1.3.0",
+  "semver": "1.4.0",
   "status": "offered",
   "tool_set": {
     "digest": "sha256:e6db9af1b829a4ccc4e7564dd6ea4eb05d81cb39264005b128067d16daf5a91b",

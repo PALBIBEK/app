@@ -23,6 +23,7 @@ from prime_agent.db.models.harness import Harness
 from prime_agent.db.models.harness_release import HarnessDraft, HarnessRelease
 from prime_agent.schemas.ai_identity import TenantPrincipal
 from prime_agent.schemas.harness_manifest import (
+    BROWSER_TOOLS,
     LEARNED_SECTION,
     HarnessManifest,
     PolicySpec,
@@ -38,6 +39,11 @@ from prime_agent.services.tool_publish_service import _canonical_digest
 
 BASE_HARNESS_VERSION = "githi-v1"
 """The shipped manifest a published harness version starts from (runtime, image, recovery)."""
+
+BROWSER_SANDBOX_IMAGE = "githi-browser-sandbox:1.56.0"
+"""The Docker image a harness's sandbox runs when its browser tools drive a Chromium in it
+(Python, Playwright, Chromium): the shipped browser profile's, in
+``harness/sandbox_profiles/githi-browser-docker-v1.json``."""
 
 GATEWAY_URL = "http://model-gateway:8090"
 """Where sessions reach the model gateway: the shipped compositions' binding."""
@@ -90,6 +96,13 @@ def model_route(model_id: str) -> str:
 
 def artifact_prefix(harness_id: str) -> str:
     return f"h-{harness_id.replace('-', '')[:12]}"
+
+
+def sandbox_image(m: HarnessManifest, base: str | None) -> str | None:
+    """The image the harness's sandbox runs: the base harness's, or, for browser tools that
+    drive a Chromium in a Docker sandbox, one that has it."""
+    in_sandbox = m.sandbox.browser in (None, "sandbox-chromium") and m.sandbox.provider == "local_docker"
+    return BROWSER_SANDBOX_IMAGE if in_sandbox and BROWSER_TOOLS & set(m.tools) else base
 
 
 async def load_draft(harness_id: str, db: AsyncSession) -> HarnessManifest:
@@ -293,6 +306,7 @@ class HarnessPublisher:
         })
 
         with_sandbox = m.sandbox.provider != "none"
+        image = sandbox_image(m, base_manifest.get("image_digest"))
         sandbox = None
         if with_sandbox:
             sandbox_body: dict[str, Any] = {
@@ -304,10 +318,11 @@ class HarnessPublisher:
                 "approval_default": m.sandbox.approval_default,
                 **({"start": m.sandbox.start} if m.sandbox.start is not None else {}),
                 **({"idle_stop_s": m.sandbox.idle_stop_s} if m.sandbox.idle_stop_s is not None else {}),
+                **({"network": m.sandbox.network.model_dump(exclude_defaults=True) | {"mode": m.sandbox.network.mode}} if m.sandbox.network else {}),
+                **({"browser": m.sandbox.browser} if m.sandbox.browser is not None else {}),
                 "sticky_eligible": True,
+                **({"image_digest": image} if image and m.sandbox.provider in ("local_docker", "e2b") else {}),
             }
-            if base_manifest.get("image_digest") and m.sandbox.provider in ("local_docker", "e2b"):
-                sandbox_body["image_digest"] = base_manifest["image_digest"]
             sandbox = await self._publish(identity, "sandbox_profile", sandbox_body)
 
         memory = await self._publish(identity, "memory_profile", {
@@ -331,7 +346,7 @@ class HarnessPublisher:
             "runtime": base_manifest.get("runtime", "githi"),
             "requires_sandbox": with_sandbox,
             "mode": "sticky" if with_sandbox else "stateless",
-            **({"image_digest": base_manifest["image_digest"]} if with_sandbox and base_manifest.get("image_digest") else {}),
+            **({"image_digest": image} if with_sandbox and image else {}),
             "model": model_route(m.model),
             "tools": {n: {"class": registry[n].get("tool_class") or "non_atomic"} for n in m.tools},
             "recovery": {

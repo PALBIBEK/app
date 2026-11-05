@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from prime_agent.config import Settings
 from prime_agent.main import create_app
 from prime_agent.services.ai_client import AiClient
-from prime_agent.services.harness_publish_service import HarnessPublisher, artifact_prefix
+from prime_agent.services.harness_publish_service import BROWSER_SANDBOX_IMAGE, HarnessPublisher, artifact_prefix
 from prime_agent.services.harness_service import HarnessService
 from prime_agent.web.dependencies import get_current_user, get_db
 
@@ -26,6 +27,8 @@ REGISTRY = [
     {"name": "grep", "description": "Search", "tool_class": "pure", "parameters": {"type": "object", "properties": {}}},
     {"name": "write", "description": "Write", "tool_class": "idempotent", "parameters": {"type": "object", "properties": {}}},
     {"name": "edit", "description": "Edit", "tool_class": "idempotent", "parameters": {"type": "object", "properties": {}}},
+    {"name": "browser_exec", "description": "Drive a browser", "tool_class": "non_atomic", "parameters": {"type": "object", "properties": {}}},
+    {"name": "browser_vault", "description": "Fill a saved login", "tool_class": "non_atomic", "parameters": {"type": "object", "properties": {}}},
 ]
 BASE = {"harness_version": "githi-v1", "runtime": "githi", "manifest": {
     "runtime": "githi", "image_digest": "img@sha256:abc",
@@ -175,6 +178,54 @@ async def test_publish_sends_leaves_then_the_composition_and_binds_the_harness(d
     assert harness.bind_status == "bound" and harness.composition_id == prefix
     assert harness.harness_version == f"{prefix}-r1" and harness.model == "gateway/githi"
     assert harness.published_tools == manifest["tools"]  # what lists and cards show
+
+
+async def _publish_sandbox(db, owner, monkeypatch, tools: list[str], sandbox: dict) -> dict[str, dict]:
+    """Publish a harness with ``tools`` and ``sandbox`` settings; what it sent, by kind."""
+    harness = await _harness(db, owner)
+    supervisor = FakeSupervisor()
+    async with _api(db, owner, supervisor, monkeypatch) as api:
+        manifest = (await api.get(f"/api/v1/harnesses/{harness.id}/manifest")).json()["manifest"]
+        manifest |= {"tools": tools, "policy": manifest["policy"] | {"require_approval": []}}
+        manifest["sandbox"] |= sandbox
+        assert (await api.put(f"/api/v1/harnesses/{harness.id}/manifest", json=manifest)).status_code == 200
+        assert (await api.post(f"/api/v1/harnesses/{harness.id}/publish")).status_code == 200
+    return dict(supervisor.calls)
+
+
+async def test_a_browser_agent_publishes_a_sandbox_that_has_a_browser_and_reaches_the_web(db_session, owner, monkeypatch):
+    sent = await _publish_sandbox(
+        db_session, owner, monkeypatch, ["browser_exec", "browser_vault"],
+        {"provider": "local_docker", "network": {"mode": "open"}, "browser": "sandbox-chromium"},
+    )
+
+    profile = sent["sandbox_profile"]
+    assert profile["network"] == {"mode": "open"} and profile["browser"] == "sandbox-chromium"
+    assert profile["image_digest"] == sent["harness_version"]["image_digest"] == BROWSER_SANDBOX_IMAGE
+
+
+async def test_a_remote_browser_reaches_only_its_host_and_needs_no_browser_image(db_session, owner, monkeypatch):
+    sent = await _publish_sandbox(
+        db_session, owner, monkeypatch, ["browser_exec"],
+        {"provider": "local_docker", "network": {"mode": "allow", "hosts": ["cdp.browser.example"]}, "browser": "remote-cdp"},
+    )
+
+    profile = sent["sandbox_profile"]
+    assert profile["network"] == {"mode": "allow", "hosts": ["cdp.browser.example"]} and profile["browser"] == "remote-cdp"
+    assert profile["image_digest"] == "img@sha256:abc", "the base harness's image"
+
+
+async def test_a_harness_without_browser_tools_keeps_the_base_image_and_names_no_network(db_session, owner, monkeypatch):
+    sent = await _publish_sandbox(db_session, owner, monkeypatch, ["read", "bash"], {"provider": "local_docker"})
+
+    profile = sent["sandbox_profile"]
+    assert profile["image_digest"] == "img@sha256:abc"
+    assert "network" not in profile and "browser" not in profile, "unset fields stay out, so digests are unchanged"
+
+
+def test_the_browser_image_is_the_shipped_browser_profiles() -> None:
+    shipped = Path(__file__).parents[2] / "prime-agent-study-main/harness/sandbox_profiles/githi-browser-docker-v1.json"
+    assert json.loads(shipped.read_text())["image_digest"] == BROWSER_SANDBOX_IMAGE
 
 
 async def test_a_refusal_names_the_manifest_section(db_session, owner, monkeypatch):

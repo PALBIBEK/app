@@ -1,15 +1,27 @@
 'use client';
 
 /**
- * A sandbox's settings: where commands run, what they may change, approvals, and when the
- * sandbox starts and stops. Used by the builder (a harness's own sandbox) and by environments.
+ * A sandbox's settings: where commands run, what they may change, approvals, what the sandbox
+ * may reach, where the browser tools find a browser, and when the sandbox starts and stops.
+ * Used by the builder (a harness's own sandbox) and by environments.
  */
 
+import { useState } from 'react';
 import { Warning } from '@phosphor-icons/react';
 
 import { Field, input } from '@/components/harness/builder/tabs';
-import type { SandboxSpec } from '@/lib/api/types/manifest.types';
-import { IDLE_STOPS, PROVIDERS, STARTS } from '@/lib/environments/sandbox';
+import type { NetworkSpec, SandboxSpec } from '@/lib/api/types/manifest.types';
+import {
+  BROWSER_TOOLS,
+  BROWSERS,
+  browserCannotBrowse,
+  IDLE_STOPS,
+  NETWORKED,
+  NETWORKS,
+  parseHosts,
+  PROVIDERS,
+  STARTS,
+} from '@/lib/environments/sandbox';
 import { cn } from '@/lib/utils';
 
 export interface SandboxFieldsProps {
@@ -17,16 +29,19 @@ export interface SandboxFieldsProps {
   onChange?: (next: SandboxSpec) => void;
   /** Read only: the settings come from an environment. */
   disabled?: boolean;
-  /** The harness's tools, to warn when bash cannot run on a host process. */
+  /** The harness's tools: to warn when bash cannot run on a host process, and to offer the
+   * browser's settings when it has browser tools. None (an environment): any tools. */
   tools?: string[];
   /** Prefix for the fields' ids (two forms on one page); none: plain ids (file_effects, …). */
   idPrefix?: string;
 }
 
-export function SandboxFields({ value: s, onChange, disabled, tools = [], idPrefix }: SandboxFieldsProps): JSX.Element {
+export function SandboxFields({ value: s, onChange, disabled, tools, idPrefix }: SandboxFieldsProps): JSX.Element {
   const set = (patch: Partial<SandboxSpec>) => onChange?.({ ...s, ...patch });
   const id = (name: string) => (idPrefix ? `${idPrefix}-${name}` : name);
-  const shellBlocked = s.provider === 'local_process' && s.file_effects !== 'danger_full_access' && tools.includes('bash');
+  const shellBlocked = s.provider === 'local_process' && s.file_effects !== 'danger_full_access' && Boolean(tools?.includes('bash'));
+  const browsing = s.provider !== 'none' && (tools === undefined || tools.some((t) => BROWSER_TOOLS.includes(t)));
+  const cannotBrowse = tools ? browserCannotBrowse(s, tools) : null;
   return (
     <fieldset disabled={disabled} className="space-y-6 disabled:opacity-80">
       <div className="space-y-2">
@@ -68,6 +83,24 @@ export function SandboxFields({ value: s, onChange, disabled, tools = [], idPref
           <option value="never">Never ask</option>
         </select>
       </Field>
+      {NETWORKED.includes(s.provider) ? (
+        <NetworkField id={id} network={s.network} onChange={(network) => set({ network })} />
+      ) : null}
+      {browsing ? (
+        <Field label="The browser" htmlFor={id('browser')} hint={BROWSERS.find((b) => b.value === (s.browser ?? 'sandbox-chromium'))?.hint}>
+          <select id={id('browser')} className={input} value={s.browser ?? 'sandbox-chromium'} onChange={(e) => set({ browser: e.target.value as SandboxSpec['browser'] })}>
+            {BROWSERS.map((b) => (
+              <option key={b.value} value={b.value}>{b.label}</option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+      {cannotBrowse ? (
+        <p className="flex items-start gap-2 rounded-xl bg-accent-50 px-4 py-3 text-sm text-ink" data-testid="browser-offline">
+          <Warning size={16} className="mt-0.5 shrink-0" />
+          {cannotBrowse}
+        </p>
+      ) : null}
       {s.provider !== 'none' ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Start the sandbox" htmlFor={id('start')} hint="Starting with the run hides the start-up time behind the model's first step.">
@@ -95,5 +128,48 @@ export function SandboxFields({ value: s, onChange, disabled, tools = [], idPref
         </div>
       ) : null}
     </fieldset>
+  );
+}
+
+/** What the sandbox may reach; for "only these hosts", the hosts, typed as a list. */
+function NetworkField({
+  id,
+  network,
+  onChange,
+}: {
+  id: (name: string) => string;
+  network: NetworkSpec | null | undefined;
+  onChange: (next: NetworkSpec | null) => void;
+}): JSX.Element {
+  const [hosts, setHosts] = useState((network?.hosts ?? []).join(', '));  // as typed: "a.com, " parses to one host
+  const mode = network?.mode ?? '';
+  function pick(next: NetworkSpec['mode'] | ''): void {
+    if (!next) onChange(null);
+    else onChange(next === 'allow' ? { mode: next, hosts: parseHosts(hosts) } : { mode: next });
+  }
+  return (
+    <div className="space-y-3">
+      <Field label="What the sandbox may reach" htmlFor={id('network')} hint="Enforced by the sandbox, not by the agent: a provider that cannot enforce it refuses to publish.">
+        <select id={id('network')} className={input} value={mode} onChange={(e) => pick(e.target.value as NetworkSpec['mode'] | '')}>
+          {NETWORKS.map((n) => (
+            <option key={n.value} value={n.value}>{n.label}</option>
+          ))}
+        </select>
+      </Field>
+      {mode === 'allow' ? (
+        <Field label="Hosts" htmlFor={id('hosts')} hint="Host names only (no https://, port or path), separated by commas or spaces.">
+          <input
+            id={id('hosts')}
+            className={input}
+            value={hosts}
+            placeholder="cdp.browser.example, api.example.com"
+            onChange={(e) => {
+              setHosts(e.target.value);
+              onChange({ mode: 'allow', hosts: parseHosts(e.target.value) });
+            }}
+          />
+        </Field>
+      ) : null}
+    </div>
   );
 }
