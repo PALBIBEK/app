@@ -180,3 +180,30 @@
 {"arm": "A", "task": "D2", "code_bytes": 111, "result_chars": 5585, "seconds": 0.72, "exit": 0, "error": []}
 {"arm": "A", "task": "D2", "code_bytes": 104, "result_chars": 5701, "seconds": 1.04, "exit": 0, "error": []}
 {"arm": "A", "task": "D2", "code_bytes": 71, "result_chars": 5701, "seconds": 0.74, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_vault", "code_bytes": 18, "result_chars": 37, "images": 0, "seconds": 0.12, "exit": null, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 84, "result_chars": 437, "images": 0, "seconds": 1.72, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_vault", "code_bytes": 107, "result_chars": 128, "images": 0, "seconds": 2.41, "exit": null, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 115, "result_chars": 354, "images": 0, "seconds": 0.75, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 47, "result_chars": 1023, "images": 0, "seconds": 0.64, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 361, "result_chars": 578, "images": 0, "seconds": 1.83, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 191, "result_chars": 658, "images": 0, "seconds": 0.75, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 634, "result_chars": 575, "images": 0, "seconds": 1.75, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 678, "result_chars": 421, "images": 0, "seconds": 1.71, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 258, "result_chars": 333, "images": 0, "seconds": 1.68, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 54, "result_chars": 1278, "images": 0, "seconds": 0.61, "exit": 0, "error": []}
+{"arm": "E", "task": "D1", "tool": "browser_exec", "code_bytes": 426, "result_chars": 566, "images": 0, "seconds": 1.88, "exit": 0, "error": []}
+{"arm": "E", "task": "D2", "tool": "browser_exec", "code_bytes": 159, "result_chars": 2671, "images": 0, "seconds": 1.71, "exit": 0, "error": []}
+{"arm": "E", "task": "D2", "tool": "browser_exec", "code_bytes": 521, "result_chars": 251, "images": 0, "seconds": 1.25, "exit": 1, "error": ["NameError: name 'locate' is not defined"]}
+{"arm": "E", "task": "D2", "tool": "browser_exec", "code_bytes": 499, "result_chars": 537, "images": 0, "seconds": 1.72, "exit": 0, "error": []}
+{"arm": "E", "task": "D2", "tool": "browser_exec", "code_bytes": 222, "result_chars": 372, "images": 0, "seconds": 0.79, "exit": 0, "error": []}
+{"arm": "E", "task": "D3", "tool": "browser_exec", "code_bytes": 1179, "result_chars": 3535, "images": 0, "seconds": 5.38, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 97, "result_chars": 1297, "images": 0, "seconds": 1.51, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 364, "result_chars": 179, "images": 0, "seconds": 1.62, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 162, "result_chars": 166, "images": 0, "seconds": 0.7, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 65, "result_chars": 495, "images": 0, "seconds": 0.65, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 445, "result_chars": 149, "images": 0, "seconds": 13.14, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 474, "result_chars": 348, "images": 0, "seconds": 6.86, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 189, "result_chars": 3941, "images": 0, "seconds": 1.34, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 368, "result_chars": 234, "images": 0, "seconds": 2.09, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 387, "result_chars": 183, "images": 0, "seconds": 1.18, "exit": 0, "error": []}
+{"arm": "E", "task": "S1", "tool": "browser_exec", "code_bytes": 475, "result_chars": 277, "images": 0, "seconds": 0.93, "exit": 0, "error": []}

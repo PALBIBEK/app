@@ -2,9 +2,12 @@
 driven through the supervisor's own ``browser_exec`` by whoever plays the model.
 
     python run.py serve              # fresh data (migrate, seed, hidden answers), server on :8800
-    python run.py call A D1 <<'PY'   # one tool call as the model makes it; prints its result
+    python run.py call A D1 <<'PY'   # one browser_exec call as the model makes it; prints its result
     ... code ...
     PY
+    python run.py vault E D1 <<'JSON'  # one browser_vault call (the site's login is saved)
+    {"action": "fill", "login": "http://127.0.0.1:8800", "username": "#id_username", ...}
+    JSON
     python run.py score              # the site's state against the hidden answers
     python run.py summary            # calls, failures, result size and re-read tokens per arm
 
@@ -33,6 +36,8 @@ WORK = HERE / "work"
 LOG = HERE / "results" / "calls.jsonl"
 SUPERVISOR = HERE.parents[2] / "services" / "supervisor"
 PORT = 8800
+LOGIN = {"username": "librarian", "password": "Shelf-2026!"}
+"""The admin's login, saved for ``browser_vault`` as a user saves it (``login:<origin>``)."""
 
 
 def serve() -> None:
@@ -55,30 +60,41 @@ def serve() -> None:
     print(f"serving http://127.0.0.1:{PORT}/admin/ (librarian / Shelf-2026!) and /shop")
 
 
-async def call(arm: str, task: str, session: str | None) -> None:
-    """One ``browser_exec`` call, exactly as the agent's model makes it."""
+async def call(arm: str, task: str, tool: str, args: dict) -> None:
+    """One tool call, exactly as the agent's model makes it, on the arm's own workspace and
+    browser; ``browser_vault`` finds the admin's login saved."""
     sys.path.insert(0, str(SUPERVISOR))
     import supervisor.tools.builtin  # noqa: F401 — registers the tools
+    from supervisor.db.engine import open_db
+    from supervisor.seams.core.types import ToolResult
     from supervisor.tools import default_registry
     from supervisor.tools.context import ToolContext
     from supervisor.tools.workspace import HostWorkspace
+    from supervisor.vault import Keyring, Owner, Vault
+    from supervisor.vault.logins import BrowserLogins
 
     workspace = WORK / f"ws-{arm}"
     workspace.mkdir(parents=True, exist_ok=True)
     env = {"GITHI_BROWSER_HOME": str(WORK / f"browser-{arm}")}
     if browsers := os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
-    code = sys.stdin.read()
-    ctx = ToolContext(bound_workspace=HostWorkspace(workspace), timeout_s=60, env=env)
     started = time.monotonic()
-    try:
-        result = dict(await default_registry()["browser_exec"].run({"code": code, **({"session": session} if session else {})}, ctx))
-    except Exception as exc:  # noqa: BLE001 — a refused call is a result too
-        result = {"tool_error": f"{type(exc).__name__}: {exc}"}
-    text = json.dumps(result, ensure_ascii=False)
+    async with open_db(f"sqlite+aiosqlite:///{WORK / 'vault.db'}") as (_, factory):
+        vault = Vault(factory, Keyring({"bench": b"bench".ljust(32, b".")}, active="bench"))
+        await vault.put(Owner.tenant("bench"), f"login:http://127.0.0.1:{PORT}", json.dumps(LOGIN))
+        logins = BrowserLogins(vault)
+        ctx = ToolContext(bound_workspace=HostWorkspace(workspace), timeout_s=60, env=env, logins=logins.bind("bench"))
+        try:
+            result = dict(await default_registry()[tool].run(args, ctx))
+            result = dict((await logins.redact("bench", ToolResult(ok=True, payload=result))).payload)  # as after_call does
+        except Exception as exc:  # noqa: BLE001 — a refused call is a result too
+            result = {"tool_error": f"{type(exc).__name__}: {exc}"}
+    shown = {k: v for k, v in result.items() if k != "images"}
+    text = json.dumps(shown, ensure_ascii=False)
     LOG.parent.mkdir(exist_ok=True)
     with LOG.open("a") as log:
-        log.write(json.dumps({"arm": arm, "task": task, "code_bytes": len(code), "result_chars": len(text),
+        log.write(json.dumps({"arm": arm, "task": task, "tool": tool, "code_bytes": len(args.get("code") or json.dumps(args)),
+                              "result_chars": len(text), "images": len(result.get("images") or ()),
                               "seconds": round(time.monotonic() - started, 2), "exit": result.get("exit_code"),
                               "error": (result.get("error") or "").strip().splitlines()[-1:]}) + "\n")
     print(text)
@@ -109,7 +125,9 @@ if __name__ == "__main__":
         case ["serve"]:
             serve()
         case ["call", arm, task, *session]:
-            asyncio.run(call(arm, task, session[0] if session else None))
+            asyncio.run(call(arm, task, "browser_exec", {"code": sys.stdin.read(), **({"session": session[0]} if session else {})}))
+        case ["vault", arm, task]:
+            asyncio.run(call(arm, task, "browser_vault", json.loads(sys.stdin.read())))
         case ["score"]:
             subprocess.run([sys.executable, str(HERE / "oracle.py"), "after"], check=True)
         case ["summary"]:

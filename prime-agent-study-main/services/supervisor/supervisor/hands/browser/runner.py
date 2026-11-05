@@ -157,7 +157,20 @@ class Session:
         events = [
             {k: v for k, v in e.items() if k not in ("seq", "at")} for e in answer["events"] if e["kind"] in REPORTED
         ]
-        return events[-MAX_REPORTED:]
+        return _distinct(events)[-MAX_REPORTED:]
+
+
+def _distinct(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``events`` with each repeat folded into its first (``times``): a page logging one
+    error per navigation says it once, not twenty times."""
+    first: dict[str, dict[str, Any]] = {}
+    for event in events:
+        key = json.dumps(event, sort_keys=True, default=str)
+        if key in first:
+            first[key]["times"] = first[key].get("times", 1) + 1
+        else:
+            first[key] = dict(event)
+    return list(first.values())
 
 
 def _prepare(page: Any) -> None:
@@ -191,7 +204,7 @@ class Helpers:
     NAMES = (
         "new_tab", "goto_url", "wait_for_load", "page_info", "js", "cdp", "fill_input", "click_at_xy",
         "capture_screenshot", "show_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
-        "browser_events", "ensure_real_tab", "snapshot", "act", "settle",
+        "browser_events", "ensure_real_tab", "snapshot", "act", "settle", "locate",
     )
 
     def __init__(self, session: Session) -> None:

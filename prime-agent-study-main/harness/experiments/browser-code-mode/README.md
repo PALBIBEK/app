@@ -52,6 +52,7 @@ commands as a sandbox does. Sandboxes have no internet, so the sites are local:
 | **B**, Hermes-style | Hermes's helpers only (`js`, `fill_input`, `goto_url`, `cdp`, …), batched, with no Playwright `page` methods. |
 | **C**, Playwright code | Batched code against `page`. |
 | **D**, snapshot IDs | A Stagehand-style `snapshot()` and `act(id)`, written as the agent's own `agent_helpers.py` (`arms/snapshot_ids_agent_helpers.py`), with code for data work. |
+| **E**, the shipped tools (re-run) | What PRs 2–6 ship, and nothing written by the agent: the daemon's browser, the built-in `snapshot()`, `act()` and `settle()`, `browser_vault` for the login (the password never in code or context), dialogs reported and answered, and `show_screenshot()` available (not needed). |
 
 ### Results
 
@@ -64,6 +65,7 @@ Every arm reached every correct outcome, checked against the site's own state by
 | B, Hermes helpers | 10 | 2 | 2,685 | **4,866** | 35 |
 | C, Playwright code | 14 | 2 | 6,216 | **8,502** | 99 |
 | D, snapshot IDs | 18 | 2 | 17,731 | **25,472** | 29 |
+| E, the shipped tools | 27 | 1 | 21,023 | **30,832** | 57 |
 
 "Input tokens re-read" counts each turn resending every earlier result (characters ÷ 4).
 That is why per-action costs compound: A's D1 alone re-read 2.16M tokens. Per-task
@@ -120,6 +122,40 @@ For later:
    for. Playwright's `select_option` gets this right. Hermes-style `js()` stays as an
    escape hatch, not the default.
 
+### The re-run: arm E, the shipped tools
+
+Every outcome was correct again: D1's 35 loans returned and none other touched, D2
+refused and reported with the book that holds the ISBN ("Beyond Hidden Engine 42"),
+D3's Arjun Das 17 counted over all 420 loans (216 in 2025), and S1's order `SO-10230E`
+for item 237 in size 42 with the inbox's coupon, £109.65. The login went through
+`browser_vault` by snapshot IDs: the password is in no call's code and no result.
+
+D2's and S1's inputs were not written down in the first run, so they are pinned here:
+D2 is ISBN 9780000000042, published 2026-05-01, genre Tech, authors Ada Lovelace and
+Grace Hopper; S1 pays with the test card 4242 4242 4242 4242, 12/28, 123.
+
+E cost more than B to D, and less than A by two orders of magnitude. The same bias
+applies as before, the other way round: E came months later and had to find the site
+again (the paginator, the shadow list's own scroll box, the inbox). Most of the gap is
+four things the tools did wrong, found by using them, and fixed in the same PR:
+
+10. **A search missed what a collapsed run hid.** `snapshot(contains="Loan")` on the
+    admin index found nothing: "Loans" was in "… 3 more like the above". A search now
+    renders the tree uncollapsed, then picks the matches and their groups.
+11. **Disclosures were invisible.** The inbox's messages are `<details>`; Chromium calls
+    a `<summary>` a `DisclosureTriangle`, which the snapshot left out, so a model that
+    reads only snapshots could not have found the coupon. It is shown now
+    (`disclosure: Your coupon`) and opens by its ID.
+12. **An ID could not become a locator.** Choosing two authors in a multi-select is
+    beyond `act()`; `locate(id)` is now in scope and returns the Playwright locator.
+13. **One repeated event flooded the result.** The admin logs the same console error on
+    every page: D3's paging call returned it 20 times (most of its 3,535 characters). A
+    repeat is now listed once, with `times`.
+
+One cost was the model's own: `snapshot(contains="42")` for the shoe size matched every
+£42 price (3,941 characters). The browser prompt now says to read what matters with code
+when a page is known, and the snapshot to find it.
+
 ## Reproduce
 
 ```
@@ -129,18 +165,25 @@ python run.py serve                    # fresh data; the hidden answers go to si
 new_tab("http://127.0.0.1:8800/admin/")
 print(page.title())
 PY
+.venv/bin/python run.py vault E D1 <<'JSON'  # browser_vault, with the admin's login saved
+{"action": "fill", "login": "http://127.0.0.1:8800", "username": "0-1", "password": "0-3", "submit": "0-8"}
+JSON
 python run.py score && python run.py summary
 ```
 
-## Plan
+## Plan, and where it landed
 
-- **PR 1 (this one):** the tool, the runner, the provider seam, the opt-in catalog
-  entries, and fixes 1–4.
-- **PR 2:** `snapshot()` and `act()` in the runner, following lessons 5–6; the settle
-  wait from lesson 7; this benchmark re-run against PR 1's numbers.
-- **PR 3:**
-  - a remote browser provider (CDP, Browserbase-style), bound per sandbox profile;
-  - an opt-in `network` setting on sandbox profiles for the open web (`local_docker`
-    sandboxes have no network today, a reviewer's call);
-  - a credentials vault (lesson 8);
-  - screenshots attached for vision models.
+- **PR 1 (#158):** the tool, the runner, the provider seam, the opt-in catalog entries,
+  and fixes 1–4.
+- **PR 2 (#161):** a daemon per browser that owns Chromium, a CDP connection and an event
+  buffer (Hermes's daemon, in the sandbox).
+- **PR 3 (#163):** `snapshot()` and `act()` with stable, checked IDs (lessons 5–6), and
+  the settle and quiet waits (lesson 7).
+- **PR 4 (#164):** sandbox networks by profile (`none`, `open`, an allow-list) enforced by
+  the provider, and a remote browser provider over CDP.
+- **PR 5 (#165):** `browser_vault`: saved logins typed in for the agent, and every result
+  cleaned of them (lesson 8).
+- **PR 6 (#167):** screenshots shown to vision models.
+- **PR 7 (#168):** browser agents from the builder (network and browser on the Sandbox
+  tab), and the shipped browser agent's prompt and open network.
+- **PR 8 (this one):** the re-run above, and fixes 10–13.

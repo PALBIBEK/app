@@ -47,6 +47,37 @@ async def test_alike_siblings_are_collapsed(call: Call) -> None:
     assert "… 97 more like the above" in shown["output"]
 
 
+async def test_a_search_finds_what_a_collapsed_run_hides(call: Call) -> None:
+    """The benchmark's admin index: "Loans" sat in "… 3 more like the above", and
+    snapshot(contains="Loan") found nothing."""
+    models = "".join(f"<tr><th><a href=#{m}>{m}</a></th><td><a href=#add>Add</a></td></tr>" for m in ("Authors", "Books", "Branchs", "Loans", "Members", "Orders"))
+    shown = await call(f"page.set_content({('<table><caption>LIB</caption>' + models + '</table>')!r})\nprint(snapshot())\nprint('---')\nprint(snapshot(contains='Loan'))")
+
+    whole, found = shown["output"].split("---")
+    assert "more like the above" in whole and "Loans" not in whole
+    assert "link: Loans" in found, found
+
+
+async def test_a_disclosure_is_shown_and_opens_by_its_id(call: Call) -> None:
+    """The shop's inbox: messages in <details>, which the snapshot left out."""
+    inbox = "<h1>Inbox</h1><details><summary>Your coupon</summary><p>Use <b>CODE-1</b></p></details>"
+    shown = await call(f"page.set_content({inbox!r})\nprint(snapshot())")
+    opened = await call(f"act(('click', {_id_of(shown['output'], 'Your coupon')!r}))\nprint(page.inner_text('details'))")
+
+    assert "disclosure: Your coupon" in shown["output"], shown["output"]
+    assert "CODE-1" in opened["output"]
+
+
+async def test_an_id_is_a_locator_for_what_act_does_not_do(call: Call) -> None:
+    """Choosing two authors in a multi-select (the benchmark's add-book form)."""
+    form = "<label>Authors <select id=a multiple><option>Ada</option><option>Grace</option><option>Alan</option></select></label>"
+    shown = await call(f"page.set_content({form!r})\nprint(snapshot())")
+    box = _id_of(shown["output"], "listbox")
+    chosen = await call(f"locate({box!r}).select_option(label=['Ada', 'Grace'])\nprint(locate({box!r}).evaluate('s => [...s.selectedOptions].map(o => o.text)'))")
+
+    assert chosen["output"] == "['Ada', 'Grace']", chosen
+
+
 async def test_an_id_stays_on_its_element_when_the_page_changes(call: Call) -> None:
     """Chrome's own node ids: an element added before the target does not move its ID."""
     first = await call("page.set_content('<button onclick=\"document.title=1\">one</button>')\nprint(snapshot())")
