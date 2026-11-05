@@ -32,6 +32,10 @@ dependencies = [
     "tenacity>=9.0.0",  # Retry logic
     "httpx>=0.27.0",  # HTTP client for testing
     "email-validator>=2.3.0",
+    # Self-improvement: GEPA's Pareto candidate selection (gepa.gepa_utils). The core package
+    # has no dependencies of its own (its LLM and logging extras stay out); pinned exactly,
+    # since a release may change how a parent is drawn.
+    "gepa==0.1.4",
 ]
 
 [project.optional-dependencies]

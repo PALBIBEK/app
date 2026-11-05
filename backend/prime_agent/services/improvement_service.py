@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
+from gepa.gepa_utils import select_program_candidate_from_pareto_front
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,7 +70,7 @@ from prime_agent.services.evaluation_service import (
 )
 from prime_agent.services.harness_publish_service import HarnessPublisher, PublishError
 
-__all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate", "pareto_parent"]
+__all__ = ["ACTIVE", "ImprovementNotFoundError", "ImprovementService", "decide_gate", "pareto_fronts", "pareto_parent"]
 
 logger = logging.getLogger(__name__)
 
@@ -167,36 +168,32 @@ def _total(scores: dict[str, float | None], items: list[str] | None = None) -> f
     return float(sum(v for v in picked if v is not None))
 
 
-def pareto_parent(scores: list[dict[str, float | None]], held_out: set[str], rng: random.Random) -> int:
-    """Which version of the pool the next candidate edits: GEPA's
-    ``select_program_candidate_from_pareto_front`` (``gepa/gepa_utils.py``). For each saved
-    run (the held-out ones when there are some: GEPA's valset), the versions with its best
-    score form a front; versions on no front only by others' grace are dropped
-    (``remove_dominated_programs``: lowest total first, while every front it is on keeps
-    another); the parent is drawn weighted by how many fronts each remaining one is on."""
-    items = sorted({i for s in scores for i in s if not held_out or i in held_out})
+def pareto_fronts(scores: list[dict[str, float | None]], items: list[str]) -> dict[str, set[int]]:
+    """For each saved run, the versions with its best score, as GEPA's state keeps them
+    (``GEPAState.program_at_pareto_front_valset``: a higher score starts a new front, an equal
+    one joins it). A run no version finished is on no front."""
     fronts: dict[str, set[int]] = {}
     for item in items:
         values = [(n, s.get(item)) for n, s in enumerate(scores)]
         best = max((v for _, v in values if v is not None), default=None)
         if best is not None:
             fronts[item] = {n for n, v in values if v == best}
+    return fronts
+
+
+def pareto_parent(scores: list[dict[str, float | None]], held_out: set[str], rng: random.Random) -> int:
+    """Which version of the pool the next candidate edits, chosen by GEPA itself:
+    ``gepa.gepa_utils.select_program_candidate_from_pareto_front`` over the fronts of the
+    held-out saved runs (GEPA's valset; every saved run when none is held out), with each
+    version's mean score on them as GEPA's aggregate score. GEPA drops the versions that are
+    on no front of their own (``remove_dominated_programs``) and draws the parent weighted by
+    how many fronts each remaining one is on."""
+    items = sorted({i for s in scores for i in s if not held_out or i in held_out})
+    fronts = pareto_fronts(scores, items)
     if not fronts:
-        return 0
-    totals = [_total(s, items) or 0.0 for s in scores]
-    on: dict[int, list[str]] = {}
-    for item, front in fronts.items():
-        for n in front:
-            on.setdefault(n, []).append(item)
-    left = {item: len(front) for item, front in fronts.items()}
-    dominated: set[int] = set()
-    for n in sorted(on, key=lambda m: totals[m]):
-        if all(left[item] > 1 for item in on[n]):
-            dominated.add(n)
-            for item in on[n]:
-                left[item] -= 1
-    draw = [n for item in sorted(fronts) for n in sorted(fronts[item]) if n not in dominated]
-    return rng.choice(draw)
+        return 0  # nothing finished: the live version
+    means = [(_total(s, items) or 0.0) / len(items) for s in scores]
+    return select_program_candidate_from_pareto_front(fronts, means, rng)
 
 
 def _round_feedback(record: dict[str, Any]) -> dict[str, Any]:
