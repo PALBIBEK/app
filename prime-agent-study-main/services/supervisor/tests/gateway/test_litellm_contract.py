@@ -107,10 +107,10 @@ def _events(text: str) -> list[dict[str, Any]]:
 # -- discovery -------------------------------------------------------------
 
 
-def test_model_list_and_group_info_describe_every_route(client: TestClient) -> None:
+def test_model_list_and_group_info_describe_every_callable_route(client: TestClient) -> None:
     listed = client.get("/v1/models", headers=SVC).json()
     assert listed["object"] == "list"
-    assert [m["id"] for m in listed["data"]] == list(ROUTES)
+    assert [m["id"] for m in listed["data"]] == [r for r in ROUTES if r != "router"]
 
     info = {
         row["model_group"]: row
@@ -132,8 +132,23 @@ def test_model_list_and_group_info_describe_every_route(client: TestClient) -> N
         "supports_adaptive_thinking": True,
         "supported_openai_params": [],
     }
-    assert info["router"]["providers"] == ["openrouter"]
+    assert "router" not in info  # OpenRouter has no key here
     assert info["embed"]["mode"] == "embedding"
+
+
+def test_a_route_is_offered_once_its_vendor_has_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _client(monkeypatch, OPENROUTER_API_KEY="sk-r") as c:
+        info = {
+            row["model_group"]: row
+            for row in c.get("/model_group/info", headers=SVC).json()["data"]
+        }
+        listed = [m["id"] for m in c.get("/v1/models", headers=SVC).json()["data"]]
+    assert info["router"]["providers"] == ["openrouter"]
+    assert listed == [*ROUTES, "githi"]  # with OpenRouter's default route
+
+
+def test_the_route_list_shows_every_route_callable_or_not(client: TestClient) -> None:
+    assert [r["id"] for r in client.get("/v1/routes", headers=SVC).json()["routes"]] == list(ROUTES)
 
 
 def test_a_virtual_key_discovers_only_its_allowed_routes(client: TestClient) -> None:
