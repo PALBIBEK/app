@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.browser import Call, needs_browser
+from tests.support.browser import Call, Tool, needs_browser
 
 pytestmark = [pytest.mark.asyncio, needs_browser]
 
@@ -88,20 +88,26 @@ async def test_a_playwright_error_points_at_the_code_not_at_playwright(call: Cal
     assert "/playwright/" not in failed["error"], "Playwright's internals reached the model"
 
 
-async def test_a_dialog_is_answered_as_asked_and_never_passes_unseen(call: Call) -> None:
-    """Playwright dismisses a dialog no handler takes, silently; here each one is listed,
-    and ``answer_dialogs`` decides the answer (found when a checkout's confirm vanished)."""
+async def test_a_dialog_is_answered_as_asked_and_never_passes_unseen(call: Call, tool: Tool) -> None:
+    """Playwright dismisses a dialog no handler takes, silently; here each one is listed.
+    ``answer_dialogs`` decides the answer for the rest of a call; a dialog nothing answered
+    is held, the call ends with it pending, and ``browser_dialog`` answers it (found when a
+    checkout's confirm vanished)."""
     page = "page.set_content(\"<button onclick=\\\"document.title = confirm('Pay?') ? 'paid' : 'kept'\\\">Pay</button>\")\n"
 
-    default = await call(page + "page.click('button')\nprint(page.title())")
+    held = await call(page + "page.click('button')\nprint(page.title())")
+    dismissed = await tool("browser_dialog", action="dismiss")
+    kept = await call("print(page.title())")
     accepted = await call(page + "answer_dialogs('accept')\npage.click('button')\nprint(page.title())")
 
-    (dismissed,) = [e for e in default["events"] if e["kind"] == "dialog"]
-    (taken,) = [e for e in accepted["events"] if e["kind"] == "dialog"]
-    assert default["output"] == "kept"
-    assert {k: dismissed[k] for k in ("type", "message", "answer")} == {"type": "confirm", "message": "Pay?", "answer": "dismiss"}
+    assert held["blocked_by_dialog"] is True and held["output"] == "", held
+    (pending,) = held["pending_dialogs"]
+    assert {k: pending[k] for k in ("type", "message")} == {"type": "confirm", "message": "Pay?"}
+    assert dismissed["success"] is True and dismissed["action"] == "dismiss"
+    assert kept["output"] == "kept"
     assert accepted["output"] == "paid"
-    assert taken["answer"] == "accept"
+    (taken,) = [e for e in accepted["events"] if e["kind"] == "dialog"]
+    assert taken["answer"] == "accept" and taken["by"] == "auto_policy"
 
 
 async def test_a_repeated_event_is_reported_once_with_how_often(call: Call) -> None:

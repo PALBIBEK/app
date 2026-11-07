@@ -39,6 +39,7 @@ __all__ = [
     "BROWSERS_ENV",
     "Call",
     "Site",
+    "Tool",
     "browser_session",
     "call",
     "default_browsers",
@@ -46,6 +47,7 @@ __all__ = [
     "needs_browser",
     "site",
     "stop_browsers",
+    "tool",
 ]
 
 needs_browser = pytest.mark.skipif(
@@ -61,26 +63,42 @@ command's HOME is the workspace, so Playwright's default would look there (a san
 image sets its own)."""
 
 Call = Callable[..., Awaitable[dict[str, Any]]]
+Tool = Callable[..., Awaitable[dict[str, Any]]]
+
+
+def _context(tmp_path: Path, stop: threading.Event | None = None) -> ToolContext:
+    """The context ``call`` and ``tool`` run in: one workspace, one browser home."""
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    return ToolContext(
+        bound_workspace=HostWorkspace(tmp_path / "ws"),
+        timeout_s=60,
+        env={"GITHI_BROWSER_HOME": str(tmp_path / "browser-home"), **BROWSERS_ENV},
+        stop=stop,
+    )
 
 
 @pytest.fixture
 async def call(tmp_path: Path) -> AsyncIterator[Call]:
     """``browser_exec`` on a workspace of its own, with a browser home of its own."""
-    home = tmp_path / "browser-home"
-    (tmp_path / "ws").mkdir()
+    (tmp_path / "ws").mkdir(exist_ok=True)
     spec = default_registry()["browser_exec"]
 
     async def run(code: str, stop: threading.Event | None = None, **args: Any) -> dict[str, Any]:
-        ctx = ToolContext(
-            bound_workspace=HostWorkspace(tmp_path / "ws"),
-            timeout_s=60,
-            env={"GITHI_BROWSER_HOME": str(home), **BROWSERS_ENV},
-            stop=stop,
-        )
-        return dict(await spec.run({"code": code, **args}, ctx))
+        return dict(await spec.run({"code": code, **args}, _context(tmp_path, stop)))
 
     yield run
-    stop_browsers(home)
+    stop_browsers(tmp_path / "browser-home")
+
+
+@pytest.fixture
+def tool(tmp_path: Path) -> Tool:
+    """Another browser tool (``browser_dialog``, ``browser_cdp``), by name, on ``call``'s
+    workspace and browser."""
+
+    async def run(name: str, **args: Any) -> dict[str, Any]:
+        return dict(await default_registry()[name].run(args, _context(tmp_path)))
+
+    return run
 
 
 def stop_browsers(home: Path) -> None:
