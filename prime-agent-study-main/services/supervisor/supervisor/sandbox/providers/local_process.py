@@ -349,6 +349,16 @@ class LocalProcessProvider(SandboxProvider):
 
     async def adopt(self, session_id: str) -> Sandbox | None:
         """The session's directory, if a worker on this host made one and it is still there."""
+        sandbox = self._find(session_id)
+        if sandbox is not None:
+            self._sandboxes[sandbox.id] = sandbox
+        return sandbox
+
+    async def serving(self, session_id: str) -> Sandbox | None:
+        """The session's directory, as ``adopt`` finds it, left to the worker that made it."""
+        return self._find(session_id)
+
+    def _find(self, session_id: str) -> LocalProcessSandbox | None:
         for path in sorted((self._base / _LABELS_DIR).glob("*.json")):
             try:
                 labels = json.loads(path.read_text())
@@ -356,9 +366,7 @@ class LocalProcessProvider(SandboxProvider):
                 continue
             root = self._base / path.stem
             if labels.get(_SESSION_LABEL) == session_id and root.is_dir():
-                sandbox = LocalProcessSandbox(root, path.stem, hydrator=self._hydrator)
-                self._sandboxes[path.stem] = sandbox
-                return sandbox
+                return LocalProcessSandbox(root, path.stem, hydrator=self._hydrator)
         return None
 
     async def create(

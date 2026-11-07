@@ -164,6 +164,21 @@ async def test_an_adopted_allow_sandbox_wakes_its_gate(provider: LocalDockerProv
     assert (await _sh(adopted, f"{CURL}https://allowed.test/")).endswith("hello from outside 200")
 
 
+async def test_another_process_finds_a_running_sandbox_and_never_wakes_a_stopped_one(made: list[Any]) -> None:
+    """The API showing a person the browser finds the session's container while it runs; a
+    stopped one stays stopped (only the worker that adopts it starts it again)."""
+    box = await _sandbox(LocalDockerProvider(), made, None, **{"supervisor.session_id": "s-look"})
+    api = LocalDockerProvider()  # another process: nothing in memory
+
+    running = await api.serving("s-look")
+    await asyncio.to_thread(_docker, "stop", "-t", "0", box.id)
+    stopped = await api.serving("s-look")
+
+    assert running is not None and running.id == box.id
+    assert stopped is None
+    assert (await asyncio.to_thread(_docker, "inspect", "-f", "{{.State.Running}}", box.id)) == "false"
+
+
 @pytest.mark.usefixtures("outside")
 async def test_the_browser_browses_through_the_gate(provider: LocalDockerProvider, made: list[Any]) -> None:
     box = await _sandbox(provider, made, ALLOW)
