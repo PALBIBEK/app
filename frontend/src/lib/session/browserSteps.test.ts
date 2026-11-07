@@ -80,9 +80,15 @@ describe('a saved login', () => {
     expect(vaultLine(vault({ status: 'error', args: { action: 'fill', login: 'https://a.example' }, explanation: 'Denied.' })).text).toContain('Denied.');
   });
 
-  it('counts the sites a list found', () => {
-    expect(vaultLine(vault({ args: { action: 'list' }, output: { logins: ['https://a.example', 'https://b.example'] } })).text).toBe('Found saved logins for 2 sites');
-    expect(vaultLine(vault({ args: { action: 'list' }, output: { logins: [] } })).text).toBe('No saved logins');
+  it('names a card, an address or a code by what it is, never by a value', () => {
+    expect(vaultLine(vault({ args: { action: 'fill', handle: 'card:Visa-4242' }, output: { success: true, filled_fields: 4, origin: 'https://shop.example.com' } })).text).toBe('Filled the saved card Visa-4242');
+    expect(vaultLine(vault({ args: { action: 'fill', handle: 'address:Home' }, output: { success: false, error: 'No address field' } }))).toEqual({ text: 'Could not use the saved address Home: No address field', failed: true });
+    expect(vaultLine(vault({ args: { action: 'enter_code', handle: 'login:https://a.example' }, output: { success: true, origin: 'https://a.example' } })).text).toBe('Entered the code for a.example');
+  });
+
+  it('counts what a list found', () => {
+    expect(vaultLine(vault({ args: { action: 'list' }, output: { items: [{ handle: 'login:https://a.example' }, { handle: 'card:Visa' }] } })).text).toBe('Found 2 saved items');
+    expect(vaultLine(vault({ args: { action: 'list' }, output: { items: [] } })).text).toBe('Nothing saved');
     expect(vaultLine(vault({ status: 'running', args: { action: 'fill', login: 'https://a.example' } })).text).toBe('Signing in to a.example…');
   });
 });
