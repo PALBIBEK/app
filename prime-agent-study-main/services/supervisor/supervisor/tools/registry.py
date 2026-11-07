@@ -76,6 +76,7 @@ class ToolRegistry(Mapping[str, ToolSpec[Any]]):
         *,
         tool_class: ToolClass,
         needs_workspace: bool = True,
+        asks: Callable[[Mapping[str, Any]], str | None] | None = None,
     ) -> Callable[[H], H]:
         """Decorator registering an ``async def handler(args, ctx)`` as a tool.
 
@@ -86,7 +87,7 @@ class ToolRegistry(Mapping[str, ToolSpec[Any]]):
         def decorate(handler: H) -> H:
             self.register(
                 ToolSpec.from_handler(
-                    handler, name=name, tool_class=tool_class, needs_workspace=needs_workspace
+                    handler, name=name, tool_class=tool_class, needs_workspace=needs_workspace, asks=asks
                 )
             )
             return handler

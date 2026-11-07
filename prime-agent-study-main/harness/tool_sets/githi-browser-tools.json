@@ -106,8 +106,8 @@
       "tool_class": "non_atomic"
     },
     "browser_exec": {
-      "description": "Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains=\"text\") narrows it to the matches and their groups); act((\"click\", \"0-42\"), (\"fill\", \"0-7\", \"Ada\"), (\"select\", \"0-9\", \"Tech\"), (\"check\", \"0-3\"), (\"press\", \"0-7\", \"Enter\")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused); locate(\"0-42\") is that element as a Playwright locator, for what act() does not do (select_option with several labels, input_value). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, show_screenshot() (full=True for the whole page) attaches a screenshot to this result for you to see when layout, images or canvas matter more than text, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs(\"accept\") (or \"dismiss\") before an action that opens a native alert/confirm/prompt, wait_for_network_idle(), browser_events(), frames() (the page's frames with their frame_id; an iframe of another site is reached with browser_cdp(frame_id=...)). A dialog nothing answered is held: the page waits on it, the call ends with it in pending_dialogs, and browser_dialog answers it. Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors (a repeat once, with times). Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; browser_vault types a login the user saved (list them first), otherwise ask the user.",
-      "digest": "sha256:44322ecc346b364491b135586c41d9bd86fac423d52878055741133458064ebf",
+      "description": "Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains=\"text\") narrows it to the matches and their groups); act((\"click\", \"0-42\"), (\"fill\", \"0-7\", \"Ada\"), (\"select\", \"0-9\", \"Tech\"), (\"check\", \"0-3\"), (\"press\", \"0-7\", \"Enter\")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused); locate(\"0-42\") is that element as a Playwright locator, for what act() does not do (select_option with several labels, input_value). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, show_screenshot() (full=True for the whole page) attaches a screenshot to this result for you to see when layout, images or canvas matter more than text, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs(\"accept\") (or \"dismiss\") before an action that opens a native alert/confirm/prompt, wait_for_network_idle(), browser_events(), frames() (the page's frames with their frame_id; an iframe of another site is reached with browser_cdp(frame_id=...)). A dialog nothing answered is held: the page waits on it, the call ends with it in pending_dialogs, and browser_dialog answers it. Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors (a repeat once, with times). Actions wait 5 s for their element (pass timeout= for a slower one). Login walls and checkouts: never guess credentials or card details; browser_vault fills what the user saved (logins with their 2FA codes, cards, addresses: list first), otherwise ask the user.",
+      "digest": "sha256:efd5f7faff0c487342a2f6e0130940e312bf2ecf6317a720d7f2b7b44116657d",
       "name": "browser_exec",
       "parameters": {
         "properties": {
@@ -134,25 +134,38 @@
       "tool_class": "non_atomic"
     },
     "browser_vault": {
-      "description": "Use a login the user saved, without seeing it: list the sites that have one, or fill one into the browser's current tab (it must be on that site) by naming the username and password fields (snapshot IDs or CSS selectors) and, optionally, what to click to submit. The values are typed for you and never shown to you; never ask the user for a password the vault holds, and never type one yourself.",
-      "digest": "sha256:60cd359bab34140a2d448e5adfb72122138908e0ea45c273e768d32cf6a441ca",
+      "description": "Fill what the user saved into the browser's current page without seeing it: logins, their 2FA codes, cards and addresses. list first: each item's handle, a login's username (identifier) and whether its code is automatic. fill: a login (its password, and its username when the form has a field for it), a card (the user is asked to allow it first) or an address, by handle; refused unless the page is on the item's site. enter_code: the one-time code a site asks for after the password, made from the saved authenticator key; without one, ask the user to type it in the browser's live view (or pass the code they gave you). save_login: when nothing is saved for a site. Never type, ask for or repeat a password, card number, security code or one-time code yourself, even if a page shows one; never retry a fill the user declined.",
+      "digest": "sha256:487d0d36d4533d6105a75ba5f1334bfa1cab7256e7cc8a137a0da933f5e77569",
       "name": "browser_vault",
       "parameters": {
         "properties": {
           "action": {
-            "description": "list: the sites with a saved login; fill: type one into the current tab",
+            "description": "list: the saved items (call it first); fill: an item into the current page; enter_code: the second factor's code; save_login: nothing is saved for this site",
             "enum": [
               "list",
-              "fill"
+              "fill",
+              "enter_code",
+              "save_login"
             ],
             "type": "string"
           },
+          "code": {
+            "description": "enter_code: a code the user gave you, when the login has no authenticator key saved",
+            "pattern": "^[0-9A-Za-z -]{4,12}$",
+            "type": "string"
+          },
+          "handle": {
+            "description": "fill / enter_code: an item's handle as list gives it (login:https://shop.example.com, card:Visa, address:Home)",
+            "maxLength": 300,
+            "type": "string"
+          },
           "login": {
-            "description": "fill: the site whose login to use, as list names it (e.g. https://shop.example.com)",
+            "description": "The same as handle, for a login (its site, e.g. https://shop.example.com)",
+            "maxLength": 300,
             "type": "string"
           },
           "password": {
-            "description": "fill: the password field, by snapshot ID or CSS selector",
+            "description": "fill, a login (optional): the password field, by snapshot ID or CSS selector",
             "type": "string"
           },
           "session": {
@@ -161,11 +174,11 @@
             "type": "string"
           },
           "submit": {
-            "description": "fill: what to click after filling (optional), by snapshot ID or CSS selector",
+            "description": "fill, a login with its fields named: what to click after filling (optional)",
             "type": "string"
           },
           "username": {
-            "description": "fill: the username field, by snapshot ID (\"0-12\") or CSS selector",
+            "description": "fill, a login (optional): the username field, by snapshot ID (\"0-12\") or CSS selector; omit to have the form's fields found",
             "type": "string"
           }
         },
@@ -536,14 +549,14 @@
   },
   "name": "githi-browser-tools",
   "protocol_version": 1,
-  "semver": "1.7.0",
+  "semver": "1.8.0",
   "status": "offered",
   "tools": {
     "bash": "sha256:14aad3e070a5d1c4eb5b2278908abed35782ecc00a5738c7b3e432a8d1db9a8b",
     "browser_cdp": "sha256:1abb2d7b052ec926f6d6a6405b12aea715e6bfb5b0569ea96c7f7f1c791bbdd2",
     "browser_dialog": "sha256:0cc01673bb56607b3dd172eb8840532df334395228c2cfea6da7871689d76159",
-    "browser_exec": "sha256:44322ecc346b364491b135586c41d9bd86fac423d52878055741133458064ebf",
-    "browser_vault": "sha256:60cd359bab34140a2d448e5adfb72122138908e0ea45c273e768d32cf6a441ca",
+    "browser_exec": "sha256:efd5f7faff0c487342a2f6e0130940e312bf2ecf6317a720d7f2b7b44116657d",
+    "browser_vault": "sha256:487d0d36d4533d6105a75ba5f1334bfa1cab7256e7cc8a137a0da933f5e77569",
     "echo": "sha256:feca607f274fc990ce5307e6189e22e113ac391a3319ef2171993ec05c95a828",
     "edit": "sha256:bc7c11528fd48d286d37ddde437393ee77e4c862291ab8d42a743f0b5367f6dd",
     "find": "sha256:39ef49ef5d3fd8c437d85cdee4e69854fa4cfe68b5f71f5fce760a30d6af93fa",

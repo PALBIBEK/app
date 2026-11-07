@@ -18,9 +18,12 @@ import base64
 import functools
 import hashlib
 import shlex
+import threading
+import time
 import zlib
+from collections.abc import Mapping
 from importlib import resources
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from supervisor.hands.browser.providers import (
     BROWSER_PROVIDERS,
@@ -30,7 +33,10 @@ from supervisor.hands.browser.providers import (
     SandboxChromium,
     browser_providers_from_env,
 )
-from supervisor.hands.browser.runner import CDP_ENV, DIALOG_ENV, FILL_ENV, META_MARK
+from supervisor.hands.browser.runner import CDP_ENV, DIALOG_ENV, FILL_ENV, META_MARK, VAULT_ENV
+
+if TYPE_CHECKING:
+    from supervisor.tools.workspace import CommandResult, Workspace
 
 __all__ = [
     "BROWSER_ERROR_ENV",
@@ -40,15 +46,20 @@ __all__ = [
     "DIALOG_ENV",
     "FILL_ENV",
     "META_MARK",
+    "MISSING_EXIT",
+    "MISSING_MARK",
     "RUNNER_DIR",
     "UNPACK",
+    "VAULT_ENV",
     "WORKSPACE_DIR",
     "BrowserProvider",
     "BrowserUnreachable",
     "RemoteCdp",
     "SandboxChromium",
     "browser_providers_from_env",
+    "install_command",
     "pack",
+    "run_runtime",
     "runner_env",
     "runtime_command",
     "runtime_payload",
@@ -64,10 +75,11 @@ files and the agent's own helpers survive a lost sandbox (the open tabs do not).
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
 RUNTIME_FILES: Final = (
-    "runner.py", "daemon.py", "snapshot.py", "cdp_supervisor.py", "cdp_dialogs.py", "cdp_frames.py", "cdp_socket.py",
+    "runner.py", "daemon.py", "snapshot.py", "vault_forms.py",
+    "cdp_supervisor.py", "cdp_dialogs.py", "cdp_frames.py", "cdp_socket.py",
 )
-"""What the sandbox runs: the call's runner, the daemon it starts, its snapshots, and the
-daemon's CDP supervisor (its dialog and frame halves, and its WebSocket)."""
+"""What the sandbox runs: the call's runner, the daemon it starts, its snapshots, the vault's
+form finder, and the daemon's CDP supervisor (its dialog and frame halves, and its WebSocket)."""
 
 
 @functools.cache
@@ -88,16 +100,54 @@ UNPACK: Final = "import base64,sys,zlib;sys.stdout.buffer.write(zlib.decompress(
 """The sandbox's side of ``pack``: Python's own, as the runtime needs Python anyway."""
 
 
+MISSING_EXIT: Final = 97
+"""What a runtime command exits with when the sandbox has no copy of this runtime yet."""
+MISSING_MARK: Final = "githi-browser: runtime missing"
+
+
 def runtime_command(run: str) -> str:
-    """A shell command that stores the runtime in the sandbox once per version (in ``$d``),
-    then runs ``run``, which finds the runner at ``"$d/runner.py"``."""
+    """A shell command that runs ``run`` with the runtime's folder in ``$d`` (``run`` finds
+    the runner at ``"$d/runner.py"``), or exits ``MISSING_EXIT`` when the sandbox has not
+    stored this version of the runtime yet (``run_runtime`` stores it, then runs it again).
+    The runtime is not in the command: with it, a call's code would not fit the one shell
+    argument a command is (Linux caps it at 128 KiB)."""
+    folder, _ = runtime_payload()
+    return (
+        f'd={shlex.quote(folder)}\n[ -f "$d/.complete" ] || {{ echo {shlex.quote(MISSING_MARK)} >&2; exit {MISSING_EXIT}; }}\n{run}'
+    )
+
+
+def install_command() -> str:
+    """A shell command that stores this version of the runtime in the sandbox: each file
+    written aside and moved into place, the folder marked complete last (two calls storing
+    it at once each leave it whole)."""
     folder, sources = runtime_payload()
     unpack = shlex.quote(UNPACK)
     store = " && ".join(
-        f'python3 -c {unpack} {source} > "$d/{name}.$$" && mv "$d/{name}.$$" "$d/{name}"'
-        for name, source in sources.items()
+        f'python3 -c {unpack} {source} > "$d/{name}.$$" && mv "$d/{name}.$$" "$d/{name}"' for name, source in sources.items()
     )
-    return f'd={shlex.quote(folder)}\n[ -f "$d/runner.py" ] || {{ mkdir -p "$d" && {store}; }}\n{run}'
+    return f'd={shlex.quote(folder)}\nmkdir -p "$d" && {store} && touch "$d/.complete"'
+
+
+async def run_runtime(
+    workspace: Workspace,
+    run: str,
+    *,
+    timeout_s: float,
+    env: Mapping[str, str] | None = None,
+    stop: threading.Event | None = None,
+) -> CommandResult:
+    """``run`` (as ``runtime_command`` takes it) in the sandbox, storing the runtime first
+    when this sandbox has no copy of this version yet."""
+    started = time.monotonic()
+    result = await workspace.run(runtime_command(run), timeout_s=timeout_s, env=env, stop=stop)
+    if result.exit_code != MISSING_EXIT or MISSING_MARK not in result.stderr:
+        return result
+    installed = await workspace.run(install_command(), timeout_s=timeout_s, stop=stop)
+    if installed.exit_code != 0:
+        return installed  # its stderr says why (no python3 in the sandbox, say)
+    left = max(timeout_s - (time.monotonic() - started), 1.0)
+    return await workspace.run(runtime_command(run), timeout_s=left, env=env, stop=stop)
 
 
 def runner_env(session: str | None) -> dict[str, str]:

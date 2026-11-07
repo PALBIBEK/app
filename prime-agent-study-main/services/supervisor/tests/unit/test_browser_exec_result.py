@@ -12,7 +12,13 @@ from typing import Any
 import pytest
 
 from supervisor.genui import SHOW_UI
-from supervisor.hands.browser import BROWSER_TOOLS, META_MARK, runtime_payload
+from supervisor.hands.browser import (
+    BROWSER_TOOLS,
+    META_MARK,
+    MISSING_EXIT,
+    MISSING_MARK,
+    runtime_payload,
+)
 from supervisor.tools import InvalidArguments, default_registry
 from supervisor.tools.builtin.browser_exec import MAX_CODE_BYTES
 from supervisor.tools.builtin.update_task import NAME as UPDATE_TASK
@@ -46,16 +52,43 @@ async def _call(tmp_path: Path, result: CommandResult, **args: Any) -> tuple[dic
     return dict(payload), workspace
 
 
-async def test_the_runner_and_the_code_travel_in_one_command(tmp_path: Path) -> None:
+async def test_the_code_travels_in_the_command_and_the_runtime_does_not(tmp_path: Path) -> None:
     _, workspace = await _call(tmp_path, CommandResult(0, "1\n", _report(started=True)), session="r7")
 
     ((command, env),) = workspace.sent
     folder, sources = runtime_payload()
-    assert folder in command and all(source in command for source in sources.values()), "the runtime is not shipped with the call"
-    assert len(command.encode()) < 128 * 1024
+    assert folder in command and not any(source in command for source in sources.values()), "the runtime travels with every call"
     assert env["FROM_SESSION"] == "1", "the session's own variables were dropped"
     assert env["GITHI_BROWSER_NAME"] == "r7"
     assert env["BROWSER_WORKSPACE"] == ".githi/browser"
+
+
+class Missing(Answering):
+    """A sandbox without this runtime: the first command says so, the install stores it."""
+
+    def __init__(self, root: Path, result: CommandResult) -> None:
+        super().__init__(root, result)
+        self.stored = False
+
+    async def run(self, command: str, *, timeout_s: float, env: Mapping[str, str] | None = None, stop: Any = None) -> CommandResult:
+        self.sent.append((command, dict(env or {})))
+        if 'touch "$d/.complete"' in command:
+            self.stored = True
+            return CommandResult(0, "", "")
+        return self.result if self.stored else CommandResult(MISSING_EXIT, "", MISSING_MARK + "\n")
+
+
+async def test_a_sandbox_without_the_runtime_gets_it_stored_once_then_the_call_runs(tmp_path: Path) -> None:
+    workspace = Missing(tmp_path, CommandResult(0, "1\n", _report()))
+    ctx = ToolContext(bound_workspace=workspace, timeout_s=30)
+    first = await default_registry()["browser_exec"].run({"code": "print(1)"}, ctx)
+    second = await default_registry()["browser_exec"].run({"code": "print(2)"}, ctx)
+
+    _, sources = runtime_payload()
+    sent = [command for command, _ in workspace.sent]
+    assert len(sent) == 4, "run, store, run again; then the next call just runs"
+    assert all(source in sent[1] for source in sources.values()) and len(sent[1].encode()) < 128 * 1024
+    assert first["output"] == "1" and second["output"] == "1"
 
 
 async def test_the_largest_code_still_fits_one_shell_argument(tmp_path: Path) -> None:
@@ -174,3 +207,16 @@ async def test_the_shipped_browser_agent_reaches_the_web_and_is_told_how_to_brow
     _check_network(profile.name, profile)  # what publishing it checks
     text = " ".join(s.text for s in prompt.sections)
     assert prompt.persona == "browser" and "browser_vault" in text and "snapshot()" in text
+
+
+async def test_a_saved_card_is_filled_only_once_a_person_allows_it() -> None:
+    """The planner asks a person before such a call, whatever the harness's approvals say."""
+    from supervisor.temporal.steps import _asked_by_tool
+
+    asked = _asked_by_tool("browser_vault", {"action": "fill", "handle": "card:Visa-4242"})
+
+    assert asked is not None and "Visa-4242" in asked
+    assert _asked_by_tool("browser_vault", {"action": "fill", "handle": "login:https://shop.example.com"}) is None
+    assert _asked_by_tool("browser_vault", {"action": "list"}) is None
+    assert _asked_by_tool("bash", {"command": "ls"}) is None
+    assert _asked_by_tool("no_such_tool", {}) is None

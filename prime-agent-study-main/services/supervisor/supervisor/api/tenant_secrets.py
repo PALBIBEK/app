@@ -4,8 +4,10 @@ A value goes in and never comes out: listing returns names and expiry only.
 ``mcp:<origin>`` (``mcp:https://tools.example.com``) authenticates the MCP
 server at that origin for every session of the tenant (``supervisor.vault.credentials``).
 ``login:<origin>`` (``login:https://shop.example.com``, the value
-``{"username": "…", "password": "…"}``) is a browser login ``browser_vault`` can type into
-that site for any of the tenant's sessions (``supervisor.vault.logins``).
+``{"username": "…", "password": "…", "otp": "…"}``), ``card:<label>`` and
+``address:<label>`` (their fields and ``"origins"``) are what ``browser_vault`` fills into
+those sites for any of the tenant's sessions (``supervisor.vault.logins``); each is checked
+when it is saved.
 
 Who in a tenant may change its secrets is the caller's decision (the product's
 settings RBAC); this API takes the tenant from the verified service identity.
@@ -21,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from supervisor.api import deps
 from supervisor.vault import Owner, Vault
-from supervisor.vault.logins import LOGIN_PREFIX, InvalidLogin, parse_login
+from supervisor.vault.logins import VAULT_PREFIXES, InvalidLogin, parse_item
 
 router = APIRouter(prefix="/v1/secrets", tags=["secrets"])
 
@@ -55,7 +57,7 @@ def _forget(request: Request, tenant_id: str, name: str) -> None:
     if credentials is not None:
         credentials.forget(tenant_id, name)
     logins = getattr(manager, "_logins", None)
-    if logins is not None and name.startswith(LOGIN_PREFIX):
+    if logins is not None and name.startswith(VAULT_PREFIXES):
         logins.forget(tenant_id)
 
 
@@ -72,9 +74,9 @@ async def put_secret(
     tenant_id: str = Depends(deps.current_tenant),
 ) -> SecretOut:
     _check_name(name)
-    if name.startswith(LOGIN_PREFIX):
+    if name.startswith(VAULT_PREFIXES):
         try:
-            parse_login(name, body.value)
+            parse_item(name, body.value)
         except InvalidLogin as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
     await _vault(request).put(Owner.tenant(tenant_id), name, body.value, expires_at=body.expires_at)

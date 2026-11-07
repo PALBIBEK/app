@@ -65,6 +65,9 @@ REPORTED = ("dialog", "console", "pageerror")
 MAX_REPORTED = 20
 FILL_ENV = "GITHI_BROWSER_FILL"
 """``{"origin": …, "targets": {"username"|"password"|"submit": ID or selector}, "values": {…}}``."""
+VAULT_ENV = "GITHI_BROWSER_VAULT"
+"""``vault-inspect``: ``{"kind", "origins": [...], "nonce"}``; ``vault-write``: ``{"tab",
+"expression"}`` (the fill script, which holds the values: it is never in code the model wrote)."""
 DIALOG_ENV = "GITHI_BROWSER_DIALOG"
 """``{"action": "accept"|"dismiss", "text": …, "dialog_id": …}``: ``browser_dialog``'s answer."""
 CDP_ENV = "GITHI_BROWSER_CDP_CALL"
@@ -102,6 +105,7 @@ def _sibling(name: str) -> ModuleType:
 DAEMON = _sibling("daemon")
 """Its paths and constants are the ones the daemon serves on."""
 SNAPSHOT = _sibling("snapshot")
+FORMS = _sibling("vault_forms")
 
 
 def ask(op: str, wait: float = 10.0, **fields: Any) -> dict[str, Any]:
@@ -534,6 +538,10 @@ def main() -> int:
         return live()
     if sys.argv[1:] == ["dialog"]:
         return dialog()
+    if sys.argv[1:] == ["vault-inspect"]:
+        return vault_inspect()
+    if sys.argv[1:] == ["vault-write"]:
+        return vault_write()
     if sys.argv[1:] == ["cdp"]:
         return cdp_call()
     code = sys.stdin.read()
@@ -620,6 +628,99 @@ def _watch_dialogs(started: bool, done: threading.Event) -> None:
         )
         sys.stderr.flush()
         os._exit(1)
+
+
+def _vault_session(playwright: Any) -> Session | None:
+    """The browser for a vault step: connected, never started (nothing to fill without a page)."""
+    try:
+        hello = ask("hello")
+        return Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), started=False)
+    except (OSError, RuntimeError):
+        print(json.dumps({"error": NO_BROWSER}))
+        return None
+
+
+def vault_inspect() -> int:
+    """The tab a saved item is filled in, and its form's controls: the current tab when it is
+    on one of the item's origins, else an open tab on one that holds such a form (Hermes's
+    ``focus_page``); its inputs are stamped with the nonce for ``vault-write``.
+    ``{"tab", "origin", "url", "controls": [...]}``, or ``{"error", "error_type"}``."""
+    request = json.loads(os.environ.pop(VAULT_ENV, "") or "{}")
+    origins, kind, nonce = request.get("origins"), str(request.get("kind", "")), str(request.get("nonce", ""))
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        session = _vault_session(playwright)
+        if session is None:
+            return 1
+        page = _vault_tab(session, origins, kind)
+        if page is None:
+            on = origin(session.page.url) if session.page.url.startswith(("http://", "https://")) else session.page.url
+            print(json.dumps({
+                "error": (
+                    f"Refused: the current page ({on or 'no page'}) is not on the item's site "
+                    f"({', '.join(origins or []) or 'none saved'}), and no open tab there holds its form: open its page first."
+                ),
+                "error_type": "origin_mismatch",
+            }))
+            return 1
+        if not nonce:  # where the form is, nothing more
+            print(json.dumps({"tab": _target_id(page), "origin": origin(page.url), "url": page.url}))
+            return 0
+        try:
+            raw = page.evaluate(FORMS.build_inspection_js(nonce))
+        except Exception as exc:  # noqa: BLE001 — the page went
+            print(json.dumps({"error": f"could not inspect the page's inputs: {type(exc).__name__}"}))
+            return 1
+        session.page = page
+        session.remember()
+        print(json.dumps({"tab": _target_id(page), "origin": origin(page.url), "url": page.url, "controls": json.loads(raw)}))
+    return 0
+
+
+def _vault_tab(session: Session, origins: list[str] | None, kind: str) -> Any | None:
+    """The current tab if it is on one of ``origins``; else the first open tab on one of them
+    holding the form ``kind`` fills (by its probe). ``origins`` None: any site's tab holding
+    such a form (where a login is to be saved)."""
+
+    def on_site(page: Any) -> bool:
+        return page.url.startswith(("http://", "https://")) if origins is None else origin(page.url) in origins
+
+    probe = FORMS.TAB_PROBES.get(kind)
+    if on_site(session.page) and (origins is not None or _probed(session.page, probe)):
+        return session.page
+    return next((p for p in session.context.pages if p is not session.page and on_site(p) and _probed(p, probe)), None)
+
+
+def _probed(page: Any, probe: str | None) -> bool:
+    """Whether the page holds the form ``probe`` looks for (no probe: any page does)."""
+    with contextlib.suppress(Exception):
+        return probe is None or bool(page.evaluate(probe))
+    return False
+
+
+def vault_write() -> int:
+    """Run the fill script in the tab ``vault-inspect`` chose: ``{"filled": n}``, or
+    ``{"refused": "origin_changed", "found"}`` when the page left the item's site in between.
+    Nothing it answers holds a value."""
+    request = json.loads(os.environ.pop(VAULT_ENV, "") or "{}")
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        session = _vault_session(playwright)
+        if session is None:
+            return 1
+        page = next((p for p in session.context.pages if _target_id(p) == request.get("tab")), None)
+        if page is None:
+            print(json.dumps({"error": "the tab with the form closed before the fill: nothing was written"}))
+            return 1
+        try:
+            answer = json.loads(page.evaluate(request["expression"]))
+        except Exception:  # noqa: BLE001 — its message could quote the script, which holds the values
+            print(json.dumps({"error": "the page did not run the fill: nothing was written"}))
+            return 1
+        print(json.dumps({k: v for k, v in answer.items() if k in ("filled", "refused", "found")}))
+    return 0
 
 
 def _article(word: str) -> str:

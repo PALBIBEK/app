@@ -5,7 +5,7 @@ from typing import Any, Final
 
 from pydantic import Field
 
-from supervisor.hands.browser import CDP_ENV, runner_env, runtime_command
+from supervisor.hands.browser import CDP_ENV, run_runtime, runner_env
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
@@ -60,8 +60,9 @@ async def browser_cdp(args: BrowserCdpArgs, ctx: ToolContext) -> dict[str, Any]:
         "frame_id": args.frame_id,
         "timeout": timeout,
     }
-    result = await ctx.workspace.run(
-        runtime_command('exec python3 "$d/runner.py" cdp'),
+    result = await run_runtime(
+        ctx.workspace,
+        'exec python3 "$d/runner.py" cdp',
         timeout_s=min(timeout + 10.0, ctx.timeout_s),
         env={
             **ctx.env,

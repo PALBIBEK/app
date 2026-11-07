@@ -12,8 +12,8 @@ from supervisor.hands.browser import (
     UNPACK,
     WORKSPACE_DIR,
     pack,
+    run_runtime,
     runner_env,
-    runtime_command,
 )
 from supervisor.seams.core.types import RESULT_IMAGES
 from supervisor.tools.args import ToolArgs
@@ -27,7 +27,7 @@ from supervisor.tools.workspace import STDERR_SEPARATOR
 
 MAX_CODE_BYTES: Final = 48 * 1024
 """The code travels packed (compressed, then base64) inside the one shell argument a
-command is, which Linux caps at 128 KiB, beside the packed runtime (about 54 KiB)."""
+command is, which Linux caps at 128 KiB (the runtime is stored apart: ``run_runtime``)."""
 MAX_STDERR_CHARS: Final = 4000
 MAX_SHOWN_BYTES: Final = 384 * 1024
 """The largest screenshot a result shows (a viewport's JPEG is a tenth of it); a larger
@@ -57,7 +57,7 @@ class BrowserExecArgs(ToolArgs):
 
 @tool(tool_class=ToolClass.NON_ATOMIC)
 async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains="text") narrows it to the matches and their groups); act(("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused); locate("0-42") is that element as a Playwright locator, for what act() does not do (select_option with several labels, input_value). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, show_screenshot() (full=True for the whole page) attaches a screenshot to this result for you to see when layout, images or canvas matter more than text, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") (or "dismiss") before an action that opens a native alert/confirm/prompt, wait_for_network_idle(), browser_events(), frames() (the page's frames with their frame_id; an iframe of another site is reached with browser_cdp(frame_id=...)). A dialog nothing answered is held: the page waits on it, the call ends with it in pending_dialogs, and browser_dialog answers it. Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors (a repeat once, with times). Actions wait 5 s for their element (pass timeout= for a slower one). Login walls: never guess credentials; browser_vault types a login the user saved (list them first), otherwise ask the user.
+    """Drive a real browser by running Python in the session's sandbox, for JavaScript pages, logins, forms and clicks (for plain reading, prefer fetching the page). Start code with a one-line comment naming the step in plain words (e.g. `# Searching the catalogue for paper towels`). Batch a whole sub-procedure (navigate, wait, extract, act) into one call, and print only what you need: stdout is the result. STATE: the browser (its tabs, cookies and current page) persists across calls; Python variables do not (each call is a fresh interpreter). The folder $BROWSER_WORKSPACE (`.githi/browser` in the workspace, also `WORKSPACE`) persists: for many items, append each batch to a JSON or CSV file there and aggregate it in code, counting against what was asked; functions saved in its agent_helpers.py are available in every call. IN SCOPE: `page`, `context`, `browser` are Playwright's sync API (page.goto, page.locator(...).click()/fill(), page.get_by_role(...), page.wait_for_selector, page.evaluate; page.wait_for_timeout(ms) ends early once the page is quiet). To see a page, print(snapshot()): its elements with [IDs] and the structure around them (snapshot(contains="text") narrows it to the matches and their groups); act(("click", "0-42"), ("fill", "0-7", "Ada"), ("select", "0-9", "Tech"), ("check", "0-3"), ("press", "0-7", "Enter")) acts by those IDs and settles; take a new snapshot after a page changes (old IDs are refused); locate("0-42") is that element as a Playwright locator, for what act() does not do (select_option with several labels, input_value). settle() waits for what an action started (navigation, requests, a changing DOM). Other helpers: new_tab(url) opens a tab and makes it `page`, goto_url(url), wait_for_load(), page_info() (url, title, viewport, scroll), js(expr) evaluates JavaScript and returns its value, fill_input(selector, text), click_at_xy(x, y), capture_screenshot() saves a PNG in the workspace and prints its path, show_screenshot() (full=True for the whole page) attaches a screenshot to this result for you to see when layout, images or canvas matter more than text, cdp('Domain.method', **params) sends raw CDP (cdp('Accessibility.getFullAXTree')['nodes'] lists every element: filter it in Python before printing), list_tabs(), switch_tab(id), ensure_real_tab(), answer_dialogs("accept") (or "dismiss") before an action that opens a native alert/confirm/prompt, wait_for_network_idle(), browser_events(), frames() (the page's frames with their frame_id; an iframe of another site is reached with browser_cdp(frame_id=...)). A dialog nothing answered is held: the page waits on it, the call ends with it in pending_dialogs, and browser_dialog answers it. Each result lists what the tabs reported since the previous call: dialogs with their answers, console errors, page errors (a repeat once, with times). Actions wait 5 s for their element (pass timeout= for a slower one). Login walls and checkouts: never guess credentials or card details; browser_vault fills what the user saved (logins with their 2FA codes, cards, addresses: list first), otherwise ask the user.
 
     Code mode, as Hermes's ``browser_exec`` and Stagehand's ``run``: the runner
     (``supervisor.hands.browser.runner``) is shipped into the sandbox and runs the code
@@ -76,7 +76,8 @@ async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any
     ceiling = max(ctx.timeout_s - _GRACE_S, 1.0)
     timeout = min(float(args.timeout), ceiling) if args.timeout else ceiling
 
-    result = await ctx.workspace.run(
+    result = await run_runtime(
+        ctx.workspace,
         _command(code),
         timeout_s=timeout,
         env={**ctx.env, **runner_env(args.session)},  # ctx.env: how to reach the session's browser
@@ -87,8 +88,9 @@ async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any
 
 
 def _command(code: bytes) -> str:
-    """The runtime, stored once per version, then its runner with ``code`` on stdin."""
-    return runtime_command(f'python3 -c {shlex.quote(UNPACK)} {pack(code)} | exec python3 "$d/runner.py"')
+    """The runner, with ``code`` on its stdin (``run_runtime`` stores the runtime first when
+    the sandbox has none of this version)."""
+    return f'python3 -c {shlex.quote(UNPACK)} {pack(code)} | exec python3 "$d/runner.py"'
 
 
 async def _payload(ctx: ToolContext, args: BrowserExecArgs, result: Any, timeout: float) -> dict[str, Any]:
