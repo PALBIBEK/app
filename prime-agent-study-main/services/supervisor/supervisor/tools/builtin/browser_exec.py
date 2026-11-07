@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import shlex
@@ -15,6 +16,7 @@ from supervisor.hands.browser import (
     run_runtime,
     runner_env,
 )
+from supervisor.hands.browser.url_policy import code_verdict
 from supervisor.seams.core.types import RESULT_IMAGES
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
@@ -29,6 +31,8 @@ MAX_CODE_BYTES: Final = 48 * 1024
 """The code travels packed (compressed, then base64) inside the one shell argument a
 command is, which Linux caps at 128 KiB (the runtime is stored apart: ``run_runtime``)."""
 MAX_STDERR_CHARS: Final = 4000
+REMOTE_ENV: Final = "GITHI_BROWSER_CDP"
+"""Set when the session's browser is hosted (``supervisor.hands.browser.providers``)."""
 MAX_SHOWN_BYTES: Final = 384 * 1024
 """The largest screenshot a result shows (a viewport's JPEG is a tenth of it); a larger
 one, a long page's whole length, stays a file in the workspace."""
@@ -75,16 +79,24 @@ async def browser_exec(args: BrowserExecArgs, ctx: ToolContext) -> dict[str, Any
         raise InvalidArguments(f"code is {len(code)} bytes; at most {MAX_CODE_BYTES}: split the work into several calls")
     ceiling = max(ctx.timeout_s - _GRACE_S, 1.0)
     timeout = min(float(args.timeout), ceiling) if args.timeout else ceiling
+    env = {**ctx.env, **runner_env(args.session)}  # ctx.env: how to reach the session's browser
+    verdict = await asyncio.to_thread(code_verdict, args.code, hosted=REMOTE_ENV in env)  # it resolves names
+    if verdict.refused:
+        return {"exit_code": None, "output": "", "error": verdict.refused, "blocked_by_policy": True}
+    local = None
+    if verdict.local:  # Hermes's hybrid routing: a private address goes to the sandbox's own browser
+        local = f"{args.session or 'default'}-local"
+        env = {k: v for k, v in env.items() if k != REMOTE_ENV} | runner_env(local)
 
-    result = await run_runtime(
-        ctx.workspace,
-        _command(code),
-        timeout_s=timeout,
-        env={**ctx.env, **runner_env(args.session)},  # ctx.env: how to reach the session's browser
-        stop=ctx.stop,
-    )
+    result = await run_runtime(ctx.workspace, _command(code), timeout_s=timeout, env=env, stop=ctx.stop)
     ctx.mutated()  # the code may write files (its workspace folder, screenshots)
-    return await _payload(ctx, args, result, timeout)
+    payload = await _payload(ctx, args, result, timeout)
+    if local is not None:
+        payload["local_browser"] = (
+            f"this call reaches a private address, which the hosted browser must not: it ran on the sandbox's own browser, "
+            f"session {local!r} (pass session={local!r} to go on there)"
+        )
+    return payload
 
 
 def _command(code: bytes) -> str:
@@ -120,6 +132,8 @@ async def _payload(ctx: ToolContext, args: BrowserExecArgs, result: Any, timeout
         payload.update(await _screenshots(ctx, meta["shown"]))
     if meta.get("started"):
         payload["browser_started"] = True  # a fresh browser: earlier tabs and logins are gone
+    if meta.get("fallback"):  # the hosted browser failed: the sandbox's own served the call
+        payload["fallback_from_cloud"] = meta["fallback"]
     if args.session:
         payload["session"] = args.session
     payload["workspace"] = WORKSPACE_DIR

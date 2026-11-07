@@ -17,7 +17,13 @@ from supervisor.agent.events import (
 from supervisor.catalog import SandboxProfile, SessionPins
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
-from supervisor.hands.browser import BROWSER_ERROR_ENV, BROWSER_TOOLS, BrowserUnreachable
+from supervisor.hands.browser import (
+    BROWSER_ERROR_ENV,
+    BROWSER_FALLBACK_ENV,
+    BROWSER_TOOLS,
+    HOSTED_BROWSERS,
+    BrowserUnreachable,
+)
 from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key, take_hand
 from supervisor.hands.leases import Borrower
 from supervisor.models.browser import BrowserAccess, BrowserGrant
@@ -264,6 +270,9 @@ class ToolOps(ApprovalOps):
         try:
             return dict(await provider.env(session_id, profile.network if profile is not None else None))
         except BrowserUnreachable as exc:
+            if name in HOSTED_BROWSERS:  # Hermes's fallback: the sandbox's own browser, and the agent told why
+                logger.warning("session %s: %s failed, its sandbox's own browser serves: %s", session_id, name, exc)
+                return {BROWSER_FALLBACK_ENV: f"{name}: {exc}"}
             return {BROWSER_ERROR_ENV: str(exc)}
 
     def _model_access_env(self, session_id: str, row: SessionRow, profile: SandboxProfile | None) -> dict[str, str]:
