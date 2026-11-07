@@ -22,6 +22,10 @@ and the screenshots the code asked to be shown with the result (``show_screensho
 the current tab. The login arrives in ``FILL_ENV`` from the supervisor, never in code the
 model wrote, and the answer says what was filled, never with what.
 
+``runner.py dialog`` and ``runner.py cdp`` are ``browser_dialog``'s and ``browser_cdp``'s:
+they answer a dialog the daemon's CDP supervisor holds, or send one raw command over its
+connection, and never start a browser.
+
 ``runner.py live`` is the person's way in (``supervisor.hands.browser.live``): the current
 tab as a JPEG, after their click, typing, key or scroll if ``LIVE_ENV`` carries one. It
 never starts a browser, and leaves what a call reads (the tab it ended on, the browser's
@@ -40,6 +44,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -60,6 +65,14 @@ REPORTED = ("dialog", "console", "pageerror")
 MAX_REPORTED = 20
 FILL_ENV = "GITHI_BROWSER_FILL"
 """``{"origin": …, "targets": {"username"|"password"|"submit": ID or selector}, "values": {…}}``."""
+DIALOG_ENV = "GITHI_BROWSER_DIALOG"
+"""``{"action": "accept"|"dismiss", "text": …, "dialog_id": …}``: ``browser_dialog``'s answer."""
+CDP_ENV = "GITHI_BROWSER_CDP_CALL"
+"""``{"method": …, "params": {…}, "target_id": …, "frame_id": …, "timeout": …}``: ``browser_cdp``'s command."""
+BLOCKED_AFTER_S = 1.0
+"""How long a held dialog may block the page before the call ends to say so: the page's
+JavaScript waits on it, so the code's next step on the page would wait for the call's timeout."""
+NO_BROWSER = "no browser is open: the agent has not used one in this sandbox"
 LIVE_ENV = "GITHI_BROWSER_LIVE"
 """``{"input": {"kind": "click"|"type"|"key"|"scroll", ...}}`` or ``{}`` (the screen only)."""
 LIVE_QUALITY = 60
@@ -91,17 +104,24 @@ DAEMON = _sibling("daemon")
 SNAPSHOT = _sibling("snapshot")
 
 
-def ask(op: str, **fields: Any) -> dict[str, Any]:
-    """One request to the daemon; its answer. Raises OSError when none is serving."""
+def ask(op: str, wait: float = 10.0, **fields: Any) -> dict[str, Any]:
+    """One request to the daemon, answered in at most ``wait`` seconds. Raises OSError when
+    none is serving, and RuntimeError with what the daemon refused."""
+    answer = told(op, wait, **fields)
+    if "error" in answer:
+        raise RuntimeError(f"browser daemon: {answer['error']}")
+    return answer
+
+
+def told(op: str, wait: float = 10.0, **fields: Any) -> dict[str, Any]:
+    """The daemon's answer to one request as it gave it, an error included. Raises OSError
+    when none is serving."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(10)
+        conn.settimeout(wait)
         conn.connect(str(DAEMON.SOCKET))
         conn.sendall(json.dumps({"op": op, **fields}).encode() + b"\n")
         reply = conn.makefile("rb").readline()
-    answer = json.loads(reply)
-    if "error" in answer:
-        raise RuntimeError(f"browser daemon: {answer['error']}")
-    return dict(answer)
+    return dict(json.loads(reply))
 
 
 def _hello() -> dict[str, Any]:
@@ -133,14 +153,12 @@ def _hello() -> dict[str, Any]:
 class Session:
     """This call's view of the browser: the page code acts on, and how it got there."""
 
-    def __init__(self, browser: Any, hello: dict[str, Any]) -> None:
+    def __init__(self, browser: Any, started: bool) -> None:
         self.browser = browser
         self.context = browser.contexts[0] if browser.contexts else browser.new_context()
         self.context.set_default_timeout(ACTION_TIMEOUT_MS)
         self.context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
-        seen = _state_file("seen-generation")
-        self.started = not seen.exists() or seen.read_text() != str(hello["generation"])
-        seen.write_text(str(hello["generation"]))
+        self.started = started
         for page in self.context.pages:
             _prepare(page)
         self.context.on("page", _prepare)
@@ -157,15 +175,26 @@ class Session:
             _state_file("tab").write_text(_target_id(self.page))
 
     def reported(self) -> list[dict[str, Any]]:
-        """What the tabs reported since the previous call ended, oldest first."""
-        cursor = _state_file("seq")
-        since = int(cursor.read_text()) if cursor.exists() else 0
-        answer = ask("events", since=since)
-        cursor.write_text(str(answer["seq"]))
-        events = [
-            {k: v for k, v in e.items() if k not in ("seq", "at")} for e in answer["events"] if e["kind"] in REPORTED
-        ]
-        return _distinct(events)[-MAX_REPORTED:]
+        return reported()
+
+
+def started_afresh(hello: dict[str, Any]) -> bool:
+    """Whether the browser is another than the one the previous call saw (its tabs and
+    logins gone); the next call compares with this one."""
+    seen = _state_file("seen-generation")
+    started = not seen.exists() or seen.read_text() != str(hello["generation"])
+    seen.write_text(str(hello["generation"]))
+    return started
+
+
+def reported() -> list[dict[str, Any]]:
+    """What the tabs reported since the previous call ended, oldest first."""
+    cursor = _state_file("seq")
+    since = int(cursor.read_text()) if cursor.exists() else 0
+    answer = ask("events", since=since)
+    cursor.write_text(str(answer["seq"]))
+    events = [{k: v for k, v in e.items() if k not in ("seq", "at")} for e in answer["events"] if e["kind"] in REPORTED]
+    return _distinct(events)[-MAX_REPORTED:]
 
 
 def current_tab(context: Any) -> Any | None:
@@ -222,7 +251,7 @@ class Helpers:
     NAMES = (
         "new_tab", "goto_url", "wait_for_load", "page_info", "js", "cdp", "fill_input", "click_at_xy",
         "capture_screenshot", "show_screenshot", "list_tabs", "switch_tab", "answer_dialogs", "wait_for_network_idle",
-        "browser_events", "ensure_real_tab", "snapshot", "act", "settle", "locate",
+        "browser_events", "ensure_real_tab", "snapshot", "act", "settle", "locate", "frames",
     )
 
     def __init__(self, session: Session) -> None:
@@ -319,7 +348,8 @@ class Helpers:
 
     def answer_dialogs(self, action: str = "accept", text: str | None = None) -> None:
         """How the rest of this call answers native dialogs: "accept" (with ``text`` for a
-        prompt) or "dismiss" (the default). Every dialog is listed in the result either way."""
+        prompt) or "dismiss". Otherwise a dialog is held for ``browser_dialog``, and the call
+        ends to say so. Every dialog is listed in the result either way."""
         if action not in ("accept", "dismiss"):
             raise ValueError('answer_dialogs takes "accept" or "dismiss"')
         ask("dialogs", action=action, text=text)
@@ -339,6 +369,12 @@ class Helpers:
                 return True
             time.sleep(0.1)
         return False
+
+    def frames(self) -> dict[str, Any]:
+        """The page's frames as the CDP supervisor tracks them: the top frame and its iframes,
+        each with its ``frame_id`` (an out-of-process one, an iframe of another site, can be
+        reached with ``browser_cdp(frame_id=...)``)."""
+        return dict(ask("frames")["frame_tree"])
 
     def browser_events(self, since: int = 0) -> list[dict[str, Any]]:
         """Every event the daemon kept (dialogs, console errors, page errors, navigations),
@@ -409,7 +445,7 @@ def fill() -> int:
     with sync_playwright() as playwright:
         try:
             hello = _hello()
-            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), hello)
+            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), started_afresh(hello))
         except Exception as exc:  # noqa: BLE001 — reported to the model as the call's error
             print(json.dumps({"error": f"browser unavailable: {exc}"}))
             return 2
@@ -443,7 +479,7 @@ def live() -> int:
     try:
         endpoint = ask("hello")["endpoint"]
     except (OSError, RuntimeError):
-        print(json.dumps({"error": "no browser is open: the agent has not used one in this sandbox"}))
+        print(json.dumps({"error": NO_BROWSER}))
         return 1
     from playwright.sync_api import sync_playwright
 
@@ -496,16 +532,25 @@ def main() -> int:
         return fill()
     if sys.argv[1:] == ["live"]:
         return live()
+    if sys.argv[1:] == ["dialog"]:
+        return dialog()
+    if sys.argv[1:] == ["cdp"]:
+        return cdp_call()
     code = sys.stdin.read()
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     Path(DAEMON.HOME).mkdir(parents=True, exist_ok=True)
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
+        done = threading.Event()
         try:
             hello = _hello()
-            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), hello)
+            started = started_afresh(hello)
+            if hello.get("supervised"):  # before connecting: a page a dialog blocks blocks that too
+                threading.Thread(target=_watch_dialogs, args=(started, done), daemon=True).start()
+            session = Session(playwright.chromium.connect_over_cdp(hello["endpoint"]), started)
         except Exception as exc:  # noqa: BLE001 — reported to the model as the call's error
+            done.set()
             _meta(error=f"browser unavailable: {exc}", started=False)
             return 2
         failed = None
@@ -515,7 +560,8 @@ def main() -> int:
             failed = _traceback()
         finally:
             with contextlib.suppress(Exception):
-                ask("dialogs", action="dismiss")  # the next call answers as it asks
+                ask("dialogs", action="hold")  # between calls, a dialog waits for browser_dialog
+        # The watcher keeps watching: reading the tab back can wait on a dialog too.
         session.remember()
         url = ""
         with contextlib.suppress(Exception):
@@ -524,8 +570,84 @@ def main() -> int:
         with contextlib.suppress(Exception):
             events = session.reported()
         shown = [str(Path(p).relative_to(WORKSPACE)) for p in session.shown[-MAX_SHOWN:]]
-        _meta(started=session.started, url=url, error=failed, events=events, shown=shown)
+        with _REPORTING:
+            done.set()
+            _meta(started=session.started, url=url, error=failed, events=events, shown=shown, pending_dialogs=_pending())
     return 1 if failed else 0
+
+
+_REPORTING = threading.Lock()
+"""Held while the call's result is written: by the call as it ends, or by the dialog watcher."""
+
+
+def _pending() -> list[dict[str, Any]]:
+    """The dialogs held for ``browser_dialog`` now."""
+    with contextlib.suppress(Exception):
+        return list(ask("pending")["pending_dialogs"])
+    return []
+
+
+def _watch_dialogs(started: bool, done: threading.Event) -> None:
+    """End the call when a held dialog blocks the page: its JavaScript waits on the dialog,
+    so the code's next step on the page would wait out the call. What the code printed so
+    far is kept; the result says which dialog, and how to answer it."""
+    first_seen: dict[str, float] = {}
+    while not done.wait(0.25):
+        pending = _pending()
+        now = time.monotonic()
+        for dialog in pending:
+            first_seen.setdefault(dialog["id"], now)
+        blocking = [d for d in pending if now - first_seen[d["id"]] >= BLOCKED_AFTER_S]
+        if not blocking:
+            continue
+        _REPORTING.acquire()
+        if done.is_set():  # the call is writing its own result
+            _REPORTING.release()
+            return
+        sys.stdout.flush()
+        events: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            events = reported()
+        _meta(
+            started=started,
+            error=(
+                f"{_article(blocking[0]['type'])} {blocking[0]['type']} dialog is open and the page waits on it: answer it with browser_dialog "
+                '(accept or dismiss), or call answer_dialogs("accept") before the step that opens one'
+            ),
+            events=events,
+            pending_dialogs=pending,
+            blocked=True,
+        )
+        sys.stderr.flush()
+        os._exit(1)
+
+
+def _article(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def dialog() -> int:
+    """``browser_dialog``: answer the dialog the supervisor holds; ``{"ok", "dialog"}`` or ``{"error"}``."""
+    request = json.loads(os.environ.pop(DIALOG_ENV, "") or "{}")
+    try:
+        answer = told("respond", wait=20.0, **request)
+    except OSError:
+        print(json.dumps({"ok": False, "error": NO_BROWSER}))
+        return 1
+    print(json.dumps(answer))
+    return 0 if answer.get("ok") else 1
+
+
+def cdp_call() -> int:
+    """``browser_cdp``: one raw CDP command over the supervisor's connection."""
+    request = json.loads(os.environ.pop(CDP_ENV, "") or "{}")
+    try:
+        answer = told("cdp", wait=float(request.get("timeout", 30.0)) + 5.0, **request)
+    except OSError:
+        print(json.dumps({"ok": False, "error": NO_BROWSER}))
+        return 1
+    print(json.dumps(answer, default=str))
+    return 0 if answer.get("ok") else 1
 
 
 def _traceback() -> str:

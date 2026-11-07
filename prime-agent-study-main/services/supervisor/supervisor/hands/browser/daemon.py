@@ -10,8 +10,12 @@ role):
 * **one CDP connection with an event buffer**: dialogs, console errors, page errors, main
   frame navigations and request counts of every tab, numbered, the last ``BUFFER`` kept,
   so a call sees what happened since the previous one and while nothing was connected;
-* **dialogs**: answered as the current call asked, else dismissed so a page never hangs on
-  one, and every one recorded;
+* **the CDP supervisor** (``cdp_supervisor``, Hermes's): one more connection, raw, that
+  sees every dialog (through its dialog bridge too, which a hosted browser's own dismissing
+  does not reach) and every frame, out-of-process iframes included. A dialog is answered as
+  the current call asked (``answer_dialogs``), else held for the agent's ``browser_dialog``
+  (dismissed after ``DIALOG_TIMEOUT_S`` unanswered); every one is recorded. Without the
+  supervisor (it could not connect), dialogs are answered as asked, else dismissed;
 * **network activity per tab**: requests in flight and the time since the last one, for a
   network-idle wait that counts requests begun before the call.
 
@@ -28,6 +32,7 @@ import asyncio
 import collections
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -48,6 +53,29 @@ BUFFER = 500
 START_TIMEOUT_S = 20.0
 TEXT_CAP = 300
 """Characters of a console message or error kept per event."""
+DIALOG_TIMEOUT_S = 300.0
+"""How long a dialog waits for the agent's answer before it is dismissed (Hermes's)."""
+
+
+def _sibling(name: str) -> Any:
+    """A module of the runtime beside this file, loaded by path, once (the runtime is a folder
+    of scripts, not a package)."""
+    key = f"githi_browser_{name}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, Path(__file__).with_name(f"{name}.py"))
+        assert spec is not None and spec.loader is not None
+        module = sys.modules[key] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return sys.modules[key]
+
+
+def websocket_url(endpoint: str) -> str:
+    """The browser's DevTools WebSocket: ``endpoint`` itself when it is one (a provider's
+    connect URL), else the one its ``/json/version`` names."""
+    if endpoint.startswith(("ws://", "wss://")):
+        return endpoint
+    with urllib.request.urlopen(f"{endpoint}/json/version", timeout=5) as reply:
+        return str(json.loads(reply.read())["webSocketDebuggerUrl"])
 
 
 def _alive(endpoint: str) -> bool:
@@ -129,6 +157,8 @@ class Daemon:
         self.last_request: dict[str, float] = {}
         self.targets: dict[Any, str] = {}
         self.browser: Any = None
+        self.supervisor: Any = None
+        """The CDP supervisor, once connected (None: it could not, and dialogs are answered here)."""
         self.done = asyncio.Event()
         """Set when the browser goes, or a call asks the daemon to stop."""
 
@@ -155,6 +185,24 @@ class Daemon:
         for page in context.pages:
             await self.watch(page)
         context.on("page", lambda page: asyncio.ensure_future(self.watch(page)))
+        await self.supervise()
+
+    async def supervise(self) -> None:
+        """Start the CDP supervisor on the browser; without it, dialogs are answered here."""
+        supervisor = _sibling("cdp_supervisor").CDPSupervisor(
+            NAME, "", dialog_timeout_s=DIALOG_TIMEOUT_S, on_dialog=self.on_supervised_dialog
+        )
+        try:
+            supervisor.cdp_url = await asyncio.to_thread(websocket_url, self.endpoint)
+            await supervisor.start()
+        except Exception as exc:  # noqa: BLE001 — the browser still works; dialogs are answered as before
+            _log(f"no CDP supervisor: {exc}")
+            return
+        self.supervisor = supervisor
+
+    @property
+    def supervised(self) -> bool:
+        return self.supervisor is not None and self.supervisor.active
 
     @staticmethod
     def _count_generation() -> None:
@@ -186,7 +234,11 @@ class Daemon:
         self.events.append({"seq": self.seq, "kind": kind, "tab": target, "at": time.time(), **fields})
 
     async def on_dialog(self, target: str, dialog: Any) -> None:
-        """Answer as the current call asked, else dismiss: a page must never hang on one."""
+        """A native dialog as Playwright sees it. The supervisor holds and answers it when it
+        runs (this listener keeps Playwright from dismissing it first); else answer as the
+        current call asked, else dismiss: a page must never hang on one."""
+        if self.supervised:
+            return
         action, text = self.dialog_answer
         with contextlib.suppress(Exception):  # closed with its page
             if action == "accept":
@@ -194,6 +246,30 @@ class Daemon:
             else:
                 await dialog.dismiss()
         self.record("dialog", target, type=dialog.type, message=dialog.message[:TEXT_CAP], answer=action)
+
+    def on_supervised_dialog(self, what: str, dialog: Any) -> None:
+        """The supervisor's dialog opened, or closed (with how it was answered)."""
+        fields = dialog.to_dict()
+        tab = self._tab_of(fields.get("frame_id"))
+        if what == "opened":
+            self.record("dialog", tab, id=fields["id"], type=fields["type"], message=fields["message"], open=True)
+        else:
+            self.record(
+                "dialog", tab, id=fields["id"], type=fields["type"], message=fields["message"],
+                answer=fields.get("answer") or "closed", by=fields["closed_by"],
+            )
+
+    def _tab_of(self, frame_id: str | None) -> str:
+        """The tab a frame is in (a tab's main frame has the tab's id; an iframe, its parent's)."""
+        frames = self.supervisor._frames if self.supervisor is not None else {}
+        seen: set[str] = set()
+        while frame_id and frame_id not in seen:
+            seen.add(frame_id)
+            if frame_id in self.targets.values():
+                return frame_id
+            frame = frames.get(frame_id)
+            frame_id = frame.parent_frame_id if frame is not None else None
+        return ""
 
     def on_console(self, target: str, message: Any) -> None:
         if message.type in ("error", "warning"):
@@ -209,20 +285,40 @@ class Daemon:
 
     # Requests ------------------------------------------------------------------
 
-    def answer(self, request: dict[str, Any]) -> dict[str, Any]:
+    async def answer(self, request: dict[str, Any]) -> dict[str, Any]:
         """One request from a call, by its ``op``."""
         match request.get("op"):
             case "hello":
-                return {"pid": os.getpid(), "endpoint": self.endpoint, "generation": self.generation, "seq": self.seq}
+                return {
+                    "pid": os.getpid(), "endpoint": self.endpoint, "generation": self.generation, "seq": self.seq,
+                    "supervised": self.supervised,
+                }
             case "events":
                 since = int(request.get("since", 0))
                 return {"events": [e for e in self.events if e["seq"] > since], "seq": self.seq}
             case "dialogs":
-                action = request.get("action", "dismiss")
-                if action not in ("accept", "dismiss"):
-                    return {"error": 'dialogs are answered "accept" or "dismiss"'}
-                self.dialog_answer = (action, request.get("text"))
-                return {"ok": True}
+                return self.answer_dialogs(request.get("action", "hold"), request.get("text"))
+            case "pending":
+                if not self.supervised:
+                    return {"pending_dialogs": [], "supervised": False}
+                return {"pending_dialogs": [d.to_dict() for d in self.supervisor.snapshot().pending_dialogs], "supervised": True}
+            case "respond":
+                if not self.supervised:
+                    return {"ok": False, "error": "no dialog is held: dialogs here are answered as each call asks"}
+                return dict(await self.supervisor.respond_to_dialog(
+                    str(request.get("action", "")), prompt_text=request.get("text"), dialog_id=request.get("dialog_id"),
+                ))
+            case "frames":
+                if not self.supervised:
+                    return {"error": "the CDP supervisor is not running, so frames are not tracked"}
+                return {"frame_tree": self.supervisor.snapshot().frame_tree}
+            case "cdp":
+                if not self.supervised:
+                    return {"ok": False, "error": "the CDP supervisor is not running"}
+                return dict(await self.supervisor.call(
+                    str(request.get("method", "")), request.get("params") or {}, target_id=request.get("target_id"),
+                    frame_id=request.get("frame_id"), timeout=float(request.get("timeout", 30.0)),
+                ))
             case "shutdown":
                 self.done.set()
                 return {"ok": True}
@@ -233,6 +329,18 @@ class Daemon:
             case op:
                 return {"error": f"unknown op {op!r}"}
 
+    def answer_dialogs(self, action: str, text: str | None) -> dict[str, Any]:
+        """How dialogs are answered from now: "accept" (``text`` for a prompt) or "dismiss",
+        as a call asked; "hold" (between calls, and in a call that asked nothing): kept for
+        the agent's ``browser_dialog``."""
+        if action not in ("accept", "dismiss", "hold"):
+            return {"error": 'dialogs are answered "accept" or "dismiss" (or held: "hold")'}
+        self.dialog_answer = ("dismiss", None) if action == "hold" else (action, text)
+        if self.supervisor is not None:
+            self.supervisor.dialog_policy = {"accept": "auto_accept", "dismiss": "auto_dismiss"}.get(action, "must_respond")
+            self.supervisor.prompt_text = text if action == "accept" else None
+        return {"ok": True}
+
     async def serve(self) -> None:
         SOCKET.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(self._connection, path=str(SOCKET))
@@ -241,19 +349,27 @@ class Daemon:
         self.browser.on("disconnected", lambda _: self.done.set())
         async with server:
             await self.done.wait()  # the browser is gone (or a call asked): so is the reason to run
+        if self.supervisor is not None:
+            await self.supervisor.stop()
         SOCKET.unlink(missing_ok=True)
 
     async def _connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             line = await reader.readline()
             try:
-                reply = self.answer(json.loads(line))
+                reply = await self.answer(json.loads(line))
             except ValueError:
                 reply = {"error": "a request is one JSON object on one line"}
             writer.write(json.dumps(reply, default=str).encode() + b"\n")
             await writer.drain()
         finally:
             writer.close()
+
+
+def _log(line: str) -> None:
+    """A line in the daemon's log (the runner reads its last when the daemon does not answer)."""
+    with open(HOME / "daemon.log", "a") as log:
+        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
 
 
 async def main() -> None:
@@ -270,6 +386,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as exc:  # noqa: BLE001 — the runner reads this log when we do not answer
-        with open(HOME / "daemon.log", "a") as log:
-            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {type(exc).__name__}: {exc}\n")
+        _log(f"{type(exc).__name__}: {exc}")
         sys.exit(1)

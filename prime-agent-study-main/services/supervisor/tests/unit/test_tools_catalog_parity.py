@@ -75,6 +75,9 @@ def _sample(prop: str, schema: dict[str, Any], index: int) -> Any:
     if schema["type"] == "array":  # one item, each of its own fields sampled
         item = schema["items"]
         return [{k: _sample(k, v, i) for i, (k, v) in enumerate(item.get("properties", {}).items())}]
-    if schema["type"] == "string" and (pattern := schema.get("pattern")):  # a value it matches (a URL, say)
-        return next(v for v in (f"value-of-{prop}", f"https://value-of-{prop}.example") if re.search(pattern, v))
-    return {"string": f"value-of-{prop}", "integer": 10 + index, "boolean": True}[schema["type"]]
+    if schema["type"] == "string" and (pattern := schema.get("pattern")):  # a value it matches (a URL, an id, a method)
+        candidates = (f"value-of-{prop}", f"https://value-of-{prop}.example", f"d-{10 + index}", f"Value.of{prop.title().replace('_', '')}")
+        return next(v for v in candidates if re.search(pattern, v))
+    if schema["type"] == "object":
+        return {f"key-of-{prop}": f"value-of-{prop}"}
+    return {"string": f"value-of-{prop}", "integer": 10 + index, "number": 10.5 + index, "boolean": True}[schema["type"]]
