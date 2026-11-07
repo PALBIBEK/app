@@ -1,5 +1,5 @@
 /**
- * Approvals inbox, sandboxes, usage, runners, secrets, publish checks and the fleet.
+ * Approvals inbox, sandboxes, usage, runners, secrets, the browser vault, publish checks and the fleet.
  */
 
 import { apiClient } from '../client';
@@ -15,6 +15,10 @@ import type {
   SandboxItem,
   UsageBy,
   UsageReport,
+  VaultAddressIn,
+  VaultCardIn,
+  VaultItem,
+  VaultLoginIn,
 } from '../types/operate.types';
 
 const seg = (name: string) => name.split('/').map(encodeURIComponent).join('/');
@@ -54,6 +58,12 @@ export const operateAPI = {
   secretNames: async (): Promise<string[]> => (await apiClient.get<{ names: string[] }>('/secrets')).names,
   putSecret: (name: string, value: string): Promise<void> => apiClient.put<void>(`/secrets/${seg(name)}`, { value }),
   deleteSecret: (name: string): Promise<void> => apiClient.delete<void>(`/secrets/${seg(name)}`),
+
+  vaultItems: async (): Promise<VaultItem[]> => (await apiClient.get<{ items: VaultItem[] }>('/browser-vault')).items,
+  saveVaultLogin: (login: VaultLoginIn): Promise<void> => apiClient.put<void>('/browser-vault/logins', login),
+  saveVaultCard: (card: VaultCardIn): Promise<void> => apiClient.put<void>('/browser-vault/cards', card),
+  saveVaultAddress: (address: VaultAddressIn): Promise<void> => apiClient.put<void>('/browser-vault/addresses', address),
+  deleteVaultItem: (handle: string): Promise<void> => apiClient.delete<void>(`/browser-vault/${encodeURIComponent(handle)}`),
 
   checkArtifact: (kind: ArtifactKind, body: Record<string, unknown>): Promise<PublishCheckResult> =>
     apiClient.post<PublishCheckResult>(`/catalog/${kind}/check`, body),
