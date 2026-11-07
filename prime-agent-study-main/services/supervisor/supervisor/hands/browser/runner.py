@@ -580,7 +580,10 @@ def main() -> int:
         shown = [str(Path(p).relative_to(WORKSPACE)) for p in session.shown[-MAX_SHOWN:]]
         with _REPORTING:
             done.set()
-            _meta(started=session.started, url=url, error=failed, events=events, shown=shown, pending_dialogs=_pending())
+            _meta(
+                started=session.started, url=url, error=failed, events=events, shown=shown, pending_dialogs=_pending(),
+                fallback=os.environ.get("GITHI_BROWSER_FALLBACK"),
+            )
     return 1 if failed else 0
 
 

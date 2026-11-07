@@ -26,7 +26,7 @@ export const SandboxSpecSchema = z.object({
   /** What the sandbox may reach; unset: the provider's default (nothing, for Docker). */
   network: NetworkSpecSchema.nullable().optional(),
   /** Where the browser tools find a browser: a Chromium in the sandbox (unset too), or a hosted one over CDP. */
-  browser: z.enum(['sandbox-chromium', 'remote-cdp']).nullable().optional(),
+  browser: z.enum(['sandbox-chromium', 'sandbox-lightpanda', 'browserbase', 'browser-use', 'firecrawl', 'remote-cdp']).nullable().optional(),
 });
 
 export const ManifestSchema = z.object({

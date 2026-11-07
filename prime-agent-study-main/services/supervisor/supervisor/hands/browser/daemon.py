@@ -5,8 +5,10 @@ everything it started. What must last between calls lives here instead, in a pro
 its own session without the call's run tag (Hermes's browser-harness daemon has the same
 role):
 
-* **the browser**: Chromium is started here, once, and its endpoint handed to each call
-  (or a provider's browser, ``GITHI_BROWSER_CDP``, is reached instead);
+* **the browser**: Chromium (or Lightpanda, ``GITHI_BROWSER_ENGINE=lightpanda``) is started
+  here, once, and its endpoint handed to each call (or a provider's browser,
+  ``GITHI_BROWSER_CDP``, is reached instead, and let go after ``GITHI_BROWSER_IDLE_S``
+  without a call);
 * **one CDP connection with an event buffer**: dialogs, console errors, page errors, main
   frame navigations and request counts of every tab, numbered, the last ``BUFFER`` kept,
   so a call sees what happened since the previous one and while nothing was connected;
@@ -35,6 +37,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -88,6 +92,48 @@ def _alive(endpoint: str) -> bool:
 
 def _untagged_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k != RUN_TAG_VAR}
+
+
+ENGINE = os.environ.get("GITHI_BROWSER_ENGINE", "").strip().lower()
+"""``lightpanda`` for Lightpanda; else Chromium."""
+IDLE_S = float(os.environ.get("GITHI_BROWSER_IDLE_S") or 0)
+"""Seconds without a call after which the daemon lets its browser go (0: never). Set for a
+hosted browser, which a provider bills by the minute (Hermes's inactivity timeout)."""
+LIGHTPANDA_HINT = "install Lightpanda (https://lightpanda.io/docs/run-locally/installation/one-liner) in the sandbox's image, on PATH or at LIGHTPANDA_PATH"
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def start_lightpanda() -> str:
+    """Start ``lightpanda serve`` on a free loopback port (detached, untagged) and wait for its
+    ``/json/version`` (Hermes's ``tools/browser_lightpanda.py``)."""
+    binary = os.environ.get("LIGHTPANDA_PATH") or shutil.which("lightpanda")
+    if not binary:
+        raise RuntimeError(f"this sandbox has no Lightpanda: {LIGHTPANDA_HINT}")
+    port = _free_port()
+    with open(HOME / "lightpanda.log", "ab") as log:
+        proc = subprocess.Popen(
+            [binary, "serve", "--host", "127.0.0.1", "--port", str(port)],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            env=_untagged_env(),
+            start_new_session=True,
+        )
+    endpoint = f"http://127.0.0.1:{port}"
+    deadline = time.monotonic() + START_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"lightpanda serve exited with code {proc.returncode} (see {HOME / 'lightpanda.log'})")
+        if _alive(endpoint):
+            (HOME / "port").write_text(str(port))
+            return endpoint
+        time.sleep(0.1)
+    raise RuntimeError(f"lightpanda serve did not answer within {START_TIMEOUT_S:.0f}s (see {HOME / 'lightpanda.log'})")
 
 
 def start_chromium(chromium_path: str) -> str:
@@ -161,6 +207,7 @@ class Daemon:
         """The CDP supervisor, once connected (None: it could not, and dialogs are answered here)."""
         self.done = asyncio.Event()
         """Set when the browser goes, or a call asks the daemon to stop."""
+        self.last_activity = time.monotonic()
 
     # The browser -------------------------------------------------------------
 
@@ -177,7 +224,10 @@ class Daemon:
         elif port.exists() and _alive(endpoint := f"http://127.0.0.1:{port.read_text().strip()}"):
             self.endpoint = endpoint
         else:
-            self.endpoint = await asyncio.to_thread(start_chromium, playwright.chromium.executable_path)
+            if ENGINE == "lightpanda":
+                self.endpoint = await asyncio.to_thread(start_lightpanda)
+            else:
+                self.endpoint = await asyncio.to_thread(start_chromium, playwright.chromium.executable_path)
             self._count_generation()
         self.generation = int(counter.read_text()) if (counter := HOME / "generation").exists() else 0
         self.browser = await playwright.chromium.connect_over_cdp(self.endpoint)
@@ -287,6 +337,8 @@ class Daemon:
 
     async def answer(self, request: dict[str, Any]) -> dict[str, Any]:
         """One request from a call, by its ``op``."""
+        if request.get("op") not in ("pending", "events"):  # a call's watcher polls those
+            self.last_activity = time.monotonic()
         match request.get("op"):
             case "hello":
                 return {
@@ -347,11 +399,23 @@ class Daemon:
         os.chmod(SOCKET, 0o600)
         (HOME / "daemon.pid").write_text(str(os.getpid()))
         self.browser.on("disconnected", lambda _: self.done.set())
+        idle = asyncio.ensure_future(self.reap_when_idle()) if IDLE_S > 0 else None
         async with server:
             await self.done.wait()  # the browser is gone (or a call asked): so is the reason to run
+        if idle is not None:
+            idle.cancel()
         if self.supervisor is not None:
             await self.supervisor.stop()
         SOCKET.unlink(missing_ok=True)
+
+    async def reap_when_idle(self) -> None:
+        """Let the browser go after ``IDLE_S`` without a call: a hosted one ends with this
+        daemon's connection (the next call opens another)."""
+        while not self.done.is_set():
+            await asyncio.sleep(min(IDLE_S, 30.0))
+            if time.monotonic() - self.last_activity >= IDLE_S:
+                _log(f"no call for {IDLE_S:.0f}s: letting the browser go")
+                self.done.set()
 
     async def _connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:

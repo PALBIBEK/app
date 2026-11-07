@@ -27,10 +27,15 @@ from typing import TYPE_CHECKING, Final
 
 from supervisor.hands.browser.providers import (
     BROWSER_PROVIDERS,
+    HOSTED_BROWSERS,
+    Browserbase,
     BrowserProvider,
     BrowserUnreachable,
+    BrowserUse,
+    Firecrawl,
     RemoteCdp,
     SandboxChromium,
+    SandboxLightpanda,
     browser_providers_from_env,
 )
 from supervisor.hands.browser.runner import CDP_ENV, DIALOG_ENV, FILL_ENV, META_MARK, VAULT_ENV
@@ -40,11 +45,13 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BROWSER_ERROR_ENV",
+    "BROWSER_FALLBACK_ENV",
     "BROWSER_PROVIDERS",
     "BROWSER_TOOLS",
     "CDP_ENV",
     "DIALOG_ENV",
     "FILL_ENV",
+    "HOSTED_BROWSERS",
     "META_MARK",
     "MISSING_EXIT",
     "MISSING_MARK",
@@ -54,8 +61,12 @@ __all__ = [
     "WORKSPACE_DIR",
     "BrowserProvider",
     "BrowserUnreachable",
+    "BrowserUse",
+    "Browserbase",
+    "Firecrawl",
     "RemoteCdp",
     "SandboxChromium",
+    "SandboxLightpanda",
     "browser_providers_from_env",
     "install_command",
     "pack",
@@ -69,6 +80,9 @@ BROWSER_TOOLS: Final = frozenset({"browser_exec", "browser_vault", "browser_dial
 """The tools that need the session's browser provider: only their calls ask it."""
 BROWSER_ERROR_ENV: Final = "GITHI_BROWSER_ERROR"
 """Why the session's browser provider could not serve this call, for the runner to report."""
+BROWSER_FALLBACK_ENV: Final = "GITHI_BROWSER_FALLBACK"
+"""Why the session's hosted browser could not serve this call, so the sandbox's own serves it
+(Hermes's fallback from a cloud browser to a local one), for the runner to report."""
 WORKSPACE_DIR: Final = ".githi/browser"
 """The browser's folder in the session's workspace: saved with the session, so batch
 files and the agent's own helpers survive a lost sandbox (the open tabs do not)."""

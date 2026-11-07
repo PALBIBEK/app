@@ -64,3 +64,31 @@ async def test_a_profile_whose_network_its_provider_cannot_enforce_is_refused(en
     async with session_worker(env.client, state, task_queue=env.queue):
         with pytest.raises(Exception, match="cannot enforce network 'open'"):
             await browser_session(env, state, network=NetworkAccess(NetworkMode.OPEN))
+
+
+class _Released:
+    """A hosted browser provider that records what it was told to release."""
+
+    name = "browserbase"
+
+    def __init__(self) -> None:
+        self.released: list[str] = []
+
+    async def env(self, session_id: str, network: object) -> dict[str, str]:
+        return {}
+
+    async def release(self, session_id: str) -> None:
+        self.released.append(session_id)
+
+
+async def test_a_sessions_hosted_browsers_are_released_when_it_ends(env: Env, model: Callable[..., ScriptedGateway]) -> None:
+    """A provider bills by the minute: the session's end releases what it opened."""
+    model(("browser_exec", {"code": "print(1)"}))
+    state = await env.state()
+    provider = _Released()
+    state.manager._browsers = {**state.manager._browsers, "browserbase": provider}
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state)
+        await env.sessions.terminate(sid)
+
+    assert provider.released == [sid]
