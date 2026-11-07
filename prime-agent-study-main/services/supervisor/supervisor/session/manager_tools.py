@@ -15,12 +15,15 @@ from supervisor.agent.events import (
     ToolStart,
 )
 from supervisor.catalog import SandboxProfile, SessionPins
+from supervisor.catalog.repository import sync_composition
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
 from supervisor.hands.browser import BROWSER_ERROR_ENV, BROWSER_TOOLS, BrowserUnreachable
 from supervisor.hands.keys import DEFAULT_HAND, hand_key, split_key, take_hand
 from supervisor.hands.leases import Borrower
 from supervisor.models.browser import BrowserAccess, BrowserGrant
+from supervisor.sandbox.base import Sandbox
+from supervisor.sandbox.resolve import resolve_sandbox_create
 from supervisor.seams import (
     ModelGatewayClient,
     ToolClassifier,
@@ -245,14 +248,41 @@ class ToolOps(ApprovalOps):
 
     async def live_browser(self, session_id: str) -> LiveBrowser | None:
         """Where a person sees and acts on the session's browser (``supervisor.hands.browser
-        .live``); None while no sandbox serves the session (the browser went with it)."""
-        if self._hands.sandbox(session_id) is None:
-            return None
-        row = await self._get_session_row(session_id)
-        env = await self._browser_env(session_id, self._sandbox_profile_for_row(row))
+        .live``); None while no sandbox serves the session (the browser went with it).
+
+        The sandbox is usually another process's, the worker running the session: the API
+        finds it where its provider made it (``SandboxProvider.serving``) and only looks and
+        acts in it. A look asks the sandbox's daemon for the browser it holds, so it needs
+        nothing from the browser provider (which would open a remote browser for a session
+        it has not seen)."""
+        if self._hands.sandbox(session_id) is not None:
+            workspace = self.hand_workspace(session_id)
+        else:
+            row = await self._get_session_row(session_id)
+            found = await self._serving_sandbox(session_id, row)
+            if found is None:
+                return None
+            workspace = HandWorkspace(lambda: found)
         async with self._db() as db:
             working = await run_open(db, session_id)
-        return LiveBrowser(self.hand_workspace(session_id), env, working)
+        return LiveBrowser(workspace, {}, working)
+
+    async def _serving_sandbox(self, session_id: str, row: SessionRow) -> Sandbox | None:
+        """The sandbox another process's worker runs for the session, found through the
+        provider its pinned profile names; None for a session that runs none."""
+        recipe = self._hands.recipe(session_id)
+        if recipe is not None:
+            return await recipe.provider.serving(session_id)
+        if row.composition_pins and self._composition_catalog is not None:
+            pins = SessionPins.from_dict(dict(row.composition_pins))  # another process may have published them
+            await sync_composition(self._composition_catalog, self._db, pins.composition_id, pins.composition_digest)
+        provider, _ = resolve_sandbox_create(
+            self._pinned_manifest(row),
+            deploy_provider=self._provider,
+            profile=self._sandbox_profile_for_row(row),
+            hydrator=self._workspace_svc.hydrator,
+        )
+        return await provider.serving(session_id) if provider is not None else None
 
     async def _browser_env(self, session_id: str, profile: SandboxProfile | None) -> dict[str, str]:
         """How the runner reaches the session's browser (the profile's provider); why not,
