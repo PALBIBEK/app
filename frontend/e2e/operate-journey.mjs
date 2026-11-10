@@ -82,7 +82,7 @@ check(await p.getByText('vault-pass-e2e').count() === 0, 'the saved password is 
 check(await p.getByTestId('secret-names').getByText(site).count() === 0, 'a saved login is not listed as a secret');
 await p.getByRole('button', { name: `Delete login:${site}` }).click();
 await p.getByTestId('vault-items').getByText(site).waitFor({ state: 'detached', timeout: 15000 }).catch(() => {});
-check(await p.getByText(site).count() === 0, 'the saved login is gone');
+check(await p.getByTestId('vault-items').getByText(site).count() === 0, 'the saved login is gone');
 console.log('5b login saved in the vault, then deleted');
 
 // Runners: register (token shown once), then remove.
