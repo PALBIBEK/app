@@ -285,6 +285,16 @@ proceed.
   change is retired (the disclosure layer's rule for deletes). Statements are cleaned as
   any captured fact is (a model's "(said in X)" is marked as a claim). The inbox backlog is
   reported in the service's metrics (`inbox_backlog`).
+- **A failing capture is set aside:** a batch that fails is rolled back and its captures
+  landed one at a time, so the good ones land. One that fails on its own is counted and
+  set aside at its fifth failure, spaced by the drainer's backoff. One that cannot be read
+  is set aside at once. Facts are embedded before the notebook's lock is taken, so the
+  lock covers the writes only. A replacement in a full notebook counts the room its
+  retirement frees, and editing a typed fact's words takes its type away.
+- **Known limit:** resolution compares a burst with the facts that have landed, not those
+  still queued. Promotion wakes at once on the replica that queued the capture, and within
+  a second elsewhere, while a session's next burst is a quiet window away. A contradiction
+  that slips through that gap is for consolidation (G5).
 - **Robust draining:** a notebook whose promotion keeps failing is backed off (5 s doubling
   to 5 minutes), so it never holds up the others. Promoted rows are pruned in every
   notebook once a minute. A full notebook refuses a capture up front, as `capture` does. A

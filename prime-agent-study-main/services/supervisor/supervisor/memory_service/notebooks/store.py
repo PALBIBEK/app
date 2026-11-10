@@ -238,13 +238,14 @@ class FactTx:
         self._log(int(fact_id), "update", text, provenance)
         await self._index(int(fact_id), text, provenance)
 
-    async def set_typed(self, fact: Fact, typed: Typed) -> None:
-        """Give a plain-text fact the type an observation repeating it carried. Not a
-        change to what the fact says, so no revision."""
+    async def set_typed(self, fact: Fact, typed: Typed | None) -> None:
+        """Give a plain-text fact the type an observation repeating it carried, or (None)
+        take a fact's type away. Not a change to what the fact says, so no revision."""
+        values = _typed_columns(typed) if typed is not None else dict.fromkeys(_TYPED_COLUMNS)
         await self.db.execute(
             update(FactRow)
             .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact.id))
-            .values(**_typed_columns(typed))
+            .values(**values)
         )
 
     async def remove(self, facts: Sequence[Fact]) -> None:
@@ -613,6 +614,40 @@ class NotebookStore:
                 )
                 texts = {str(i): str(t) for i, t in rows}
             return live, texts
+
+    async def embed_queued(self, notebook_id: str, *, limit: int) -> None:
+        """Embed the facts of the notebook's oldest queued captures now, outside its lock:
+        the embedder keeps them (``cost.CachingEmbedder``), so landing them under the lock
+        embeds nothing."""
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(InboxRow.observations)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .order_by(InboxRow.id)
+                .limit(limit)
+            )
+            statements = [o.get("statement") for observations in rows for o in observations or () if isinstance(o, dict)]
+        for statement in statements:
+            if isinstance(statement, str) and statement:
+                self._embedder.embed(statement)
+
+    async def count_failure(self, notebook_id: str, *, give_up_at: int) -> tuple[int, int | None]:
+        """Count a failure against the notebook's oldest queued capture, setting it aside
+        (marked promoted, so it is pruned in time) at ``give_up_at``: (its failures, its id)."""
+        async with self._db() as db:
+            row = await db.scalar(
+                select(InboxRow)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .order_by(InboxRow.id)
+                .limit(1)
+            )
+            if row is None:
+                return 0, None
+            row.attempts = int(row.attempts or 0) + 1
+            if row.attempts >= give_up_at:
+                row.promoted_at = now_ms()
+            await db.commit()
+            return int(row.attempts), int(row.id)
 
     async def all_texts(self, notebook_id: str) -> list[str]:
         """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""

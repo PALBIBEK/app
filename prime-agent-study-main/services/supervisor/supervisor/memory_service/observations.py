@@ -53,6 +53,7 @@ __all__ = [
     "parse_model_outcome",
     "scrub_control_characters",
     "truncate_utf8",
+    "utf8_bytes",
 ]
 
 # Grok's limits (xai-grok-memory/src/v2_capture.rs), unchanged.
@@ -300,5 +301,9 @@ def _is_control(character: str) -> bool:
     return unicodedata.category(character) == "Cc"
 
 
-def _bytes(text: str) -> int:
+def utf8_bytes(text: str) -> int:
+    """``text``'s length as every bound here counts it: UTF-8 bytes."""
     return len(text.encode("utf-8"))
+
+
+_bytes = utf8_bytes

@@ -58,12 +58,15 @@ from supervisor.memory_service.observations import (
     ObservationDraft,
     ObservationInvalid,
     truncate_utf8,
+    utf8_bytes,
 )
 
 logger = logging.getLogger(__name__)
 
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
+PROMOTE_ATTEMPTS = 5
+"""Tries a queued capture that fails to land on its own gets before it is set aside."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
 """How long a promoted capture's row is kept, so a retried burst (its idempotency key)
 is still recognised: well past capture's own retries and Temporal's."""
@@ -208,8 +211,45 @@ class NotebookOps:
     async def promote(self, notebook_id: str, *, batch: int = PROMOTE_BATCH) -> tuple[int, int]:
         """Land up to ``batch`` of the notebook's queued captures as facts, in one
         transaction under its lock, each as ``capture`` would (repeats tighten, never
-        duplicate); then mark them promoted. (captures, facts added). Replicas may promote the same notebook at once: its lock makes them take
-        turns, and the second finds the first's captures gone."""
+        duplicate); then mark them promoted. (captures, facts added). Replicas may promote
+        the same notebook at once: its lock makes them take turns, and the second finds the
+        first's captures gone.
+
+        Their facts are embedded first, outside the lock (the embedder caches them), so the
+        lock is held for the writes only. A batch that fails is rolled back whole and its
+        captures landed one at a time instead: the good ones land, and one that fails on its
+        own again is counted against it and set aside at ``PROMOTE_ATTEMPTS`` (the drainer
+        spaces the tries); the failure is raised, for the drainer to back off."""
+        await self.store.embed_queued(notebook_id, limit=batch)
+        try:
+            return await self._promote_batch(notebook_id, batch)
+        except NotebookArchived:
+            dropped = await self.store.drop_inbox(notebook_id)
+            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
+            return dropped, 0
+        except Exception:
+            if batch == 1:
+                await self._count_failure(notebook_id)
+                raise
+            logger.warning("notebook %s: a batch of queued captures failed: landing them one at a time",
+                           notebook_id, exc_info=True)
+        captures = added = 0
+        for _ in range(batch):
+            one, facts = await self.promote(notebook_id, batch=1)  # raises at the one that fails alone
+            if not one:
+                break
+            captures, added = captures + one, added + facts
+        return captures, added
+
+    async def _count_failure(self, notebook_id: str) -> None:
+        attempts, row_id = await self.store.count_failure(notebook_id, give_up_at=PROMOTE_ATTEMPTS)
+        if row_id is not None:
+            logger.warning(
+                "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
+                notebook_id, row_id, attempts, PROMOTE_ATTEMPTS, ": set aside" if attempts >= PROMOTE_ATTEMPTS else "",
+            )
+
+    async def _promote_batch(self, notebook_id: str, batch: int) -> tuple[int, int]:
 
         async def run(tx: FactTx) -> tuple[int, int]:
             rows = list(
@@ -234,12 +274,7 @@ class NotebookOps:
                 )
             return len(rows), added
 
-        try:
-            return await self.store.transact(notebook_id, run)
-        except NotebookArchived:
-            dropped = await self.store.drop_inbox(notebook_id)
-            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
-            return dropped, 0
+        return await self.store.transact(notebook_id, run)
 
     async def edit(
         self,
@@ -267,6 +302,10 @@ class NotebookOps:
                     else fact.provenance
                 )
                 await tx.update(fact.id, edited_text(edit.text), provenance)
+                if fact.typed is not None and edited_text(edit.text) != fact.text:
+                    # A person's words now, not the observation's: what it said of itself
+                    # (its keywords, its body, the model that made it) no longer describes it.
+                    await tx.set_typed(fact, None)
                 if expiry is not None and fact.expires_on != (expiry or None):
                     await tx.set_expiry(replace(fact, text=edited_text(edit.text), provenance=provenance), expiry or None)
 
@@ -356,6 +395,7 @@ async def land(
     *,
     existing: dict[str, Fact] | None = None,
     over_limit: Literal["refuse", "drop"] = "refuse",
+    room: int = 0,
 ) -> tuple[int, bool]:
     """Add each (text, type) to the notebook, under the caller's lock: (facts added,
     whether every entry was kept).
@@ -382,7 +422,7 @@ async def land(
                 await tx.set_typed(duplicate, typed)
                 duplicate = existing[key] = replace(duplicate, typed=typed)
             continue
-        if len(existing) + 1 > MAX_FACTS_PER_NOTEBOOK:
+        if len(existing) + 1 > MAX_FACTS_PER_NOTEBOOK + room:
             if over_limit == "drop":
                 logger.warning(
                     "notebook %s is full (%d facts): %d queued facts not kept",
@@ -410,13 +450,15 @@ def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
     if not cleaned:
         return None
     statement = cleaned[0]
-    if _bytes(draft.statement) <= MAX_STATEMENT_BYTES < _bytes(statement):  # lengthened by the cleaning only
-        statement = truncate_utf8(statement, MAX_STATEMENT_BYTES).rstrip()
+    if utf8_bytes(draft.statement) <= MAX_STATEMENT_BYTES < utf8_bytes(statement):  # lengthened by the cleaning only
+        # Cut the words, never the "[claimed source: ...]" label the cleaning added.
+        head, marker, claim = statement.rpartition(" [claimed source: ")
+        if marker:
+            tail = marker + claim
+            statement = truncate_utf8(head, MAX_STATEMENT_BYTES - utf8_bytes(tail)).rstrip() + tail
+        else:
+            statement = truncate_utf8(statement, MAX_STATEMENT_BYTES).rstrip()
     return replace(draft, statement=statement)
-
-
-def _bytes(text: str) -> int:
-    return len(text.encode("utf-8"))
 
 
 def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
@@ -427,6 +469,9 @@ def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
         drafts = [observation_in(o) for o in row.observations]
         for draft in drafts:
             draft.validate()
+        for entry in row.retire or ():
+            if not (isinstance(entry.get("id"), str) and isinstance(entry.get("text"), str)):
+                raise ObservationInvalid(f"retire entry {entry!r}")
     except (ObservationInvalid, TypeError, AttributeError):
         logger.warning("notebook %s: queued capture %s cannot be read: set aside", notebook_id, row.id, exc_info=True)
         return None
@@ -440,15 +485,19 @@ async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDr
     tx.author = row.author
     provenance = Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown))
     entries = [(d.statement, typed_of(d)) for d in drafts]
-    landed, whole = await land(tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop")
-    if row.retire and whole:
-        restated = {normalize(text) for text, _ in entries}
-        by_id = {f.id: key for key, f in existing.items()}
-        gone = [
-            by_id[r["id"]]
-            for r in row.retire
-            if r["id"] in by_id and existing[by_id[r["id"]]].text == r["text"] and by_id[r["id"]] not in restated
-        ]
+    restated = {normalize(text) for text, _ in entries}
+    by_id = {f.id: key for key, f in existing.items()}
+    gone = [
+        by_id[r["id"]]
+        for r in row.retire or ()
+        if r["id"] in by_id and existing[by_id[r["id"]]].text == r["text"] and by_id[r["id"]] not in restated
+    ]
+    # What it retires makes room for what replaces it (as observe counted): a full notebook
+    # takes the replacement, then loses the fact it replaces.
+    landed, whole = await land(
+        tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=len(gone)
+    )
+    if gone and whole:
         await tx.remove([existing[key] for key in gone])
         for key in gone:
             del existing[key]

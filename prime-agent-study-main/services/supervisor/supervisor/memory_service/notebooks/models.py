@@ -155,3 +155,4 @@ class InboxRow(Base):
     expires_on: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     promoted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # failures landing on its own

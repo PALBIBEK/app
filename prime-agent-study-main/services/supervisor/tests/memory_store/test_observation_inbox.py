@@ -354,37 +354,83 @@ async def test_a_queued_capture_that_cannot_be_read_is_set_aside_not_the_queue_b
     assert await store.pending() == 0
 
 
-async def test_a_batch_that_fails_to_write_is_rolled_back_whole_and_tried_again(
+async def test_a_batch_that_fails_to_write_is_landed_one_capture_at_a_time(
     svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failure while writing (the database, the embedder) rolls the batch back with
-    nothing marked: the notebook is backed off and its captures land on a later try."""
+    """A failure while writing rolls the batch back; its captures then land one per
+    transaction, so a passing failure costs nothing and a capture that fails on its own
+    is counted against it, then set aside, never the queue behind it."""
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.store import FactTx
+
     memory = svc.app.state.memory
     await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
-    await client.observe(nb.id, [draft("First")], context=OWN)
-    await client.observe(nb.id, [draft("Second")], context=OWN)
-    from supervisor.memory_service.notebooks.store import FactTx
-
+    for text in ("First", "Refused by the embedder", "Third"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
     insert = FactTx.insert
-    calls = 0
 
-    async def flaky(self: FactTx, *args: object, **kw: object) -> str:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("the embedder is down")
-        return await insert(self, *args, **kw)  # type: ignore[arg-type]
+    async def picky(self: FactTx, text: str, *args: object, **kw: object) -> str:
+        if text == "Refused by the embedder":
+            raise RuntimeError("the embedder refuses this text")
+        return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(FactTx, "insert", flaky)
-    assert await memory.inbox.drain() == 0
-    assert await client.facts(nb.id) == [], "the first capture's fact rolled back with the batch"
-    assert await memory.notebooks.store.pending() == 2
+    monkeypatch.setattr(FactTx, "insert", picky)
+    for _ in range(PROMOTE_ATTEMPTS):
+        with pytest.raises(RuntimeError):
+            await memory.notebooks.promote(nb.id)
 
-    memory.inbox._failing.clear()  # past its backoff
-    assert await memory.inbox.drain() == 2
-    assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Second"]
+    assert [f.text for f in await client.facts(nb.id)] == ["First"], "what came before it landed"
+    await memory.notebooks.promote(nb.id)
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Third"], "set aside: the queue moves"
+    assert await memory.notebooks.store.pending() == 0
+
+
+async def test_a_replacement_lands_in_a_full_notebook_and_the_fact_it_replaces_goes(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Prefers tabs"], context=OWN)
+    (old,) = await client.facts(nb.id)
+
+    await client.observe(nb.id, [draft("Prefers spaces", ObservationType.USER)], context=OWN, retire=[old.id])
+
+    async with asyncio.timeout(10):
+        while [f.text for f in await client.facts(nb.id)] != ["Prefers spaces"]:
+            await asyncio.sleep(0.02)
+
+
+async def test_editing_a_typed_fact_s_words_takes_its_type_away(svc: MemoryServiceHandle) -> None:
+    """A person's words now: the observation's keywords, body and model no longer describe it."""
+    from supervisor.memory_service.notebooks.types import Edit
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Owns the billing service")], context=OWN)
+    (fact,) = await landed(client, nb.id, 1)
+
+    await client.edit(nb.id, [Edit(fact.id, "Owns the payments service")], context=OWN)
+
+    (edited,) = await client.facts(nb.id)
+    assert edited.text == "Owns the payments service" and edited.typed is None
+
+
+async def test_a_statement_cut_to_fit_keeps_its_claim_label_whole(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.observations import MAX_STATEMENT_BYTES
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    raw = "w" * (MAX_STATEMENT_BYTES - 16) + " (said in Slack)"
+
+    await client.observe(nb.id, [draft(raw, ObservationType.USER)], context=OWN)
+
+    (fact,) = await landed(client, nb.id, 1)
+    assert fact.text.endswith(" [claimed source: Slack]") and len(fact.text.encode()) <= MAX_STATEMENT_BYTES
 
 
 async def test_a_retire_id_that_is_not_one_is_refused(svc: MemoryServiceHandle) -> None:
