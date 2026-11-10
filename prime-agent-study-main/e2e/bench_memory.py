@@ -1,7 +1,7 @@
 """Memory under load on a running stack: many tenants, agents and concurrent sessions.
 
     e2e/bench_memory.py run [--tenants 4] [--compositions githi-v1,...] [--sessions 50]
-                            [--facts 3] [--capture-model ROUTE] [--quiet 5] [--results PATH] [--resume]
+                            [--facts 3] [--capture-route ROUTE] [--quiet 5] [--results PATH] [--resume]
     e2e/bench_memory.py report [PATH] [--run ID]
 
 The load harness of ``docs/memory-gaps.md`` (G0): every memory gap is verified against it,
@@ -20,9 +20,12 @@ runs several sessions at once, so they write one notebook concurrently):
    wait before the model is called (``run_start`` to ``MemoryInjected``: the audience
    checkpoint and the step's scheduling on a worker too, which grows when workers are
    short).
-3. **capture** (``--capture-model``, which needs a real model): a session states a fact
-   in plain words, with automatic capture after ``--quiet`` seconds of quiet; the time
-   until the fact is in the owner's notebook is the capture lag.
+3. **capture** (``--capture-route``: ``standin-chat`` on the e2e stack, whose relay answers
+   memory's extraction; each tenant gets ``bench-capture-<tenant>``, the shipped githi-v1
+   on that route): a session's turn finds a fact only in a tool's output and is
+   stopped by the user before it ends (``stopped_after_tool``), with automatic capture
+   after ``--quiet`` seconds of quiet; the time from the stop until the fact is in the
+   owner's notebook is the capture lag.
 
 When every session is done, each owner's notebook is read once more, and the checks run
 on that final read:
@@ -100,6 +103,23 @@ def owner_of(run: str, tenant: str, agent: str, session: int, per_owner: int) ->
     return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}"
 
 
+def capture_composition(tenant: str, route: str) -> dict[str, Any]:
+    """``bench-capture-<tenant>``: the shipped githi-v1 on ``route`` (a composition pins its
+    model route; a session cannot pick a test route itself). Catalog names are owned, so
+    each tenant has its own."""
+    body = json.loads((HERE.parent / "harness" / "compositions" / "githi-v1.json").read_text(encoding="utf-8"))
+    body.pop("digest", None)
+    body |= {"name": f"bench-capture-{tenant}", "plug_bindings": dict(body["plug_bindings"], model_route=route)}
+    admin = User(tenant, "bench-admin")
+    try:
+        r = admin.publish("composition", body)
+    finally:
+        admin.http.close()
+    if r.status_code != 200:
+        raise RuntimeError(f"publishing bench-capture: {r.status_code} {r.text[:200]}")
+    return {"artifact_id": r.json()["artifact_id"], "digest": r.json()["digest"]}
+
+
 def pin(composition: dict[str, Any]) -> str:
     return f"composition:{composition['artifact_id']}@{composition['digest']}"
 
@@ -114,11 +134,8 @@ def _ok(response: Any) -> Any:
     return response.json()
 
 
-def session(user: User, composition: dict[str, Any], model: str | None = None, **memory: Any) -> str:
-    extra: dict[str, Any] = {"memory": memory} if memory else {}
-    if model:
-        extra["model"] = model
-    r = user.create(composition["artifact_id"], composition["digest"], **extra)
+def session(user: User, composition: dict[str, Any], **memory: Any) -> str:
+    r = user.create(composition["artifact_id"], composition["digest"], **({"memory": memory} if memory else {}))
     if r.status_code != 201:
         raise RuntimeError(f"create {r.status_code}: {r.text[:200]}")
     return str(r.json()["session_id"])
@@ -159,12 +176,36 @@ def since(run: list[dict[str, Any]], start: str, end: str = "memory_injected") -
     return shown - began if began is not None and shown is not None else None
 
 
+def stopped_after_tool(user: User, sid: str, said: str, timeout: float) -> None:
+    """A turn whose fact only its tool steps hold, stopped by the user before it ends.
+
+    The ``echo`` tool is called with the token written as a JSON escape (``\\u007a`` for its
+    first letter): the user's words hold the escape, never the token, and the model's
+    parsed call and the tool's result hold the token itself. ``SLOWMODEL`` keeps the
+    model's next call going long enough to stop the run after the tool, and
+    ``CAPTUREMODEL`` has the relay answer memory's extraction as a model that found the
+    token would (e2e/stack/relay.py). What G1 captures and capture before it could not: it
+    read neither a run's tool steps nor a stopped run."""
+    escaped = "\\u007a" + said[1:]  # the token's "z" as JSON's escape for it
+    r = user.say(sid, f'/tool echo {{"text": "{escaped} SLOWMODEL CAPTUREMODEL"}}')
+    if r.status_code != 202:
+        raise RuntimeError(f"message {r.status_code}: {r.text[:200]}")
+    user.wait(sid, lambda evs: any(e.get("type") == "tool_end" for e in evs), timeout=timeout)
+    stop = user.post(f"/v1/sessions/{sid}/abort")
+    if stop.status_code >= 300:
+        raise RuntimeError(f"abort {stop.status_code}: {stop.text[:200]}")
+    events = user.wait(sid, runs_ended(1), timeout=timeout)
+    ends = [e for e in events if e.get("type") == "turn_end"]
+    if not ends or (ends[-1].get("data") or {}).get("stop_reason") != "aborted":
+        raise RuntimeError(f"the run was not stopped: {[e.get('type') for e in events][-6:]}")
+
+
 def wait_for_capture(user: User, composition: dict[str, Any], said: str, began: float, args: argparse.Namespace) -> float | None:
     """Seconds from ``began`` until ``said`` is in the owner's notebook, or None by the
-    deadline. Polls back off, and a failed poll is retried, not a failed session: polling
-    must neither load the stack it measures nor turn a transient error into a lost fact."""
-    deadline, wait = began + 2 * args.quiet + 120, 1.0
-    time.sleep(args.quiet)  # the quiet window, from the turn's end: nothing is captured before it
+    deadline. Polls start at once (a burst of one turn is captured as soon as it ends) and
+    back off from half a second to two: fine enough to measure the lag, light enough not
+    to load the stack it measures. A failed poll is retried, not a failed session."""
+    deadline, wait = began + 2 * args.quiet + 120, 0.5
     while time.time() < deadline:
         try:
             if any(said in f for f in notebook_facts(user, composition)):
@@ -172,7 +213,7 @@ def wait_for_capture(user: User, composition: dict[str, Any], said: str, began: 
         except (RuntimeError, httpx.HTTPError):
             pass  # a refused, failed or timed-out read: the next poll asks again
         time.sleep(wait)
-        wait = min(wait * 2, 10.0)
+        wait = min(wait * 1.5, 2.0)
     return None
 
 
@@ -180,7 +221,7 @@ def wait_for_capture(user: User, composition: dict[str, Any], said: str, began: 
 
 
 def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composition: dict[str, Any], s: int,
-         attempt: int) -> Row:
+         attempt: int, capturing: dict[str, Any] | None = None) -> Row:
     """One session's whole script, as one result row."""
     owner = owner_of(run_id, tenant, agent, s, args.per_owner)
     user = User(tenant, owner)
@@ -204,12 +245,12 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
         out["first_step_ms"] = since(run, "run_start")  # with the checkpoint and the step's scheduling
         out["injected"] = injected_text(user, later, run)
 
-        if args.capture_model:
+        if capturing is not None:
             out["said"] = token(run_id, owner, f"s{s}a{attempt}said")
-            spoke = session(user, composition, args.capture_model, capture_quiet_s=args.quiet, capture_max_turns=1)
-            turn(user, spoke, f"Please remember for later: my locker word is {out['said']}.", 1, args.timeout)
-            # From the turn's end, where capture's quiet window starts (not the model's reply).
-            out["capture_s"] = wait_for_capture(user, composition, out["said"], time.time(), args)
+            spoke = session(user, capturing, capture_quiet_s=args.quiet, capture_max_turns=1)
+            stopped_after_tool(user, spoke, out["said"], args.timeout)
+            # From the turn's end, where capture's quiet window starts.
+            out["capture_s"] = wait_for_capture(user, capturing, out["said"], time.time(), args)
     except Exception as exc:  # noqa: BLE001 — a session's failure is its row, the load goes on
         out["error"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -253,6 +294,7 @@ def run(args: argparse.Namespace) -> bool:
         compositions = {name: admin.latest("composition", name) for name in names}
     finally:
         admin.http.close()
+    capturing = {t: capture_composition(t, args.capture_route) for t in tenants} if args.capture_route else {}
     cells = [(t, a, s) for t in tenants for a in names for s in range(args.sessions)]
     todo = [c for c in cells if c not in done]
     print(f"run {run_id}: {len(cells)} sessions ({len(tenants)} tenants x {len(names)} agents x {args.sessions}), "
@@ -264,7 +306,7 @@ def run(args: argparse.Namespace) -> bool:
             f.write(json.dumps(row) + "\n")
 
     def one(c: tuple[str, str, int]) -> None:
-        row = cell(args, run_id, c[0], c[1], compositions[c[1]], c[2], attempts.get(c, 0) + 1)
+        row = cell(args, run_id, c[0], c[1], compositions[c[1]], c[2], attempts.get(c, 0) + 1, capturing.get(c[0]))
         write(row)
         if row["error"]:
             print(f"  {c[0]}/{c[1]}/{c[2]}: {row['error'][:160]}", flush=True)
@@ -398,7 +440,8 @@ def main() -> int:
     go.add_argument("--per-owner", type=int, default=5, help="concurrent sessions per user (they share a notebook)")
     go.add_argument("--facts", type=int, default=3)
     go.add_argument("--concurrency", type=int, default=50, help="sessions in flight at once")
-    go.add_argument("--capture-model", default="", help="also measure automatic capture (needs a real model route)")
+    go.add_argument("--capture-route", default="", help="also measure automatic capture, on this model route "
+                    "(standin-chat on the e2e stack)")
     go.add_argument("--quiet", type=float, default=5.0, help="capture quiet window, seconds")
     go.add_argument("--timeout", type=float, default=180)
     go.add_argument("--results", default=str(RESULTS))

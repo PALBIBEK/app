@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 import httpx
@@ -20,6 +21,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 GATEWAY = os.environ.get("RELAY_GATEWAY", "http://127.0.0.1:8090")
 TOKEN = os.environ.get("RELAY_GATEWAY_TOKEN", "dev-local-gateway-token")
 LOG = os.environ.get("RELAY_LOG", "relay.jsonl")
+
+EXTRACTION = "You extract durable facts"
+"""How memory's extraction prompt starts (supervisor.memory_service.extraction_prompt)."""
+FACT = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
+"""A load test's fact token (e2e/bench_memory.py)."""
 
 app = FastAPI()
 client = httpx.AsyncClient(timeout=120)
@@ -31,10 +37,28 @@ def _record(path: str, request: Request, body: dict) -> None:
         fh.write(json.dumps({"at": time.time(), "path": path, "headers": seen, "body": body}) + "\n")
 
 
+def _extraction_answer(body: dict) -> str | None:
+    """Test switch CAPTUREMODEL: memory's extraction, answered as a model would that found
+    the facts the transcript states (each load-test token in it, wherever it was: the
+    user's words or a tool's output). Not this switch's request: None."""
+    messages = body.get("messages") if isinstance(body.get("messages"), list) else []
+    system = next((m.get("content") for m in messages if m.get("role") == "system"), "")
+    text = json.dumps(body)
+    if "CAPTUREMODEL" not in text or not str(system).startswith(EXTRACTION):
+        return None
+    tokens = list(dict.fromkeys(FACT.findall(text)))
+    return "SENSITIVITY: ordinary\n" + "\n".join(f"- The locker word is {t}." for t in tokens) if tokens else "NONE"
+
+
 async def _relay(path: str, request: Request) -> object:
     body = await request.json()
     _record(path, request, body)
-    if "SLOWMODEL" in json.dumps(body):  # test switch: a model call that takes a while
+    if (answer := _extraction_answer(body)) is not None:
+        # Through echo, so the reply keeps the wire's shape and streaming: echo answers the
+        # last user turn (prefixed "echo:", which the extraction parser reads past: its
+        # bullets are what it keeps).
+        body = dict(body, messages=[{"role": "user", "content": answer}])
+    elif "SLOWMODEL" in json.dumps(body):  # test switch: a model call that takes a while
         import asyncio
 
         await asyncio.sleep(float(os.environ.get("RELAY_SLOW_S", "20")))

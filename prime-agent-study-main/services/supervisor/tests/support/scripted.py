@@ -61,6 +61,8 @@ class ScriptedGateway:
     malformed_first: bool = False
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
+    # Raised by the next extraction calls, one each, before ``extract`` answers again.
+    extract_errors: list[Exception] = dataclasses.field(default_factory=list)
     sensitivity: str = "ordinary"
     resolution: str = '{"facts": []}'  # supervisor.memory.resolution: nothing duplicated or contradicted
     # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
@@ -240,6 +242,8 @@ class ScriptedGateway:
             return None
         with self._lock:
             self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
+            if system.startswith("You extract durable facts") and self.extract_errors:
+                raise self.extract_errors.pop(0)
         return answer
 
     def context_window(self, model: str) -> int | None:

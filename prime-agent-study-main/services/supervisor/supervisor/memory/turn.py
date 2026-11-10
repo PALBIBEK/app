@@ -37,12 +37,13 @@ from supervisor.memory.client import MemoryRefused, MemoryRequestInvalid, Memory
 from supervisor.memory.cross import recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta
 from supervisor.memory.disclosure import Audience
-from supervisor.memory.extraction import Exchange, extract_facts
+from supervisor.memory.extraction import Exchange, Extracted, extract_transcript
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.resolution import resolve
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
+from supervisor.memory.transcript import Item, TranscriptBudget, condense, run_items
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
@@ -356,7 +357,9 @@ class SessionMemory:
     # --- automatic capture -------------------------------------------------------
 
     async def capture(self, session_id: str, run_ids: Sequence[str]) -> int:
-        """Extract and save durable facts from these runs' exchanges (QM per-turn burst)."""
+        """Extract and save durable facts from these runs (QM per-turn burst), read whole:
+        every step of each run, its tool calls and results included, and a run the user
+        stopped up to where they stopped it (``supervisor.memory.transcript``)."""
         scope = await self.scope(session_id)
         if scope is None:
             return 0
@@ -369,17 +372,22 @@ class SessionMemory:
             return 0
         context = await self._latest_context(session_id)
         through = -1 if context is None else context.through_seq
+        items: list[Item] = []
         exchanges, runs = [], []
         for run_id in run_ids:
+            # One run's events, by the journal's (session, run, seq) index: never the session.
             run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
-            if (exchange := _exchange(run)) is not None:
-                exchanges.append(exchange)
-                runs.extend(run)
-        if not exchanges:
+            steps = run_items(run)
+            if not any(item["type"] == "user" for item in steps):
+                continue  # nothing the user said in this audience: nothing to learn
+            items += steps
+            exchanges.append(_said(run))
+            runs.extend(run)
+        if not items:
             return 0
         one_shot = await self._one_shot_for(session_id)
-        extracted = await extract_facts(one_shot, exchanges)
-        if not extracted.facts:
+        extracted = await _extract(one_shot, session_id, items)
+        if extracted is None or not extracted.facts:
             return 0
         # Resolve against what the notebook holds (supervisor.memory.resolution): a
         # duplicate is not added; a fact the new ones make false is retired after them.
@@ -428,8 +436,8 @@ class SessionMemory:
                 sensitivity=sensitivity,
                 # Everything these turns could have drawn on (QM captureDependencies).
                 inherited=dependencies(runs),
-                input="\n\n".join(x.input for x in exchanges),
-                reply="\n\n".join(x.reply for x in exchanges),
+                input="\n\n".join(x.input for x in exchanges if x.input),
+                reply="\n\n".join(x.reply for x in exchanges if x.reply),
                 idempotency_key=key,
             ),
         )
@@ -455,8 +463,37 @@ def _checkpoint(event: object) -> list[dict[str, Any]] | None:
     return None
 
 
-def _exchange(run: Sequence[Envelope]) -> Exchange | None:
-    """The user's message and the final reply of one completed run."""
+CAPTURE_ATTEMPTS: Final = 4
+"""Extraction calls one capture makes at most: the transcript's budget halves each time
+(512, 256, 128, 64 KiB), so a model whose window the first was too long for gets one
+that fits, and a failing capture costs a bounded number of calls."""
+
+
+async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
+    """The burst's facts, from its transcript condensed to fit (Grok Build's per-attempt
+    budget); None when every attempt failed. A retry is made only when it would read a
+    shorter transcript: the same one again would fail the same way."""
+    for attempt in range(1, CAPTURE_ATTEMPTS + 1):
+        condensed = condense(items, TranscriptBudget.for_attempt(attempt))
+        try:
+            return await extract_transcript(one_shot, condensed)
+        except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
+            shorter = TranscriptBudget.for_attempt(attempt + 1)
+            again = attempt < CAPTURE_ATTEMPTS and (
+                condensed.stats.final_bytes > shorter.max_bytes or condensed.stats.final_items > shorter.max_items
+            )
+            logger.warning(
+                "session %s: memory extraction failed on a %d-byte transcript (attempt %d)%s: %s",
+                session_id, condensed.stats.final_bytes, attempt, ", retrying shorter" if again else "", exc,
+            )
+            if not again:
+                return None
+    return None
+
+
+def _said(run: Sequence[Envelope]) -> Exchange:
+    """What the user said in a run and what the assistant last answered (empty when the
+    run was stopped before any answer): the capture's provenance record."""
     user = next(
         (e.payload for e in run if isinstance(e.payload, MessageEnd) and e.payload.role == "user"),
         None,
@@ -465,13 +502,11 @@ def _exchange(run: Sequence[Envelope]) -> Exchange | None:
         (
             e.payload
             for e in reversed(run)
-            if isinstance(e.payload, MessageEnd)
-            and e.payload.role == "assistant"
-            and not any(p.get("type") == "tool_call" for p in e.payload.content)
+            if isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and message_text(e.payload).strip()
         ),
         None,
     )
-    if user is None or reply is None:
-        return None
-    text, answer = message_text(user).strip(), message_text(reply).strip()
-    return Exchange(text, answer) if text and answer else None
+    return Exchange(
+        message_text(user).strip() if user is not None else "",
+        message_text(reply).strip() if reply is not None else "",
+    )
