@@ -71,7 +71,7 @@ def test_a_profile_publishes_with_a_network_its_provider_enforces() -> None:
         ({"provider": "local_process", "network": {"mode": "open"}}, "cannot enforce network 'open'"),
         ({"browser": "remote-cdp"}, "needs network allow or open"),
         ({"browser": "remote-cdp", "network": {"mode": "none"}}, "needs network allow or open"),
-        ({"browser": "a-browser-we-do-not-have"}, "use one of remote-cdp, sandbox-chromium"),
+        ({"browser": "a-browser-we-do-not-have"}, "use one of browser-use, browserbase, firecrawl, remote-cdp, sandbox-chromium, sandbox-lightpanda"),
     ],
 )
 def test_a_profile_that_would_not_work_as_written_is_refused(fields: dict[str, Any], why: str) -> None:

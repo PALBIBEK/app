@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Final
 
 from pydantic import Field
 
 from supervisor.hands.browser import CDP_ENV, run_runtime, runner_env
+from supervisor.hands.browser.url_policy import cdp_refusal
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
 from supervisor.tools.errors import InvalidArguments
@@ -52,6 +54,9 @@ async def browser_cdp(args: BrowserCdpArgs, ctx: ToolContext) -> dict[str, Any]:
         raise InvalidArguments(
             "pass target_id or frame_id, not both: a frame_id already names its tab"
         )
+    refused = await asyncio.to_thread(cdp_refusal, args.method, args.params or {}, hosted="GITHI_BROWSER_CDP" in ctx.env)
+    if refused:
+        return {"success": False, "method": args.method, "error": refused, "blocked_by_policy": True}
     timeout = min(args.timeout or 30.0, MAX_TIMEOUT_S, max(ctx.timeout_s - 5.0, 1.0))
     request = {
         "method": args.method,
