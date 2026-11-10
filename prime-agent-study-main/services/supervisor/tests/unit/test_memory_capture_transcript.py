@@ -19,12 +19,14 @@ from supervisor.memory.transcript import (
     MIN_MAX_TRANSCRIPT_BYTES,
     MIN_MAX_TRANSCRIPT_ITEMS,
     STOPPED_MARKER,
+    WITHHELD_ARGUMENTS,
     WITHHELD_RESULT,
     TranscriptBudget,
     condense,
     run_items,
     trim_middle,
 )
+from supervisor.seams.core.types import ModelGatewayError
 
 FIRST = TranscriptBudget.for_attempt(1)
 
@@ -288,39 +290,61 @@ def test_condensing_time_is_bounded_however_long_the_turn() -> None:
 # --- extraction attempts (supervisor.memory.turn._extract) --------------------------------
 
 
-def _attempts(failures: int, monkeypatch: pytest.MonkeyPatch, items: list[dict[str, Any]]) -> tuple[Any, list[str]]:
+def _attempts(
+    errors: list[Exception], monkeypatch: pytest.MonkeyPatch, items: list[dict[str, Any]]
+) -> tuple[Any, list[str]]:
+    """``turn._extract`` against a model that fails with ``errors``, in turn, then answers."""
     monkeypatch.setattr(turn, "RETRY_PAUSE_S", 0.0)
     sent: list[str] = []
 
     async def one_shot(system: str, content: str) -> str:
         sent.append(content)
-        if len(sent) <= failures:
-            raise RuntimeError("HTTP 503 from the gateway")
+        if len(sent) <= len(errors):
+            raise errors[len(sent) - 1]
         return "SENSITIVITY: ordinary\n- Builds with make check"
 
     return asyncio.run(turn._extract(one_shot, "s1", items)), sent
 
 
-def test_a_failure_that_passes_is_retried_even_when_the_transcript_already_fits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A short turn's extraction that fails once (a 429, a 503) is sent again, the same
-    transcript, and its fact lands: only a transcript too long used to be retried."""
-    extracted, sent = _attempts(1, monkeypatch, tool_loop(2, 100))
+OVERLOADED = ModelGatewayError(503, '{"detail": {"error": {"code": "UPSTREAM", "message": "overloaded"}}}')
+TOO_LONG = ModelGatewayError(400, "This model's maximum context length is 128000 tokens")
+REFUSED = ModelGatewayError(401, '{"detail": {"error": {"code": "AUTH_INVALID", "message": "bad key"}}}')
+
+
+def test_a_failure_that_may_pass_is_retried_on_the_same_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 503 has nothing to do with length: the same transcript is sent again, nothing of a
+    long turn condensed away for it."""
+    extracted, sent = _attempts([OVERLOADED, OVERLOADED], monkeypatch, tool_loop(60, 20 * 1024))
 
     assert extracted is not None and extracted.facts == ["Builds with make check"]
-    assert len(sent) == 2 and sent[0] == sent[1], "the same transcript, again"
+    assert len(sent) == 3 and sent[0] == sent[1] == sent[2], "the same transcript each time"
 
 
-def test_a_long_transcript_is_retried_on_the_shorter_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    extracted, sent = _attempts(1, monkeypatch, tool_loop(60, 20 * 1024))
+def test_a_transcript_too_long_for_the_model_is_retried_on_the_shorter_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracted, sent = _attempts([TOO_LONG], monkeypatch, tool_loop(60, 20 * 1024))
 
     assert extracted is not None
     assert len(sent[0].encode()) > len(sent[1].encode()), "the retry read the half budget"
 
 
-def test_a_capture_that_always_fails_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    extracted, sent = _attempts(99, monkeypatch, tool_loop(2, 100))
+def test_an_overflow_that_no_shorter_budget_would_help_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    extracted, sent = _attempts([TOO_LONG], monkeypatch, tool_loop(2, 100))
+
+    assert extracted is None and len(sent) == 1, "the same transcript would overflow the same way"
+
+
+def test_a_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bad key, a spent budget, an unknown model fail the same way again, and each call
+    may be charged."""
+    extracted, sent = _attempts([REFUSED], monkeypatch, tool_loop(2, 100))
+
+    assert extracted is None and len(sent) == 1
+
+
+def test_a_capture_that_keeps_failing_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    extracted, sent = _attempts([OVERLOADED] * 99, monkeypatch, tool_loop(2, 100))
 
     assert extracted is None
     assert len(sent) == turn.CAPTURE_ATTEMPTS, "a bounded number of calls"
@@ -355,6 +379,10 @@ def test_a_withheld_tools_result_keeps_its_place_but_not_its_content() -> None:
 
     events = [
         MessageEnd(role="user", content=[{"type": "text", "text": "what do you know about the launch?"}]),
+        MessageEnd(role="assistant", content=[
+            {"type": "tool_call", "id": "c1", "name": MEMORY_TOOL, "arguments": {"query": "Project Kestrel launch"}},
+            {"type": "tool_call", "id": "c2", "name": "bash", "arguments": {"command": "ls"}},
+        ]),
         ToolEnd(tool_call_id="c1", tool_name=MEMORY_TOOL, result={"ok": True, "payload": "Launch slips to May (private)"}),
         ToolEnd(tool_call_id="c2", tool_name="bash", result={"ok": True, "payload": "launch.md"}),
     ]
@@ -363,5 +391,29 @@ def test_a_withheld_tools_result_keeps_its_place_but_not_its_content() -> None:
 
     memory, other = (i for i in items if i["type"] == "tool_result")
     assert (memory["name"], memory["content"]) == (MEMORY_TOOL, WITHHELD_RESULT)
-    assert "slips" not in json.dumps(items)
-    assert other["content"] == "launch.md", "any other tool's result is read whole"
+    assert "slips" not in json.dumps(items) and "Kestrel" not in json.dumps(items), "neither its output nor its query"
+    (calls,) = (i["tool_calls"] for i in items if i["type"] == "assistant")
+    assert [c["arguments"] for c in calls] == [WITHHELD_ARGUMENTS, '{"command": "ls"}']
+    assert other["content"] == "launch.md", "any other tool's call and result are read whole"
+
+
+def test_a_burst_of_many_stopped_runs_condenses_and_an_overflow_at_its_floor_is_not_resent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A burst may hold 100 runs (``capture_max_turns``): every request and stop marker is
+    kept, the steps between them go, and once condensing can shrink it no further an
+    overflow is not sent again unchanged."""
+    burst: list[dict[str, Any]] = []
+    for run in range(100):
+        burst += [user(f"request {run}"), *tool_loop(30, 2000)[1:-1], assistant(STOPPED_MARKER)]
+
+    condensed = condense(burst, TranscriptBudget.for_attempt(4))
+    parsed = json.loads(condensed.json)
+    assert sum(i.get("content") == STOPPED_MARKER for i in parsed) == 100, "every run's stop survives"
+    assert all(f"request {run}" in condensed.json for run in range(100))
+    assert condensed.stats.steps_omitted > 0
+
+    always_too_long = [TOO_LONG] * 9
+    extracted, sent = _attempts(always_too_long, monkeypatch, burst)
+    assert extracted is None
+    assert len(sent) == len(set(sent)), "never the same transcript twice"

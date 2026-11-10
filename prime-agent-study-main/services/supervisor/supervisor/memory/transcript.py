@@ -40,6 +40,7 @@ __all__ = [
     "BASE_MAX_TRANSCRIPT_BYTES",
     "BASE_MAX_TRANSCRIPT_ITEMS",
     "STOPPED_MARKER",
+    "WITHHELD_ARGUMENTS",
     "WITHHELD_RESULT",
     "CondensationStats",
     "CondensedTranscript",
@@ -60,8 +61,11 @@ TOOL_ARGS_TIERS: Final = (2 * 1024, 512, 256)
 KEEP_EDGE_START: Final = 8
 USER_TEXT_FLOOR_BYTES: Final = 4 * 1024
 STOPPED_MARKER: Final = "[... the user stopped this turn here, before it finished ...]"
-WITHHELD_RESULT: Final = "[... memory or history the agent looked up: already held, not captured again ...]"
 """Where a run the user stopped ends: what it did up to here is unfinished work."""
+WITHHELD_RESULT: Final = "[... memory or history the agent looked up: already held, not captured again ...]"
+"""What a withheld tool's result reads as (``run_items``)."""
+WITHHELD_ARGUMENTS: Final = "[... withheld ...]"
+"""What a withheld tool's call arguments read as."""
 _IMAGE: Final = "[... image omitted ...]"
 _IMAGE_PARTS: Final = frozenset({"image", "image_url", "input_image"})
 
@@ -144,17 +148,18 @@ def run_items(events: Iterable[Envelope], *, withheld: AbstractSet[str] = frozen
     stopped the run. Only readable text is kept: a reasoning part's signature or encrypted
     content, and a redacted block, never are.
 
-    A ``withheld`` tool's result keeps its place but not its content: capture withholds
-    the memory and history tools', whose content is facts already held (with provenance
-    and an audience of their own, which a fact extracted from them again would lose) or
-    another conversation's history."""
+    A ``withheld`` tool's call and result keep their place but not their content (its
+    arguments, its output): capture withholds the memory and history tools', whose output
+    is facts already held (with provenance and an audience of their own, which a fact
+    extracted from them again would lose) or another conversation's history, and whose
+    queries name what was looked up there."""
     items: list[Item] = []
     for envelope in events:
         event = envelope.payload
         if isinstance(event, MessageEnd) and event.role == "user":
             items.append({"type": "user", "content": _user_parts(event.content)})
         elif isinstance(event, MessageEnd) and event.role == "assistant":
-            items.extend(_assistant_items(event.content))
+            items.extend(_assistant_items(event.content, withheld))
         elif isinstance(event, ToolEnd):
             item = _tool_result(event)
             if event.tool_name in withheld:
@@ -175,7 +180,7 @@ def _user_parts(content: Sequence[Mapping[str, Any]]) -> list[Item]:
     return parts
 
 
-def _assistant_items(content: Sequence[Mapping[str, Any]]) -> list[Item]:
+def _assistant_items(content: Sequence[Mapping[str, Any]], withheld: AbstractSet[str] = frozenset()) -> list[Item]:
     reasoning = [
         {"type": "reasoning", "text": str(part["text"])}
         for part in content
@@ -186,7 +191,8 @@ def _assistant_items(content: Sequence[Mapping[str, Any]]) -> list[Item]:
         {
             "id": str(part.get("id", "")),
             "name": str(part.get("name", "")),
-            "arguments": json.dumps(part.get("arguments") or {}, ensure_ascii=False, sort_keys=True),
+            "arguments": WITHHELD_ARGUMENTS if part.get("name") in withheld
+            else json.dumps(part.get("arguments") or {}, ensure_ascii=False, sort_keys=True),
         }
         for part in content
         if part.get("type") == "tool_call"

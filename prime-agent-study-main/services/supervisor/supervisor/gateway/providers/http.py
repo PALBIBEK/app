@@ -68,11 +68,19 @@ class HttpUpstream:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     def client(self) -> httpx.Client:
-        """The upstream's one client, made on first use."""
+        """The upstream's one client, made on first use from ``transport`` and
+        ``timeout_s`` (read then, once: an upstream's connection settings are fixed)."""
         with self._lock:
             if self._client is None:
                 self._client = httpx.Client(transport=self.transport, timeout=self.timeout_s, limits=_LIMITS)
             return self._client
+
+    def close(self) -> None:
+        """Close the client and its pooled connections; the next call makes a new one."""
+        with self._lock:
+            client, self._client = self._client, None
+        if client is not None:
+            client.close()
 
     def url(self) -> str:
         """The base URL now, without a trailing slash."""

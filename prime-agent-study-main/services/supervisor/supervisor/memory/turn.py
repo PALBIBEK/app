@@ -29,6 +29,7 @@ from supervisor.agent.events import (
     RunEnd,
     ToolStart,
 )
+from supervisor.agent.runtimes.githi.classify import is_context_overflow, is_retryable
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import keyed_event_id
@@ -467,32 +468,56 @@ def _checkpoint(event: object) -> list[dict[str, Any]] | None:
 
 
 CAPTURE_ATTEMPTS: Final = 4
-"""Extraction calls one capture makes at most: the transcript's budget halves each time
-(512, 256, 128, 64 KiB), so a model whose window the first was too long for gets one
-that fits, and a failing capture costs a bounded number of calls."""
+"""Extraction calls one capture makes at most, so a failing capture costs a bounded number
+of calls (and of the session's spend)."""
 RETRY_PAUSE_S: Final = 1.0
-"""The pause before the second attempt, doubled before each later one: a rate limit or an
-overloaded gateway gets a moment, and every capture failing at once does not retry at
-once."""
+"""The pause before retrying a failure that may pass, doubled before each later one and
+jittered, so every capture failing at once does not retry at once."""
+MAX_RETRY_PAUSE_S: Final = 30.0
+"""The longest a capture waits on a provider's ``Retry-After``."""
 
 
 async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
-    """The burst's facts, from its transcript condensed to fit (Grok Build's per-attempt
-    budget); None when every attempt failed. Any failure is retried, on the next, shorter
-    budget: a transcript too long for the model shrinks, and one that already fits is
-    sent again after a pause, for a failure that passes (a 429, a 503, a timeout)."""
+    """The burst's facts, from its transcript condensed to fit; None when extraction failed
+    for good. What is tried again depends on why the call failed (the agent loop's own rules,
+    ``supervisor.agent.runtimes.githi.classify``):
+
+    * the transcript did not fit the model's window: the next, halved budget (Grok Build's
+      per-attempt budget), while one is shorter;
+    * a failure that may pass (a rate limit, an overloaded or unreachable provider): the
+      same transcript, after a pause, so nothing is condensed away for a failure that has
+      nothing to do with length;
+    * anything else (a refused key, a spent budget, an unknown model): not at all, since
+      it would fail the same way, and each call may be charged.
+    """
+    budget = 1
+    condensed = condense(items, TranscriptBudget.for_attempt(budget))
     for attempt in range(1, CAPTURE_ATTEMPTS + 1):
-        condensed = condense(items, TranscriptBudget.for_attempt(attempt))
         try:
             return await extract_transcript(one_shot, condensed)
         except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
-            again = attempt < CAPTURE_ATTEMPTS
+            pause: float | None = None
+            again_on = condensed
+            if is_context_overflow(exc):
+                shorter = condense(items, TranscriptBudget.for_attempt(budget + 1))
+                # Only a transcript that really is shorter (a burst of many runs keeps every
+                # request and stop marker, so condensing can reach a floor).
+                if shorter.stats.final_bytes < condensed.stats.final_bytes:
+                    budget, again_on, pause = budget + 1, shorter, 0.0
+            elif is_retryable(exc):
+                asked = getattr(exc, "retry_after", None)
+                pause = min(MAX_RETRY_PAUSE_S, asked if isinstance(asked, (int, float)) else
+                            RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random()))
+            again = pause is not None and attempt < CAPTURE_ATTEMPTS
             logger.warning(
                 "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",
-                session_id, condensed.stats.final_bytes, attempt, CAPTURE_ATTEMPTS, ", retrying" if again else "", exc,
+                session_id, condensed.stats.final_bytes, attempt, CAPTURE_ATTEMPTS,
+                ", retrying" if again else ", not retried", exc,
             )
-            if again:
-                await asyncio.sleep(RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random()))
+            if not again:
+                return None
+            condensed = again_on
+            await asyncio.sleep(pause or 0.0)
     return None
 
 
