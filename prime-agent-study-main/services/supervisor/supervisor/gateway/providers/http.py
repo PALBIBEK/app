@@ -213,7 +213,8 @@ class _Relay(Iterator[bytes]):
 def _no_cookies() -> http.cookiejar.CookieJar:
     """A cookie jar that keeps none. The client is shared by every caller (every session,
     every tenant), and a cookie one response set (a balancer's sticky cookie, a vendor's bot
-    management cookie) would otherwise go out on everyone's later calls."""
+    management cookie) would otherwise go out on everyone's later calls. The same as
+    ``supervisor.http_cookies.no_cookies``: the gateway imports nothing outside itself."""
     return http.cookiejar.CookieJar(policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
 
 

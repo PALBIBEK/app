@@ -69,3 +69,22 @@ def test_the_shared_client_keeps_no_cookie_from_one_session_for_another() -> Non
         router.shared_http_client().get("https://gateway.example/v1/models")
 
     assert sent == [None, None]
+
+
+async def test_the_memory_client_keeps_no_cookie_from_one_tenant_for_another() -> None:
+    import httpx
+
+    from supervisor.memory.client import NotebookClient
+
+    sent: list[str | None] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, json={"items": []}, headers={"set-cookie": "sticky=replica-2; Path=/"})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    for _ in range(2):
+        await client._http.get("/v1/notebooks")
+    await client.aclose()
+
+    assert sent == [None, None]

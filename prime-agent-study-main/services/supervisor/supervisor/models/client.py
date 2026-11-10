@@ -17,7 +17,6 @@ Keys live in the gateway: a model the gateway does not route has no other way ou
 
 from __future__ import annotations
 
-import http.cookiejar
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -27,6 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from supervisor.http_cookies import no_cookies
 from supervisor.models.audit import ModelCallAudit, ModelCallRecord
 from supervisor.models.catalog import GatewayCatalog
 from supervisor.models.endpoints import (
@@ -110,7 +110,7 @@ class ModelRouter:
             transport=self._transport,
             follow_redirects=False,
             limits=httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0),
-            cookies=_no_cookies(),  # one client serves every session: nothing one is sent carries to another
+            cookies=no_cookies(),  # one client serves every session: nothing one is sent carries to another
         )
 
     def shared_http_client(self) -> httpx.Client:
@@ -371,10 +371,3 @@ __all__ = [
     "UnsupportedAlias",
     "completion",
 ]
-
-
-def _no_cookies() -> http.cookiejar.CookieJar:
-    """A cookie jar that keeps none. The client is shared by every caller (every session,
-    every tenant), and a cookie one response set (a balancer's sticky cookie, a vendor's bot
-    management cookie) would otherwise go out on everyone's later calls."""
-    return http.cookiejar.CookieJar(policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))

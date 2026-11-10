@@ -64,10 +64,6 @@ logger = logging.getLogger(__name__)
 def threads() -> int:
     """``BLOCKING_CALL_THREADS``, checked: raises, naming it, when it is not a whole number
     of 1 or more. Read it where a process starts, so a typo stops the process there."""
-    return _size()
-
-
-def _size() -> int:
     raw = os.environ.get(BLOCKING_THREADS_ENV, "").strip()
     if not raw:
         return DEFAULT_THREADS
@@ -88,7 +84,7 @@ def pool() -> ThreadPoolExecutor:
     global _pool, _pool_size
     with _lock:
         if _pool is None:
-            _pool_size = _size()
+            _pool_size = threads()
             _pool = ThreadPoolExecutor(max_workers=_pool_size, thread_name_prefix="blocking")
         return _pool
 
@@ -152,7 +148,7 @@ def _unqueue() -> None:
         _queued -= 1
 
 
-def widen_request_threads() -> int:
+def widen_request_threads(size: int | None = None) -> int:
     """Let the running loop's synchronous routes and streams use ``BLOCKING_CALL_THREADS``
     threads at once instead of anyio's 40; call it as an app starts. The size set.
 
@@ -162,5 +158,5 @@ def widen_request_threads() -> int:
     lifespan, uvicorn would take the failure for "lifespan unsupported" and serve the app
     without its startup."""
     limiter = anyio.to_thread.current_default_thread_limiter()
-    limiter.total_tokens = _size()
+    limiter.total_tokens = threads() if size is None else size
     return int(limiter.total_tokens)

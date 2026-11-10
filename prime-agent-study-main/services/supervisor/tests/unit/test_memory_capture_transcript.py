@@ -550,3 +550,25 @@ def test_a_withheld_lookup_alone_is_not_work_to_learn_from() -> None:
     run = [env(1, image_only), env(2, lookup)]
 
     assert not turn._learnable(turn._said(run), run_items(run, withheld=PLATFORM_TOOLS))
+
+
+def test_a_retry_after_inside_the_window_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 45 s Retry-After fits the capture's window: it is waited for, not abandoned."""
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(turn.asyncio, "sleep", sleep)
+    extracted, sent = _attempts([ModelGatewayError(429, "rate limit", retry_after=45.0)], monkeypatch, tool_loop(1, 10))
+
+    assert extracted is not None and len(sent) == 2 and waits == [45.0]
+
+
+def test_a_failures_error_that_is_not_text_reads_as_its_own_text() -> None:
+    failed = ToolEnd(tool_call_id="c1", tool_name="bash", result={"ok": False, "error": OSError("disk full")},
+                     is_error=True)
+
+    (item,) = run_items([env(1, failed)])
+
+    assert item["content"] == "disk full"

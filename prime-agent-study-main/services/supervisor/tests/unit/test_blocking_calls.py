@@ -189,3 +189,18 @@ def test_a_bad_thread_setting_stops_the_server_being_built_not_its_lifespan(monk
     monkeypatch.setenv(blocking.BLOCKING_THREADS_ENV, "ten")
     with pytest.raises(ValueError, match="BLOCKING_CALL_THREADS"):
         WithRequestThreads(FastAPI())
+
+
+def test_every_listener_fails_on_a_failed_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``lifespan="on"``: under uvicorn's "auto" a failing startup is taken for an app
+    without a lifespan, and served without its startup having run."""
+    from supervisor.config import Settings
+    from supervisor.main import listeners
+
+    for flag in ("SERVE_SUPERVISOR_API", "SERVE_MODEL_GATEWAY"):
+        monkeypatch.setenv(flag, "1")
+    monkeypatch.setenv("SERVE_MEMORY_SERVICE", "0")
+
+    served = listeners(Settings())
+
+    assert served and all(config.lifespan == "on" for _, config in served)

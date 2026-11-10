@@ -49,7 +49,6 @@ from supervisor.memory.resolution import resolve
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
 from supervisor.memory.transcript import (
-    WITHHELD_RESULT,
     Item,
     TranscriptBudget,
     condense,
@@ -482,13 +481,11 @@ of calls (and of the session's spend)."""
 RETRY_PAUSE_S: Final = 1.0
 """The pause before retrying a failure that may pass, doubled before each later one and
 jittered, so every capture failing at once does not retry at once."""
-MAX_RETRY_PAUSE_S: Final = 30.0
-"""The longest a capture waits on a provider's ``Retry-After``; one asking for longer is
-not retried."""
 RETRY_WINDOW_S: Final = 240.0
-"""No retry starts past this long into a capture's extraction: the capture activity has
-ten minutes (``temporal.policies``) for extraction, resolution and the save, and one that
-ran out would be retried whole, its calls made and charged again."""
+"""No retry starts past this long into a capture's extraction, its pause included: the
+capture activity has ten minutes (``temporal.policies``) for extraction, resolution and
+the save, and one that ran out would be retried whole, its calls made and charged again.
+The window bounds when attempts start; each call is bounded by its own timeout."""
 
 
 async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
@@ -530,12 +527,12 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
                 backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
                 asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit
                 # A provider's wait, when it asks for one longer than ours; never shorter (a 0
-                # would retry at once, into the same rate limit). One longer than the cap is
-                # not waited for, nor retried early into the limit (classify.retry_delay too).
-                wait = max(backoff, asked) if isinstance(asked, (int, float)) else backoff
-                pause = wait if wait <= MAX_RETRY_PAUSE_S else None
+                # would retry at once, into the same rate limit).
+                pause = max(backoff, asked) if isinstance(asked, (int, float)) else backoff
             if pause is not None and time.monotonic() + pause - began > RETRY_WINDOW_S:
-                pause = None  # inside the capture activity's limit, with resolution and the save to come
+                # A retry that would start past the window is not made: one asking for a wait
+                # longer than the window has is not retried early into its limit either.
+                pause = None
             again = pause is not None and attempt < CAPTURE_ATTEMPTS
             logger.warning(
                 "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",
@@ -554,8 +551,8 @@ def _learnable(said: Exchange, steps: Sequence[Item]) -> bool:
     done (a tool's result). A run with neither (an image alone, or nothing in this audience)
     costs no extraction call."""
     return bool(said.input) or any(
-        item["type"] == "tool_result" and item["content"] != WITHHELD_RESULT for item in steps
-    )  # a withheld lookup (memory, history) is not work the extractor could read
+        item["type"] == "tool_result" and item["name"] not in PLATFORM_TOOLS for item in steps
+    )  # a lookup (memory, history: withheld from the transcript) is not work the extractor could read
 
 
 def _said(run: Sequence[Envelope]) -> Exchange:

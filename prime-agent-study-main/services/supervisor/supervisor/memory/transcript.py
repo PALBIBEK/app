@@ -171,10 +171,7 @@ def run_items(events: Iterable[Envelope], *, withheld: AbstractSet[str] = frozen
         elif isinstance(event, MessageEnd) and event.role == "assistant":
             items.extend(_assistant_items(event.content, withheld))
         elif isinstance(event, ToolEnd):
-            item = _tool_result(event)
-            if event.tool_name in withheld:
-                item.update(content=WITHHELD_RESULT, images=[])
-            items.append(item)
+            items.append(_tool_result(event, withheld=event.tool_name in withheld))
         elif isinstance(event, TurnEnd) and event.stop_reason == "aborted":
             items.append({"type": "assistant", "content": STOPPED_MARKER, "tool_calls": []})
     return items
@@ -210,19 +207,28 @@ def _assistant_items(content: Sequence[Mapping[str, Any]], withheld: AbstractSet
     return reasoning + ([{"type": "assistant", "content": text, "tool_calls": calls}] if text or calls else [])
 
 
-def _tool_result(event: ToolEnd) -> Item:
+def _tool_result(event: ToolEnd, *, withheld: bool = False) -> Item:
     result = event.result or {}
+    failed = bool(event.is_error or result.get("ok") is False)
+    if withheld:  # its content never read: not encoded either (a lookup may return megabytes)
+        return {"type": "tool_result", "call_id": event.tool_call_id, "name": event.tool_name,
+                "content": WITHHELD_RESULT, "is_error": failed, "images": []}
     payload = result.get("payload")
     images: list[Item] = []
     if isinstance(payload, Mapping) and isinstance(payload.get("images"), list):
         images = [{"type": "image"} for _ in payload["images"]]
         payload = {k: v for k, v in payload.items() if k != "images"}
-    failed = event.is_error or result.get("ok") is False
     said = (result.get("error") or payload or "the call failed") if failed else payload
-    # Text as it is; anything structured as JSON, a failure's included (never a Python repr).
-    body = said if isinstance(said, str) else json.dumps(said, ensure_ascii=False, default=str)
+    # Text as it is; a structure as JSON, a failure's included (never a Python repr); anything
+    # else (an exception, a number) as its own text.
+    if isinstance(said, str):
+        body = said
+    elif isinstance(said, (Mapping, list, tuple)):
+        body = json.dumps(said, ensure_ascii=False, default=str)
+    else:
+        body = str(said) if failed else json.dumps(said, ensure_ascii=False, default=str)
     return {"type": "tool_result", "call_id": event.tool_call_id, "name": event.tool_name, "content": body,
-            "is_error": bool(event.is_error or result.get("ok") is False), "images": images}
+            "is_error": failed, "images": images}
 
 
 # --- condensing ---------------------------------------------------------------------------

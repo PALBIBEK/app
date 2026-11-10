@@ -276,12 +276,12 @@ class WithRequestThreads:
         # Checked here, as the server is built, never first in the lifespan: an error raised
         # there is taken by uvicorn ("auto") for a lifespan the app lacks, and the app would
         # be served without its own startup.
-        threads()
+        self.threads = threads()
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
-            widen_request_threads()
+            widen_request_threads(self.threads)  # the size checked as the server was built
         await self.app(scope, receive, send)
 
     def __getattr__(self, name: str) -> Any:
@@ -293,6 +293,9 @@ class WithRequestThreads:
 def listeners(settings: Settings) -> list[tuple[str, Any]]:
     """What this process serves: the API, the model gateway, the memory service.
 
+    Each with ``lifespan="on"``: under uvicorn's "auto", a failing startup is taken for an
+    app without a lifespan, and served without its startup having run.
+
     One process, one port each (8080, 8090, 8092 by default), so their URLs stay
     what they were as separate services. Each can be switched off: a deploy with
     several API copies serves the gateway (whose virtual keys live in its
@@ -302,12 +305,12 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
 
     out: list[tuple[str, Any]] = []
     if _flag("SERVE_SUPERVISOR_API"):
-        out.append(("api", uvicorn.Config(WithRequestThreads(app), host=settings.host, port=settings.port)))
+        out.append(("api", uvicorn.Config(WithRequestThreads(app), host=settings.host, port=settings.port, lifespan="on")))
     if _flag("SERVE_MODEL_GATEWAY"):
         port = int(os.environ.get("MODEL_GATEWAY_PORT", "8090"))
         from supervisor.gateway.app import app as gateway_app
 
-        out.append(("model-gateway", uvicorn.Config(WithRequestThreads(gateway_app), host=settings.host, port=port)))
+        out.append(("model-gateway", uvicorn.Config(WithRequestThreads(gateway_app), host=settings.host, port=port, lifespan="on")))
     if _flag("SERVE_MEMORY_SERVICE"):
         from supervisor.memory_service.app import create_app as memory_app
         from supervisor.memory_service.db import database_url_from_env
@@ -315,7 +318,7 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
         url = database_url_from_env()
         host = os.environ.get("MEMORY_HOST", settings.host)
         port = int(os.environ.get("MEMORY_PORT", "8092"))
-        out.append(("memory-service", uvicorn.Config(WithRequestThreads(memory_app(database_url=url)), host=host, port=port)))
+        out.append(("memory-service", uvicorn.Config(WithRequestThreads(memory_app(database_url=url)), host=host, port=port, lifespan="on")))
         # The API in this process keeps its notebooks there unless told otherwise.
         os.environ.setdefault("MEMORY_SERVICE_URL", f"http://127.0.0.1:{port}")
     return out
