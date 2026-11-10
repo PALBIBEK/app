@@ -171,3 +171,61 @@ async def test_a_memory_service_older_than_the_inbox_takes_plain_captures() -> N
         assert await client.observe("t1~abc", [draft("x")], context=OWN) is None
     finally:
         await client.aclose()
+
+
+async def test_a_contradicted_fact_is_retired_only_once_its_replacement_has_landed(svc: MemoryServiceHandle) -> None:
+    """Retirement travels with the capture and goes after it, in one transaction: never
+    the old fact gone and the new one still queued (or lost)."""
+    memory = svc.app.state.memory
+    await memory.stop_background()
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
+    (old,) = await client.facts(nb.id)
+
+    await client.observe(nb.id, [draft("Deploys use flag B")], context=OWN, retire=[old.id])
+    assert [f.text for f in await client.facts(nb.id)] == ["Deploys use flag A"], "kept while the new one waits"
+
+    await memory.inbox.drain()
+    assert [f.text for f in await client.facts(nb.id)] == ["Deploys use flag B"]
+
+
+async def test_a_capture_that_does_not_land_retires_nothing(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await memory.stop_background()
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
+    (old,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Deploys use flag B")], context=OWN, retire=[old.id])
+    await client.set_archived(nb.id, True)  # the queue is dropped: so is its retirement
+
+    await memory.inbox.drain()
+    await client.set_archived(nb.id, False)
+
+    assert [f.text for f in await client.facts(nb.id)] == ["Deploys use flag A"]
+
+
+async def test_a_statement_is_cleaned_as_a_captured_fact_is(svc: MemoryServiceHandle) -> None:
+    """A model's "(said in X)" is its claim, not provenance: marked as one, as ``capture``
+    marks it."""
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+
+    await client.observe(nb.id, [draft("- Prefers dark mode (said in #exec-channel)", ObservationType.USER)],
+                         context=OWN)
+
+    (fact,) = await landed(client, nb.id, 1)
+    assert fact.text == "Prefers dark mode [claimed source: #exec-channel]"
+
+
+async def test_the_backlog_is_reported(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await memory.stop_background()
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("One queued")], context=OWN)
+
+    assert (await memory.metrics_snapshot())["inbox_backlog"] == 1
+    await memory.inbox.drain()
+    assert (await memory.metrics_snapshot())["inbox_backlog"] == 0

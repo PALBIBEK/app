@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -129,7 +130,15 @@ class InboxRow(Base):
     __table_args__ = (
         # A retried capture (the same burst) is one row, whichever replica it reached.
         UniqueConstraint("notebook_id", "idempotency_key", name="uq_memory_inbox_key"),
-        Index("ix_memory_inbox_pending", "notebook_id", "promoted_at", "id"),
+        # What the drainer reads every pass: the queue, never the day of promoted rows kept.
+        Index(
+            "ix_memory_inbox_queued",
+            "notebook_id",
+            "id",
+            postgresql_where=text("promoted_at IS NULL"),
+            sqlite_where=text("promoted_at IS NULL"),
+        ),
+        Index("ix_memory_inbox_promoted", "promoted_at"),  # pruning
     )
 
     id: Mapped[int] = mapped_column(_Id, primary_key=True, autoincrement=True)
@@ -138,6 +147,7 @@ class InboxRow(Base):
     )
     idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     observations: Mapped[list] = mapped_column(JSON, nullable=False)  # wire.observation_out each
+    retire: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # fact ids it makes false
     sensitivity: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     source_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False)

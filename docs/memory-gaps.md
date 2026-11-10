@@ -274,9 +274,17 @@ proceed.
   `reference` facts go to the session's writable notebook, typed, so G8 can move them.
 - **Inbox (S1):** an automatic capture is one insert into `memory_observation_inbox`, with
   no lock on its notebook. Each replica's drainer (`notebooks/inbox.py`) lands a notebook's
-  queue in batches of 100 under one lock, woken at once when a capture is queued there. A
-  promoted row is kept for a day, so a retried burst's idempotency key still holds. Erasure
-  deletes queued captures too; an archived notebook drops what was queued.
+  queue in batches of 100 under one lock, reading its facts once a batch, and is woken at
+  once when a capture is queued there. Where no background loop runs (an in-memory
+  database), a capture lands as it is queued. A promoted row is kept for a day (a partial
+  index keeps the drainer's reads to the queue), so a retried burst's idempotency key still
+  holds. Erasure deletes queued captures too; an archived notebook drops what was queued.
+- **Retirement after the replacement:** the facts a capture makes false travel with it in
+  the inbox and are removed after it lands, in the same transaction, and only if all of it
+  was kept, so a capture that does not land leaves both facts. Only what the audience may
+  change is retired (the disclosure layer's rule for deletes). Statements are cleaned as
+  any captured fact is (a model's "(said in X)" is marked as a claim). The inbox backlog is
+  reported in the service's metrics (`inbox_backlog`).
 - **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404
   on `/observations`), gets the statements as a plain capture.
 - **Per-tenant fairness:** capture's model calls (extraction, resolution) take one of their

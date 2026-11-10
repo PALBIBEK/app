@@ -12,7 +12,10 @@ the extraction model, the prompt version, and when.
 
 Ours beyond Grok's: QM's sensitivity label rides on the outcome (``sensitivity``, one label
 for what was extracted, ``unknown`` when missing or not one of the four), and a JSON answer
-wrapped in a code fence is unwrapped (models without structured output add one).
+wrapped in a code fence is unwrapped (models without structured output add one). Grok also
+sends the outcome's JSON schema with the request (``extraction_schema``); our one-shot calls
+take no response format, so the prompt states the shape and this parser holds the model to
+it.
 
 Shared, like ``extraction_prompt``, by the supervisor's capture (which parses the model's
 answer) and the memory service (which validates what it is sent).
@@ -46,7 +49,6 @@ __all__ = [
     "ObservationInvalid",
     "ObservationType",
     "Observations",
-    "extraction_schema",
     "parse_model_outcome",
 ]
 
@@ -177,36 +179,6 @@ def parse_model_outcome(text: str, model: str, created_at: int) -> Noop | Observ
     )
 
 
-def extraction_schema() -> dict[str, Any]:
-    """The outcome's JSON schema, for a model that takes one (Grok's ``extraction_schema``,
-    with ``sensitivity`` added); bare, without the ``{name, strict, schema}`` envelope."""
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["outcome", "observations", "sensitivity"],
-        "properties": {
-            "outcome": {"type": "string", "enum": ["noop", "observations"]},
-            "observations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["type", "topic_hint", "statement", "keywords", "aliases", "body"],
-                    "properties": {
-                        "type": {"type": "string", "enum": [t.value for t in ObservationType]},
-                        "topic_hint": {"type": ["string", "null"]},
-                        "statement": {"type": "string", "maxLength": MAX_STATEMENT_BYTES},
-                        "keywords": {"type": "array", "items": {"type": "string"}},
-                        "aliases": {"type": "array", "items": {"type": "string"}},
-                        "body": {"type": ["string", "null"]},
-                    },
-                },
-            },
-            "sensitivity": {"type": "string", "enum": [s.value for s in Sensitivity]},
-        },
-    }
-
-
 # --- reading one observation ----------------------------------------------------------------
 
 
@@ -222,6 +194,10 @@ def _object(value: Any, fields: frozenset[str], what: str) -> dict[str, Any]:
 def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
     observation = _object(raw, _OBSERVATION_FIELDS, "an observation")
     statement = scrub_control_characters(_string(observation, "statement", required=True) or "")
+    if not statement:
+        # The store would refuse it, and the whole capture with it: malformed, so the
+        # extractor is asked again instead.
+        raise MalformedOutcome("malformed extraction output: statement is empty")
     if _bytes(statement) > MAX_STATEMENT_BYTES:
         raise MalformedOutcome("malformed extraction output: statement exceeds byte limit")
     try:

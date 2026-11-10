@@ -68,6 +68,7 @@ class ObserveIn(BaseModel):
     observations: list[dict[str, Any]]
     author: str | None = None
     context: dict[str, Any] | None = None
+    retire: list[str] = []
     idempotency_key: str | None = None
 
 
@@ -243,6 +244,7 @@ async def observe(notebook_id: str, body: ObserveIn, request: Request) -> dict[s
             drafts,
             author=body.author,
             context=wire.context_in(body.context),
+            retire=body.retire,
             idempotency_key=body.idempotency_key,
         )
     except ObservationInvalid as exc:

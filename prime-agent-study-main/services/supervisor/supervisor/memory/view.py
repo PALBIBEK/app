@@ -53,12 +53,14 @@ class MemoryView:
         *,
         author: str | None = None,
         context: CaptureContext | None = None,
+        retire: Sequence[str] = (),
         idempotency_key: str | None = None,
     ) -> int | None:
         """Queue typed observations (G2), or None when the memory below takes plain
         captures only (``observe``)."""
         return await observe(
-            self._base, notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+            self._base, notebook_id, drafts, author=author, context=context, retire=retire,
+            idempotency_key=idempotency_key,
         )
 
     async def query(
@@ -107,16 +109,18 @@ async def observe(
     *,
     author: str | None = None,
     context: CaptureContext | None = None,
+    retire: Sequence[str] = (),
     idempotency_key: str | None = None,
 ) -> int | None:
-    """Queue typed observations into ``memory`` (G2): the number queued, or None when it
-    takes plain captures only (a provider's own memory, or a memory service older than G2),
-    for the caller to capture their statements instead. Not part of ``MemoryService``, so a
-    provider without it still is one."""
+    """Queue typed observations into ``memory`` (G2), ``retire`` (the facts they make false)
+    going after them: the number queued, or None when it takes plain captures only (a
+    provider's own memory, or a memory service older than G2), for the caller to capture
+    their statements and retire separately. Not part of ``MemoryService``, so a provider
+    without it still is one."""
     queue = getattr(memory, "observe", None)
     if queue is None:
         return None
     queued: int | None = await queue(
-        notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+        notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
     )
     return queued

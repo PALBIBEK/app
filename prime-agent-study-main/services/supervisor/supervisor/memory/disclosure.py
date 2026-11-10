@@ -18,7 +18,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from supervisor.memory.service import MemoryService
+from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
 from supervisor.memory_service.notebooks.render import (
@@ -38,6 +38,7 @@ from supervisor.memory_service.notebooks.types import (
     Sensitivity,
     personal_source,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,29 @@ class DisclosedMemory(MemoryView):
     ) -> None:
         await self._require_editable(notebook_id, ids)
         await self._base.delete(notebook_id, ids, author=author)
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureContext | None = None,
+        retire: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Queue observations as capture writes, unfiltered; but retire only what this
+        audience may change (``delete``'s rule): otherwise the observations alone, so both
+        facts are kept, as a refused delete keeps them."""
+        if retire:
+            try:
+                await self._require_editable(notebook_id, retire)
+            except (MemoryDisclosureDenied, MemoryFactsMissing) as exc:
+                logger.info("notebook %s: contradicted facts not retired: %s", notebook_id, exc)
+                retire = ()
+        return await super().observe(
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
+        )
 
     async def clear(self, notebook_id: str, *, author: str | None = None) -> int:
         await self._require_fully_visible(notebook_id)

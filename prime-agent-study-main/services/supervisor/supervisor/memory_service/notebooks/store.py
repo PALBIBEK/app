@@ -541,6 +541,7 @@ class NotebookStore:
         *,
         author: str | None,
         expires_on: str | None,
+        retire: Sequence[str] = (),
         idempotency_key: str | None,
     ) -> bool:
         """Queue one capture's observations; False when ``idempotency_key`` is queued
@@ -552,6 +553,7 @@ class NotebookStore:
                     notebook_id=notebook_id,
                     idempotency_key=idempotency_key,
                     observations=list(observations),
+                    retire=list(retire),
                     author=author,
                     expires_on=expires_on,
                     received_at=now_ms(),
@@ -562,7 +564,13 @@ class NotebookStore:
                 await db.commit()
             except IntegrityError:
                 await db.rollback()
-                return False
+                if idempotency_key is not None and await db.scalar(
+                    select(InboxRow.id).where(
+                        InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key == idempotency_key
+                    )
+                ):
+                    return False  # queued already: a retried burst
+                raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued
             return True
 
     async def pending_notebooks(self, *, limit: int) -> list[str]:

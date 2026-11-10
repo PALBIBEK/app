@@ -27,7 +27,6 @@ from supervisor.memory_service.observations import (
     ObservationInvalid,
     Observations,
     ObservationType,
-    extraction_schema,
     parse_model_outcome,
 )
 
@@ -88,16 +87,6 @@ def test_inconsistent_or_unknown_output_fields_are_rejected() -> None:
         ),
     ):
         assert expected in error(output)
-
-
-def test_schema_requires_observations_without_conditionals() -> None:
-    schema = extraction_schema()
-
-    assert schema["additionalProperties"] is False
-    assert isinstance(schema["properties"]["observations"], dict)
-    assert schema["required"] == ["outcome", "observations", "sensitivity"]
-    for keyword in ("allOf", "if", "then"):
-        assert keyword not in schema
 
 
 def test_deterministic_quality_fixtures_cover_memory_categories_and_unicode() -> None:
@@ -264,3 +253,13 @@ def test_a_json_answer_inside_a_code_fence_is_read() -> None:
 
     assert isinstance(parse(fenced), Noop)
     assert "unknown field `tool`" in error('```json\n{"outcome":"noop","tool":"shell"}\n```')
+
+
+def test_a_statement_empty_once_scrubbed_is_malformed_so_extraction_is_asked_again() -> None:
+    """The store refuses an empty statement and its whole capture with it; caught here, it
+    is a malformed answer, retried, instead of a burst lost."""
+    for statement in ("", "   ", "\u0000\u0007"):
+        output = json.dumps({"outcome": "observations", "observations": [
+            {"type": "user", "topic_hint": None, "statement": statement, "keywords": [], "aliases": [], "body": None},
+        ]})
+        assert "statement is empty" in error(output)

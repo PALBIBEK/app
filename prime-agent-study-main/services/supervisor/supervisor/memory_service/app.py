@@ -509,10 +509,8 @@ def create_app(
         if existing is None:
             svc = MemoryService(database_url=database_url)
             await svc.startup()
-            # Always: without it no automatic capture becomes a fact (an in-memory database
-            # too, where the other loops are off).
-            svc.start_inbox_drainer()
             if interval > 0:
+                svc.start_inbox_drainer()  # without it, an automatic capture lands as it is queued
                 svc.start_extraction_worker(interval_s=interval)
                 svc.start_buffer_sweeper()
                 svc.start_archiver()

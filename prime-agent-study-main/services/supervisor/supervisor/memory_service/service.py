@@ -461,7 +461,13 @@ class MemoryService:
         return await self._retention.archive_cold(limit=limit)
 
     async def metrics_snapshot(self) -> dict:
-        return {**METRICS.snapshot(), **await self._extraction.backlog()}
+        return {
+            **METRICS.snapshot(),
+            **await self._extraction.backlog(),
+            # Automatic captures queued, not yet facts (G2): a backlog that grows means the
+            # drainers fall behind.
+            "inbox_backlog": await self.notebooks.store.pending(),
+        }
 
     async def report_recall_used(self, n: int = 1) -> None:
         METRICS.inc("recall_items_marked_used", n)

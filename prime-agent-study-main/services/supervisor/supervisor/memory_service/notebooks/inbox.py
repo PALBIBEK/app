@@ -36,7 +36,6 @@ class InboxDrainer:
         self._ops = ops
         self._wake = asyncio.Event()
         self._gate = asyncio.Semaphore(concurrency)
-        ops.on_queued = self.kick
 
     def kick(self) -> None:
         """A capture was queued: drain now, not at the next pass."""
@@ -64,6 +63,7 @@ class InboxDrainer:
     async def run(self, interval_s: float) -> None:
         """Drain whenever a capture is queued here, and every ``interval_s`` (for those
         queued on other replicas), until cancelled."""
+        self._ops.on_queued = self.kick
         while True:
             self._wake.clear()
             try:

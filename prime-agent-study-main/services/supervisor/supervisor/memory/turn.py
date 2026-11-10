@@ -409,7 +409,9 @@ class SessionMemory:
         one_shot = await self._one_shot_for(session_id)
         # Its model calls in one of its tenant's slots (supervisor.memory.fairness): one
         # tenant's burst of captures never holds up another tenant's.
-        async with capture_gate().slot(tenant_of(binding.writable)):
+        # A notebook id names its tenant; a provider's own memory's may not: then the owner's
+        # lane, never one shared by every such tenant.
+        async with capture_gate().slot(tenant_of(binding.writable) or f"owner:{binding.owner}"):
             extracted = await _extract(one_shot, session_id, items)
             if not isinstance(extracted, Observations):
                 return 0  # failed for good, or nothing worth retaining
@@ -419,13 +421,12 @@ class SessionMemory:
             resolution = await resolve(one_shot, statements, await scope.view.facts(binding.writable))
         drafts = [extracted.drafts[i] for i in resolution.add]
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
-        added = 0
-        if drafts:
-            added = await self._capture_observations(
-                scope, binding.writable, session_id, drafts, extracted.sensitivity, runs, exchanges, key
-            )
-        await self._retire(scope, binding.writable, session_id, resolution.retire)
-        return added
+        if not drafts:
+            await self._retire(scope, binding.writable, session_id, resolution.retire)
+            return 0
+        return await self._capture_observations(
+            scope, binding.writable, session_id, drafts, resolution.retire, extracted.sensitivity, runs, exchanges, key
+        )
 
     async def _retire(self, scope: Scope, notebook: str, session_id: str, ids: Sequence[str]) -> None:
         """Delete facts a capture made false (history keeps them); best effort, after the
@@ -444,23 +445,29 @@ class SessionMemory:
         notebook: str,
         session_id: str,
         drafts: Sequence[ObservationDraft],
+        retire: Sequence[str],
         sensitivity: Sensitivity,
         runs: Sequence[Envelope],
         exchanges: Sequence[Exchange],
         key: str,
     ) -> int:
         """Queue the observations into the notebook's inbox (G2: no lock on the notebook,
-        typed facts once it is drained); the number queued. A memory that takes plain
-        captures only (a provider's own, or a service older than G2) gets their statements."""
+        typed facts once it is drained), the facts they make false retired after them in
+        the same transaction; the number of facts queued (a repeat among them adds none
+        when it lands). A memory that takes plain captures only (a provider's own, or a
+        service older than G2) gets their statements, then the retirement, as before G2."""
         context = self._automatic(scope, session_id, sensitivity, runs, exchanges, key)
         queued = await observe(
-            scope.view, notebook, drafts, author=scope.audience.actor, context=context, idempotency_key=key
+            scope.view, notebook, drafts, author=scope.audience.actor, context=context, retire=retire,
+            idempotency_key=key,
         )
         if queued is not None:
             return queued
-        return await scope.view.capture(
+        added = await scope.view.capture(
             notebook, [d.statement for d in drafts], author=scope.audience.actor, context=context
         )
+        await self._retire(scope, notebook, session_id, retire)
+        return added
 
     @staticmethod
     def _automatic(

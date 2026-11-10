@@ -110,3 +110,18 @@ async def _landed(client: object, notebook_id: str, count: int) -> list[Fact]:
         while len(facts := await client.facts(notebook_id)) < count:  # type: ignore[attr-defined]
             await asyncio.sleep(0.05)
     return facts
+
+
+async def test_a_capture_into_a_notebook_erased_under_it_is_not_found_not_a_duplicate(replicas: Replicas) -> None:
+    """The insert fails the notebook's foreign key: that is a missing notebook, never a
+    retried burst already queued (which would report the capture handled and lose it)."""
+    (replica,) = await replicas.start(1)
+    store = replica.app.state.memory.notebooks.store
+    from supervisor.memory_service.notebooks.errors import NotebookNotFound
+    from supervisor.memory_service.notebooks.types import Provenance
+
+    with pytest.raises(NotebookNotFound):
+        await store.append_inbox(
+            "t1~gone", [], Provenance(Sensitivity.ORDINARY, (), False), author=None, expires_on=None,
+            idempotency_key="burst-1",
+        )

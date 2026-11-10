@@ -263,15 +263,18 @@ class NotebookClient:
         *,
         author: str | None = None,
         context: CaptureMetadata | None = None,
+        retire: Sequence[str] = (),
         idempotency_key: str | None = None,
     ) -> int | None:
         """Queue an automatic capture's typed observations (G2): facts once the service's
-        inbox lands them. The number queued (0 when ``idempotency_key`` was queued already);
-        None from a service older than G2, which takes plain captures only."""
+        inbox lands them, ``retire`` (the facts they make false) after them. The number
+        queued (0 when ``idempotency_key`` was queued already); None from a service older
+        than G2, which takes plain captures only."""
         body = {
             "observations": [wire.observation_out(d) for d in drafts],
             "author": author,
             "context": wire.context_out(context),
+            "retire": list(retire),
             "idempotency_key": idempotency_key,
         }
         for attempt in range(OBSERVE_ATTEMPTS):

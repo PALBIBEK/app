@@ -140,13 +140,14 @@ class NotebookMemory:
         *,
         author: str | None = None,
         context: CaptureContext | None = None,
+        retire: Sequence[str] = (),
         idempotency_key: str | None = None,
     ) -> int | None:
         """Queue typed observations (G2), or None from a service that takes only plain captures."""
         if not drafts:
             return 0
         return await self._store.observe(
-            notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
         )
 
     async def query(
