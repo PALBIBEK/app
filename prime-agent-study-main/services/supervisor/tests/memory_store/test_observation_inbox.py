@@ -334,8 +334,9 @@ async def test_the_facts_as_they_were_keep_their_type(svc: MemoryServiceHandle) 
     assert then.typed == fact.typed
 
 
-async def test_a_queued_capture_that_cannot_land_is_set_aside_not_the_queue_behind_it(svc: MemoryServiceHandle) -> None:
-    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+async def test_a_queued_capture_that_cannot_be_read_is_set_aside_not_the_queue_behind_it(svc: MemoryServiceHandle) -> None:
+    """A row no reader can parse never will be: set aside at once, and the capture queued
+    behind it lands."""
     from supervisor.memory_service.notebooks.types import Provenance
 
     memory = svc.app.state.memory
@@ -344,15 +345,46 @@ async def test_a_queued_capture_that_cannot_land_is_set_aside_not_the_queue_behi
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     store = memory.notebooks.store
     await store.append_inbox(nb.id, [{"type": "bogus"}], Provenance(Sensitivity.ORDINARY, (), False),
-                             author=None, expires_on=None, idempotency_key="bad")  # a row no longer readable
+                             author=None, expires_on=None, idempotency_key="bad")
     await client.observe(nb.id, [draft("Lands behind it")], context=OWN)
 
     await memory.inbox.drain()
 
     assert [f.text for f in await client.facts(nb.id)] == ["Lands behind it"]
-    for _ in range(PROMOTE_ATTEMPTS):
-        await memory.notebooks.promote(nb.id)
-    assert await store.pending() == 0, "given up after its attempts, never retried forever"
+    assert await store.pending() == 0
+
+
+async def test_a_batch_that_fails_to_write_is_rolled_back_whole_and_tried_again(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure while writing (the database, the embedder) rolls the batch back with
+    nothing marked: the notebook is backed off and its captures land on a later try."""
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("First")], context=OWN)
+    await client.observe(nb.id, [draft("Second")], context=OWN)
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    insert = FactTx.insert
+    calls = 0
+
+    async def flaky(self: FactTx, *args: object, **kw: object) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("the embedder is down")
+        return await insert(self, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", flaky)
+    assert await memory.inbox.drain() == 0
+    assert await client.facts(nb.id) == [], "the first capture's fact rolled back with the batch"
+    assert await memory.notebooks.store.pending() == 2
+
+    memory.inbox._failing.clear()  # past its backoff
+    assert await memory.inbox.drain() == 2
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Second"]
 
 
 async def test_a_retire_id_that_is_not_one_is_refused(svc: MemoryServiceHandle) -> None:
@@ -389,3 +421,17 @@ async def test_a_full_notebook_still_takes_a_repeat_or_a_replacement(
 
     assert await client.observe(nb.id, [draft("deploys use flag a")], context=OWN) == 1, "a repeat adds nothing"
     assert await client.observe(nb.id, [draft("Deploys use flag B")], context=OWN, retire=[old.id]) == 1
+
+
+async def test_any_404_that_is_not_the_service_s_own_means_an_older_service() -> None:
+    """A proxy's page in front of an older service, not FastAPI's body: still no route
+    (a missing notebook is the service's own answer, coded NotebookNotFound)."""
+
+    def proxied(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="<html><body>404 Not Found</body></html>")
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(proxied))
+    try:
+        assert await client.observe("t1~abc", [draft("x")], context=OWN) is None
+    finally:
+        await client.aclose()

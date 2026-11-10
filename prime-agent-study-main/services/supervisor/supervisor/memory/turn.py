@@ -49,7 +49,7 @@ from supervisor.memory.extraction import (
     Observations,
     extract_observations,
 )
-from supervisor.memory.fairness import capture_gate
+from supervisor.memory.fairness import GatedOneShot, capture_gate
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.resolution import resolve
@@ -209,6 +209,7 @@ class SessionMemory:
         self._reader = reader
         self._one_shot_for = one_shot_for
         self._sessions_for = sessions_for
+        capture_gate()  # its setting checked as the worker starts, not at its first capture
 
     async def scope(self, session_id: str) -> Scope | None:
         resolved = await self._platform.session_audience(session_id)
@@ -406,19 +407,22 @@ class SessionMemory:
             runs.extend(run)
         if not items:
             return 0
-        one_shot = await self._one_shot_for(session_id)
-        # Its model calls in one of its tenant's slots (supervisor.memory.fairness): one
-        # tenant's burst of captures never holds up another tenant's.
-        # A notebook id names its tenant; a provider's own memory's may not: then the owner's
-        # lane, never one shared by every such tenant.
-        async with capture_gate().slot(tenant_of(binding.writable) or f"owner:{binding.owner}"):
-            extracted = await _extract(one_shot, session_id, items)
-            if not isinstance(extracted, Observations):
-                return 0  # failed for good, or nothing worth retaining
-            # Resolve against what the notebook holds (supervisor.memory.resolution): a
-            # duplicate is not added; a fact the new ones make false is retired after them.
-            statements = [d.statement for d in extracted.drafts]
-            resolution = await resolve(one_shot, statements, await scope.view.facts(binding.writable))
+        # Each model call in one of its tenant's slots (supervisor.memory.fairness): one
+        # tenant's burst of captures never holds up another tenant's. A notebook id names its
+        # tenant; a provider's own memory's may not: then the owner's lane, never one shared
+        # by every such tenant.
+        one_shot = GatedOneShot(
+            await self._one_shot_for(session_id),
+            tenant_of(binding.writable) or f"owner:{binding.owner}",
+            capture_gate(),
+        )
+        extracted = await _extract(one_shot, session_id, items)
+        if not isinstance(extracted, Observations):
+            return 0  # failed for good, or nothing worth retaining
+        # Resolve against what the notebook holds (supervisor.memory.resolution): a
+        # duplicate is not added; a fact the new ones make false is retired after them.
+        statements = [d.statement for d in extracted.drafts]
+        resolution = await resolve(one_shot, statements, await scope.view.facts(binding.writable))
         drafts = [extracted.drafts[i] for i in resolution.add]
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
         if not drafts:

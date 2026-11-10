@@ -300,6 +300,27 @@ proceed.
   rate-limited `observe` (the service's per-tenant change limit) is retried briefly,
   honouring `Retry-After`, rather than losing the burst.
 
+*Load (4 tenants × 50 sessions, capture on), G1 then G2, on the same machine in the same
+hour:* G1's numbers recorded earlier were taken when this shared machine was quieter, so
+`main` (G1) was run again beside G2.
+
+| Measure | G1 (`main`) | G2 |
+|---|---|---|
+| Session errors | 1 (create 500, overloaded Temporal) | 0 |
+| Captured | 199/200 | 200/200 (p95 5.6 s) |
+| Lost, duplicated, crossed, unrecalled | 0 | 0 |
+| Recall p50 / p95 | 2,245 / 3,304 ms | 1,959 / 2,965 ms |
+| First step p95 | 10,974 ms | 9,310 ms |
+
+Found by G2's first load run, and fixed in G2:
+- **Malformed answers:** a model answering capture in prose (the stack's stand-in) made
+  every capture four charged calls. A malformed answer is now retried once.
+- **Rate limits:** one session's `notebooks:ensure` was refused by the per-tenant change
+  limit, and the session failed. The client now asks again for any request the limit
+  refused, waiting the `Retry-After` asked: it ran nothing, so asking again is safe.
+
+The recall target (150 ms p95) still needs a sized environment, as for G0 and G1.
+
 *Concurrency tests:* on four replicas, 100 captures into one notebook whose lock another
 transaction holds all queue in under 2 s, none landing past the lock. Once it is released
 they land once each, in batches (fewer revisions than a quarter of the captures). The same

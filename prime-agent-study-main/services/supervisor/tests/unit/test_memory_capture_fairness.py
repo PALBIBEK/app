@@ -73,3 +73,23 @@ def test_the_cap_is_a_setting_and_a_bad_one_names_itself(monkeypatch: pytest.Mon
         monkeypatch.setenv(fairness.PER_TENANT_ENV, bad)
         with pytest.raises(ValueError, match="MEMORY_CAPTURE_PER_TENANT"):
             fairness.capture_gate()
+
+
+async def test_a_gated_one_shot_holds_a_slot_only_while_its_call_runs() -> None:
+    gate = TenantGate(1)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def model(system: str, content: str) -> str:
+        entered.set()
+        await release.wait()
+        return "ok"
+
+    model.model = "m-1"  # type: ignore[attr-defined]
+    gated = fairness.GatedOneShot(model, "t", gate)
+    call = asyncio.create_task(gated("s", "c"))
+    await entered.wait()
+    assert gate.held("t") == 1
+    release.set()
+    assert await call == "ok"
+    assert gate.held("t") == 0 and gated.model == "m-1", "nothing held between calls; its model kept"

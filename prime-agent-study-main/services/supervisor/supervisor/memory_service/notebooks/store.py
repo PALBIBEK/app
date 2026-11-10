@@ -623,32 +623,6 @@ class NotebookStore:
                 )
             )
 
-    async def live_count(self, notebook_id: str) -> int:
-        """The notebook's live facts."""
-        async with self._db() as db:
-            return int(
-                await db.scalar(
-                    select(func.count())
-                    .select_from(FactRow)
-                    .where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
-                )
-                or 0
-            )
-
-    async def texts(self, notebook_id: str, ids: Sequence[str]) -> dict[str, str]:
-        """The live text of each of ``ids`` (an id gone, or another notebook's, is left out)."""
-        if not ids:
-            return {}
-        async with self._db() as db:
-            rows = await db.execute(
-                select(FactRow.id, FactRow.text).where(
-                    FactRow.notebook_id == notebook_id,
-                    FactRow.id.in_([int(i) for i in ids]),
-                    FactRow.deleted_at.is_(None),
-                )
-            )
-            return {str(i): str(t) for i, t in rows}
-
     async def typed_of(self, notebook_id: str, ids: Sequence[str]) -> dict[str, Typed]:
         """The type each of ``ids`` carries now, live or deleted (a fact's type is not in its
         history: it says what the fact is, not what it said)."""

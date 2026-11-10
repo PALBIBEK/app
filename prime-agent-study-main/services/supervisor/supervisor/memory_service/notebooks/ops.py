@@ -64,8 +64,6 @@ logger = logging.getLogger(__name__)
 
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
-PROMOTE_ATTEMPTS = 5
-"""Batches a queued capture that fails to land is tried in before it is given up."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
 """How long a promoted capture's row is kept, so a retried burst (its idempotency key)
 is still recognised: well past capture's own retries and Temporal's."""
@@ -179,9 +177,10 @@ class NotebookOps:
         # retired when the capture lands only if it still says that: a fact edited meanwhile
         # is not the one resolution judged false).
         live, texts = await self.store.capacity(notebook_id, retire_ids)
-        if live + len(drafts) - len(texts) > MAX_FACTS_PER_NOTEBOOK:
-            # Full, or the capture would overfill it: refused now, as ``capture`` refuses,
-            # unless what is new fits (repeats add nothing; a retired fact makes room).
+        if live - len(texts) >= MAX_FACTS_PER_NOTEBOOK:
+            # Full, with no room made by what it retires: refused now, as ``capture`` refuses,
+            # unless it only repeats facts it holds (that read only when full, never near it;
+            # near it, what overfills is dropped as it lands, logged).
             known = {normalize(t) for t in await self.store.all_texts(notebook_id)}
             new = sum(1 for d in drafts if normalize(d.statement) not in known)
             _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + new - len(texts))
@@ -223,29 +222,17 @@ class NotebookOps:
             )
             added = 0
             existing = await live_facts(tx) if rows else {}  # once a batch, kept current
-            done: list[int] = []
             for row in rows:
-                try:
-                    async with tx.db.begin_nested():  # one capture's failure rolls back that capture only
-                        added += await _promote_row(tx, row, existing)
-                except Exception:
-                    # A capture that fails is set aside, never the queue behind it: tried again
-                    # in later batches, then given up (kept for its window, then pruned).
-                    existing = await live_facts(tx)
-                    row.attempts = int(row.attempts or 0) + 1
-                    given_up = row.attempts >= PROMOTE_ATTEMPTS
-                    logger.warning(
-                        "notebook %s: queued capture %s failed to land (attempt %d of %d)%s",
-                        notebook_id, row.id, row.attempts, PROMOTE_ATTEMPTS, ", given up" if given_up else "",
-                        exc_info=True,
-                    )
-                    if given_up:
-                        done.append(row.id)
-                    continue
-                done.append(row.id)
-            if done:
-                await tx.db.execute(update(InboxRow).where(InboxRow.id.in_(done)).values(promoted_at=tx.at))
-            return len(done), added
+                drafts = _readable(notebook_id, row)
+                if drafts is not None:  # one that cannot be read never will be: set aside, not the queue
+                    added += await _promote_row(tx, row, drafts, existing)
+            # Any other failure (the database, the embedder) fails the whole batch, rolled back
+            # with nothing marked: the drainer backs the notebook off and tries it again.
+            if rows:
+                await tx.db.execute(
+                    update(InboxRow).where(InboxRow.id.in_([r.id for r in rows])).values(promoted_at=tx.at)
+                )
+            return len(rows), added
 
         try:
             return await self.store.transact(notebook_id, run)
@@ -432,12 +419,25 @@ def _bytes(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
-async def _promote_row(tx: FactTx, row: InboxRow, existing: dict[str, Fact]) -> int:
+def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
+    """A queued capture's observations, each within its bounds; None (logged) for one that
+    cannot be read (stored by another version, say): that does not change, so it is set
+    aside at once rather than retried."""
+    try:
+        drafts = [observation_in(o) for o in row.observations]
+        for draft in drafts:
+            draft.validate()
+    except (ObservationInvalid, TypeError, AttributeError):
+        logger.warning("notebook %s: queued capture %s cannot be read: set aside", notebook_id, row.id, exc_info=True)
+        return None
+    return drafts
+
+
+async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDraft], existing: dict[str, Fact]) -> int:
     """Land one queued capture, then retire what it makes false (only when all of it was
     kept, only facts that still say what resolution judged, and never one the capture
     itself just restated); the facts added."""
     tx.author = row.author
-    drafts = [observation_in(o) for o in row.observations]
     provenance = Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown))
     entries = [(d.statement, typed_of(d)) for d in drafts]
     landed, whole = await land(tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop")

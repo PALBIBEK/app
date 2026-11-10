@@ -18,11 +18,11 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Final
 
-__all__ = ["PER_TENANT_ENV", "TenantGate", "capture_gate"]
+__all__ = ["PER_TENANT_ENV", "GatedOneShot", "TenantGate", "capture_gate"]
 
 PER_TENANT_ENV: Final = "MEMORY_CAPTURE_PER_TENANT"
 DEFAULT_PER_TENANT: Final = 8
@@ -86,6 +86,22 @@ class _Lane:
         self.semaphore = semaphore
         self.users = 0  # holding or waiting
         self.holding = 0
+
+
+class GatedOneShot:
+    """A one-shot whose every call takes one of its tenant's slots, for that call only: a
+    capture sleeping between attempts (a rate limit, a pause) holds none. Keeps the model
+    it names (``classification.one_shot_model``)."""
+
+    def __init__(self, one_shot: Callable[[str, str], Awaitable[str]], tenant: str, gate: TenantGate) -> None:
+        self._one_shot = one_shot
+        self._tenant = tenant
+        self._gate = gate
+        self.model = getattr(one_shot, "model", None)
+
+    async def __call__(self, system: str, content: str) -> str:
+        async with self._gate.slot(self._tenant):
+            return await self._one_shot(system, content)
 
 
 _gate: TenantGate | None = None

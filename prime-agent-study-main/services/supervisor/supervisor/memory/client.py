@@ -350,7 +350,9 @@ class NotebookClient:
             except RateLimited as exc:
                 if attempt + 1 == RATE_LIMITED_ATTEMPTS:
                     raise
-                await asyncio.sleep(min(exc.retry_after, 2.0) * (0.5 + random.random()))
+                # The wait asked for, never less (a retry inside the window meets the same
+                # limit), jittered upward so a burst's retries spread; at most MAX_RATE_WAIT_S.
+                await asyncio.sleep(min(max(exc.retry_after, 0.2) * (1 + random.random() / 2), MAX_RATE_WAIT_S))
         raise AssertionError("unreachable")
 
     async def _request(self, tenant_id: str, method: str, path: str, **kw: Any) -> Any:
@@ -432,8 +434,10 @@ def _error(response: httpx.Response) -> NotebookError:
             f"{detail.get('message', detail)}"
         )
     if response.status_code == 404:
-        if code is None and detail.get("message") == "Not Found":
-            return RouteMissing(response.request.url.path)  # FastAPI's own: no such route
+        if code is None:
+            # Not the service's own answer (a missing notebook says NotebookNotFound): no such
+            # route there, FastAPI's "Not Found" or a proxy's page in front of it.
+            return RouteMissing(response.request.url.path)
         # A notebook of another tenant is "not found" too, by design.
         return NotebookNotFound(str(detail.get("message", "")))
     if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
@@ -464,7 +468,9 @@ class RateLimited(MemoryUnavailable):
 OLDER_SERVICE_RECHECK_S = 600.0
 """How long a service found without ``/observations`` is taken as older than G2."""
 RATE_LIMITED_ATTEMPTS = 4
-"""Tries a rate-limited request makes (Retry-After apart, at most 2 s each)."""
+"""Tries a rate-limited request makes, Retry-After apart."""
+MAX_RATE_WAIT_S = 5.0
+"""The longest one wait for the change limit lasts (the service asks for 1 s)."""
 
 
 class RouteMissing(NotebookNotFound):

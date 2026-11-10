@@ -263,3 +263,30 @@ def test_a_statement_empty_once_scrubbed_is_malformed_so_extraction_is_asked_aga
             {"type": "user", "topic_hint": None, "statement": statement, "keywords": [], "aliases": [], "body": None},
         ]})
         assert "statement is empty" in error(output)
+
+
+def test_cleaning_twice_changes_nothing() -> None:
+    """The client cleans as the store does; the store's second pass must agree with the
+    first, or a statement resolution judged is stored as another."""
+    from supervisor.memory_service.notebooks.render import clean_captured
+
+    for raw in ("- - Uses make check", "* - (2024-05-01) Shipped v2 (said in #eng)", "Plain"):
+        once = clean_captured([raw])
+        assert clean_captured(once) == once, raw
+    assert clean_captured(["- - Uses make check"]) == ["Uses make check"]
+
+
+def test_the_model_named_in_provenance_is_within_the_store_s_bounds() -> None:
+    from supervisor.memory.classification import DEFAULT_MODEL, one_shot_model
+
+    class Named:
+        def __init__(self, model: object) -> None:
+            self.model = model
+
+        async def __call__(self, system: str, content: str) -> str:
+            return ""
+
+    assert one_shot_model(Named("gpt-x\n")) == "gpt-x"
+    assert one_shot_model(Named("é" * 100)).encode() == ("é" * 64).encode()
+    assert one_shot_model(Named("\x07")) == DEFAULT_MODEL
+    assert one_shot_model(Named(None)) == DEFAULT_MODEL

@@ -103,7 +103,7 @@ async def test_a_rate_limited_memory_request_is_asked_again() -> None:
         status = answers.pop(0)
         if status == 429:
             return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow down"}},
-                                  headers={"Retry-After": "0"})
+                                  headers={"Retry-After": "0.01"})
         return httpx.Response(200, json={"added": 1})
 
     client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
@@ -112,3 +112,32 @@ async def test_a_rate_limited_memory_request_is_asked_again() -> None:
     finally:
         await client.aclose()
     assert answers == []
+
+
+async def test_a_rate_limited_request_waits_the_time_asked(monkeypatch: object) -> None:
+    import httpx
+
+    from supervisor.memory import client as memory_client
+    from supervisor.memory.client import NotebookClient
+
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(memory_client.asyncio, "sleep", sleep)  # type: ignore[attr-defined]
+    answers = [429, 200]
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if answers.pop(0) == 429:
+            return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow"}},
+                                  headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"added": 1})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        await client.capture("t1~abc", ["x"])
+    finally:
+        await client.aclose()
+    (waited,) = waits
+    assert 3.0 <= waited <= memory_client.MAX_RATE_WAIT_S, "never sooner than asked, never past the cap"
