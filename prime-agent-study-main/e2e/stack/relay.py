@@ -28,7 +28,9 @@ FACT = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
 """A load test's fact token (e2e/bench_memory.py)."""
 
 app = FastAPI()
-client = httpx.AsyncClient(timeout=120)
+# Uncapped: under a load test the relay must not be the stack's bottleneck (httpx caps a
+# client at 100 connections, which the slow test switch's held streams fill).
+client = httpx.AsyncClient(timeout=120, limits=httpx.Limits(max_connections=None, max_keepalive_connections=200))
 
 
 def _record(path: str, request: Request, body: dict) -> None:

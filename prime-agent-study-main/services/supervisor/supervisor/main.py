@@ -45,6 +45,7 @@ from supervisor.api import (
 )
 from supervisor.api.sessions import end_and_erase
 from supervisor.app import SupervisorState
+from supervisor.blocking import widen_request_threads
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
 from supervisor.obs.responses import CountResponses, ResponseCounts
@@ -258,6 +259,25 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "1").strip().lower() not in {"0", "false", "no", "off", ""}
 
 
+def with_request_threads(served: FastAPI) -> FastAPI:
+    """``served`` with its loop's request threads widened when it starts
+    (``supervisor.blocking.widen_request_threads``): Starlette runs a synchronous route,
+    and each read of a synchronous stream, on 40 threads per loop otherwise, and the model
+    gateway's every model call is one, held for the whole reply. Done here, where the apps
+    are served, because the gateway and the memory service import nothing of the rest of
+    the supervisor."""
+    inner = served.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
+        widen_request_threads()
+        async with inner(app) as state:
+            yield state
+
+    served.router.lifespan_context = lifespan
+    return served
+
+
 def listeners(settings: Settings) -> list[tuple[str, Any]]:
     """What this process serves: the API, the model gateway, the memory service.
 
@@ -270,10 +290,12 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
 
     out: list[tuple[str, Any]] = []
     if _flag("SERVE_SUPERVISOR_API"):
-        out.append(("api", uvicorn.Config("supervisor.main:app", host=settings.host, port=settings.port)))
+        out.append(("api", uvicorn.Config(with_request_threads(app), host=settings.host, port=settings.port)))
     if _flag("SERVE_MODEL_GATEWAY"):
         port = int(os.environ.get("MODEL_GATEWAY_PORT", "8090"))
-        out.append(("model-gateway", uvicorn.Config("supervisor.gateway.app:app", host=settings.host, port=port)))
+        from supervisor.gateway.app import app as gateway_app
+
+        out.append(("model-gateway", uvicorn.Config(with_request_threads(gateway_app), host=settings.host, port=port)))
     if _flag("SERVE_MEMORY_SERVICE"):
         from supervisor.memory_service.app import create_app as memory_app
         from supervisor.memory_service.db import database_url_from_env
@@ -281,7 +303,7 @@ def listeners(settings: Settings) -> list[tuple[str, Any]]:
         url = database_url_from_env()
         host = os.environ.get("MEMORY_HOST", settings.host)
         port = int(os.environ.get("MEMORY_PORT", "8092"))
-        out.append(("memory-service", uvicorn.Config(memory_app(database_url=url), host=host, port=port)))
+        out.append(("memory-service", uvicorn.Config(with_request_threads(memory_app(database_url=url)), host=host, port=port)))
         # The API in this process keeps its notebooks there unless told otherwise.
         os.environ.setdefault("MEMORY_SERVICE_URL", f"http://127.0.0.1:{port}")
     return out

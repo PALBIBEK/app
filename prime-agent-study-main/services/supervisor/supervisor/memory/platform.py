@@ -13,7 +13,6 @@ back to the platform gateway; with no gateway at all, classification says
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -21,6 +20,7 @@ from dataclasses import replace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from supervisor.blocking import run_blocking
 from supervisor.db.models import ScopeMembershipRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.classification import ClassifiedMemory, OneShot
@@ -40,13 +40,14 @@ def gateway_one_shot(
     model: str | None = None,
     charge: Callable[[float], Awaitable[None]] | None = None,
 ) -> OneShot:
-    """A OneShot over a ModelGatewayClient (blocking ``complete`` runs in a thread).
+    """A OneShot over a ModelGatewayClient (blocking ``complete`` runs on the long-call
+    pool, ``supervisor.blocking``).
 
     ``charge``: counts each call's cost toward whoever pays for it (a session's cost cap).
     """
 
     async def call(system: str, content: str) -> str:
-        completion = await asyncio.to_thread(
+        completion = await run_blocking(
             gateway.complete,  # type: ignore[attr-defined]
             [ChatMessage("system", system), ChatMessage("user", content)],
             [],

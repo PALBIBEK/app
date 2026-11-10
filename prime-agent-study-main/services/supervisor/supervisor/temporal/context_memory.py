@@ -50,6 +50,7 @@ from supervisor.agent.runtimes.githi.classify import (
     is_retryable,
     retry_delay,
 )
+from supervisor.blocking import run_blocking
 from supervisor.memory.binding import long_term_agent
 from supervisor.memory.history import message_text
 from supervisor.models.messages import fits_with_reply
@@ -424,7 +425,7 @@ class PinnedContextMemory:
         if binding is None or not binding.profile.recall_enabled or not user_text.strip():
             return
         try:
-            block = await asyncio.to_thread(
+            block = await run_blocking(
                 binding.memory.recall_for_turn, binding.context, user_prompt=user_text
             )
         except Exception:  # noqa: BLE001 — recall is best effort; the turn goes on without it
@@ -483,7 +484,7 @@ async def _decide(
     while True:
         attempt += 1
         try:
-            decision = await asyncio.to_thread(
+            decision = await run_blocking(
                 binding.memory.before_compact, binding.context, preparation, reason="threshold"
             )
         except Exception as exc:  # a failed summary fails the compaction, never the run

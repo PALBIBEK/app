@@ -20,7 +20,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -93,13 +93,34 @@ class ModelRouter:
         self.catalog = GatewayCatalog(config, transport=transport)
         self.audit = audit or ModelCallAudit()
         self._transport = transport
+        self._shared: httpx.Client | None = None
+        self._shared_lock = threading.Lock()
 
     def serves(self, base_url: str) -> bool:
         """Whether ``base_url`` names this router's gateway (with or without ``/v1``)."""
         return _origin_path(base_url) == _origin_path(self.config.url)
 
     def http_client(self) -> httpx.Client:
-        return httpx.Client(transport=self._transport, follow_redirects=False)
+        """A client of the caller's own, which the caller closes. Its connections are
+        bounded by the threads that make calls (``supervisor.blocking``), not by httpx's
+        default of 100, which a busy worker's shared client would wait on."""
+        return httpx.Client(
+            transport=self._transport,
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=None, max_keepalive_connections=64),
+        )
+
+    def shared_http_client(self) -> httpx.Client:
+        """The one client every model call this router routes goes through, made once.
+
+        A new client builds a TLS context (it parses the CA bundle: tens of milliseconds of
+        CPU) and a pool of its own, so one per session or per call costs every concurrent
+        session that much again, and holds sockets nothing reuses. ``httpx.Client`` is safe
+        to share across threads; it lives as long as the router (the process)."""
+        with self._shared_lock:
+            if self._shared is None:
+                self._shared = self.http_client()
+            return self._shared
 
     def refresh(self) -> None:
         self.catalog.refresh()
@@ -162,18 +183,13 @@ class RoutedModelClient:
     session_id: str | None = None
     default_model: str | None = None
     effort: Effort = "auto"
-    _http: httpx.Client | None = None
-    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def rekey(self, token: str) -> None:
         """Call with ``token`` from now on (the session's key was renewed)."""
         self.api_key = token
 
     def _client(self) -> httpx.Client:
-        with self._lock:
-            if self._http is None:
-                self._http = self.router.http_client()
-            return self._http
+        return self.router.shared_http_client()
 
     def spec(self, model: str | None = None) -> ModelSpec:
         model_id = model or self.default_model
@@ -296,10 +312,7 @@ class RoutedModelClient:
         yield StreamEvent(type="done", finish_reason=done.finish_reason, model=done.model)
 
     def close(self) -> None:
-        with self._lock:
-            if self._http is not None:
-                self._http.close()
-                self._http = None
+        """Nothing of the session's to close: its calls use the router's shared client."""
 
 
 def completion(spec: ModelSpec, turn: AssistantTurn) -> Completion:

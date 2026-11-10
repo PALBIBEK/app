@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -19,6 +20,9 @@ from supervisor.gateway.providers.base import (
 
 _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
+_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=64)
+"""Connections are bounded by the gateway's request threads (``supervisor.main``), not
+here; up to 64 stay open between calls for the next one to reuse."""
 
 type AuthHeaders = Callable[[str], Mapping[str, str]]
 type ApiKey = str | Callable[[], str]
@@ -38,6 +42,11 @@ class HttpUpstream:
     Transient failures (HTTP 408/409/429/5xx, connection errors, timeouts) are
     retried with capped exponential backoff, honouring ``Retry-After``. A stream is
     retried only before its first byte is relayed.
+
+    Every call goes through one client, made on the first: a client per call built a TLS
+    context (it parses the CA bundle) and a TLS handshake with the vendor each time, and
+    reused no connection, on the busiest path there is. ``httpx.Client`` is safe across
+    threads; each response is closed when read, the client never.
     """
 
     vendor: str
@@ -53,6 +62,15 @@ class HttpUpstream:
     retries: int = 1
     timeout_s: float = 600.0
     backoff_s: float = 0.2
+    _client: httpx.Client | None = field(default=None, init=False, repr=False, compare=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+
+    def client(self) -> httpx.Client:
+        """The upstream's one client, made on first use."""
+        with self._lock:
+            if self._client is None:
+                self._client = httpx.Client(transport=self.transport, timeout=self.timeout_s, limits=_LIMITS)
+            return self._client
 
     def url(self) -> str:
         """The base URL now, without a trailing slash."""
@@ -77,12 +95,11 @@ class HttpUpstream:
             raise ProviderUnconfigured(f"{missing} is not configured on the gateway", vendor=self.vendor)
         attempts = 1 + max(0, self.retries if retries is None else retries)
         stream = body.get("stream") is True
+        client = self.client()
         for attempt in range(attempts):
-            client = httpx.Client(transport=self.transport, timeout=self.timeout_s)
             try:
                 response = client.send(self._request(client, path, body), stream=stream)
             except httpx.TransportError as exc:
-                client.close()
                 if attempt + 1 < attempts:
                     self._sleep(attempt, None)
                     continue
@@ -91,16 +108,14 @@ class HttpUpstream:
                 ) from exc
             if response.is_success:
                 if stream:
-                    return _relay(response, client)
+                    return _relay(response)
                 try:
                     return _json(response, self.vendor)
                 finally:
                     response.close()
-                    client.close()
             status = response.status_code
             detail = _error_detail(response, stream=stream)
             response.close()
-            client.close()
             if status in _TRANSIENT_STATUS and attempt + 1 < attempts:
                 self._sleep(attempt, response.headers.get("retry-after"))
                 continue
@@ -140,12 +155,11 @@ def _json(response: httpx.Response, vendor: str) -> Body:
     return parsed
 
 
-def _relay(response: httpx.Response, client: httpx.Client) -> Iterator[bytes]:
+def _relay(response: httpx.Response) -> Iterator[bytes]:
     try:
         yield from response.iter_bytes()
     finally:
-        response.close()
-        client.close()
+        response.close()  # its connection goes back to the pool
 
 
 def _error_detail(response: httpx.Response, *, stream: bool) -> str:
