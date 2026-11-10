@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Final
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -53,6 +54,7 @@ from supervisor.memory_service.notebooks.types import (
     personal_source,
     subject_of,
 )
+from supervisor.memory_service.notebooks.wire import typed_in, typed_out
 
 BANK_CONFIDENCE = 0.9
 """A fact a user or agent wrote down is surer than one extracted from a transcript."""
@@ -84,29 +86,15 @@ def _fact(row: FactRow) -> Fact:
 def _typed(row: FactRow) -> Typed | None:
     if row.kind is None:
         return None
-    return Typed(
-        kind=row.kind,
-        topic=row.topic,
-        keywords=tuple(row.keywords or ()),
-        aliases=tuple(row.aliases or ()),
-        body=row.body,
-        extraction_model=row.extraction_model,
-        prompt_version=row.prompt_version,
-    )
+    return typed_in({column: getattr(row, column) for column in _TYPED_COLUMNS})
 
 
 def _typed_columns(typed: Typed | None) -> dict[str, object]:
-    if typed is None:
-        return {}
-    return {
-        "kind": typed.kind,
-        "topic": typed.topic,
-        "keywords": list(typed.keywords),
-        "aliases": list(typed.aliases),
-        "body": typed.body,
-        "extraction_model": typed.extraction_model,
-        "prompt_version": typed.prompt_version,
-    }
+    """The columns a fact's type is kept in: its wire form (``wire.typed_out``), one name for one field."""
+    return {} if typed is None else dict(typed_out(typed) or {})
+
+
+_TYPED_COLUMNS: Final = ("kind", "topic", "keywords", "aliases", "body", "extraction_model", "prompt_version")
 
 
 def _notebook(row: NotebookRow) -> Notebook:
@@ -541,7 +529,7 @@ class NotebookStore:
         *,
         author: str | None,
         expires_on: str | None,
-        retire: Sequence[str] = (),
+        retire: Sequence[dict[str, str]] = (),
         idempotency_key: str | None,
     ) -> bool:
         """Queue one capture's observations; False when ``idempotency_key`` is queued
@@ -573,12 +561,15 @@ class NotebookStore:
                 raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued
             return True
 
-    async def pending_notebooks(self, *, limit: int) -> list[str]:
-        """Notebooks with queued captures, the longest waiting first."""
+    async def pending_notebooks(self, *, limit: int, skip: Sequence[str] = ()) -> list[str]:
+        """Notebooks with queued captures, the longest waiting first, but those in ``skip``
+        (the drainer's, backing off a notebook whose promotion keeps failing)."""
         async with self._db() as db:
+            query = select(InboxRow.notebook_id).where(InboxRow.promoted_at.is_(None))
+            if skip:
+                query = query.where(InboxRow.notebook_id.not_in(list(skip)))
             rows = await db.execute(
-                select(InboxRow.notebook_id)
-                .where(InboxRow.promoted_at.is_(None))
+                query
                 .group_by(InboxRow.notebook_id)
                 .order_by(func.min(InboxRow.id))
                 .limit(limit)
@@ -591,6 +582,51 @@ class NotebookStore:
             return int(
                 await db.scalar(select(func.count()).select_from(InboxRow).where(InboxRow.promoted_at.is_(None))) or 0
             )
+
+    async def prune_inbox(self, *, before: int) -> int:
+        """Delete promoted rows promoted before ``before`` (epoch ms), in every notebook: past
+        the window a retried burst could come in, nothing of a capture is kept there."""
+        async with self._db() as db:
+            pruned = await db.execute(delete(InboxRow).where(InboxRow.promoted_at < before))
+            await db.commit()
+            return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def live_count(self, notebook_id: str) -> int:
+        """The notebook's live facts."""
+        async with self._db() as db:
+            return int(
+                await db.scalar(
+                    select(func.count())
+                    .select_from(FactRow)
+                    .where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
+                )
+                or 0
+            )
+
+    async def texts(self, notebook_id: str, ids: Sequence[str]) -> dict[str, str]:
+        """The live text of each of ``ids`` (an id gone, or another notebook's, is left out)."""
+        if not ids:
+            return {}
+        async with self._db() as db:
+            rows = await db.execute(
+                select(FactRow.id, FactRow.text).where(
+                    FactRow.notebook_id == notebook_id,
+                    FactRow.id.in_([int(i) for i in ids]),
+                    FactRow.deleted_at.is_(None),
+                )
+            )
+            return {str(i): str(t) for i, t in rows}
+
+    async def typed_of(self, notebook_id: str, ids: Sequence[str]) -> dict[str, Typed]:
+        """The type each of ``ids`` carries now, live or deleted (a fact's type is not in its
+        history: it says what the fact is, not what it said)."""
+        if not ids:
+            return {}
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(FactRow).where(FactRow.notebook_id == notebook_id, FactRow.id.in_([int(i) for i in ids]))
+            )
+            return {str(r.id): t for r in rows if (t := _typed(r)) is not None}
 
     async def drop_inbox(self, notebook_id: str) -> int:
         """Discard a notebook's queued captures (it was archived after they were queued)."""

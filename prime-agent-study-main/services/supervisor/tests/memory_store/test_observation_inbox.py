@@ -46,6 +46,13 @@ async def svc(tmp_path: Path) -> AsyncIterator[MemoryServiceHandle]:
         yield handle
 
 
+async def hold(memory: object) -> None:
+    """Keep captures queued until the test drains them (``memory.inbox.drain``): the drainer
+    stopped, and none landed as it is queued."""
+    await memory.stop_background()  # type: ignore[attr-defined]
+    memory.notebooks.on_queued = lambda: None  # type: ignore[attr-defined]
+
+
 async def landed(client: NotebookClient, notebook_id: str, count: int) -> list[Fact]:
     """The notebook's facts once ``count`` of them have landed (the drainer runs at once)."""
     async with asyncio.timeout(10):
@@ -105,7 +112,7 @@ async def test_an_archived_notebook_takes_no_observations(svc: MemoryServiceHand
 
 async def test_captures_queued_before_an_archive_are_dropped_not_kept(svc: MemoryServiceHandle) -> None:
     memory = svc.app.state.memory
-    await memory.stop_background()  # hold the drainer: the archive comes between queue and drain
+    await hold(memory)  # the archive comes between queue and drain
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.observe(nb.id, [draft("Queued then archived")], context=OWN)
@@ -134,7 +141,7 @@ async def test_many_captures_queued_at_once_land_in_few_locks(svc: MemoryService
     """Fifty captures into one notebook: all land, each once, in batches (one revision a
     batch, not one a capture)."""
     memory = svc.app.state.memory
-    await memory.stop_background()
+    await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
 
@@ -149,7 +156,7 @@ async def test_many_captures_queued_at_once_land_in_few_locks(svc: MemoryService
 
 async def test_erasing_an_owner_erases_their_queued_captures(svc: MemoryServiceHandle) -> None:
     memory = svc.app.state.memory
-    await memory.stop_background()
+    await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.observe(nb.id, [draft("Alice's queued fact")], context=OWN)
@@ -177,7 +184,7 @@ async def test_a_contradicted_fact_is_retired_only_once_its_replacement_has_land
     """Retirement travels with the capture and goes after it, in one transaction: never
     the old fact gone and the new one still queued (or lost)."""
     memory = svc.app.state.memory
-    await memory.stop_background()
+    await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
@@ -192,7 +199,7 @@ async def test_a_contradicted_fact_is_retired_only_once_its_replacement_has_land
 
 async def test_a_capture_that_does_not_land_retires_nothing(svc: MemoryServiceHandle) -> None:
     memory = svc.app.state.memory
-    await memory.stop_background()
+    await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
@@ -221,7 +228,7 @@ async def test_a_statement_is_cleaned_as_a_captured_fact_is(svc: MemoryServiceHa
 
 async def test_the_backlog_is_reported(svc: MemoryServiceHandle) -> None:
     memory = svc.app.state.memory
-    await memory.stop_background()
+    await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.observe(nb.id, [draft("One queued")], context=OWN)
@@ -229,3 +236,99 @@ async def test_the_backlog_is_reported(svc: MemoryServiceHandle) -> None:
     assert (await memory.metrics_snapshot())["inbox_backlog"] == 1
     await memory.inbox.drain()
     assert (await memory.metrics_snapshot())["inbox_backlog"] == 0
+
+
+async def test_an_older_service_is_probed_once_not_on_every_capture() -> None:
+    calls: list[str] = []
+
+    def older(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(older))
+    try:
+        for _ in range(3):
+            assert await client.observe("t1~abc", [draft("x")], context=OWN) is None
+    finally:
+        await client.aclose()
+
+    assert len(calls) == 1
+
+
+async def test_a_notebook_that_keeps_failing_is_backed_off_and_holds_up_no_other(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    broken = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="broken")
+    fine = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="fine")
+    await client.observe(broken.id, [draft("Never lands")], context=OWN)
+    await client.observe(fine.id, [draft("Lands")], context=OWN)
+    promote = memory.notebooks.promote
+
+    async def failing(notebook_id: str, **kw: object) -> tuple[int, int]:
+        if notebook_id == broken.id:
+            raise RuntimeError("an embedder fails on this text")
+        return await promote(notebook_id, **kw)
+
+    monkeypatch.setattr(memory.notebooks, "promote", failing)
+    assert await memory.inbox.drain() == 1
+    assert [f.text for f in await client.facts(fine.id)] == ["Lands"]
+    assert broken.id in memory.inbox._backing_off(), "tried again later, not every pass"
+    assert await memory.inbox.drain() == 0
+
+
+async def test_promoted_captures_are_pruned_in_every_notebook(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import KEEP_PROMOTED_MS
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="once")
+    await client.observe(nb.id, [draft("Captured once")], context=OWN, idempotency_key="k")
+    await memory.inbox.drain()
+
+    assert await memory.notebooks.store.prune_inbox(before=now_ms() + KEEP_PROMOTED_MS) == 1
+
+
+async def test_a_fact_edited_after_its_retirement_was_queued_is_kept(svc: MemoryServiceHandle) -> None:
+    """Resolution judged the fact as it was; one edited since is not that fact."""
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
+    (old,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Deploys use flag B")], context=OWN, retire=[old.id])
+    from supervisor.memory_service.notebooks.types import Edit
+
+    await client.edit(nb.id, [Edit(old.id, "Deploys use flag A, or C on Fridays")], context=OWN)
+    await memory.inbox.drain()
+
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["Deploys use flag A, or C on Fridays", "Deploys use flag B"]
+
+
+async def test_a_full_notebook_refuses_a_capture_up_front(svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch) -> None:
+    from supervisor.memory_service.notebooks import ops
+    from supervisor.memory_service.notebooks.errors import MemoryLimitExceeded
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["The only one"], context=OWN)
+
+    with pytest.raises(MemoryLimitExceeded):
+        await client.observe(nb.id, [draft("One too many")], context=OWN)
+
+
+async def test_the_facts_as_they_were_keep_their_type(svc: MemoryServiceHandle) -> None:
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("The repository builds with make check")], context=OWN)
+    (fact,) = await landed(client, nb.id, 1)
+
+    (then,) = await client.facts_at(nb.id, 1)
+
+    assert then.typed == fact.typed

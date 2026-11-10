@@ -16,6 +16,7 @@ from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.extraction_prompt import SENSITIVITY_PROMPT
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
+from supervisor.memory_service.observations import MAX_MODEL_BYTES, truncate_utf8
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ def one_shot_model(one_shot: OneShot) -> str:
     """The model ``one_shot`` calls, for provenance (a one-shot may say, as
     ``platform.gateway_one_shot``'s do, with ``model``); ``DEFAULT_MODEL`` when it does not."""
     model = getattr(one_shot, "model", None)
-    return str(model)[:128] if model else DEFAULT_MODEL
+    # Bytes, as the store bounds it (``observations.MAX_MODEL_BYTES``), cut on a character.
+    return truncate_utf8(str(model), MAX_MODEL_BYTES) or DEFAULT_MODEL if model else DEFAULT_MODEL
 
 
 

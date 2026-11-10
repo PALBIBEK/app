@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -52,7 +52,12 @@ from supervisor.memory_service.notebooks.types import (
     merge_provenance,
 )
 from supervisor.memory_service.notebooks.wire import observation_in, observation_out, typed_of
-from supervisor.memory_service.observations import ObservationDraft, ObservationInvalid
+from supervisor.memory_service.observations import (
+    MAX_STATEMENT_BYTES,
+    ObservationDraft,
+    ObservationInvalid,
+    truncate_utf8,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,18 +157,27 @@ class NotebookOps:
         if not drafts:
             return 0
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(drafts))
-        drafts = [_cleaned(d) for d in drafts]
+        drafts = [c for c in (_cleaned(d) for d in drafts) if c is not None]
+        if not drafts:
+            return 0
         for draft in drafts:
             try:
                 draft.validate()
             except ObservationInvalid as exc:
                 raise InvalidObservation(str(exc)) from None
         _within_length([d.statement for d in drafts])
-        retired = [parse_fact_id(i) for i in retire]
         expires_on = _expiry(context.expires_on if context else None) or None
         notebook = await self.store.get(notebook_id)
         if notebook.archived_at is not None:
             raise NotebookArchived(notebook_id)
+        # A full notebook refuses the capture now, as ``capture`` does, rather than accept
+        # it and keep none of it when it lands (repeats aside; one it fills meanwhile keeps
+        # what fits, then).
+        _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, await self.store.live_count(notebook_id) + 1)
+        # Each fact to retire with its text now: it is retired when the capture lands only if
+        # it still says that (a fact edited meanwhile is not the one resolution judged false).
+        texts = await self.store.texts(notebook_id, [parse_fact_id(i) for i in retire])
+        retired = [{"id": fact_id, "text": text} for fact_id, text in texts.items()]
         provenance = capture_provenance(notebook.home, context)
         queued = await self.store.append_inbox(
             notebook_id,
@@ -218,18 +232,18 @@ class NotebookOps:
                 added += landed
                 if row.retire and whole:  # after what replaces them, and only when it was kept
                     live = {f.id: (k, f) for k, f in existing.items()}
-                    gone = [live[i] for i in row.retire if i in live]  # gone already: nothing to do
+                    gone = [
+                        live[r["id"]]
+                        for r in row.retire
+                        # gone already, or edited since resolution judged it: left as it is
+                        if r["id"] in live and live[r["id"]][1].text == r["text"]
+                    ]
                     await tx.remove([f for _, f in gone])
                     for key, _ in gone:
                         del existing[key]
             if rows:
                 await tx.db.execute(
                     update(InboxRow).where(InboxRow.id.in_([r.id for r in rows])).values(promoted_at=tx.at)
-                )
-                await tx.db.execute(  # past the window a retry could come in: gone
-                    delete(InboxRow).where(
-                        InboxRow.notebook_id == notebook_id, InboxRow.promoted_at < tx.at - KEEP_PROMOTED_MS
-                    )
                 )
             return len(rows), added
 
@@ -294,7 +308,11 @@ class NotebookOps:
         """The facts as they were at ``revision`` (0, before any change, to the current one)."""
         _in_range(revision, (await self.store.get(notebook_id)).revision)
         state = state_at(await self.history(notebook_id), revision)
-        return sorted(state.values(), key=lambda f: int(f.id))
+        # A fact's type says what it is, not what it said: it is the fact's own, kept on its
+        # row (deleted facts too), so the facts as they were carry it.
+        typed = await self.store.typed_of(notebook_id, list(state))
+        facts = [replace(f, typed=typed.get(f.id)) for f in state.values()]
+        return sorted(facts, key=lambda f: int(f.id))
 
     async def restore(self, notebook_id: str, revision: int, *, author: str | None = None) -> None:
         """Make the notebook's facts what they were at ``revision`` (as new revisions)."""
@@ -395,10 +413,19 @@ async def live_facts(tx: FactTx) -> dict[str, Fact]:
     return {normalize(f.text): f for f in await tx.current()}
 
 
-def _cleaned(draft: ObservationDraft) -> ObservationDraft:
+def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
     """The draft with its statement cleaned as ``capture`` cleans a fact
-    (``render.clean_captured``); one cleaned to nothing is invalid."""
+    (``render.clean_captured``); None for one cleaned to nothing. A client cleans first
+    (``observations.parse_model_outcome``); one that did not may have a statement the
+    cleaning lengthened past its bound: cut to it, never the whole capture refused."""
     cleaned = clean_captured([draft.statement])
     if not cleaned:
-        raise InvalidObservation("statement is empty")
-    return replace(draft, statement=cleaned[0])
+        return None
+    statement = cleaned[0]
+    if _bytes(draft.statement) <= MAX_STATEMENT_BYTES < _bytes(statement):  # lengthened by the cleaning only
+        statement = truncate_utf8(statement, MAX_STATEMENT_BYTES).rstrip()
+    return replace(draft, statement=statement)
+
+
+def _bytes(text: str) -> int:
+    return len(text.encode("utf-8"))

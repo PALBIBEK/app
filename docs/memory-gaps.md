@@ -285,6 +285,13 @@ proceed.
   change is retired (the disclosure layer's rule for deletes). Statements are cleaned as
   any captured fact is (a model's "(said in X)" is marked as a claim). The inbox backlog is
   reported in the service's metrics (`inbox_backlog`).
+- **Robust draining:** a notebook whose promotion keeps failing is backed off (5 s doubling
+  to 5 minutes), so it never holds up the others. Promoted rows are pruned in every
+  notebook once a minute. A full notebook refuses a capture up front, as `capture` does. A
+  fact is retired only if it still says what resolution judged (one edited meanwhile is
+  kept). A client that finds an older service probes it once every 10 minutes, not on
+  every capture. A fact's type is on its row, so the facts as they were at a revision
+  keep it.
 - **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404
   on `/observations`), gets the statements as a plain capture.
 - **Per-tenant fairness:** capture's model calls (extraction, resolution) take one of their

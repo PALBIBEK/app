@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
+from supervisor.memory_service.notebooks.render import clean_captured
 from supervisor.memory_service.notebooks.types import Sensitivity
 
 __all__ = [
@@ -50,6 +51,8 @@ __all__ = [
     "ObservationType",
     "Observations",
     "parse_model_outcome",
+    "scrub_control_characters",
+    "truncate_utf8",
 ]
 
 # Grok's limits (xai-grok-memory/src/v2_capture.rs), unchanged.
@@ -193,7 +196,11 @@ def _object(value: Any, fields: frozenset[str], what: str) -> dict[str, Any]:
 
 def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
     observation = _object(raw, _OBSERVATION_FIELDS, "an observation")
-    statement = scrub_control_characters(_string(observation, "statement", required=True) or "")
+    # Cleaned as the store cleans a captured fact (``render.clean_captured``: a bullet or a
+    # leading date made prose, a "(said in X)" marked a claim), so the bounds checked here
+    # are the ones the store will check, and an answer it would refuse is malformed now.
+    cleaned = clean_captured([scrub_control_characters(_string(observation, "statement", required=True) or "")])
+    statement = cleaned[0] if cleaned else ""
     if not statement:
         # The store would refuse it, and the whole capture with it: malformed, so the
         # extractor is asked again instead.

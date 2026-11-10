@@ -161,6 +161,8 @@ class NotebookClient:
         )
         self._credential = credential
         self._breaker = breaker or _Breaker()
+        self._no_observations_until = 0.0
+        """Until when the service is known to lack ``/observations`` (older than G2)."""
 
     @classmethod
     def from_env(cls) -> NotebookClient | None:
@@ -270,6 +272,8 @@ class NotebookClient:
         inbox lands them, ``retire`` (the facts they make false) after them. The number
         queued (0 when ``idempotency_key`` was queued already); None from a service older
         than G2, which takes plain captures only."""
+        if time.monotonic() < self._no_observations_until:
+            return None  # asked lately: an older service, so a plain capture, with no probe each time
         body = {
             "observations": [wire.observation_out(d) for d in drafts],
             "author": author,
@@ -281,6 +285,8 @@ class NotebookClient:
             try:
                 return int((await self._on(notebook_id, "POST", "/observations", json=body))["queued"])
             except RouteMissing:
+                # Remembered a while, then asked again (a rolling upgrade brings the route).
+                self._no_observations_until = time.monotonic() + OLDER_SERVICE_RECHECK_S
                 return None
             except RateLimited as exc:
                 # Queuing is cheap and keyed: a burst from one tenant waits its turn rather
@@ -449,6 +455,8 @@ class RateLimited(MemoryUnavailable):
         self.retry_after = retry_after
 
 
+OLDER_SERVICE_RECHECK_S = 600.0
+"""How long a service found without ``/observations`` is taken as older than G2."""
 OBSERVE_ATTEMPTS = 4
 """Tries a rate-limited ``observe`` makes (Retry-After apart, at most 2 s each)."""
 
