@@ -40,6 +40,7 @@ dev = [
   "pytest-timeout>=2.3",
   "pytest-xdist>=3.6",  # CI runs the suite on four workers
   "pytest-split>=0.10",  # ... in two jobs (--splits 2 --group N)
+  "pytest-repeat>=0.9",  # memory's concurrency tests run 20 times in a row (docs/memory-gaps.md)
   "psycopg2-binary>=2.9",  # the alembic CLI (alembic check in CI)
   "ruff==0.17.1",  # pinned: newer releases enable more rules by default
 ]
