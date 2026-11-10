@@ -16,7 +16,8 @@ from dataclasses import replace
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import DBAPIError
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -201,7 +202,10 @@ class NotebookOps:
         if queued:
             if self.on_queued is not None:
                 self.on_queued()
-            else:  # no drainer here (an in-memory database runs no background loop): land it now
+            else:
+                # No drainer here: an in-memory database (development, tests) runs no background
+                # loop. Production always runs one, which retries what fails; here a failed
+                # promotion waits for the next capture into this notebook.
                 try:
                     await self.promote(notebook_id)
                 except Exception:  # queued all the same: the next promotion lands it
@@ -227,6 +231,8 @@ class NotebookOps:
             dropped = await self.store.drop_inbox(notebook_id)
             logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
             return dropped, 0
+        except (DBAPIError, OSError, TimeoutError):
+            raise  # the database or the network, not the capture: nothing counted against it
         except Exception:
             if batch == 1:
                 await self._count_failure(notebook_id)
@@ -250,6 +256,7 @@ class NotebookOps:
             )
 
     async def _promote_batch(self, notebook_id: str, batch: int) -> tuple[int, int]:
+        """One transaction: up to ``batch`` of the queued captures, landed and marked."""
 
         async def run(tx: FactTx) -> tuple[int, int]:
             rows = list(
@@ -318,11 +325,16 @@ class NotebookOps:
         await self.store.transact(notebook_id, run, author=author)
 
     async def clear(self, notebook_id: str, *, author: str | None = None) -> int:
-        """Remove every current fact; history keeps them (clearing is not erasure)."""
+        """Remove every current fact; history keeps them (clearing is not erasure). Captures
+        queued before it go with them, in its transaction: none lands afterwards to bring
+        back what was cleared."""
 
         async def run(tx: FactTx) -> int:
             facts = await tx.current()
             await tx.remove(facts)
+            await tx.db.execute(
+                delete(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+            )
             return len(facts)
 
         return await self.store.transact(notebook_id, run, author=author)
@@ -358,6 +370,8 @@ class NotebookOps:
                         [fact.provenance, live.provenance], fact.provenance.sensitivity
                     )
                     await tx.update(fact_id, fact.text, floor)
+                    if live.typed is not None and live.text != fact.text:
+                        await tx.set_typed(live, None)  # its type described the words it no longer has
 
         await self.store.transact(notebook_id, run, author=author)
 
@@ -493,9 +507,12 @@ async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDr
         if r["id"] in by_id and existing[by_id[r["id"]]].text == r["text"] and by_id[r["id"]] not in restated
     ]
     # What it retires makes room for what replaces it (as observe counted): a full notebook
-    # takes the replacement, then loses the fact it replaces.
+    # takes the replacement, then loses the fact it replaces. Only when all of it fits:
+    # otherwise it lands what fits within the limit and retires nothing (never left over it).
+    new = len({key for key in restated if key not in existing})
+    room = len(gone) if len(existing) + new <= MAX_FACTS_PER_NOTEBOOK + len(gone) else 0
     landed, whole = await land(
-        tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=len(gone)
+        tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=room
     )
     if gone and whole:
         await tx.remove([existing[key] for key in gone])

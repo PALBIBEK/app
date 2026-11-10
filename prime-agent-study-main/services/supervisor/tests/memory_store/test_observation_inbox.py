@@ -481,3 +481,84 @@ async def test_any_404_that_is_not_the_service_s_own_means_an_older_service() ->
         assert await client.observe("t1~abc", [draft("x")], context=OWN) is None
     finally:
         await client.aclose()
+
+
+async def test_clearing_a_notebook_drops_its_queued_captures_too(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Queued before the clear")], context=OWN)
+
+    await client.clear(nb.id)
+    await memory.inbox.drain()
+
+    assert await client.facts(nb.id) == [], "nothing comes back after a clear"
+
+
+async def test_a_replacement_that_does_not_all_fit_retires_nothing_and_never_overfills(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 2)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Old fact", "Other fact"], context=OWN)
+    old = next(f for f in await client.facts(nb.id) if f.text == "Old fact")
+    await client.observe(nb.id, [draft("New one"), draft("New two")], context=OWN, retire=[old.id])
+
+    await memory.inbox.drain()
+
+    facts = sorted(f.text for f in await client.facts(nb.id))
+    assert len(facts) <= 2 and "Old fact" in facts, "retired nothing; still within the limit"
+
+
+async def test_a_database_failure_is_not_counted_against_a_capture(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Healthy capture")], context=OWN)
+    insert = FactTx.insert
+    down = True
+
+    async def flaky(self: FactTx, *args: object, **kw: object) -> str:
+        if down:
+            raise OperationalError("INSERT", {}, Exception("connection reset"))
+        return await insert(self, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", flaky)
+    for _ in range(8):
+        with pytest.raises(OperationalError):
+            await memory.notebooks.promote(nb.id)
+    down = False
+
+    await memory.notebooks.promote(nb.id)
+    assert [f.text for f in await client.facts(nb.id)] == ["Healthy capture"], "never set aside for the database's fault"
+
+
+async def test_restoring_a_typed_fact_to_other_words_takes_its_type_away(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.types import Edit
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Builds with make"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.edit(nb.id, [Edit(fact.id, "Builds with make check")], context=OWN)
+    await client.observe(nb.id, [draft("builds with make check")], context=OWN)  # gives the fact a type
+    await svc.app.state.memory.inbox.drain()
+    assert (await client.facts(nb.id))[0].typed is not None
+
+    await client.restore(nb.id, 1)
+
+    (restored,) = await client.facts(nb.id)
+    assert restored.text == "Builds with make" and restored.typed is None

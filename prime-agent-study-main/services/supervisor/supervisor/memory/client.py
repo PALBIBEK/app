@@ -465,7 +465,7 @@ class RateLimited(MemoryUnavailable):
         self.retry_after = retry_after
 
 
-OLDER_SERVICE_RECHECK_S = 600.0
+OLDER_SERVICE_RECHECK_S = 60.0
 """How long a service found without ``/observations`` is taken as older than G2."""
 RATE_LIMITED_ATTEMPTS = 4
 """Tries a rate-limited request makes, Retry-After apart."""

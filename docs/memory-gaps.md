@@ -299,7 +299,7 @@ proceed.
   to 5 minutes), so it never holds up the others. Promoted rows are pruned in every
   notebook once a minute. A full notebook refuses a capture up front, as `capture` does. A
   fact is retired only if it still says what resolution judged (one edited meanwhile is
-  kept). A client that finds an older service probes it once every 10 minutes, not on
+  kept). A client that finds an older service probes it again after a minute, not on
   every capture. A fact's type is on its row, so the facts as they were at a revision
   keep it.
 - **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404

@@ -16,6 +16,7 @@ narrower stays reachable only through notebook recall, which does.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -265,7 +266,13 @@ class FactTx:
             await self._unindex(int(fact.id))
 
     async def revive(self, fact_id: str, text: str, provenance: Provenance) -> None:
-        """Bring a deleted fact back under its own id (restore keeps identity)."""
+        """Bring a deleted fact back under its own id (restore keeps identity). Brought back
+        with other words than it last had, it loses the type that described those."""
+        last = await self.db.scalar(select(FactRow.text).where(FactRow.id == int(fact_id)))
+        if last is not None and last != text:
+            await self.db.execute(
+                update(FactRow).where(FactRow.id == int(fact_id)).values(**dict.fromkeys(_TYPED_COLUMNS))
+            )
         await self.db.execute(
             update(FactRow)
             .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact_id))
@@ -627,9 +634,10 @@ class NotebookStore:
                 .limit(limit)
             )
             statements = [o.get("statement") for observations in rows for o in observations or () if isinstance(o, dict)]
-        for statement in statements:
-            if isinstance(statement, str) and statement:
-                self._embedder.embed(statement)
+        texts = [s for s in statements if isinstance(s, str) and s]
+        if texts:
+            # On a thread: an embedder may be slow, and the loop serves every other request.
+            await asyncio.to_thread(lambda: [self._embedder.embed(t) for t in texts])
 
     async def count_failure(self, notebook_id: str, *, give_up_at: int) -> tuple[int, int | None]:
         """Count a failure against the notebook's oldest queued capture, setting it aside
