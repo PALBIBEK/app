@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 # (system prompt, user content) -> model text. Blocking callers wrap this in a thread.
 type OneShot = Callable[[str, str], Awaitable[str]]
 
+DEFAULT_MODEL = "platform-default"
+"""What a one-shot that does not name its model is recorded as (the platform gateway's
+default route)."""
+
+
+def one_shot_model(one_shot: OneShot) -> str:
+    """The model ``one_shot`` calls, for provenance (a one-shot may say, as
+    ``platform.gateway_one_shot``'s do, with ``model``); ``DEFAULT_MODEL`` when it does not."""
+    model = getattr(one_shot, "model", None)
+    return str(model)[:128] if model else DEFAULT_MODEL
+
 
 
 async def classify(one_shot: OneShot, texts: Sequence[str]) -> Sensitivity:

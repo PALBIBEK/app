@@ -13,6 +13,7 @@ from supervisor.memory_service.notebooks.types import (
     RecallContext,
     Revision,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 Rank = Callable[[Sequence[Fact], RecallContext | None], list[Candidate]]
 
@@ -44,6 +45,21 @@ class MemoryView:
         context: CaptureContext | None = None,
     ) -> int:
         return await self._base.capture(notebook_id, facts, author=author, context=context)
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureContext | None = None,
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Queue typed observations (G2), or None when the memory below takes plain
+        captures only (``observe``)."""
+        return await observe(
+            self._base, notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+        )
 
     async def query(
         self, notebook_id: str, q: str, limit: int = 20, context: RecallContext | None = None
@@ -82,3 +98,25 @@ class MemoryView:
 
     async def restore(self, notebook_id: str, revision: int, *, author: str | None = None) -> None:
         await self._base.restore(notebook_id, revision, author=author)
+
+
+async def observe(
+    memory: MemoryService,
+    notebook_id: str,
+    drafts: Sequence[ObservationDraft],
+    *,
+    author: str | None = None,
+    context: CaptureContext | None = None,
+    idempotency_key: str | None = None,
+) -> int | None:
+    """Queue typed observations into ``memory`` (G2): the number queued, or None when it
+    takes plain captures only (a provider's own memory, or a memory service older than G2),
+    for the caller to capture their statements instead. Not part of ``MemoryService``, so a
+    provider without it still is one."""
+    queue = getattr(memory, "observe", None)
+    if queue is None:
+        return None
+    queued: int | None = await queue(
+        notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+    )
+    return queued

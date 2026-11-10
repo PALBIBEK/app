@@ -68,6 +68,15 @@ class InvalidExpiry(NotebookError):
         self.value = value
 
 
+class InvalidObservation(NotebookError):
+    """An observation outside the store's bounds (``memory_service.observations``); nothing
+    of its capture was kept."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"invalid observation: {reason}")
+        self.reason = reason
+
+
 class MemoryLimitExceeded(NotebookError):
     """A request beyond a limit of ``supervisor.memory_service.limits``: nothing was changed."""
 

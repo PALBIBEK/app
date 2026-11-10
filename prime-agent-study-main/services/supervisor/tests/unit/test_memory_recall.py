@@ -12,8 +12,10 @@ from supervisor.memory.cross import Recalled, recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta, shown_of
 from supervisor.memory.disclosure import Audience
 from supervisor.memory.extraction import (
-    TRANSCRIPT_EXTRACTION_PROMPT,
-    extract_transcript,
+    OBSERVATION_EXTRACTION_PROMPT,
+    MalformedOutcome,
+    Observations,
+    extract_observations,
     parse_facts,
 )
 from supervisor.memory.service import CaptureContext, NotebookMemory
@@ -26,6 +28,7 @@ from supervisor.memory_service.notebooks.types import (
     RecallContext,
     Sensitivity,
 )
+from tests.support.scripted import as_outcome
 
 pytestmark = pytest.mark.asyncio
 TRACKED = CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=())
@@ -142,17 +145,19 @@ async def test_extraction_parses_facts_and_fails_safe() -> None:
     )
 
     async def model(system: str, content: str) -> str:
-        assert system == TRANSCRIPT_EXTRACTION_PROMPT, "QM's prompt and the transcript's rules, nothing condensed"
+        assert system == OBSERVATION_EXTRACTION_PROMPT, "the typed prompt, nothing condensed"
         assert content.startswith("durable_conversation_json:\n") and '"text":"hi"' in content and '"content":"hello"' in content
-        return "SENSITIVITY: sensitive\n- Has a doctor's appointment"
+        return as_outcome("SENSITIVITY: sensitive\n- Has a doctor's appointment")
 
     async def malformed(system: str, content: str) -> str:
         return "I could not decide"
 
-    got = await extract_transcript(model, turn)
-    assert (got.facts, got.sensitivity) == (["Has a doctor's appointment"], Sensitivity.SENSITIVE)
-    unsure = await extract_transcript(malformed, turn)
-    assert (unsure.facts, unsure.sensitivity) == ([], Sensitivity.UNKNOWN), "no label: unknown, never invented"
+    got = await extract_observations(model, turn)
+    assert isinstance(got, Observations)
+    assert ([d.statement for d in got.drafts], got.sensitivity) == (["Has a doctor's appointment"], Sensitivity.SENSITIVE)
+    assert got.drafts[0].extraction_model == "platform-default", "a one-shot that names no model"
+    with pytest.raises(MalformedOutcome):
+        await extract_observations(malformed, turn)  # never a guess: capture tries again or keeps nothing
 
 
 def test_prompt_section_and_query() -> None:

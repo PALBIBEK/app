@@ -21,8 +21,10 @@ per call.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import random
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -34,6 +36,7 @@ from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
     InvalidExpiry,
+    InvalidObservation,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
@@ -53,6 +56,7 @@ from supervisor.memory_service.notebooks.types import (
     subject_of,
     tenant_of,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +256,37 @@ class NotebookClient:
         body = {"facts": list(facts), "author": author, "context": wire.context_out(context)}
         return int((await self._on(notebook_id, "POST", "/facts:capture", json=body))["added"])
 
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureMetadata | None = None,
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Queue an automatic capture's typed observations (G2): facts once the service's
+        inbox lands them. The number queued (0 when ``idempotency_key`` was queued already);
+        None from a service older than G2, which takes plain captures only."""
+        body = {
+            "observations": [wire.observation_out(d) for d in drafts],
+            "author": author,
+            "context": wire.context_out(context),
+            "idempotency_key": idempotency_key,
+        }
+        for attempt in range(OBSERVE_ATTEMPTS):
+            try:
+                return int((await self._on(notebook_id, "POST", "/observations", json=body))["queued"])
+            except RouteMissing:
+                return None
+            except RateLimited as exc:
+                # Queuing is cheap and keyed: a burst from one tenant waits its turn rather
+                # than losing its memories (a capture that fails is dropped, G3).
+                if attempt + 1 == OBSERVE_ATTEMPTS:
+                    raise
+                await asyncio.sleep(min(exc.retry_after, 2.0) * (0.5 + random.random()))
+        raise AssertionError("unreachable")
+
     async def edit(
         self,
         notebook_id: str,
@@ -368,6 +403,8 @@ def _error(response: httpx.Response) -> NotebookError:
         return EmptyFact(tuple(str(i) for i in detail.get("ids") or ()))
     if code == "InvalidExpiry":
         return InvalidExpiry(str(detail.get("value", "")))
+    if code == "InvalidObservation":
+        return InvalidObservation(str(detail.get("reason", "")))
     if code == "MemoryLimitExceeded":
         return MemoryLimitExceeded(
             str(detail.get("what", "")), int(detail.get("limit", -1)), int(detail.get("got", -1))
@@ -380,16 +417,42 @@ def _error(response: httpx.Response) -> NotebookError:
             f"{detail.get('message', detail)}"
         )
     if response.status_code == 404:
+        if code is None and detail.get("message") == "Not Found":
+            return RouteMissing(response.request.url.path)  # FastAPI's own: no such route
         # A notebook of another tenant is "not found" too, by design.
         return NotebookNotFound(str(detail.get("message", "")))
     if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
         return MemoryRequestInvalid(
             f"memory service rejected the request ({response.status_code}): {detail.get('message', detail)}"
         )
+    if response.status_code == 429 and code == "RATE_LIMITED":
+        try:
+            retry_after = float(response.headers.get("retry-after", "1"))
+        except ValueError:
+            retry_after = 1.0
+        return RateLimited(f"memory service rate limit: {detail.get('message', detail)}", max(0.0, retry_after))
     logger.warning("memory service refused %s: %s %s", response.request.url.path, response.status_code, detail)
     return MemoryUnavailable(
         f"memory service returned {response.status_code}: {detail.get('message', detail)}"
     )
+
+
+class RateLimited(MemoryUnavailable):
+    """The memory service's per-tenant limit on changes (``memory_service.rate_limit``):
+    asking again after ``retry_after`` seconds may pass."""
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+OBSERVE_ATTEMPTS = 4
+"""Tries a rate-limited ``observe`` makes (Retry-After apart, at most 2 s each)."""
+
+
+class RouteMissing(NotebookNotFound):
+    """The memory service has no such route: it is older than this supervisor (one without
+    G2's ``/observations``, say). A ``NotebookNotFound`` to every caller that does not ask."""
 
 
 class UnavailableNotebooks:

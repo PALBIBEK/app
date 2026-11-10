@@ -1,7 +1,7 @@
 """Notebook tables, in the memory service's database.
 
-New tables only, so ``create_all`` brings an existing memory database up to date
-(the service has no migrations): the link from a fact to its semantic-bank item
+New tables come with ``create_all``; a new column on an existing table needs a migration
+(``memory_service.schema.MIGRATIONS``). The link from a fact to its semantic-bank item
 is its own table rather than a column on ``memory_item``.
 """
 
@@ -70,6 +70,15 @@ class FactRow(Base):
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     expires_on: Mapped[str | None] = mapped_column(Text, nullable=True)  # YYYY-MM-DD, UTC
+    # What a typed observation said of itself (G2, ``memory_service.observations``); None on
+    # a fact captured as plain text (an explicit capture, or one from before G2).
+    kind: Mapped[str | None] = mapped_column(Text, nullable=True)  # user, feedback, project, reference
+    topic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    aliases: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class FactRevisionRow(Base):
@@ -103,3 +112,36 @@ class FactItemRow(Base):
         Text, ForeignKey("memory_notebooks.id"), nullable=False, index=True
     )
     item_id: Mapped[str] = mapped_column(Text, ForeignKey("memory_item.id"), nullable=False)
+
+
+class InboxRow(Base):
+    """One automatic capture's observations, waiting to become facts (G2, hot spot S1 of
+    ``docs/memory-gaps.md``).
+
+    A capture appends here and takes no lock on its notebook, so captures into one notebook
+    from many sessions never wait on each other. The inbox's drainer
+    (``notebooks.inbox``) promotes a notebook's rows in a batch, under that notebook's lock
+    once per batch, marking them promoted in the same transaction. A promoted row is kept
+    (``KEEP_PROMOTED_MS``) so a retried burst still finds its idempotency key, then pruned.
+    """
+
+    __tablename__ = "memory_observation_inbox"
+    __table_args__ = (
+        # A retried capture (the same burst) is one row, whichever replica it reached.
+        UniqueConstraint("notebook_id", "idempotency_key", name="uq_memory_inbox_key"),
+        Index("ix_memory_inbox_pending", "notebook_id", "promoted_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(_Id, primary_key=True, autoincrement=True)
+    notebook_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("memory_notebooks.id"), nullable=False
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observations: Mapped[list] = mapped_column(JSON, nullable=False)  # wire.observation_out each
+    sensitivity: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_on: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    promoted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

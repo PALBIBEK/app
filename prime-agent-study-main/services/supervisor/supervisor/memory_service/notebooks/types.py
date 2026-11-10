@@ -129,6 +129,21 @@ def capture_provenance(home: str, context: CaptureMetadata | None) -> Provenance
 
 
 @dataclass(frozen=True, slots=True)
+class Typed:
+    """A fact's type and what else its observation carried (G2, ``memory_service.observations``):
+    what it is about (``kind``: user, feedback, project or reference), the subject it belongs
+    to, the words it may be found by, its longer body, and which extraction made it."""
+
+    kind: str
+    topic: str | None = None
+    keywords: tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()
+    body: str | None = None
+    extraction_model: str | None = None
+    prompt_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Fact:
     id: str
     text: str
@@ -138,6 +153,8 @@ class Fact:
     author: str | None = None
     expires_on: str | None = None
     """The day (YYYY-MM-DD, UTC) the fact stops being true, if it is time-bound."""
+    typed: Typed | None = None
+    """What the observation it came from said of itself; None for a plain-text fact."""
 
     def expired(self, today: str | None = None) -> bool:
         """Past its expiry: kept (and shown where facts are managed), but no longer recalled,

@@ -9,10 +9,14 @@ and the write that depends on it never cross the network apart.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
+from typing import Literal
+
+from sqlalchemy import delete, select, update
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -22,10 +26,13 @@ from supervisor.memory_service.limits import (
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
     InvalidExpiry,
+    InvalidObservation,
     MemoryFactsMissing,
     MemoryLimitExceeded,
+    NotebookArchived,
     RevisionOutOfRange,
 )
+from supervisor.memory_service.notebooks.models import InboxRow
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
     edited_text,
@@ -39,9 +46,21 @@ from supervisor.memory_service.notebooks.types import (
     Fact,
     Provenance,
     Revision,
+    Sensitivity,
+    Typed,
     capture_provenance,
     merge_provenance,
 )
+from supervisor.memory_service.notebooks.wire import observation_in, observation_out, typed_of
+from supervisor.memory_service.observations import ObservationDraft, ObservationInvalid
+
+logger = logging.getLogger(__name__)
+
+PROMOTE_BATCH = 100
+"""Queued captures one promotion lands, under one lock."""
+KEEP_PROMOTED_MS = 24 * 3600 * 1000
+"""How long a promoted capture's row is kept, so a retried burst (its idempotency key)
+is still recognised: well past capture's own retries and Temporal's."""
 
 
 def resolve_ids(facts: Sequence[Fact], ids: Sequence[str]) -> list[Fact]:
@@ -82,6 +101,8 @@ class NotebookOps:
 
     def __init__(self, store: NotebookStore) -> None:
         self.store = store
+        self.on_queued: Callable[[], None] | None = None
+        """Told when a capture is queued (the inbox's drainer, ``notebooks.inbox``)."""
 
     async def capture(
         self,
@@ -104,27 +125,95 @@ class NotebookOps:
         provenance = capture_provenance(notebook.home, context)
 
         async def run(tx: FactTx) -> int:
-            existing = {normalize(f.text): f for f in await tx.current()}
-            added = 0
-            for text in lines:
-                key = normalize(text)
-                if (duplicate := existing.get(key)) is not None:
-                    merged = merge_provenance(
-                        [duplicate.provenance, provenance], duplicate.provenance.sensitivity
-                    )
-                    if not merged.same_as(duplicate.provenance):
-                        await tx.update(duplicate.id, duplicate.text, merged)
-                        duplicate = existing[key] = replace(duplicate, provenance=merged)
-                    if expires_on is not None and duplicate.expires_on != expires_on:
-                        await tx.set_expiry(duplicate, expires_on)
-                    continue
-                _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
-                fact_id = await tx.insert(text, provenance, expires_on=expires_on)
-                existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, author, expires_on)
-                added += 1
-            return added
+            return await land(tx, [(text, None) for text in lines], provenance, expires_on)
 
         return await self.store.transact(notebook_id, run, author=author)
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureMetadata | None = None,
+        idempotency_key: str | None = None,
+    ) -> int:
+        """Queue an automatic capture's typed observations for its notebook, taking no lock
+        on it (``notebooks.inbox``); the facts land when the inbox is drained. Every bound
+        is checked here, so a capture is refused whole, never half kept. The number queued:
+        0 for a capture already queued under ``idempotency_key`` (a retried burst)."""
+        if not drafts:
+            return 0
+        _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(drafts))
+        for draft in drafts:
+            try:
+                draft.validate()
+            except ObservationInvalid as exc:
+                raise InvalidObservation(str(exc)) from None
+        _within_length([d.statement for d in drafts])
+        expires_on = _expiry(context.expires_on if context else None) or None
+        notebook = await self.store.get(notebook_id)
+        if notebook.archived_at is not None:
+            raise NotebookArchived(notebook_id)
+        provenance = capture_provenance(notebook.home, context)
+        queued = await self.store.append_inbox(
+            notebook_id,
+            [observation_out(d) for d in drafts],
+            provenance,
+            author=author,
+            expires_on=expires_on,
+            idempotency_key=idempotency_key,
+        )
+        if queued and self.on_queued is not None:
+            self.on_queued()
+        return len(drafts) if queued else 0
+
+    async def promote(self, notebook_id: str, *, batch: int = PROMOTE_BATCH) -> tuple[int, int]:
+        """Land up to ``batch`` of the notebook's queued captures as facts, in one
+        transaction under its lock, each as ``capture`` would (repeats tighten, never
+        duplicate); then mark them promoted. (captures, facts added). Replicas may promote the same notebook at once: its lock makes them take
+        turns, and the second finds the first's captures gone."""
+
+        async def run(tx: FactTx) -> tuple[int, int]:
+            rows = list(
+                await tx.db.scalars(
+                    select(InboxRow)
+                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                    .order_by(InboxRow.id)
+                    .limit(batch)
+                )
+            )
+            added = 0
+            for row in rows:
+                tx.author = row.author
+                drafts = [observation_in(o) for o in row.observations]
+                provenance = Provenance(
+                    Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown)
+                )
+                added += await land(
+                    tx,
+                    [(d.statement, typed_of(d)) for d in drafts],
+                    provenance,
+                    row.expires_on,
+                    over_limit="drop",
+                )
+            if rows:
+                await tx.db.execute(
+                    update(InboxRow).where(InboxRow.id.in_([r.id for r in rows])).values(promoted_at=tx.at)
+                )
+                await tx.db.execute(  # past the window a retry could come in: gone
+                    delete(InboxRow).where(
+                        InboxRow.notebook_id == notebook_id, InboxRow.promoted_at < tx.at - KEEP_PROMOTED_MS
+                    )
+                )
+            return len(rows), added
+
+        try:
+            return await self.store.transact(notebook_id, run)
+        except NotebookArchived:
+            dropped = await self.store.drop_inbox(notebook_id)
+            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
+            return dropped, 0
 
     async def edit(
         self,
@@ -227,3 +316,46 @@ def _expiry(value: str | None) -> str | None:
 def _in_range(revision: int, current: int) -> None:
     if not 0 <= revision <= current:
         raise RevisionOutOfRange(revision, current)
+
+
+async def land(
+    tx: FactTx,
+    entries: Sequence[tuple[str, Typed | None]],
+    provenance: Provenance,
+    expires_on: str | None,
+    *,
+    over_limit: Literal["refuse", "drop"] = "refuse",
+) -> int:
+    """Add each (text, type) to the notebook, under the caller's lock; the number added.
+
+    A repeat adds no text but may tighten what is known about the fact (its provenance,
+    its expiry, and the type a plain-text fact lacked). Past the notebook's size limit a
+    capture is refused (``"refuse"``); a queued one, already accepted, keeps what fits
+    (``"drop"``), the rest logged."""
+    existing = {normalize(f.text): f for f in await tx.current()}
+    added = 0
+    for text, typed in entries:
+        key = normalize(text)
+        if (duplicate := existing.get(key)) is not None:
+            merged = merge_provenance([duplicate.provenance, provenance], duplicate.provenance.sensitivity)
+            if not merged.same_as(duplicate.provenance):
+                await tx.update(duplicate.id, duplicate.text, merged)
+                duplicate = existing[key] = replace(duplicate, provenance=merged)
+            if expires_on is not None and duplicate.expires_on != expires_on:
+                await tx.set_expiry(duplicate, expires_on)
+            if typed is not None and duplicate.typed is None:
+                await tx.set_typed(duplicate, typed)
+                duplicate = existing[key] = replace(duplicate, typed=typed)
+            continue
+        if len(existing) + 1 > MAX_FACTS_PER_NOTEBOOK:
+            if over_limit == "drop":
+                logger.warning(
+                    "notebook %s is full (%d facts): %d queued facts not kept",
+                    tx.notebook.id, MAX_FACTS_PER_NOTEBOOK, len(entries) - added,
+                )
+                break
+            _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
+        fact_id = await tx.insert(text, provenance, expires_on=expires_on, typed=typed)
+        existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, tx.author, expires_on, typed)
+        added += 1
+    return added

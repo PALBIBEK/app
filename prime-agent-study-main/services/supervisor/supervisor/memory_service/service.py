@@ -21,6 +21,7 @@ from supervisor.memory_service.extract import ExtractionQueue, Extractor
 from supervisor.memory_service.leases import LeaseManager
 from supervisor.memory_service.limits import BUFFER_IDLE_MS
 from supervisor.memory_service.metrics import METRICS
+from supervisor.memory_service.notebooks.inbox import InboxDrainer
 from supervisor.memory_service.notebooks.ops import NotebookOps
 from supervisor.memory_service.notebooks.store import NotebookStore
 from supervisor.memory_service.outbox import Outbox
@@ -94,6 +95,8 @@ class MemoryService:
         self._erase = EraseService(self._factory)
         # The one long-term store: notebooks of facts, indexed into the same bank.
         self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
+        self.inbox = InboxDrainer(self.notebooks)
+        """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(
             self._factory, ObjectArchive(arch_root), hot_days=hot_days
@@ -137,6 +140,11 @@ class MemoryService:
                 await step()
             except Exception:
                 logger.warning("%s failed", what, exc_info=True)
+
+    def start_inbox_drainer(self, *, interval_s: float = 1.0) -> None:
+        """Land queued captures as facts: at once when one is queued here, and every
+        ``interval_s`` for those queued on other replicas (until ``aclose``)."""
+        self._start("inbox", lambda: self.inbox.run(interval_s))
 
     def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
         """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""

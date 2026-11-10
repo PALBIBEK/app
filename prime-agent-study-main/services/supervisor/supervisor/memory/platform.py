@@ -41,23 +41,34 @@ def gateway_one_shot(
     charge: Callable[[float], Awaitable[None]] | None = None,
 ) -> OneShot:
     """A OneShot over a ModelGatewayClient (blocking ``complete`` runs on the long-call
-    pool, ``supervisor.blocking``).
+    pool, ``supervisor.blocking``); its ``model`` says which model it calls (provenance,
+    ``classification.one_shot_model``).
 
     ``charge``: counts each call's cost toward whoever pays for it (a session's cost cap).
     """
+    return GatewayOneShot(gateway, model, charge)
 
-    async def call(system: str, content: str) -> str:
+
+class GatewayOneShot:
+    """A one-shot model call through a gateway, which names its model."""
+
+    def __init__(
+        self, gateway: object, model: str | None, charge: Callable[[float], Awaitable[None]] | None
+    ) -> None:
+        self._gateway = gateway
+        self.model = model
+        self._charge = charge
+
+    async def __call__(self, system: str, content: str) -> str:
         completion = await run_blocking(
-            gateway.complete,  # type: ignore[attr-defined]
+            self._gateway.complete,  # type: ignore[attr-defined]
             [ChatMessage("system", system), ChatMessage("user", content)],
             [],
-            model=model,
+            model=self.model,
         )
-        if charge is not None and (cost := completion.spent["cost"]):
-            await charge(cost)
+        if self._charge is not None and (cost := completion.spent["cost"]):
+            await self._charge(cost)
         return str(completion.message.content or "")
-
-    return call
 
 
 def platform_one_shot() -> OneShot:

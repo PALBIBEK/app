@@ -27,6 +27,7 @@ from supervisor.memory_service.notebooks.types import (
     RecallContext,
     Revision,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 type CaptureMode = Literal["explicit", "automatic"]
 
@@ -131,6 +132,22 @@ class NotebookMemory:
         if not clean_captured(facts):
             return 0
         return await self._store.capture(notebook_id, facts, author=author, context=context)
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureContext | None = None,
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Queue typed observations (G2), or None from a service that takes only plain captures."""
+        if not drafts:
+            return 0
+        return await self._store.observe(
+            notebook_id, drafts, author=author, context=context, idempotency_key=idempotency_key
+        )
 
     async def query(
         self, notebook_id: str, q: str, limit: int = 20, context: RecallContext | None = None

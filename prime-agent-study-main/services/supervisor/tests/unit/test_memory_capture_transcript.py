@@ -26,7 +26,9 @@ from supervisor.memory.transcript import (
     run_items,
     trim_middle,
 )
+from supervisor.memory_service.observations import Observations
 from supervisor.seams.core.types import ModelGatewayError
+from tests.support.scripted import as_outcome
 
 FIRST = TranscriptBudget.for_attempt(1)
 
@@ -301,7 +303,7 @@ def _attempts(
         sent.append(content)
         if len(sent) <= len(errors):
             raise errors[len(sent) - 1]
-        return "SENSITIVITY: ordinary\n- Builds with make check"
+        return as_outcome("SENSITIVITY: ordinary\n- Builds with make check")
 
     return asyncio.run(turn._extract(one_shot, "s1", items)), sent
 
@@ -316,7 +318,8 @@ def test_a_failure_that_may_pass_is_retried_on_the_same_transcript(monkeypatch: 
     long turn condensed away for it."""
     extracted, sent = _attempts([OVERLOADED, OVERLOADED], monkeypatch, tool_loop(60, 20 * 1024))
 
-    assert extracted is not None and extracted.facts == ["Builds with make check"]
+    assert isinstance(extracted, Observations)
+    assert [d.statement for d in extracted.drafts] == ["Builds with make check"]
     assert len(sent) == 3 and sent[0] == sent[1] == sent[2], "the same transcript each time"
 
 
@@ -458,7 +461,7 @@ def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkey
         async def one_shot(system: str, content: str) -> str:
             if errors:
                 raise errors.pop(0)
-            return "SENSITIVITY: ordinary\n- ok"
+            return as_outcome("SENSITIVITY: ordinary\n- ok")
 
         assert await turn._extract(one_shot, "s1", tool_loop(1, 10)) is not None
 

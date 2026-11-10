@@ -18,6 +18,7 @@ from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
     InvalidExpiry,
+    InvalidObservation,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
@@ -29,6 +30,7 @@ from supervisor.memory_service.notebooks.errors import (
 )
 from supervisor.memory_service.notebooks.ops import NotebookOps
 from supervisor.memory_service.notebooks.types import Notebook
+from supervisor.memory_service.observations import ObservationInvalid
 
 router = APIRouter(prefix="/v1/notebooks", tags=["notebooks"])
 
@@ -60,6 +62,13 @@ class CaptureIn(BaseModel):
     facts: list[str]
     author: str | None = None
     context: dict[str, Any] | None = None
+
+
+class ObserveIn(BaseModel):
+    observations: list[dict[str, Any]]
+    author: str | None = None
+    context: dict[str, Any] | None = None
+    idempotency_key: str | None = None
 
 
 class EditIn(BaseModel):
@@ -104,6 +113,8 @@ def _error(exc: NotebookError) -> HTTPException:
         detail["ref"] = exc.ref
     elif isinstance(exc, InvalidExpiry):
         status, detail["value"] = 422, exc.value
+    elif isinstance(exc, InvalidObservation):
+        status, detail["reason"] = 422, exc.reason
     elif isinstance(exc, MemoryLimitExceeded):
         status, detail["what"], detail["limit"], detail["got"] = 422, exc.what, exc.limit, exc.got
     elif isinstance(exc, RevisionOutOfRange):
@@ -218,6 +229,27 @@ async def capture_facts(notebook_id: str, body: CaptureIn, request: Request) -> 
     except NotebookError as exc:
         raise _error(exc) from exc
     return {"added": added}
+
+
+@router.post("/{notebook_id}/observations", status_code=202)
+async def observe(notebook_id: str, body: ObserveIn, request: Request) -> dict[str, int]:
+    """Queue an automatic capture's typed observations (G2): accepted now, facts once the
+    inbox is drained (``notebooks.inbox``)."""
+    await _owned(request, notebook_id)
+    try:
+        drafts = [wire.observation_in(o) for o in body.observations]
+        queued = await _ops(request).observe(
+            notebook_id,
+            drafts,
+            author=body.author,
+            context=wire.context_in(body.context),
+            idempotency_key=body.idempotency_key,
+        )
+    except ObservationInvalid as exc:
+        raise _error(InvalidObservation(str(exc))) from exc
+    except NotebookError as exc:
+        raise _error(exc) from exc
+    return {"queued": queued}
 
 
 @router.post("/{notebook_id}/facts:edit", status_code=204)

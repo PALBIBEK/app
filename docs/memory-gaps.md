@@ -252,6 +252,45 @@ concurrent captures into one notebook all land, and none blocks another. A per-t
 on extraction calls holds under a burst from one tenant while another tenant's captures
 proceed.
 
+*Done (G2):*
+- **Typed, strict outcome:** `memory_service/observations.py` ports Grok's
+  `parse_model_outcome`, `extraction_schema` and `ObservationDraft::validate` with their
+  limits, test for test.
+  - `noop` and `observations` are exclusive; an unknown field anywhere fails the outcome.
+  - Each observation is normalized to the store's limits rather than failing on them, and
+    the store checks every bound again before it keeps one.
+  - The host sets the provenance: extraction model, `PROMPT_VERSION` and time.
+  - Ours: QM's sensitivity label rides on the outcome (`unknown` when missing), and a JSON
+    answer in a code fence is unwrapped.
+- **Prompt:** `OBSERVATION_EXTRACTION_PROMPT` keeps QM's rules as the `user` and
+  `feedback` types (user's own words only, directives verbatim) and adds `project` and
+  `reference`. Those may come from what the work established, such as a tool's result,
+  never from the assistant's guesses. Grok's transcript rules follow. A malformed answer is
+  retried on the same transcript. The memory service's own Tier 1 extraction keeps QM's
+  bullet prompt.
+- **Facts keep their type:** `memory_facts` gains kind, topic, keywords, aliases, body,
+  extraction model and prompt version (migration 8). A repeat of a plain fact gives it the
+  type it lacked, with no revision. Until G8 adds project notebooks, `project` and
+  `reference` facts go to the session's writable notebook, typed, so G8 can move them.
+- **Inbox (S1):** an automatic capture is one insert into `memory_observation_inbox`, with
+  no lock on its notebook. Each replica's drainer (`notebooks/inbox.py`) lands a notebook's
+  queue in batches of 100 under one lock, woken at once when a capture is queued there. A
+  promoted row is kept for a day, so a retried burst's idempotency key still holds. Erasure
+  deletes queued captures too; an archived notebook drops what was queued.
+- **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404
+  on `/observations`), gets the statements as a plain capture.
+- **Per-tenant fairness:** capture's model calls (extraction, resolution) take one of their
+  tenant's slots on the worker (`memory/fairness.py`, `MEMORY_CAPTURE_PER_TENANT`, 8).
+  One tenant's burst waits its turn and other tenants' captures go straight through. A
+  rate-limited `observe` (the service's per-tenant change limit) is retried briefly,
+  honouring `Retry-After`, rather than losing the burst.
+
+*Concurrency tests:* on four replicas, 100 captures into one notebook whose lock another
+transaction holds all queue in under 2 s, none landing past the lock. Once it is released
+they land once each, in batches (fewer revisions than a quarter of the captures). The same
+burst queued by two replicas at once is one row and one fact. On one worker, a 40-capture
+burst from one tenant runs at its cap while another tenant's capture goes straight through.
+
 ### G3 (P0). A failed capture burst is dropped
 
 *Ours:* `temporal/workflow.py::_flush_capture` says "a failed burst is dropped, never
@@ -653,8 +692,8 @@ requires before any gap is ported.
 | Gap | Pri | Tests ported | Concurrency tests | Green | Review clean | Load targets | Verified | PR |
 |---|---|---|---|---|---|---|---|---|
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
-| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [ ] | [~] correctness and capture met; recall latency needs a sized environment | [ ] | |
-| G2 typed observations, strict schema | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [~] eight review rounds; merged on request | [~] correctness and capture met; recall latency needs a sized environment | [x] | #197 |
+| G2 typed observations, strict schema | P0 | [x] | [x] | [ ] | [ ] | [ ] | [ ] | |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G5 consolidation (Dream) | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |

@@ -38,6 +38,7 @@ from supervisor.memory_service.notebooks.models import (
     FactItemRow,
     FactRevisionRow,
     FactRow,
+    InboxRow,
     NotebookRow,
 )
 from supervisor.memory_service.notebooks.types import (
@@ -47,6 +48,7 @@ from supervisor.memory_service.notebooks.types import (
     Provenance,
     Revision,
     Sensitivity,
+    Typed,
     notebook_id,
     personal_source,
     subject_of,
@@ -75,7 +77,36 @@ def _fact(row: FactRow) -> Fact:
         updated_at=int(row.updated_at),
         author=row.author,
         expires_on=row.expires_on,
+        typed=_typed(row),
     )
+
+
+def _typed(row: FactRow) -> Typed | None:
+    if row.kind is None:
+        return None
+    return Typed(
+        kind=row.kind,
+        topic=row.topic,
+        keywords=tuple(row.keywords or ()),
+        aliases=tuple(row.aliases or ()),
+        body=row.body,
+        extraction_model=row.extraction_model,
+        prompt_version=row.prompt_version,
+    )
+
+
+def _typed_columns(typed: Typed | None) -> dict[str, object]:
+    if typed is None:
+        return {}
+    return {
+        "kind": typed.kind,
+        "topic": typed.topic,
+        "keywords": list(typed.keywords),
+        "aliases": list(typed.aliases),
+        "body": typed.body,
+        "extraction_model": typed.extraction_model,
+        "prompt_version": typed.prompt_version,
+    }
 
 
 def _notebook(row: NotebookRow) -> Notebook:
@@ -192,6 +223,7 @@ class FactTx:
         *,
         created_at: int | None = None,
         expires_on: str | None = None,
+        typed: Typed | None = None,
     ) -> str:
         row = FactRow(
             notebook_id=self.notebook.id,
@@ -201,6 +233,7 @@ class FactTx:
             updated_at=self.at,
             expires_on=expires_on,
             **_columns(provenance),
+            **_typed_columns(typed),
         )
         self.db.add(row)
         await self.db.flush()
@@ -216,6 +249,15 @@ class FactTx:
         )
         self._log(int(fact_id), "update", text, provenance)
         await self._index(int(fact_id), text, provenance)
+
+    async def set_typed(self, fact: Fact, typed: Typed) -> None:
+        """Give a plain-text fact the type an observation repeating it carried. Not a
+        change to what the fact says, so no revision."""
+        await self.db.execute(
+            update(FactRow)
+            .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact.id))
+            .values(**_typed_columns(typed))
+        )
 
     async def remove(self, facts: Sequence[Fact]) -> None:
         if not facts:
@@ -489,6 +531,68 @@ class NotebookStore:
 
     # --- erasure ---------------------------------------------------------------------
 
+    # --- the inbox (G2: automatic captures, appended without the notebook's lock) -------
+
+    async def append_inbox(
+        self,
+        notebook_id: str,
+        observations: Sequence[dict[str, object]],
+        provenance: Provenance,
+        *,
+        author: str | None,
+        expires_on: str | None,
+        idempotency_key: str | None,
+    ) -> bool:
+        """Queue one capture's observations; False when ``idempotency_key`` is queued
+        already (a retried burst). One insert, no lock on the notebook: captures into one
+        notebook never wait on each other, nor on its edits."""
+        async with self._db() as db:
+            db.add(
+                InboxRow(
+                    notebook_id=notebook_id,
+                    idempotency_key=idempotency_key,
+                    observations=list(observations),
+                    author=author,
+                    expires_on=expires_on,
+                    received_at=now_ms(),
+                    **_columns(provenance),
+                )
+            )
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                return False
+            return True
+
+    async def pending_notebooks(self, *, limit: int) -> list[str]:
+        """Notebooks with queued captures, the longest waiting first."""
+        async with self._db() as db:
+            rows = await db.execute(
+                select(InboxRow.notebook_id)
+                .where(InboxRow.promoted_at.is_(None))
+                .group_by(InboxRow.notebook_id)
+                .order_by(func.min(InboxRow.id))
+                .limit(limit)
+            )
+            return [str(r[0]) for r in rows]
+
+    async def pending(self) -> int:
+        """Captures queued, in every notebook."""
+        async with self._db() as db:
+            return int(
+                await db.scalar(select(func.count()).select_from(InboxRow).where(InboxRow.promoted_at.is_(None))) or 0
+            )
+
+    async def drop_inbox(self, notebook_id: str) -> int:
+        """Discard a notebook's queued captures (it was archived after they were queued)."""
+        async with self._db() as db:
+            dropped = await db.execute(
+                delete(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+            )
+            await db.commit()
+            return int(dropped.rowcount or 0)  # type: ignore[attr-defined]
+
     async def erase_owner(self, *, tenant_id: str, owner: str) -> int:
         """Delete every notebook of ``owner`` with its facts, history and bank items.
 
@@ -512,6 +616,7 @@ class NotebookStore:
             if items:
                 await db.execute(delete(MemoryItemRow).where(MemoryItemRow.id.in_(items)))
             await db.execute(delete(FactRevisionRow).where(FactRevisionRow.notebook_id.in_(ids)))
+            await db.execute(delete(InboxRow).where(InboxRow.notebook_id.in_(ids)))  # not yet facts, theirs all the same
             await db.execute(delete(FactRow).where(FactRow.notebook_id.in_(ids)))
             await db.execute(delete(NotebookRow).where(NotebookRow.id.in_(ids)))
             await db.commit()
