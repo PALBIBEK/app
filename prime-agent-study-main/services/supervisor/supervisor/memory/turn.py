@@ -383,8 +383,8 @@ class SessionMemory:
             run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
             steps = run_items(run, withheld=PLATFORM_TOOLS)
             said = _said(run)
-            if not said.input:
-                continue  # no words of the user's in this audience (none, or an image only): nothing to learn
+            if not _learnable(said, steps):
+                continue
             items += steps
             exchanges.append(said)
             runs.extend(run)
@@ -531,6 +531,13 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
             condensed = again_on
             await asyncio.sleep(pause or 0.0)
     return None
+
+
+def _learnable(said: Exchange, steps: Sequence[Item]) -> bool:
+    """Whether a run gives an extraction anything to learn from: the user's words, or work
+    done (a tool's result). A run with neither (an image alone, or nothing in this audience)
+    costs no extraction call."""
+    return bool(said.input) or any(item["type"] == "tool_result" for item in steps)
 
 
 def _said(run: Sequence[Envelope]) -> Exchange:

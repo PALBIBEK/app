@@ -18,6 +18,8 @@ from supervisor.gateway.providers.base import (
     UpstreamUnreachable,
 )
 
+_CLOSED_CLIENT = "client has been closed"
+"""httpx's words when a client closed by another thread is used (``HttpUpstream.close``)."""
 _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
 _LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0)
@@ -112,8 +114,8 @@ class HttpUpstream:
                 try:
                     response = client.send(self._request(client, path, body), stream=stream)
                 except RuntimeError as exc:
-                    if not client.is_closed:
-                        raise
+                    if not (client.is_closed and _CLOSED_CLIENT in str(exc)):
+                        raise  # any other RuntimeError is a fault, never retried as a dropped connection
                     # Closed by another thread under this call: retried, like a dropped connection.
                     raise httpx.TransportError("the upstream's client was closed during the call") from exc
             except httpx.TransportError as exc:

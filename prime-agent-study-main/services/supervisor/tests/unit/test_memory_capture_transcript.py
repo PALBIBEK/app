@@ -511,3 +511,17 @@ def test_many_long_user_messages_condense_in_a_few_passes(monkeypatch: pytest.Mo
 
     assert size(condensed.json) <= FIRST.max_bytes and not condensed.stats.over_budget
     assert passes < 30, f"{passes} serializations"
+
+
+def test_a_run_is_extracted_for_the_users_words_or_for_work_done() -> None:
+    image_only = MessageEnd(role="user", content=[{"type": "image", "data": "B" * 10}])
+    worded = MessageEnd(role="user", content=[{"type": "text", "text": "fix the build"}])
+    worked = ToolEnd(tool_call_id="c1", tool_name="bash", result={"ok": True, "payload": "make: ok"})
+
+    def learnable(*events: Any) -> bool:
+        run = [env(i, e) for i, e in enumerate(events)]
+        return turn._learnable(turn._said(run), run_items(run))
+
+    assert learnable(worded)
+    assert learnable(image_only, worked), "a screenshot and the work it led to"
+    assert not learnable(image_only), "an image alone: no call for nothing to read"

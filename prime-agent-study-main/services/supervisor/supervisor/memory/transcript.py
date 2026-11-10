@@ -117,8 +117,10 @@ class CondensationStats:
         """What the extractor is told was removed; None when nothing was."""
         if not self.is_condensed():
             return None
-        if not any((self.reasoning_dropped, self.tool_results_trimmed, self.tool_args_trimmed, self.steps_omitted,
-                    self.assistant_text_trimmed, self.user_text_trimmed)):
+        if self.images_dropped and not self.over_budget and not any((
+            self.reasoning_dropped, self.tool_results_trimmed, self.tool_args_trimmed, self.steps_omitted,
+            self.assistant_text_trimmed, self.user_text_trimmed,
+        )):
             # Only images, whatever the budget: nothing was cut to fit, and saying so would
             # have the extractor treat a whole transcript as partial.
             return 'The transcript is whole, its images omitted ("[... image omitted ...]"): the extractor reads text only.'
@@ -292,7 +294,11 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
         # JSON escaping and the markers cost bytes the share did not count: take the
         # overshoot out of every user's share at once (a few passes, not one per 10%).
         excess = max(_size(encoded) - budget.max_bytes, 1)
-        share = max(min(share * 9 // 10, share - -(-excess // users)), USER_TEXT_FLOOR_BYTES)
+        shrinking = max(1, sum(  # only texts longer than the share give anything up when it falls
+            1 for item in items if item["type"] == "user"
+            for part in item["content"] if part["type"] == "text" and _size(part["text"]) > share
+        ))
+        share = max(min(share * 9 // 10, share - -(-excess // shrinking)), USER_TEXT_FLOOR_BYTES)
     stats.over_budget = not budget.fits(encoded, len(items))
     return _finish(encoded, len(items), stats)
 
