@@ -146,7 +146,7 @@ from supervisor.temporal.subagent_tools import (
     settlement,
     task,
 )
-from supervisor.tools import ToolError
+from supervisor.tools import ToolError, default_registry
 from supervisor.traces.store import record_run
 
 TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
@@ -884,6 +884,7 @@ class GithiSteps:
                 parallel=True,
             )
         approvals = manifest.approvals
+        asked = _asked_by_tool(name, dict(call.get("arguments") or {}))
         needed = (
             ApprovalNeeded(
                 prompt=f"Allow the agent to run {name!r}?",
@@ -894,6 +895,13 @@ class GithiSteps:
             if approvals is not None and name in approvals.require_approval
             else None
         )
+        if asked is not None:  # the tool's own ask: always a person's, and denied if no one answers
+            needed = ApprovalNeeded(
+                prompt=asked,
+                options=["allow", "deny"],
+                timeout_s=float(approvals.timeout_s) if approvals is not None else TOOL_ASK_TIMEOUT_S,
+                on_timeout="deny",
+            )
         retry = (
             RetryMode.RETRY
             # Memory tools are idempotent: capture dedupes, edits and deletes are by id;
@@ -1576,3 +1584,13 @@ class GithiSteps:
             trace_id=None,
             event_key=f"interrupted:{open_run[0]}",
         )
+
+
+TOOL_ASK_TIMEOUT_S = 600.0
+"""How long a tool's own ask waits for a person when the harness sets no approval timeout."""
+
+
+def _asked_by_tool(name: str, arguments: dict[str, Any]) -> str | None:
+    """What a built-in tool asks a person to allow before this call (``ToolSpec.asks``)."""
+    registry = default_registry()
+    return registry[name].asks_for(arguments) if name in registry else None

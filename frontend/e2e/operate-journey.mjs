@@ -60,15 +60,30 @@ console.log('4 usage by agent shows it');
 // Secrets: add, see the name only, delete.
 const secret = 'E2E_' + Date.now().toString(36).toUpperCase();
 await p.goto(`${BASE}/policies`);
-await p.getByLabel('Name').fill(secret);
-await p.getByLabel('Value').fill('s3cret-value');
+await p.getByLabel('Name', { exact: true }).fill(secret);
+await p.getByLabel('Value', { exact: true }).fill('s3cret-value');
 await p.getByRole('button', { name: 'Save secret' }).click();
 await p.getByTestId('secret-names').getByText(secret).waitFor({ timeout: 15000 });
 check(await p.getByText('s3cret-value').count() === 0, 'the value is never shown');
 await p.getByRole('button', { name: `Delete ${secret}` }).click();
 await p.getByTestId('secret-names').getByText(secret).waitFor({ state: 'detached', timeout: 15000 }).catch(() => {});
 check(await p.getByTestId('secret-names').getByText(secret).count() === 0, 'the secret is gone');
+
 console.log('5 secret added and deleted');
+
+// The browser vault: a login saved for its site, listed by the site only, deleted.
+const site = `https://e2e-${Date.now().toString(36)}.example.com`;
+await p.getByLabel('Site', { exact: true }).fill(site);
+await p.getByLabel('Username or email', { exact: true }).fill('ada');
+await p.getByLabel('Password', { exact: true }).fill('vault-pass-e2e');
+await p.getByRole('button', { name: 'Save login' }).click();
+await p.getByTestId('vault-items').getByText(site).waitFor({ timeout: 15000 });
+check(await p.getByText('vault-pass-e2e').count() === 0, 'the saved password is never shown');
+check(await p.getByTestId('secret-names').getByText(site).count() === 0, 'a saved login is not listed as a secret');
+await p.getByRole('button', { name: `Delete login:${site}` }).click();
+await p.getByTestId('vault-items').getByText(site).waitFor({ state: 'detached', timeout: 15000 }).catch(() => {});
+check(await p.getByTestId('vault-items').getByText(site).count() === 0, 'the saved login is gone');
+console.log('5b login saved in the vault, then deleted');
 
 // Runners: register (token shown once), then remove.
 const runner = 'e2e-' + Date.now().toString(36);

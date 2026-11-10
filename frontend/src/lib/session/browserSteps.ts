@@ -113,18 +113,24 @@ export function shortUrl(url: string): string {
   }
 }
 
-/** What a `browser_vault` call did, in one line. It names the site, never the login. */
+/** What a `browser_vault` call did, in one line. It names the site or the item, never a value. */
 export function vaultLine(tool: ToolCallView): { text: string; failed: boolean } {
   const args = fields(tool.args);
   const out = fields(tool.output);
-  const site = shortUrl(text(out.login) ?? text(args.login) ?? 'the site');
+  const handle = text(args.handle) ?? text(args.login) ?? '';
+  const [kind, name] = handle.startsWith('card:') ? ['card', handle.slice(5)] : handle.startsWith('address:') ? ['address', handle.slice(8)] : ['login', handle.replace(/^login:/, '')];
+  const site = shortUrl(text(out.origin) ?? text(out.login) ?? (kind === 'login' && name ? name : 'the site'));
   if (args.action === 'list') {
-    if (tool.status === 'running') return { text: 'Checking saved logins…', failed: false };
-    const sites = Array.isArray(out.logins) ? out.logins.length : 0;
-    return { text: sites ? `Found saved logins for ${sites} site${sites === 1 ? '' : 's'}` : 'No saved logins', failed: false };
+    if (tool.status === 'running') return { text: 'Checking what is saved…', failed: false };
+    const items = Array.isArray(out.items) ? out.items.length : Array.isArray(out.logins) ? out.logins.length : 0;
+    return { text: items ? `Found ${items} saved item${items === 1 ? '' : 's'}` : 'Nothing saved', failed: false };
   }
-  if (tool.status === 'running') return { text: `Signing in to ${site}…`, failed: false };
+  const what = args.action === 'enter_code' ? `the code for ${site}` : kind === 'login' ? `the saved login for ${site}` : `the saved ${kind} ${name}`;
+  if (tool.status === 'running') {
+    return { text: args.action === 'enter_code' ? `Entering the code for ${site}…` : kind === 'login' ? `Signing in to ${site}…` : `Filling ${what}…`, failed: false };
+  }
   const error = text(out.error) ?? (tool.status === 'error' ? tool.explanation ?? tool.error ?? 'the call failed' : null);
-  if (error) return { text: `Could not use the saved login for ${site}: ${error}`, failed: true };
-  return { text: out.submitted === true ? `Signed in to ${site}` : `Filled the saved login for ${site}`, failed: false };
+  if (error) return { text: `Could not use ${what}: ${error}`, failed: true };
+  if (args.action === 'enter_code') return { text: `Entered the code for ${site}`, failed: false };
+  return { text: out.submitted === true ? `Signed in to ${site}` : `Filled ${what}`, failed: false };
 }

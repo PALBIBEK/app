@@ -15,11 +15,15 @@ from supervisor.vault import Keyring, Owner, Vault
 from supervisor.vault.logins import (
     REDACTED,
     BrowserLogins,
+    Checkout,
     InvalidLogin,
+    Login,
     login_secret_name,
     normalize_origin,
+    parse_item,
     parse_login,
 )
+from supervisor.vault.totp import totp_now
 
 pytestmark = pytest.mark.asyncio
 
@@ -124,3 +128,73 @@ async def test_a_results_images_are_not_scrubbed_as_text(vault: Vault) -> None:
     clean = await BrowserLogins(vault).redact("t1", result)
 
     assert clean.payload == {"output": f"typed {REDACTED}", "images": [shot]}
+
+
+# Hermes's vault kinds: a login's authenticator key, cards, addresses ------------------------
+
+CARD = {"origins": ["https://shop.example.com/checkout"], "card_number": "4242 4242 4242 4242", "exp_month": "4", "exp_year": "2031", "cvc": "731", "pin": "9999"}
+ADDRESS = {"origins": ["https://shop.example.com"], "address_line1": "12 Analytical St", "city": "London", "postal_code": "N1 9GU", "country": "United Kingdom"}
+
+
+async def test_cards_and_addresses_keep_only_their_fields_and_need_their_sites() -> None:
+    card = parse_item("card:Visa-4242", json.dumps(CARD))
+    address = parse_item("address:Home", json.dumps(ADDRESS))
+
+    assert isinstance(card, Checkout) and card.kind == "card" and card.origins == ("https://shop.example.com",)
+    assert "pin" not in card.fields, "only a card's own fields are kept"
+    assert card.described() == "Visa-4242 (card ending 4242)" and card.secrets == ["4242 4242 4242 4242", "731"]
+    assert isinstance(address, Checkout) and address.secrets == [], "an address is not a secret"
+    for name, value, why in [
+        ("card:Visa", json.dumps({**CARD, "origins": []}), "the sites it may be filled on"),
+        ("card:Visa", json.dumps({k: v for k, v in CARD.items() if k != "cvc"}), "needs cvc"),
+        ("card:My Visa", json.dumps(CARD), "a label of letters"),
+        ("address:Home", json.dumps({**ADDRESS, "origins": ["shop.example.com"]}), r"not an http\(s\) origin"),
+        ("wallet:x", "{}", "not a vault item"),
+    ]:
+        with pytest.raises(InvalidLogin, match=why):
+            parse_item(name, value)
+
+
+async def test_a_login_keeps_its_authenticator_key_normalized_and_makes_its_codes() -> None:
+    login = parse_item(SHOP, json.dumps({"username": "ada", "password": PASSWORD, "otp": "otpauth://totp/Shop:ada?secret=jbsw y3dp ehpk3pxp"}))
+
+    assert isinstance(login, Login) and login.otp == "JBSWY3DPEHPK3PXP"
+    assert login.code(at=0) == totp_now("JBSWY3DPEHPK3PXP", at=0)
+    with pytest.raises(InvalidLogin, match="base32"):
+        parse_item(SHOP, json.dumps({"username": "ada", "password": PASSWORD, "otp": "not base32!"}))
+
+
+async def test_the_listing_shows_handles_and_never_a_secret(vault: Vault) -> None:
+    owner = Owner.tenant("t1")
+    await vault.put(owner, SHOP, json.dumps({"username": "ada", "password": PASSWORD, "otp": "JBSWY3DPEHPK3PXP"}))
+    await vault.put(owner, "card:Visa-4242", json.dumps(CARD))
+    await vault.put(owner, "address:Home", json.dumps(ADDRESS))
+    await vault.put(owner, "card:broken", "{}")
+    tenant = BrowserLogins(vault).bind("t1")
+
+    listing = await tenant.listing()
+
+    assert listing == [
+        {"handle": SHOP, "kind": "login", "origin": "https://shop.example.com", "identifier": "ada", "two_factor": "automatic"},
+        {"handle": "address:Home", "kind": "address", "label": "Home (London)", "origins": ["https://shop.example.com"]},
+        {"handle": "card:Visa-4242", "kind": "card", "label": "Visa-4242 (card ending 4242)", "origins": ["https://shop.example.com"]},
+    ]
+    shown = json.dumps(listing)
+    assert PASSWORD not in shown and "JBSWY3DPEHPK3PXP" not in shown and "4242 4242" not in shown and "731" not in shown
+    assert isinstance(await tenant.item("card:Visa-4242"), Checkout)
+    assert isinstance(await tenant.item("https://shop.example.com/login"), Login), "a bare origin names its login"
+    assert await tenant.item("card:none") is None
+
+
+async def test_card_numbers_codes_keys_and_typed_codes_are_cleaned_from_results(vault: Vault) -> None:
+    owner = Owner.tenant("t1")
+    await vault.put(owner, SHOP, json.dumps({"username": "ada", "password": PASSWORD, "otp": "JBSWY3DPEHPK3PXP"}))
+    await vault.put(owner, "card:Visa-4242", json.dumps(CARD))
+    logins = BrowserLogins(vault)
+    logins.typed("t1", "246810")
+
+    clean = await logins.redact("t1", ToolResult(ok=True, payload="4242 4242 4242 4242 / 731 / JBSWY3DPEHPK3PXP / 246810 / London"))
+
+    # A 3-digit security code is not hunted for, as no value under MIN_REDACTED is: every "731"
+    # in a page (a price, a page number) would go with it.
+    assert clean.payload == f"{REDACTED} / 731 / {REDACTED} / {REDACTED} / London"

@@ -104,6 +104,19 @@ class ToolSpec[ArgsT: BaseModel]:
     needs_workspace: bool = True
     """Whether a call acts on the session's files or shell, so a sandbox must exist
     before it runs. Implementation metadata only: not part of the published body."""
+    asks: Callable[[Mapping[str, Any]], str | None] | None = None
+    """For a call that a person must allow whatever the harness's own approvals say (a saved
+    card filled into a page): what to ask them, from the call's arguments; None for a call
+    that needs no one. Implementation metadata only: not part of the published body."""
+
+    def asks_for(self, arguments: Mapping[str, Any]) -> str | None:
+        """What a person must allow before this call runs, if anything."""
+        if self.asks is None:
+            return None
+        try:
+            return self.asks(arguments)
+        except Exception:  # noqa: BLE001 — arguments the tool will refuse itself: nothing to ask
+            return None
 
     @classmethod
     def from_handler(
@@ -113,6 +126,7 @@ class ToolSpec[ArgsT: BaseModel]:
         name: str | None = None,
         tool_class: ToolClass,
         needs_workspace: bool = True,
+        asks: Callable[[Mapping[str, Any]], str | None] | None = None,
     ) -> ToolSpec[ArgsT]:
         """Derive a spec from a handler's signature and docstring; reject malformed ones."""
         qualname = getattr(handler, "__qualname__", repr(handler))
@@ -136,6 +150,7 @@ class ToolSpec[ArgsT: BaseModel]:
             handler=handler,
             tool_class=ToolClass(tool_class),
             needs_workspace=needs_workspace,
+            asks=asks,
         )
 
     @property
