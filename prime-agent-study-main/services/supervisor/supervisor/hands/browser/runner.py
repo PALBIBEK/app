@@ -106,6 +106,7 @@ DAEMON = _sibling("daemon")
 """Its paths and constants are the ones the daemon serves on."""
 SNAPSHOT = _sibling("snapshot")
 FORMS = _sibling("vault_forms")
+SHOTS = _sibling("shots")
 
 
 def ask(op: str, wait: float = 10.0, **fields: Any) -> dict[str, Any]:
@@ -169,6 +170,14 @@ class Session:
         self.page = self._current()
         self.shown: list[str] = []
         """Screenshots to show with the result, as paths in the workspace folder."""
+        self.captured: str | None = None
+        """What of the call's last ``capture_screenshot`` the result shows when the code
+        showed nothing itself (Hermes attaches a call's screenshot for a model that sees)."""
+
+    def attached(self) -> list[str]:
+        """The screenshots the result shows: those asked for, else the last capture."""
+        shots = self.shown[-MAX_SHOWN:] or ([self.captured] if self.captured else [])
+        return [str(Path(p).resolve().relative_to(WORKSPACE)) for p in shots]
 
     def _current(self) -> Any:
         """The tab the previous call ended on, else the last real tab, else a new one."""
@@ -284,6 +293,7 @@ class Helpers:
     def new_tab(self, url: str = "about:blank") -> Any:
         """Open ``url`` in a new tab and make it ``page``."""
         page = self._use(self.session.context.new_page())
+        SHOTS.activate(page)  # a background tab renders no frames: captures of it would hang
         if url != "about:blank":
             page.goto(url, wait_until="domcontentloaded")
         return page
@@ -325,18 +335,31 @@ class Helpers:
     def click_at_xy(self, x: float, y: float) -> None:
         self.session.page.mouse.click(x, y)
 
-    def capture_screenshot(self, path: str | None = None, full: bool = False) -> str:
-        """Save a screenshot (in the workspace by default) and print its path."""
-        path = path or _shot_path("shot", "png")
-        self.session.page.screenshot(path=path, full_page=full)
-        print(path)
-        return path
+    def capture_screenshot(self, path: str | os.PathLike[str] | None = None, full: bool = False,
+                           max_dim: int | None = None) -> str:
+        """Save a PNG of the viewport (or the whole page) and print its path: in the
+        workspace by default; ``max_dim=1800`` bounds the longer side. Unless the code shows
+        screenshots itself, the call's last capture is attached to its result."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        page = self.session.page
+        written = SHOTS.capture_screenshot(page, path or _shot_path("shot", "png"), full=full, max_dim=max_dim,
+                                           timeout=PlaywrightTimeout)
+        print(written)
+        try:
+            inside = Path(written).resolve().is_relative_to(WORKSPACE)
+            self.session.captured = SHOTS.attachable(page, written, full, _shot_path("attached", "jpg"), reuse=inside)
+        except Exception:  # noqa: BLE001 — the capture is saved; only its attachment is missing
+            self.session.captured = None
+        return written
 
     def show_screenshot(self, full: bool = False) -> str:
         """Screenshot the tab (its viewport, or the whole page) to be shown, as an image,
         with this call's result; its path in the workspace."""
         path = _shot_path("shown", "jpg")
-        self.session.page.screenshot(path=path, type="jpeg", quality=SHOWN_QUALITY, full_page=full, scale="css")
+        SHOTS.bring_to_front_if_hidden(self.session.page)
+        self.session.page.screenshot(path=path, type="jpeg", quality=SHOWN_QUALITY, full_page=full, scale="css",
+                                     timeout=SHOTS.JPEG_DEADLINE_S * 1000)
         self.session.shown.append(path)
         return path
 
@@ -577,7 +600,7 @@ def main() -> int:
         events: list[dict[str, Any]] = []
         with contextlib.suppress(Exception):
             events = session.reported()
-        shown = [str(Path(p).relative_to(WORKSPACE)) for p in session.shown[-MAX_SHOWN:]]
+        shown = session.attached()
         with _REPORTING:
             done.set()
             _meta(

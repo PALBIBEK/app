@@ -132,6 +132,85 @@ async def test_a_screenshot_is_saved_in_the_workspace(call: Call, tmp_path: Path
     assert path.read_bytes().startswith(b"\x89PNG")
 
 
+async def test_the_calls_last_capture_is_attached_for_a_model_that_sees(
+    call: Call, tmp_path: Path
+) -> None:
+    """Hermes's native screenshot attach: a call that captures and shows nothing itself
+    gets its last capture back as an image, so the model never needs another tool to look."""
+    shot = await call(
+        f"page.set_content({PAGE!r})\ncapture_screenshot()\npage.set_content('<h1>later</h1>')\ncapture_screenshot()"
+    )
+
+    (image,) = shot["images"]
+    assert image["mime_type"] == "image/png" and base64.b64decode(image["data"]).startswith(
+        b"\x89PNG"
+    )
+    (shown,) = shot["screenshots"]
+    assert str(tmp_path / "ws" / shown) == str(Path(shot["output"].splitlines()[-1])), (
+        "the last capture"
+    )
+
+
+async def test_what_the_code_shows_itself_replaces_the_attached_capture(call: Call) -> None:
+    shot = await call(f"page.set_content({PAGE!r})\ncapture_screenshot()\nshow_screenshot()")
+
+    assert [i["mime_type"] for i in shot["images"]] == ["image/jpeg"], (
+        "only the screenshot the code showed"
+    )
+
+
+NOISE = (
+    "<body style=margin:0><canvas id=c width=1280 height=720></canvas><script>"
+    "const x=c.getContext('2d'),d=x.createImageData(1280,720);"
+    "for(let i=0;i<d.data.length;i++)d.data[i]=i%4==3?255:Math.random()*256;x.putImageData(d,0,0)</script>"
+)
+"""A page whose PNG is megabytes: noise does not compress."""
+
+
+async def test_a_capture_too_large_to_attach_is_attached_as_a_jpeg_copy(call: Call) -> None:
+    """Hermes re-encodes a large capture as a JPEG to attach; the capture itself is kept."""
+    shot = await call(f"page.set_content({NOISE!r})\ncapture_screenshot()")
+
+    assert Path(shot["output"]).read_bytes().startswith(b"\x89PNG"), "the capture stays a PNG"
+    (image,) = shot["images"]
+    assert image["mime_type"] == "image/jpeg" and base64.b64decode(image["data"]).startswith(
+        b"\xff\xd8"
+    )
+    assert shot["screenshots"][0].startswith(".githi/browser/screenshots/attached-")
+
+
+async def test_a_capture_outside_the_workspace_is_attached_from_a_copy_in_it(
+    call: Call, tmp_path: Path
+) -> None:
+    outside = tmp_path / "elsewhere.png"
+
+    shot = await call(f"page.set_content({PAGE!r})\ncapture_screenshot({str(outside)!r})")
+
+    assert outside.read_bytes().startswith(b"\x89PNG")
+    assert (
+        shot["screenshots"][0].startswith(".githi/browser/screenshots/attached-") and shot["images"]
+    )
+
+
+async def test_max_dim_bounds_the_longer_side_of_a_capture(call: Call) -> None:
+    shot = await call(
+        "page.set_viewport_size({'width': 1200, 'height': 600})\n"
+        f"page.set_content({PAGE!r})\n"
+        "import struct\n"
+        "path = capture_screenshot(max_dim=600)\n"
+        "w, h = struct.unpack('>II', open(path, 'rb').read()[16:24])\n"
+        "print(w, h)"
+    )
+
+    assert shot["output"].splitlines()[-1] == "600 300", shot
+
+
+async def test_a_new_tab_is_brought_to_the_front(call: Call) -> None:
+    shot = await call("new_tab()\nprint(js('document.visibilityState'))")
+
+    assert shot["output"] == "visible", shot
+
+
 async def test_a_shown_screenshot_comes_back_with_the_result_as_an_image(call: Call, tmp_path: Path) -> None:
     shown = await call(f"page.set_content({PAGE!r})\nshow_screenshot()\npage.set_content('<h1>later</h1>')\nshow_screenshot()\nshow_screenshot()")
 
