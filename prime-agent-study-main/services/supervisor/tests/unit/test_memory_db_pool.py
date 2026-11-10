@@ -16,7 +16,7 @@ def test_set_sizes_the_pool() -> None:
     assert pool_settings({"MEMORY_DB_POOL_SIZE": "2", "MEMORY_DB_MAX_OVERFLOW": "0"}) == {"pool_size": 2, "max_overflow": 0}
 
 
-@pytest.mark.parametrize("value", ["two", "-1"])
+@pytest.mark.parametrize("value", ["two", "-1", "0"])  # 0 would be an unbounded pool
 def test_a_bad_setting_fails_at_once(value: str) -> None:
     with pytest.raises(ValueError, match="MEMORY_DB_POOL_SIZE|invalid literal"):
         pool_settings({"MEMORY_DB_POOL_SIZE": value})

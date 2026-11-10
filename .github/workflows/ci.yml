@@ -209,7 +209,7 @@ jobs:
             status=$?
             grep -E '^(FAILED|ERROR) ' concurrency.out | head -40 | sed 's/^/::error title=memory concurrency::/' || true
             if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-              echo "::error title=memory concurrency stuck (stopped after 15 minutes)::$(tail -c 4000 concurrency.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+              echo "::error title=memory concurrency stuck (stopped after 15 minutes)::$(tail -c 4000 concurrency.out | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
             fi
             exit 1
           }

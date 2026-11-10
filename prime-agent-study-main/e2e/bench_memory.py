@@ -91,14 +91,13 @@ def token(run: str, owner: str, what: str) -> str:
     """A word naming exactly one fact's place: found in another owner's notebook or
     injection, it crossed a boundary. It ends in a marker no part of it holds, so no token
     is a prefix of another (``f1`` of ``f10``)."""
-    return f"zq{run}-{owner}-{what}".replace("_", "") + "qz"
+    return "zq" + f"{run}-{owner}-{what}".replace("_", "").replace("qz", "q-z") + "qz"
 
 
 def owner_of(run: str, tenant: str, agent: str, session: int, per_owner: int) -> str:
     """The user a session runs as: ``per_owner`` sessions each, new users every run, so one
     run's notebooks hold only its own facts."""
-    # No part of a token may hold its end marker, or ``TOKEN`` would stop inside it.
-    return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}".replace("qz", "q-z")
+    return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}"
 
 
 def pin(composition: dict[str, Any]) -> str:
@@ -147,6 +146,8 @@ def injected_text(user: User, sid: str, run: list[dict[str, Any]]) -> str:
     """What the run's recall showed the model. The event stream carries only a count (the
     supervisor keeps memory's text off it); the run's recorded events hold the text."""
     run_id = next((e.get("turn_id") for e in run if e.get("type") == "run_start"), None)
+    if not run_id:
+        raise RuntimeError("the run's run_start event names no run (turn_id): its injection cannot be read")
     recorded = _ok(user.get(f"/v1/sessions/{sid}/runs/{run_id}/trace/events")).get("events", [])
     return " ".join(str(e["payload"].get("text", "")) for e in recorded if e.get("event_type") == "MemoryInjected")
 
@@ -235,9 +236,9 @@ def run(args: argparse.Namespace) -> bool:
     results = Path(args.results)
     results.parent.mkdir(parents=True, exist_ok=True)
     run_id, earlier = uuid.uuid4().hex[:6], []
-    if args.resume and results.exists() and (rows := _rows(results)):
-        run_id = rows[-1]["run"]  # its tokens are in the notebooks
-        earlier = [r for r in rows if r.get("run") == run_id and "final" not in r]
+    if args.resume and results.exists() and (rows := [r for r in _rows(results) if "final" not in r]):
+        run_id = rows[-1]["run"]  # the run the last session belonged to: its tokens are in the notebooks
+        earlier = [r for r in rows if r.get("run") == run_id]
     attempts: dict[tuple[str, str, int], int] = {}
     done: set[tuple[str, str, int]] = set()
     for r in earlier:
@@ -320,7 +321,13 @@ def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) ->
     if not rows:
         print("no rows")
         return False
-    finals = {r["final"]: r["notebook"] for r in every if "final" in r and "notebook" in r}  # the latest read wins
+    finals: dict[str, list[str]] = {}
+    for r in every:  # each owner's latest final read; one that failed leaves the owner unverified
+        if "final" in r:
+            if "notebook" in r:
+                finals[r["final"]] = r["notebook"]
+            else:
+                finals.pop(r["final"], None)
     by_owner: dict[str, list[Row]] = {}
     for r in rows:
         by_owner.setdefault(r["owner"], []).append(r)

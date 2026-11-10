@@ -52,9 +52,17 @@ class Replicas:
 
     async def start(self, n: int) -> list[MemoryServiceHandle]:
         """Start ``n`` more replicas at once; every replica started so far is kept running."""
-        started = await asyncio.gather(*(self._stack.enter_async_context(memory_service(self.url)) for _ in range(n)))
-        self.handles.extend(started)
-        return list(started)
+        started = await asyncio.gather(
+            *(self._stack.enter_async_context(memory_service(self.url)) for _ in range(n)), return_exceptions=True
+        )
+        # Every boot ends before a failure is raised: none is left starting into teardown, and
+        # every one that started is on the stack to be stopped.
+        failures = [s for s in started if isinstance(s, BaseException)]
+        if failures:
+            raise BaseExceptionGroup(f"{len(failures)} of {n} replicas did not start", failures)
+        handles = [s for s in started if not isinstance(s, BaseException)]
+        self.handles.extend(handles)
+        return handles
 
     def clients(self, n: int) -> list[NotebookClient]:
         """``n`` clients spread round-robin over the running replicas: one per worker."""
@@ -65,7 +73,7 @@ class Replicas:
 
 def _require_server() -> str:
     if not PG_URL:
-        if os.environ.get("MEMORY_CONCURRENCY_REQUIRED"):
+        if os.environ.get("MEMORY_CONCURRENCY_REQUIRED", "").strip().lower() in ("1", "true", "yes"):
             pytest.fail("memory concurrency tests need Postgres: set SUPERVISOR_TEST_PG_URL")
         pytest.skip("no Postgres test server (set MEMORY_TEST_PG_URL or SUPERVISOR_TEST_PG_URL)")
     return PG_URL

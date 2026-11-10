@@ -50,16 +50,17 @@ def pool_settings(environ: Mapping[str, str] = os.environ) -> dict[str, int]:
     the server's ``max_connections`` (100 by default) with room for everything else that
     connects: scaling the service out means sizing these down, or putting a pooler such as
     PgBouncer in front."""
-    def number(name: str, default: int) -> int:
+    def number(name: str, default: int, least: int) -> int:
         raw = environ.get(name, "").strip()
         if not raw:
             return default
         value = int(raw)  # a typo fails the replica's start, not its first busy minute
-        if value < 0:
-            raise ValueError(f"{name} must be 0 or more, not {value}")
+        if value < least:
+            raise ValueError(f"{name} must be {least} or more, not {value}")
         return value
 
-    return {"pool_size": number(POOL_SIZE_ENV, 5), "max_overflow": number(MAX_OVERFLOW_ENV, 10)}
+    # A pool of 0 is SQLAlchemy's "no limit": never what a connection budget means.
+    return {"pool_size": number(POOL_SIZE_ENV, 5, 1), "max_overflow": number(MAX_OVERFLOW_ENV, 10, 0)}
 
 
 def make_engine(database_url: str = "sqlite+aiosqlite:///:memory:") -> AsyncEngine:
