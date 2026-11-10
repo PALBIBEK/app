@@ -13,8 +13,8 @@ runs several sessions at once, so they write one notebook concurrently):
 
 1. **write**: the session adds ``--facts`` facts of its own and one fact all of its
    owner's sessions add, with the ``memory`` tool (no model needed). Each fact carries a
-   token naming its tenant, agent, owner and session.
-2. **recall**: a new session of the same owner asks about its facts; what was injected
+   token naming its run, owner (so its tenant and agent), session and attempt.
+2. **recall**: a new session of the same owner asks about its facts. What was injected
    (``MemoryInjected``) is recorded, and two times: the recall step itself (the first
    model step's ``turn_start`` to ``MemoryInjected``, the target's measure) and the whole
    wait before the model is called (``run_start`` to ``MemoryInjected``: the audience
@@ -24,14 +24,21 @@ runs several sessions at once, so they write one notebook concurrently):
    in plain words, with automatic capture after ``--quiet`` seconds of quiet; the time
    until the fact is in the owner's notebook is the capture lag.
 
-Then the checks: every fact, the owner's shared one included, is in its owner's notebook
-exactly once (lost, duplicated); each session's own facts are in its owner's next recall
-(unrecalled), and a run that recalls nothing is a session error;
-no notebook or injection holds another tenant's or owner's token (crossed); and the
-latencies against the targets. A run is fresh unless ``--resume`` is given: it then goes
-on with the file's last run, skipping its finished sessions and retrying its failed ones.
-A report scores one run (the file's last, or ``--run``). Both subcommands exit 1 when a
-target fails.
+When every session is done, each owner's notebook is read once more, and the checks run
+on that final read:
+
+* every fact a session wrote, and its owner's shared fact, is there exactly once (lost,
+  duplicated); an owner whose final read failed is *unverified*, never scored from an
+  earlier, partial read;
+* each session's own facts were in its owner's next recall, when recall had room
+  (unrecalled); a run that recalled nothing is a session error;
+* no notebook or injection holds another owner's token (crossed);
+* the latencies are within their targets; a target with no measurement fails.
+
+A run is fresh unless ``--resume`` is given: it then goes on with the file's last run,
+skipping its finished sessions and running its failed ones again (as a new attempt, with
+tokens of its own). A report scores one run (the file's last, or ``--run``), each session
+by its latest attempt. Both subcommands exit 1 when a check fails.
 """
 
 from __future__ import annotations
@@ -44,42 +51,44 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from client import User, payloads, runs_ended
 
+try:  # the stack's own Python has the supervisor installed: its budget, not a copy
+    from supervisor.memory_service.notebooks.types import RECALL_MAX_CHARS
+except ImportError:  # pragma: no cover — run with another interpreter
+    RECALL_MAX_CHARS = 6_000
+
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "memory_bench" / "results" / "results.jsonl"
 TARGETS = {
-    "recall_ms_p95": 150,  # recall added to a run's first model step
+    "recall_ms_p95": 150,  # the recall step of a run's first model step
     "lost": 0,
     "duplicated": 0,
     "crossed": 0,
-    "unrecalled": 0,  # a session's own facts missing from its owner's next recall, when recall had room
+    "unrecalled": 0,
+    "unverified": 0,
 }
-RECALL_BUDGET_CHARS = 6_000
-"""Recall's default budget (``supervisor.memory_service.notebooks.types.RECALL_MAX_CHARS``):
-an injection near it may have left facts out by rank, which is not a lost fact."""
 """``docs/memory-gaps.md``'s targets. Capture lag's is 2 × the quiet window + 30 s."""
+ROOM = 0.9
+"""An injection shorter than this share of recall's budget had room for every fact, so a
+missing one was not ranked out: it is unrecalled."""
+TOKEN = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
+"""Every token in a text (``token``'s shape), read once instead of searched per token."""
 _WRITE = threading.Lock()
+
+type Row = dict[str, Any]
 
 
 def token(run: str, owner: str, what: str) -> str:
-    """A word naming exactly one fact's place (the owner's name holds its tenant and agent):
-    found in another owner's notebook or injection, it crossed a boundary. It ends in a
-    marker no part of it holds, so no token is a prefix of another (``f1`` of ``f10``)."""
+    """A word naming exactly one fact's place: found in another owner's notebook or
+    injection, it crossed a boundary. It ends in a marker no part of it holds, so no token
+    is a prefix of another (``f1`` of ``f10``)."""
     return f"zq{run}-{owner}-{what}".replace("_", "") + "qz"
-
-
-TOKEN = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
-"""Every token in a text (``token``'s shape), read once instead of searched per token."""
-
-
-def count(word: str, texts: list[str]) -> int:
-    """How many of ``texts`` hold ``word``."""
-    return sum(word in text for text in texts)
 
 
 def owner_of(run: str, tenant: str, agent: str, session: int, per_owner: int) -> str:
@@ -92,14 +101,14 @@ def pin(composition: dict[str, Any]) -> str:
     return f"composition:{composition['artifact_id']}@{composition['digest']}"
 
 
-def turn(user: User, sid: str, text: str, n: int, timeout: float) -> list[dict[str, Any]]:
-    """Send message ``n`` of the session and return the events of its run."""
-    r = user.say(sid, text)
-    if r.status_code != 202:
-        raise RuntimeError(f"message {r.status_code}: {r.text[:200]}")
-    events = user.wait(sid, runs_ended(n), timeout=timeout)
-    starts = [i for i, e in enumerate(events) if e.get("type") == "run_start"]
-    return events[starts[n - 1] :] if len(starts) >= n else events
+# --- talking to the stack ---------------------------------------------------------------
+
+
+def _ok(response: Any) -> Any:
+    """The JSON of a successful answer; a refusal or an outage raises with what it said."""
+    if response.status_code != 200:
+        raise RuntimeError(f"{response.request.url.path} {response.status_code}: {response.text[:200]}")
+    return response.json()
 
 
 def session(user: User, composition: dict[str, Any], model: str | None = None, **memory: Any) -> str:
@@ -112,19 +121,22 @@ def session(user: User, composition: dict[str, Any], model: str | None = None, *
     return str(r.json()["session_id"])
 
 
+def turn(user: User, sid: str, text: str, n: int, timeout: float) -> list[dict[str, Any]]:
+    """Send message ``n`` of the session and return the events of its run."""
+    r = user.say(sid, text)
+    if r.status_code != 202:
+        raise RuntimeError(f"message {r.status_code}: {r.text[:200]}")
+    events = user.wait(sid, runs_ended(n), timeout=timeout)
+    starts = [i for i, e in enumerate(events) if e.get("type") == "run_start"]
+    return events[starts[n - 1] :] if len(starts) >= n else events
+
+
 def notebook_facts(user: User, composition: dict[str, Any]) -> list[str]:
     """Every fact text in the owner's notebooks for this agent."""
     texts: list[str] = []
     for nb in _ok(user.get("/v1/memory/notebooks", params={"agent_pin": pin(composition)})):
         texts += [str(f.get("text", "")) for f in _ok(user.get(f"/v1/memory/notebooks/{nb['id']}/facts"))]
     return texts
-
-
-def _ok(response: Any) -> Any:
-    """The JSON of a successful answer; a refusal or an outage raises with what it said."""
-    if response.status_code != 200:
-        raise RuntimeError(f"{response.request.url.path} {response.status_code}: {response.text[:200]}")
-    return response.json()
 
 
 def injected_text(user: User, sid: str, run: list[dict[str, Any]]) -> str:
@@ -142,17 +154,37 @@ def since(run: list[dict[str, Any]], start: str, end: str = "memory_injected") -
     return shown - began if began is not None and shown is not None else None
 
 
-def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composition: dict[str, Any], s: int) -> dict[str, Any]:
-    """One session's whole script: what ``report`` checks."""
+def wait_for_capture(user: User, composition: dict[str, Any], said: str, began: float, args: argparse.Namespace) -> float | None:
+    """Seconds from ``began`` until ``said`` is in the owner's notebook, or None by the
+    deadline. Polls back off, and a failed poll is retried, not a failed session: polling
+    must neither load the stack it measures nor turn a transient error into a lost fact."""
+    deadline, wait = began + 2 * args.quiet + 120, 1.0
+    time.sleep(args.quiet)  # nothing is captured before the quiet window ends
+    while time.time() < deadline:
+        try:
+            if any(said in f for f in notebook_facts(user, composition)):
+                return round(time.time() - began, 1)
+        except RuntimeError:
+            pass  # a refused or failed read: the next poll asks again
+        time.sleep(wait)
+        wait = min(wait * 2, 10.0)
+    return None
+
+
+# --- one session ------------------------------------------------------------------------
+
+
+def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composition: dict[str, Any], s: int,
+         attempt: int) -> Row:
+    """One session's whole script, as one result row."""
     owner = owner_of(run_id, tenant, agent, s, args.per_owner)
     user = User(tenant, owner)
-    mine = [token(run_id, owner, f"s{s}f{i}") for i in range(args.facts)]
-    shared = token(run_id, owner, "shared")
-    out: dict[str, Any] = {"tenant": tenant, "agent": agent, "session": s, "owner": owner, "error": None, "mine": mine,
-                           "shared": shared}
+    mine = [token(run_id, owner, f"s{s}a{attempt}f{i}") for i in range(args.facts)]
+    out: Row = {"run": run_id, "tenant": tenant, "agent": agent, "session": s, "attempt": attempt, "owner": owner,
+                "mine": mine, "shared": token(run_id, owner, "shared"), "error": None}
     try:
         sid = session(user, composition)
-        facts = [{"text": f"The locker word is {t}."} for t in [*mine, shared]]
+        facts = [{"text": f"The locker word is {t}."} for t in [*mine, out["shared"]]]
         run = turn(user, sid, "/tool memory " + json.dumps({"action": "add", "facts": facts}), 1, args.timeout)
         ends = payloads(run, "ToolEnd")
         out["write_ok"] = bool(ends) and (ends[0].get("result") or {}).get("ok") is True
@@ -166,73 +198,20 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
         out["injected"] = injected_text(user, later, run)
 
         if args.capture_model:
-            said = token(run_id, owner, f"s{s}said")
-            talker = User(tenant, owner)
-            spoke = session(talker, composition, args.capture_model, capture_quiet_s=args.quiet, capture_max_turns=1)
+            out["said"] = token(run_id, owner, f"s{s}a{attempt}said")
+            spoke = session(user, composition, args.capture_model, capture_quiet_s=args.quiet, capture_max_turns=1)
             began = time.time()
-            turn(talker, spoke, f"Please remember for later: my locker word is {said}.", 1, args.timeout)
-            deadline, wait = began + 2 * args.quiet + 120, 1.0
-            time.sleep(args.quiet)  # nothing is captured before the quiet window ends
-            while time.time() < deadline:
-                if any(said in f for f in notebook_facts(user, composition)):
-                    out["capture_s"] = round(time.time() - began, 1)
-                    break
-                time.sleep(wait)
-                wait = min(wait * 2, 10.0)  # backing off: polling must not load the stack it measures
-            out["said"] = said
-        out["notebook"] = notebook_facts(user, composition)
+            turn(user, spoke, f"Please remember for later: my locker word is {out['said']}.", 1, args.timeout)
+            out["capture_s"] = wait_for_capture(user, composition, out["said"], began, args)
     except Exception as exc:  # noqa: BLE001 — a session's failure is its row, the load goes on
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
-def run(args: argparse.Namespace) -> bool:
-    """Run the load and report it; whether every target holds."""
-    results = Path(args.results)
-    results.parent.mkdir(parents=True, exist_ok=True)
-    done: set[tuple[str, str, int]] = set()
-    run_id = uuid.uuid4().hex[:6]
-    if args.resume and results.exists():
-        rows = _rows(results)
-        run_id = rows[-1]["run"] if rows else run_id  # its tokens are in the notebooks
-        done = {
-            (r["tenant"], r["agent"], int(r["session"]))
-            for r in rows
-            if r.get("run") == run_id and "final" not in r and not r.get("error")  # a failed session runs again
-        }
-    tenants = [f"bench{t}" for t in range(args.tenants)]
-    names = args.compositions.split(",")
-    compositions = {name: User(tenants[0], "bench-admin").latest("composition", name) for name in names}
-    cells = [(t, a, s) for t in tenants for a in names for s in range(args.sessions)]
-    todo = [c for c in cells if c not in done]
-    print(f"run {run_id}: {len(cells)} sessions ({len(tenants)} tenants x {len(names)} agents x {args.sessions}), "
-          f"{len(cells) - len(todo)} already done", flush=True)
-    began = time.time()
-
-    def one(c: tuple[str, str, int]) -> None:
-        row = cell(args, run_id, c[0], c[1], compositions[c[1]], c[2]) | {"run": run_id}
-        with _WRITE, results.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
-        if row["error"]:
-            print(f"  {c[0]}/{c[1]}/{c[2]}: {row['error'][:160]}", flush=True)
-
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        list(pool.map(one, todo))
-    # Once every session is done: each owner's notebook as it finally is (a session that
-    # ended early read it before its owner's other sessions wrote).
-    owners = sorted({(t, a, owner_of(run_id, t, a, s, args.per_owner)) for t, a, s in cells})
-    with results.open("a", encoding="utf-8") as f:
-        for t, a, owner in owners:
-            try:
-                final: dict[str, Any] = {"notebook": notebook_facts(User(t, owner), compositions[a])}
-            except Exception as exc:  # noqa: BLE001 — reported; the scorecard then uses the sessions' reads
-                final = {"error": f"{type(exc).__name__}: {exc}"}
-            f.write(json.dumps({"run": run_id, "final": owner, "tenant": t, "agent": a} | final) + "\n")
-    print(f"done in {time.time() - began:.0f}s", flush=True)
-    return report([str(results)], quiet_s=args.quiet, run_id=run_id)
+# --- the run ----------------------------------------------------------------------------
 
 
-def _rows(path: Path) -> list[dict[str, Any]]:
+def _rows(path: Path) -> list[Row]:
     """The results file's rows; a line cut off by a crash (or a full disk) is skipped."""
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -243,61 +222,128 @@ def _rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def run(args: argparse.Namespace) -> bool:
+    """Run the load and report it; whether every check holds."""
+    results = Path(args.results)
+    results.parent.mkdir(parents=True, exist_ok=True)
+    run_id, earlier = uuid.uuid4().hex[:6], []
+    if args.resume and results.exists() and (rows := _rows(results)):
+        run_id = rows[-1]["run"]  # its tokens are in the notebooks
+        earlier = [r for r in rows if r.get("run") == run_id and "final" not in r]
+    attempts: dict[tuple[str, str, int], int] = {}
+    done: set[tuple[str, str, int]] = set()
+    for r in earlier:
+        key = (r["tenant"], r["agent"], int(r["session"]))
+        attempts[key] = max(attempts.get(key, 0), int(r.get("attempt", 1)))
+        if not r.get("error"):
+            done.add(key)
+    tenants = [f"bench{t}" for t in range(args.tenants)]
+    names = args.compositions.split(",")
+    compositions = {name: User(tenants[0], "bench-admin").latest("composition", name) for name in names}
+    cells = [(t, a, s) for t in tenants for a in names for s in range(args.sessions)]
+    todo = [c for c in cells if c not in done]
+    print(f"run {run_id}: {len(cells)} sessions ({len(tenants)} tenants x {len(names)} agents x {args.sessions}), "
+          f"{len(cells) - len(todo)} already done", flush=True)
+    began = time.time()
+
+    def write(row: Row) -> None:
+        with _WRITE, results.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+
+    def one(c: tuple[str, str, int]) -> None:
+        row = cell(args, run_id, c[0], c[1], compositions[c[1]], c[2], attempts.get(c, 0) + 1)
+        write(row)
+        if row["error"]:
+            print(f"  {c[0]}/{c[1]}/{c[2]}: {row['error'][:160]}", flush=True)
+
+    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+        list(pool.map(one, todo))
+    # Each owner's notebook once every session is done (a session that ended early read it
+    # before its owner's other sessions wrote): what lost and duplicated are judged on.
+    for t, a, owner in sorted({(t, a, owner_of(run_id, t, a, s, args.per_owner)) for t, a, s in cells}):
+        final: Row = {"run": run_id, "final": owner, "tenant": t, "agent": a}
+        try:
+            final["notebook"] = notebook_facts(User(t, owner), compositions[a])
+        except Exception as exc:  # noqa: BLE001 — the owner is then unverified, not scored
+            final["error"] = f"{type(exc).__name__}: {exc}"
+        write(final)
+    print(f"done in {time.time() - began:.0f}s", flush=True)
+    return report([str(results)], quiet_s=args.quiet, run_id=run_id)
+
+
+# --- the scorecard ----------------------------------------------------------------------
+
+
 def pct(values: list[float], q: float) -> float:
     ordered = sorted(values)
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)] if ordered else float("nan")
 
 
+def count(word: str, texts: Iterable[str]) -> int:
+    """How many of ``texts`` hold ``word``."""
+    return sum(word in text for text in texts)
+
+
+def within(value: float | None, limit: float) -> bool:
+    """A measurement within its target; no measurement (None, NaN) is not within it."""
+    return value is not None and not (isinstance(value, float) and math.isnan(value)) and value <= limit
+
+
 def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) -> bool:
-    """One run's scorecard (``run_id``, else the last run in the files); whether every
-    target holds."""
+    """One run's scorecard (``run_id``, else the last run in the files), each session by its
+    latest attempt; whether every check holds."""
     every = [row for p in paths for row in _rows(Path(p))]
     run_id = run_id or (every[-1]["run"] if every else None)
     every = [r for r in every if r.get("run") == run_id]
-    rows = [r for r in every if "final" not in r]
-    finals = {r["final"]: r["notebook"] for r in every if "final" in r and "notebook" in r}  # the latest read wins
+    latest: dict[tuple[str, str, int], Row] = {}
+    for r in every:
+        if "final" not in r:
+            key = (r["tenant"], r["agent"], int(r["session"]))
+            if int(r.get("attempt", 1)) >= int(latest.get(key, {}).get("attempt", 0)):
+                latest[key] = r
+    rows = list(latest.values())
     if not rows:
         print("no rows")
         return False
-    lost = duplicated = crossed = unrecalled = 0
-    owner_by_token = {t: r["owner"] for r in rows for t in [*r.get("mine", []), r.get("shared", "")] if t}
-    latest: dict[str, list[str]] = dict(finals)  # each owner's notebook once every session ended
+    finals = {r["final"]: r["notebook"] for r in every if "final" in r and "notebook" in r}  # the latest read wins
+    by_owner: dict[str, list[Row]] = {}
     for r in rows:
-        if not r.get("error"):
-            latest.setdefault(r["owner"], r.get("notebook", []))
-            seen = set(TOKEN.findall(" ".join(r.get("notebook", [])) + " " + r.get("injected", "")))
-            crossed += sum(1 for t in seen if owner_by_token.get(t, r["owner"]) != r["owner"])
-            # Written before its later session started, so that session's recall shows them
-            # (unless recall ran out of room and ranked them out, which is not a loss).
-            injected = r.get("injected", "")
-            if len(injected) < 0.9 * RECALL_BUDGET_CHARS:
-                unrecalled += any(t not in injected for t in r.get("mine", []))
-    for r in rows:
-        if r.get("error") or r["owner"] not in latest:
+        by_owner.setdefault(r["owner"], []).append(r)
+    owner_by_token = {t: r["owner"] for r in every if "final" not in r for t in [*r.get("mine", []), r.get("shared", "")]}
+
+    lost = duplicated = crossed = unrecalled = unverified = 0
+    for owner, sessions in by_owner.items():
+        writers = [r for r in sessions if r.get("write_ok")]
+        if owner not in finals:
+            unverified += bool(writers)  # no final read: nothing about it is scored
             continue
-        for t in r.get("mine", []):
-            n = count(t, latest[r["owner"]])
+        notebook = finals[owner]
+        for t in [t for r in writers for t in r["mine"]] + ([writers[0]["shared"]] if writers else []):
+            n = count(t, notebook)
             lost += n == 0
             duplicated += n > 1
-    for owner, texts in latest.items():  # the fact all of an owner's sessions added, once
-        wrote = [r for r in rows if r["owner"] == owner and r.get("write_ok")]
-        if not wrote:
-            continue  # none of the owner's sessions got as far as writing
-        n = count(wrote[0]["shared"], texts)
-        lost += n == 0
-        duplicated += n > 1
+        seen = set(TOKEN.findall(" ".join(notebook) + " " + " ".join(r.get("injected", "") for r in sessions)))
+        crossed += sum(1 for t in seen if owner_by_token.get(t, owner) != owner)
+    for r in rows:
+        injected = r.get("injected")
+        if r.get("error") or injected is None or len(injected) >= ROOM * RECALL_MAX_CHARS:
+            continue  # recall ran out of room: a fact ranked out of it is not unrecalled
+        unrecalled += any(t not in injected for t in r["mine"])
+
     recalls = [float(r["recall_ms"]) for r in rows if r.get("recall_ms") is not None]
     firsts = [float(r["first_step_ms"]) for r in rows if r.get("first_step_ms") is not None]
-    captures = [float(r["capture_s"]) for r in rows if r.get("capture_s") is not None]
     asked = [r for r in rows if r.get("said")]
+    captures = [float(r["capture_s"]) for r in asked if r.get("capture_s") is not None]
     errors = [r for r in rows if r.get("error")]
     score = {
         "sessions": len(rows),
+        "retried": sum(1 for r in rows if int(r.get("attempt", 1)) > 1),
         "errors": len(errors),
         "lost": lost,
         "duplicated": duplicated,
         "crossed": crossed,
         "unrecalled": unrecalled,
+        "unverified": unverified,
         "recall_ms_p50": pct(recalls, 0.5),
         "recall_ms_p95": pct(recalls, 0.95),
         "first_step_ms_p50": pct(firsts, 0.5),
@@ -306,13 +352,10 @@ def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) ->
         "capture_s_p95": pct(captures, 0.95) if asked else None,
         "captured": f"{len(captures)}/{len(asked)}" if asked else None,
     }
-    capture_target = 2 * quiet_s + 30
-    checks = {
-        "no session errors": not errors,
-        **{f"{k} <= {v}": (score[k] <= v) for k, v in TARGETS.items() if not (isinstance(score[k], float) and math.isnan(score[k]))},
-        **({f"capture_s_p95 <= {capture_target:g}": score["capture_s_p95"] <= capture_target,
-            "every stated fact captured": len(captures) == len(asked)} if asked else {}),
-    }
+    checks = {"no session errors": not errors, **{f"{k} <= {v}": within(score[k], v) for k, v in TARGETS.items()}}
+    if asked:
+        checks[f"capture_s_p95 <= {2 * quiet_s + 30:g}"] = within(score["capture_s_p95"], 2 * quiet_s + 30)
+        checks["every stated fact captured"] = len(captures) == len(asked)
     print(json.dumps(score, indent=2))
     for name, ok in checks.items():
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
