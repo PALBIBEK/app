@@ -26,7 +26,7 @@ from contextlib import AsyncExitStack
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from supervisor.memory.client import NotebookClient
@@ -74,7 +74,7 @@ async def replicas() -> AsyncIterator[Replicas]:
         await conn.execute(text(f'CREATE DATABASE "{name}"'))
     try:
         async with AsyncExitStack() as stack:
-            yield Replicas(f"{server.rpartition('/')[0]}/{name}", stack)
+            yield Replicas(make_url(server).set(database=name).render_as_string(hide_password=False), stack)
     finally:
         async with admin.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))

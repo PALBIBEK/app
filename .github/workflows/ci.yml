@@ -194,6 +194,12 @@ jobs:
             fi
             exit 1
           }
+      - name: Memory concurrency, 20 runs in a row (a race that fails once in twenty fails daily at scale)
+        # docs/memory-gaps.md, G0: memory's concurrency tests on this job's Postgres, each run 20
+        # times; once, on the first half's runner, since they need no split.
+        if: matrix.group == 1
+        working-directory: ${{ env.PROJECT }}/services/supervisor
+        run: timeout --signal=INT --kill-after=60 15m pytest -q -rfE --count 20 tests/memory_store/test_memory_concurrency.py
 
   e2e:
     runs-on: ubuntu-latest

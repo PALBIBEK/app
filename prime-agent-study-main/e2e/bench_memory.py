@@ -25,9 +25,11 @@ runs several sessions at once, so they write one notebook concurrently):
    until the fact is in the owner's notebook is the capture lag.
 
 Then the checks: every fact, the owner's shared one included, is in its owner's notebook
-exactly once (lost, duplicated);
+exactly once (lost, duplicated); each session's own facts are in its owner's next recall
+(unrecalled), and a run that recalls nothing is a session error;
 no notebook or injection holds another tenant's or owner's token (crossed); and the
 latencies against the targets. Cells already in the results file are skipped (resume).
+Both subcommands exit 1 when a target fails.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ TARGETS = {
     "lost": 0,
     "duplicated": 0,
     "crossed": 0,
+    "unrecalled": 0,  # a session's own facts missing from its owner's next recall
 }
 """``docs/memory-gaps.md``'s targets. Capture lag's is 2 × the quiet window + 30 s."""
 _WRITE = threading.Lock()
@@ -59,8 +62,20 @@ _WRITE = threading.Lock()
 
 def token(run: str, owner: str, what: str) -> str:
     """A word naming exactly one fact's place (the owner's name holds its tenant and agent):
-    found in another owner's notebook or injection, it crossed a boundary."""
-    return f"zq{run}-{owner}-{what}".replace("_", "")
+    found in another owner's notebook or injection, it crossed a boundary. It ends in a
+    marker no part of it holds, so no token is a prefix of another (``f1`` of ``f10``)."""
+    return f"zq{run}-{owner}-{what}".replace("_", "") + "qz"
+
+
+def count(word: str, texts: list[str]) -> int:
+    """How many of ``texts`` hold ``word``."""
+    return sum(word in text for text in texts)
+
+
+def owner_of(run: str, tenant: str, agent: str, session: int, per_owner: int) -> str:
+    """The user a session runs as: ``per_owner`` sessions each, new users every run, so one
+    run's notebooks hold only its own facts."""
+    return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}"
 
 
 def pin(composition: dict[str, Any]) -> str:
@@ -102,6 +117,14 @@ def _ok(response: Any) -> Any:
     return response.json()
 
 
+def injected_text(user: User, sid: str, run: list[dict[str, Any]]) -> str:
+    """What the run's recall showed the model. The event stream carries only a count (the
+    supervisor keeps memory's text off it); the run's recorded events hold the text."""
+    run_id = next((e.get("turn_id") for e in run if e.get("type") == "run_start"), None)
+    recorded = _ok(user.get(f"/v1/sessions/{sid}/runs/{run_id}/trace/events")).get("events", [])
+    return " ".join(str(e["payload"].get("text", "")) for e in recorded if e.get("event_type") == "MemoryInjected")
+
+
 def since(run: list[dict[str, Any]], start: str, end: str = "memory_injected") -> int | None:
     """Milliseconds from the run's first ``start`` event to its first ``end`` event."""
     began = next((e["ts_ms"] for e in run if e.get("type") == start), None)
@@ -111,7 +134,7 @@ def since(run: list[dict[str, Any]], start: str, end: str = "memory_injected") -
 
 def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composition: dict[str, Any], s: int) -> dict[str, Any]:
     """One session's whole script: what ``report`` checks."""
-    owner = f"{tenant}-{agent}-u{s // args.per_owner:03d}"
+    owner = owner_of(run_id, tenant, agent, s, args.per_owner)
     user = User(tenant, owner)
     mine = [token(run_id, owner, f"s{s}f{i}") for i in range(args.facts)]
     shared = token(run_id, owner, "shared")
@@ -126,9 +149,11 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
 
         later = session(user, composition)
         run = turn(user, later, "What are my locker words?", 1, args.timeout)
+        if not payloads(run, "MemoryInjected"):
+            raise RuntimeError("the later session's run recalled nothing (no MemoryInjected)")
         out["recall_ms"] = since(run, "turn_start")  # the recall step itself
         out["first_step_ms"] = since(run, "run_start")  # with the checkpoint and the step's scheduling
-        out["injected"] = " ".join(str(p.get("text", "")) for p in payloads(run, "MemoryInjected"))
+        out["injected"] = injected_text(user, later, run)
 
         if args.capture_model:
             said = token(run_id, owner, f"s{s}said")
@@ -149,7 +174,8 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
     return out
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> bool:
+    """Run the load and report it; whether every target holds."""
     results = Path(args.results)
     results.parent.mkdir(parents=True, exist_ok=True)
     done: set[tuple[str, str, int]] = set()
@@ -183,7 +209,7 @@ def run(args: argparse.Namespace) -> None:
         list(pool.map(one, todo))
     # Once every session is done: each owner's notebook as it finally is (a session that
     # ended early read it before its owner's other sessions wrote).
-    owners = sorted({(t, a, f"{t}-{a}-u{s // args.per_owner:03d}") for t, a, s in cells})
+    owners = sorted({(t, a, owner_of(run_id, t, a, s, args.per_owner)) for t, a, s in cells})
     with results.open("a", encoding="utf-8") as f:
         for t, a, owner in owners:
             try:
@@ -192,7 +218,7 @@ def run(args: argparse.Namespace) -> None:
                 final = {"error": f"{type(exc).__name__}: {exc}"}
             f.write(json.dumps({"run": run_id, "final": owner, "tenant": t, "agent": a} | final) + "\n")
     print(f"done in {time.time() - began:.0f}s", flush=True)
-    report([str(results)], quiet_s=args.quiet)
+    return report([str(results)], quiet_s=args.quiet)
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -219,24 +245,28 @@ def report(paths: list[str], quiet_s: float = 5.0) -> bool:
     if not rows:
         print("no rows")
         return False
-    lost = duplicated = crossed = 0
-    owner_of = {t: r["owner"] for r in rows for t in [*r.get("mine", []), r.get("shared", "")] if t}
+    lost = duplicated = crossed = unrecalled = 0
+    owner_by_token = {t: r["owner"] for r in rows for t in [*r.get("mine", []), r.get("shared", "")] if t}
     latest: dict[str, list[str]] = dict(finals)  # each owner's notebook once every session ended
     for r in rows:
         if not r.get("error"):
             latest.setdefault(r["owner"], r.get("notebook", []))
             seen = " ".join(r.get("notebook", [])) + " " + r.get("injected", "")
-            crossed += sum(1 for t, owner in owner_of.items() if owner != r["owner"] and t in seen)
+            crossed += sum(1 for t, owner in owner_by_token.items() if owner != r["owner"] and t in seen)
+            # Written before its later session started, so that session's recall shows them.
+            unrecalled += any(t not in r.get("injected", "") for t in r.get("mine", []))
     for r in rows:
         if r.get("error") or r["owner"] not in latest:
             continue
         for t in r.get("mine", []):
-            n = sum(t in f for f in latest[r["owner"]])
+            n = count(t, latest[r["owner"]])
             lost += n == 0
             duplicated += n > 1
     for owner, texts in latest.items():  # the fact all of an owner's sessions added, once
-        shared = next((r["shared"] for r in rows if r["owner"] == owner), "")
-        n = sum(shared in f for f in texts)
+        wrote = [r for r in rows if r["owner"] == owner and r.get("write_ok")]
+        if not wrote:
+            continue  # none of the owner's sessions got as far as writing
+        n = count(wrote[0]["shared"], texts)
         lost += n == 0
         duplicated += n > 1
     recalls = [float(r["recall_ms"]) for r in rows if r.get("recall_ms") is not None]
@@ -250,6 +280,7 @@ def report(paths: list[str], quiet_s: float = 5.0) -> bool:
         "lost": lost,
         "duplicated": duplicated,
         "crossed": crossed,
+        "unrecalled": unrecalled,
         "recall_ms_p50": pct(recalls, 0.5),
         "recall_ms_p95": pct(recalls, 0.95),
         "first_step_ms_p50": pct(firsts, 0.5),
@@ -291,10 +322,8 @@ def main() -> int:
     show.add_argument("paths", nargs="*", default=[str(RESULTS)])
     show.add_argument("--quiet", type=float, default=5.0)
     args = parser.parse_args()
-    if args.command == "run":
-        run(args)
-        return 0
-    return 0 if report(args.paths, quiet_s=args.quiet) else 1
+    passed = run(args) if args.command == "run" else report(args.paths, quiet_s=args.quiet)
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

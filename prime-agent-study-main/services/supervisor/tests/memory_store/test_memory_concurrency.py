@@ -118,11 +118,16 @@ async def test_a_capture_waits_only_on_its_own_notebooks_lock(replicas: Replicas
                 update(NotebookRow).where(NotebookRow.id == a.id).values(revision=NotebookRow.revision)
             )  # the same no-op write that is the store's lock, held open
             waiting = asyncio.create_task(first.capture(a.id, ["Waits for the lock"], context=OWN))
-            assert await asyncio.wait_for(second.capture(b.id, ["Never waits"], context=OWN), 10) == 1
-            await asyncio.sleep(0.5)
-            assert not waiting.done(), "a capture into the locked notebook waits"
-            await holder.rollback()
-        assert await asyncio.wait_for(waiting, 10) == 1
+            try:
+                assert await asyncio.wait_for(second.capture(b.id, ["Never waits"], context=OWN), 10) == 1
+                await asyncio.sleep(0.5)
+                assert not waiting.done(), "a capture into the locked notebook waits"
+                await holder.rollback()
+                assert await asyncio.wait_for(waiting, 10) == 1
+            finally:  # never left running into the next test, whatever failed
+                if not waiting.done():
+                    waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
     finally:
         await engine.dispose()
     assert [f.text for f in await first.facts(a.id)] == ["Waits for the lock"]
@@ -130,7 +135,8 @@ async def test_a_capture_waits_only_on_its_own_notebooks_lock(replicas: Replicas
 
 async def test_extraction_jobs_claimed_by_many_processors_each_run_once(replicas: Replicas) -> None:
     """Eight processors (one per replica, as each replica's extraction worker is) drain
-    twenty sessions' jobs at once: every job runs exactly once and ends done."""
+    twenty sessions' jobs at once, three at a time, so their claims really contend: every
+    job runs exactly once and ends done, and more than one processor did the work."""
     processors = [MemoryService(database_url=replicas.url, extractor=scripted_extractor()) for _ in range(8)]
     await asyncio.gather(*(p.startup() for p in processors))
     try:
@@ -141,11 +147,26 @@ async def test_extraction_jobs_claimed_by_many_processors_each_run_once(replicas
             processors[n % 8].append(handle.id, "turn/end", {})
             await processors[n % 8].flush(handle.id)
 
-        ran = await run_workers(8, lambda i: processors[i].process_extraction_jobs())
+        async def drain(i: int) -> int:
+            ran = 0
+            while batch := await processors[i].process_extraction_jobs(limit=3):
+                ran += batch
+            return ran
 
-        async with processors[0]._factory() as db:
-            statuses = dict((await db.execute(select(ExtractionJobRow.status, func.count()).group_by(ExtractionJobRow.status))).all())
+        ran = await run_workers(8, drain)
+
+        engine = create_async_engine(replicas.url)
+        try:
+            async with engine.connect() as conn:
+                statuses = dict(
+                    (await conn.execute(select(ExtractionJobRow.status, func.count()).group_by(ExtractionJobRow.status))).all()
+                )
+        finally:
+            await engine.dispose()
+        backlog = await processors[0].metrics_snapshot()
         assert sum(ran) == 20, f"each job ran once: {ran}"
         assert statuses == {"done": 20}
+        assert backlog["extraction_backlog"] == backlog["extraction_jobs_failed"] == 0
+        assert sum(1 for n in ran if n) > 1, f"the claims contended: {ran}"
     finally:
         await asyncio.gather(*(p.aclose() for p in processors))
