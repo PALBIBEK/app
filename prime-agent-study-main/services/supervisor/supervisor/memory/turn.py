@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import logging
 import random
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -47,7 +48,13 @@ from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.resolution import resolve
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
-from supervisor.memory.transcript import Item, TranscriptBudget, condense, run_items
+from supervisor.memory.transcript import (
+    WITHHELD_RESULT,
+    Item,
+    TranscriptBudget,
+    condense,
+    run_items,
+)
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
@@ -476,7 +483,12 @@ RETRY_PAUSE_S: Final = 1.0
 """The pause before retrying a failure that may pass, doubled before each later one and
 jittered, so every capture failing at once does not retry at once."""
 MAX_RETRY_PAUSE_S: Final = 30.0
-"""The longest a capture waits on a provider's ``Retry-After``."""
+"""The longest a capture waits on a provider's ``Retry-After``; one asking for longer is
+not retried."""
+RETRY_WINDOW_S: Final = 240.0
+"""No retry starts past this long into a capture's extraction: the capture activity has
+ten minutes (``temporal.policies``) for extraction, resolution and the save, and one that
+ran out would be retried whole, its calls made and charged again."""
 
 
 async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
@@ -492,7 +504,7 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
     * anything else (a refused key, a spent budget, an unknown model): not at all, since
       it would fail the same way, and each call may be charged.
     """
-    budget = 1
+    budget, began = 1, time.monotonic()
     # Condensing is CPU work that grows with the burst (megabytes of tool output are
     # re-encoded at each stage): off the loop, which carries every other session's steps.
     condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
@@ -517,9 +529,13 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
             elif is_retryable(exc):
                 backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
                 asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit
-                # A provider's wait, when it asks for one longer than ours; never shorter
-                # (a 0 would retry at once, into the same rate limit), never past the cap.
-                pause = min(MAX_RETRY_PAUSE_S, max(backoff, asked) if isinstance(asked, (int, float)) else backoff)
+                # A provider's wait, when it asks for one longer than ours; never shorter (a 0
+                # would retry at once, into the same rate limit). One longer than the cap is
+                # not waited for, nor retried early into the limit (classify.retry_delay too).
+                wait = max(backoff, asked) if isinstance(asked, (int, float)) else backoff
+                pause = wait if wait <= MAX_RETRY_PAUSE_S else None
+            if pause is not None and time.monotonic() + pause - began > RETRY_WINDOW_S:
+                pause = None  # inside the capture activity's limit, with resolution and the save to come
             again = pause is not None and attempt < CAPTURE_ATTEMPTS
             logger.warning(
                 "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",
@@ -537,7 +553,9 @@ def _learnable(said: Exchange, steps: Sequence[Item]) -> bool:
     """Whether a run gives an extraction anything to learn from: the user's words, or work
     done (a tool's result). A run with neither (an image alone, or nothing in this audience)
     costs no extraction call."""
-    return bool(said.input) or any(item["type"] == "tool_result" for item in steps)
+    return bool(said.input) or any(
+        item["type"] == "tool_result" and item["content"] != WITHHELD_RESULT for item in steps
+    )  # a withheld lookup (memory, history) is not work the extractor could read
 
 
 def _said(run: Sequence[Envelope]) -> Exchange:

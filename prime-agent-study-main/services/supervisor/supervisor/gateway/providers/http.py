@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.cookiejar
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -75,7 +76,9 @@ class HttpUpstream:
         ``timeout_s`` (read then, once: an upstream's connection settings are fixed)."""
         with self._lock:
             if self._client is None or self._client.is_closed:
-                self._client = httpx.Client(transport=self.transport, timeout=self.timeout_s, limits=_LIMITS)
+                self._client = httpx.Client(
+                    transport=self.transport, timeout=self.timeout_s, limits=_LIMITS, cookies=_no_cookies()
+                )
             return self._client
 
     def close(self) -> None:
@@ -127,7 +130,7 @@ class HttpUpstream:
                 ) from exc
             if response.is_success:
                 if stream:
-                    return _relay(response)
+                    return _Relay(response)
                 try:
                     return _json(response, self.vendor)
                 finally:
@@ -207,8 +210,11 @@ class _Relay(Iterator[bytes]):
         self.close()
 
 
-def _relay(response: httpx.Response) -> _Relay:
-    return _Relay(response)
+def _no_cookies() -> http.cookiejar.CookieJar:
+    """A cookie jar that keeps none. The client is shared by every caller (every session,
+    every tenant), and a cookie one response set (a balancer's sticky cookie, a vendor's bot
+    management cookie) would otherwise go out on everyone's later calls."""
+    return http.cookiejar.CookieJar(policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
 
 
 def _error_detail(response: httpx.Response, *, stream: bool) -> str:

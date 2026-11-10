@@ -163,8 +163,9 @@ captured and labelled unfinished.
   - a transcript too long for the model is retried on the next, halved budget, and only
     while that is really shorter;
   - a failure that may pass (a 429 or a 503) is retried on the same transcript, after a
-    jittered pause that doubles (or the provider's `Retry-After` when longer, up to 30 s), so nothing
-    is condensed away for it;
+    jittered pause that doubles (or the provider's `Retry-After` when longer), so nothing is
+    condensed away for it. A provider asking for more than 30 s is not retried early into its
+    limit, and no retry starts after 4 minutes, inside the capture activity's 10;
   - a refusal (bad key, spent budget, unknown model) is not retried.
 
   Durable retries across workers are G3.
@@ -192,7 +193,7 @@ three limits that held every session back.
 |---|---|---|---|
 | S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256), which counts its running and queued calls (`busy`) and logs when calls wait |
 | S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.WithRequestThreads` widens each served app's loop as it starts, without changing the app |
-| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) and idle ones kept 5 s. Every upstream stream gives its connection back: when read to its end, when closed partway, or when dropped unread |
+| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) and idle ones kept 5 s. A shared client keeps no cookies, so nothing one caller was sent goes out on another's call. Every upstream stream gives its connection back: when read to its end, when closed partway, or when dropped unread |
 
 Same load (4 tenants × 50 sessions, capture on), G0 then G1:
 

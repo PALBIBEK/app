@@ -27,3 +27,10 @@ def test_a_postgres_engine_takes_the_settings(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("MEMORY_DB_MAX_OVERFLOW", "1")
     engine = make_engine("postgresql+asyncpg://u:p@127.0.0.1:1/memory")  # not connected: an engine is lazy
     assert (engine.pool.size(), engine.pool._max_overflow) == (3, 1)  # type: ignore[attr-defined]
+
+
+def test_a_setting_that_is_not_a_number_names_itself() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="MEMORY_DB_POOL_SIZE must be a whole number, not 'ten'"):
+        pool_settings({"MEMORY_DB_POOL_SIZE": "ten"})

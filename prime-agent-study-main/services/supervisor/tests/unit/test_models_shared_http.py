@@ -53,3 +53,19 @@ def test_closing_the_router_closes_its_shared_client() -> None:
     router.close()
 
     assert shared.is_closed and router.shared_http_client() is not shared
+
+
+def test_the_shared_client_keeps_no_cookie_from_one_session_for_another() -> None:
+    import httpx
+
+    sent: list[str | None] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, headers={"set-cookie": "sticky=backend-3; Path=/"})
+
+    router = ModelRouter(CONFIG, transport=httpx.MockTransport(handle))
+    for _ in range(2):
+        router.shared_http_client().get("https://gateway.example/v1/models")
+
+    assert sent == [None, None]

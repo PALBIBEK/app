@@ -46,7 +46,7 @@ from supervisor.api import (
 )
 from supervisor.api.sessions import end_and_erase
 from supervisor.app import SupervisorState
-from supervisor.blocking import widen_request_threads
+from supervisor.blocking import threads, widen_request_threads
 from supervisor.bootstrap import bootstrap_supervisor
 from supervisor.config import Settings
 from supervisor.obs.responses import CountResponses, ResponseCounts
@@ -273,6 +273,10 @@ class WithRequestThreads:
     loop, so it is widened on the loop's first message, before the app's own startup."""
 
     def __init__(self, app: ASGIApp) -> None:
+        # Checked here, as the server is built, never first in the lifespan: an error raised
+        # there is taken by uvicorn ("auto") for a lifespan the app lacks, and the app would
+        # be served without its own startup.
+        threads()
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

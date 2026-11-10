@@ -54,7 +54,10 @@ def pool_settings(environ: Mapping[str, str] = os.environ) -> dict[str, int]:
         raw = environ.get(name, "").strip()
         if not raw:
             return default
-        value = int(raw)  # a typo fails the replica's start, not its first busy minute
+        try:  # a typo fails the replica's start, not its first busy minute, and names itself
+            value = int(raw)
+        except ValueError:
+            raise ValueError(f"{name} must be a whole number, not {raw!r}") from None
         if value < least:
             raise ValueError(f"{name} must be {least} or more, not {value}")
         return value

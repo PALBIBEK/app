@@ -177,3 +177,15 @@ async def test_running_and_queued_calls_are_counted_and_a_full_pool_is_logged(
         while blocking.busy() != (0, 0):
             await asyncio.sleep(0.01)
     blocking.pool().shutdown()
+
+
+def test_a_bad_thread_setting_stops_the_server_being_built_not_its_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raised in a lifespan, uvicorn ("auto") would log the app as lacking one and serve it
+    without its startup; the setting is checked as the server is built instead."""
+    from fastapi import FastAPI
+
+    from supervisor.main import WithRequestThreads
+
+    monkeypatch.setenv(blocking.BLOCKING_THREADS_ENV, "ten")
+    with pytest.raises(ValueError, match="BLOCKING_CALL_THREADS"):
+        WithRequestThreads(FastAPI())

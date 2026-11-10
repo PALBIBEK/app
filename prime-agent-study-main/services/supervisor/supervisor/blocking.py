@@ -44,7 +44,7 @@ from typing import Final
 
 import anyio.to_thread
 
-__all__ = ["BLOCKING_THREADS_ENV", "DEFAULT_THREADS", "busy", "pool", "run_blocking", "widen_request_threads"]
+__all__ = ["BLOCKING_THREADS_ENV", "DEFAULT_THREADS", "busy", "pool", "run_blocking", "threads", "widen_request_threads"]
 
 BLOCKING_THREADS_ENV: Final = "BLOCKING_CALL_THREADS"
 DEFAULT_THREADS: Final = 256
@@ -59,6 +59,12 @@ _running = 0
 _queued = 0
 _warned_at = float("-inf")
 logger = logging.getLogger(__name__)
+
+
+def threads() -> int:
+    """``BLOCKING_CALL_THREADS``, checked: raises, naming it, when it is not a whole number
+    of 1 or more. Read it where a process starts, so a typo stops the process there."""
+    return _size()
 
 
 def _size() -> int:
@@ -151,9 +157,10 @@ def widen_request_threads() -> int:
     threads at once instead of anyio's 40; call it as an app starts. The size set.
 
     Set, not raised: an operator may size a replica below 40 as well as above. Each served
-    app has a loop, and so a limiter, of its own (``supervisor.main.serve``). A value that
-    is not a whole number of 1 or more stops the app starting, saying so, rather than
-    leaving it serving at a size nobody chose."""
+    app has a loop, and so a limiter, of its own (``supervisor.main.serve``). The setting
+    is checked before this is reached (``threads``, as each server is built): raised in a
+    lifespan, uvicorn would take the failure for "lifespan unsupported" and serve the app
+    without its startup."""
     limiter = anyio.to_thread.current_default_thread_limiter()
     limiter.total_tokens = _size()
     return int(limiter.total_tokens)

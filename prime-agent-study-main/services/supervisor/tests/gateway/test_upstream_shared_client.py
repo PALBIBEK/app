@@ -107,3 +107,20 @@ def test_a_client_closed_under_a_call_is_retried_on_a_new_one() -> None:
     made.client().close()  # closed under it, its cached client left in place
 
     assert made.post("/chat", {}) == {"ok": True}
+
+
+def test_a_cookie_one_caller_was_set_never_goes_out_on_anothers_call() -> None:
+    """One client serves every tenant's calls to a vendor: a cookie a response set (a
+    balancer's, a vendor's bot management) is not kept for the next caller."""
+    sent: list[str | None] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, json={}, headers={"set-cookie": "__cf_bm=tenant-a; Path=/"})
+
+    up = HttpUpstream(vendor="v", api_key="k", base_url="https://v.example", key_env_name="V_KEY",
+                      transport=httpx.MockTransport(handle))
+    up.post("/chat", {})
+    up.post("/chat", {})
+
+    assert sent == [None, None]

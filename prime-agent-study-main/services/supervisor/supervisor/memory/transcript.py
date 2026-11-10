@@ -217,10 +217,10 @@ def _tool_result(event: ToolEnd) -> Item:
     if isinstance(payload, Mapping) and isinstance(payload.get("images"), list):
         images = [{"type": "image"} for _ in payload["images"]]
         payload = {k: v for k, v in payload.items() if k != "images"}
-    if event.is_error or result.get("ok") is False:
-        body = str(result.get("error") or payload or "the call failed")
-    else:
-        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, default=str)
+    failed = event.is_error or result.get("ok") is False
+    said = (result.get("error") or payload or "the call failed") if failed else payload
+    # Text as it is; anything structured as JSON, a failure's included (never a Python repr).
+    body = said if isinstance(said, str) else json.dumps(said, ensure_ascii=False, default=str)
     return {"type": "tool_result", "call_id": event.tool_call_id, "name": event.tool_name, "content": body,
             "is_error": bool(event.is_error or result.get("ok") is False), "images": images}
 

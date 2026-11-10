@@ -451,10 +451,9 @@ def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkey
     monkeypatch.setattr(turn.random, "random", lambda: 0.5)  # no jitter: the pause is RETRY_PAUSE_S doubling
     now = ModelGatewayError(429, "rate limit", retry_after=0.0)
     later = ModelGatewayError(429, "rate limit", retry_after=12.0)
-    forever = ModelGatewayError(429, "rate limit", retry_after=3600.0)
 
     async def run() -> None:
-        errors = [now, later, forever]
+        errors = [now, later]
 
         async def one_shot(system: str, content: str) -> str:
             if errors:
@@ -464,7 +463,14 @@ def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkey
         assert await turn._extract(one_shot, "s1", tool_loop(1, 10)) is not None
 
     asyncio.run(run())
-    assert waits == [turn.RETRY_PAUSE_S, 12.0, turn.MAX_RETRY_PAUSE_S], "ours, theirs when longer, never past the cap"
+    assert waits == [turn.RETRY_PAUSE_S, 12.0], "ours, then theirs when longer"
+
+
+def test_a_provider_asking_for_longer_than_the_cap_is_not_retried_early(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retrying before the provider's Retry-After only meets the same limit, and is charged."""
+    extracted, sent = _attempts([ModelGatewayError(429, "rate limit", retry_after=3600.0)], monkeypatch, tool_loop(1, 10))
+
+    assert extracted is None and len(sent) == 1
 
 
 def test_a_transcript_whose_only_change_is_its_images_is_not_called_condensed() -> None:
@@ -525,3 +531,22 @@ def test_a_run_is_extracted_for_the_users_words_or_for_work_done() -> None:
     assert learnable(worded)
     assert learnable(image_only, worked), "a screenshot and the work it led to"
     assert not learnable(image_only), "an image alone: no call for nothing to read"
+
+
+def test_a_failed_tools_structured_result_is_json_like_any_other() -> None:
+    failed = ToolEnd(tool_call_id="c1", tool_name="bash", result={"ok": False, "payload": {"stderr": "x", "code": 2}},
+                     is_error=True)
+
+    (item,) = run_items([env(1, failed)])
+
+    assert json.loads(item["content"]) == {"stderr": "x", "code": 2} and item["is_error"]
+
+
+def test_a_withheld_lookup_alone_is_not_work_to_learn_from() -> None:
+    from supervisor.memory.tools import MEMORY_TOOL, PLATFORM_TOOLS
+
+    image_only = MessageEnd(role="user", content=[{"type": "image", "data": "B"}])
+    lookup = ToolEnd(tool_call_id="c1", tool_name=MEMORY_TOOL, result={"ok": True, "payload": "Prefers tea"})
+    run = [env(1, image_only), env(2, lookup)]
+
+    assert not turn._learnable(turn._said(run), run_items(run, withheld=PLATFORM_TOOLS))
