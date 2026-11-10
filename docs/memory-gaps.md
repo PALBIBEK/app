@@ -150,6 +150,40 @@ without ever dropping it. A stopped turn is captured as unfinished work, never a
 `trim_middle_respects_char_boundaries`. Add one of ours: a stopped run's exchange is
 captured and labelled unfinished.
 
+*Done (G1):*
+- **Transcript:** `memory/transcript.py` ports `capture_transcript.rs` stage for stage.
+  `run_items` turns a run's journal into user, assistant (with tool calls), tool result and
+  reasoning items, and adds a stop marker where the user stopped the run.
+- **Images:** they are always placeholders, since our extractor is text-only and an
+  image's base64 would be most of the bytes.
+- **Prompt:** extraction gets the JSON under QM's prompt, followed by Grok's transcript
+  rules (`TRANSCRIPT_EXTRACTION_PROMPT`).
+- **Retries:** a failed extraction retries at most 3 more times, only when the next budget
+  would give a shorter transcript (`CAPTURE_ATTEMPTS`), so a failing capture costs a
+  bounded number of calls. Durable retries across workers are G3.
+- **Stopped runs:** the workflow now queues a run the user stopped for capture
+  (`workflow.patched("capture-stopped-runs")`).
+- **What is not yet extracted:** facts found in tool results are given to the extractor,
+  but QM's user-only rules still decide what it keeps. Project facts are G2.
+
+*Found by G1's load test, and fixed in G1:* G1's added captures (two model calls and the
+notebook writes each) were more than the stack carried. That was not from volume but from
+three limits that held every session back.
+
+| | Limit | Effect under load | Fix |
+|---|---|---|---|
+| S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256) |
+| S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.with_request_threads` widens each served app's loop as it starts |
+| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) |
+
+Same load (4 tenants × 50 sessions, capture on), G0 then G1:
+
+| Measure | G0 | G1 |
+|---|---|---|
+| Session errors | 9 | 0 |
+| Stopped-run facts captured | 0/191 | 200/200 (p95 4.8 s) |
+| Recall p95 | 999 ms | 601 ms |
+
 *Scale:* condensation reads only the run range being captured, through the journal's seq
 index, never the whole session. Its budget is fixed per attempt, so its cost does not grow
 with session length. *Concurrency tests:* 50 sessions' captures condensed at once give each
@@ -594,7 +628,7 @@ requires before any gap is ported.
 | Gap | Pri | Tests ported | Concurrency tests | Green | Review clean | Load targets | Verified | PR |
 |---|---|---|---|---|---|---|---|---|
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
-| G1 transcript of the whole turn, condensed; stopped turns | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [ ] | [~] correctness and capture met; recall latency needs a sized environment | [ ] | |
 | G2 typed observations, strict schema | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
@@ -612,8 +646,10 @@ requires before any gap is ported.
 Each line holds for one session, and under the load script (G0) for every concurrent session.
 
 
-- **G1:** a turn that found the answer in a tool result and was then stopped still yields
-  the fact.
+- **G1:** a turn that found the answer only in a tool result and was then stopped
+  reaches the extractor with that result and the stop marker, and yields the fact
+  (`e2e/bench_memory.py --capture-route`, whose relay extracts what the transcript states).
+  Whether a real model keeps a project fact is G2.
 - **G2:** "the build runs with `make check`" said in a session is recalled in the next
   session of the same project, typed `project`.
 - **G3:** a capture activity that fails three times is retried later and the fact appears;
