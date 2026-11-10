@@ -140,6 +140,9 @@ _PARALLEL_ROUND = "parallel-round"
 # Patch id: a stop (an abort, the hard deadline) that lands while nothing cancellable
 # runs ends the run before its next step. Before it, the next step still ran.
 _STOP_BETWEEN_STEPS = "stop-between-steps"
+# A run the user stopped is captured too (its work up to the stop, marked unfinished:
+# supervisor.memory.transcript). Before it, only a run that ended by itself was.
+_CAPTURE_STOPPED = "capture-stopped-runs"
 # A round's calls run at most this many at once (each is an activity slot on the
 # session's worker); the rest wait their turn, in the model's order.
 ROUND_CONCURRENCY = 8
@@ -454,7 +457,12 @@ class AgentSessionWorkflow:
                 if workflow.patched(_PHASE_LOOP)
                 else self._run_steps(message, plan)
             )
-            if plan.capture is not None and outcome.stop_reason == "stop":
+            # Only stepped (githi) runs capture (a whole run's plan has none), and they end a
+            # stop as an outcome, so a stopped run reaches here as "aborted".
+            if plan.capture is not None and (
+                outcome.stop_reason == "stop"
+                or (outcome.stop_reason == "aborted" and workflow.patched(_CAPTURE_STOPPED))
+            ):
                 await self._queue_capture(plan.run_id, plan.capture)
             if outcome.session_status in CLOSED_STATUSES:
                 # Policy closed the session (e.g. a loop guard): nothing more can run.

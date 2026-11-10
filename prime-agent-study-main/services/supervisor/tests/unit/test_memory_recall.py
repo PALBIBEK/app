@@ -11,9 +11,14 @@ from supervisor.memory.client import NotebookClient
 from supervisor.memory.cross import Recalled, recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta, shown_of
 from supervisor.memory.disclosure import Audience
-from supervisor.memory.extraction import Exchange, extract_facts, parse_facts
+from supervisor.memory.extraction import (
+    TRANSCRIPT_EXTRACTION_PROMPT,
+    extract_transcript,
+    parse_facts,
+)
 from supervisor.memory.service import CaptureContext, NotebookMemory
 from supervisor.memory.tools import TurnMemory
+from supervisor.memory.transcript import TranscriptBudget, condense
 from supervisor.memory.turn import dependencies, memory_section, recall_query
 from supervisor.memory_service.notebooks.types import (
     UNTRACKED,
@@ -131,17 +136,23 @@ async def test_extraction_parses_facts_and_fails_safe() -> None:
         "Owns billing",
     ]
 
+    turn = condense(
+        [{"type": "user", "content": [{"type": "text", "text": "hi"}]}, {"type": "assistant", "content": "hello", "tool_calls": []}],
+        TranscriptBudget.for_attempt(1),
+    )
+
     async def model(system: str, content: str) -> str:
-        assert "User said:\nhi" in content and "Assistant replied:\nhello" in content
+        assert system == TRANSCRIPT_EXTRACTION_PROMPT, "QM's prompt and the transcript's rules, nothing condensed"
+        assert content.startswith("durable_conversation_json:\n") and '"text":"hi"' in content and '"content":"hello"' in content
         return "SENSITIVITY: sensitive\n- Has a doctor's appointment"
 
-    async def broken(system: str, content: str) -> str:
-        raise ConnectionError
+    async def malformed(system: str, content: str) -> str:
+        return "I could not decide"
 
-    got = await extract_facts(model, [Exchange("hi", "hello")])
+    got = await extract_transcript(model, turn)
     assert (got.facts, got.sensitivity) == (["Has a doctor's appointment"], Sensitivity.SENSITIVE)
-    failed = await extract_facts(broken, [Exchange("hi", "hello")])
-    assert (failed.facts, failed.sensitivity) == ([], Sensitivity.UNKNOWN)
+    unsure = await extract_transcript(malformed, turn)
+    assert (unsure.facts, unsure.sensitivity) == ([], Sensitivity.UNKNOWN), "no label: unknown, never invented"
 
 
 def test_prompt_section_and_query() -> None:

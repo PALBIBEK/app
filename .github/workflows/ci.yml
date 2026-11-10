@@ -196,16 +196,18 @@ jobs:
             exit 1
           }
       - name: Memory concurrency, 20 runs in a row (a race that fails once in twenty fails daily at scale)
-        # docs/memory-gaps.md, G0: memory's concurrency tests on this job's Postgres, each run 20
-        # times (about 2 minutes on four workers; each run has a database of its own); on the
-        # first half's runner only, since they need no split. Failures and a stuck run are
-        # annotated as the suite's are.
+        # docs/memory-gaps.md, G0 and G1: memory's concurrency tests on this job's Postgres
+        # (G0's stores, G1's captures reading their transcripts), each run 20 times (a few
+        # minutes on four workers; each run has a database of its own); on the first half's
+        # runner only, since they need no split. Failures and a stuck run are annotated as
+        # the suite's are.
         if: matrix.group == 1
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
           set -o pipefail
           timeout --signal=INT --kill-after=60 15m pytest -q -rfE -n 4 --count 20 \
-            tests/memory_store/test_memory_concurrency.py 2>&1 | tee concurrency.out || {
+            tests/memory_store/test_memory_concurrency.py tests/unit/test_memory_capture_concurrency.py \
+            2>&1 | tee concurrency.out || {
             status=$?
             grep -E '^(FAILED|ERROR) ' concurrency.out | head -40 | sed 's/^/::error title=memory concurrency::/' || true
             if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then

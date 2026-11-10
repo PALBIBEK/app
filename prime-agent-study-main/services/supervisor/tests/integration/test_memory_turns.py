@@ -8,6 +8,7 @@ durable burst, and a change of audience cuts earlier history off.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Callable
 
@@ -15,19 +16,20 @@ import pytest
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-from supervisor.agent.events import MemoryContext, MemoryInjected, ToolEnd
+from supervisor.agent.events import MemoryContext, MemoryInjected, ToolEnd, TurnEnd
 from supervisor.app import SupervisorState
 from supervisor.db.models import ScopeMembershipRow, ScopeRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.service import CaptureContext
+from supervisor.memory.transcript import STOPPED_MARKER
 from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source
 from supervisor.seams.core.types import ChatMessage
 from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
 from supervisor.temporal.workflow import AgentSessionWorkflow
-from tests.support.githi_env import LS, Env, payloads, run_ended
-from tests.support.scripted import ScriptedGateway
+from tests.support.githi_env import LS, WRITE, Env, has_event, payloads, run_ended
+from tests.support.scripted import ScriptedGateway, slow_tool
 from tests.support.workflow_histories import replayable_histories
 
 # Notebooks live in the memory service: a live one, found as production finds it.
@@ -119,7 +121,70 @@ async def test_finished_turns_are_captured_after_a_quiet_window(
     assert fact.provenance.sources == (personal_source("alice"),)
     assert not fact.provenance.source_unknown, "no tools ran: everything is tracked"
     (extraction,) = [c for k, c in gateway.one_shots if k.startswith("You extract")]
-    assert "User said:\nI always drink tea" in extraction
+    assert extraction.startswith("durable_conversation_json:\n")
+    assert '{"type":"user","content":[{"type":"text","text":"I always drink tea"}]}' in extraction
+
+
+async def test_what_a_turns_tools_found_reaches_extraction(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """G1: the whole turn, not just its request and answer: the tool call and the result it
+    read are in the transcript the extractor gets."""
+    gateway = model(LS, extract="SENSITIVITY: ordinary\n- Keeps notes in the repo root")
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, memory=QUICK)
+        await env.sessions.submit(sid, Message("c1", "what files do I have?"))
+        await env.wait_for(state, sid, run_ended())
+        await _wait_facts(state, sid, 1)
+    (extraction,) = [c for k, c in gateway.one_shots if k.startswith("You extract")]
+    items = json.loads(extraction.removeprefix("durable_conversation_json:\n"))
+    assert [i["type"] for i in items][:3] == ["user", "assistant", "tool_result"]
+    assert items[1]["tool_calls"][0]["name"] == "ls" and items[2]["name"] == "ls"
+    assert items[-1]["type"] == "assistant" and items[-1]["content"], "and the answer after it"
+
+
+async def test_a_turn_the_user_stopped_is_captured_as_unfinished(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """G1: a stopped run used to capture nothing. Now its work up to the stop reaches the
+    extractor, marked as the user's stop."""
+    gateway = model(WRITE, extract="SENSITIVITY: ordinary\n- Was writing notes.txt")
+    state = await env.state()
+    with slow_tool("write", 60):
+        async with session_worker(env.client, state, task_queue=env.queue):
+            sid = await env.create(state, memory=QUICK)
+            await env.sessions.submit(sid, Message("c1", "write my notes"))
+            await env.wait_for(state, sid, has_event(lambda p: type(p).__name__ == "ToolStart"))
+            await env.sessions.abort(sid)
+            events = await env.wait_for(state, sid, run_ended(), timeout=30)
+            (fact,) = await _wait_facts(state, sid, 1)
+    assert payloads(events, TurnEnd)[-1].stop_reason == "aborted"
+    assert fact.text == "Was writing notes.txt"
+    (extraction,) = [c for k, c in gateway.one_shots if k.startswith("You extract")]
+    items = json.loads(extraction.removeprefix("durable_conversation_json:\n"))
+    assert items[-1]["content"] == STOPPED_MARKER
+    assert any(i["type"] == "tool_result" and i["name"] == "write" for i in items), "the call it stopped, as unknown"
+
+
+async def test_a_failed_extraction_retries_on_a_shorter_transcript(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """Grok Build's per-attempt budget: an extraction that fails on a transcript longer than
+    the next budget is retried once on the shorter one, and the fact still lands."""
+    gateway = model(extract="SENSITIVITY: ordinary\n- Pasted the build log")
+    gateway.extract_errors.append(RuntimeError("context length exceeded"))
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        # Five long turns (a message holds at most 64 Ki characters), captured as one burst.
+        sid = await env.create(state, memory={"capture_quiet_s": 600, "capture_max_turns": 5})
+        for n in range(5):
+            await env.sessions.submit(sid, Message(f"c{n}", f"build log part {n}:\n" + "line of output\n" * 4_000))
+            await env.wait_for(state, sid, run_ended(n + 1))
+        (fact,) = await _wait_facts(state, sid, 1)
+    first, second = [c for k, c in gateway.one_shots if k.startswith("You extract")]
+    assert len(first.encode()) > 256 * 1024 >= len(second.encode()), "the retry read the half budget"
+    assert "bytes omitted" in second and fact.text == "Pasted the build log"
 
 
 async def test_a_captured_fact_that_contradicts_one_held_retires_it(

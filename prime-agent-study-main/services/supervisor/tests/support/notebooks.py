@@ -56,9 +56,11 @@ class MemoryServiceHandle:
 
 
 @asynccontextmanager
-async def _database(backend: str, tmp_path: Path) -> AsyncIterator[str]:
+async def _database(backend: str, tmp_path: Path, name: str) -> AsyncIterator[str]:
+    """A fresh database: on SQLite, file ``name`` (one per fixture: two fixtures on one file
+    made the supervisor's schema bootstrap and the memory service's writers lock each other)."""
     if backend == "sqlite":
-        yield f"sqlite+aiosqlite:///{tmp_path / 'memory.db'}"
+        yield f"sqlite+aiosqlite:///{tmp_path / f'{name}.db'}"
         return
     assert PG_URL is not None
     name = f"notebooks_{uuid.uuid4().hex[:10]}"
@@ -136,7 +138,7 @@ async def supervisor_db(
     request: pytest.FixtureRequest, tmp_path: Path
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """The supervisor's own database for one test: SQLite, and a fresh Postgres one."""
-    async with _database(request.param, tmp_path) as url, open_db(url) as (_, factory):
+    async with _database(request.param, tmp_path, "supervisor") as url, open_db(url) as (_, factory):
         yield factory
 
 
@@ -144,7 +146,7 @@ async def supervisor_db(
 async def memory_svc(
     request: pytest.FixtureRequest, tmp_path: Path
 ) -> AsyncIterator[MemoryServiceHandle]:
-    async with _database(request.param, tmp_path) as url, memory_service(url) as handle:
+    async with _database(request.param, tmp_path, "memory") as url, memory_service(url) as handle:
         yield handle
 
 

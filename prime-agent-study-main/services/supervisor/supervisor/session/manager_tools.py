@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, replace
@@ -14,6 +13,7 @@ from supervisor.agent.events import (
     ToolEnd,
     ToolStart,
 )
+from supervisor.blocking import run_blocking
 from supervisor.catalog import SandboxProfile, SessionPins
 from supervisor.db.models import SessionRow
 from supervisor.hands import HandWorkspace
@@ -426,7 +426,7 @@ class ToolOps(ApprovalOps):
             result = hand.unavailable
         else:
             try:
-                result = await asyncio.to_thread(seams.tool_provider.invoke, ctx, name, arguments)
+                result = await run_blocking(seams.tool_provider.invoke, ctx, name, arguments)
             except BaseException:
                 self.call_ended(hand)
                 raise

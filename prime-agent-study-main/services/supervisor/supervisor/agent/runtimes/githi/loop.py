@@ -17,7 +17,6 @@ turn instead: a workspace probe that exercises the session and SSE plumbing.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import threading
@@ -39,6 +38,7 @@ from supervisor.agent.events import (
 )
 from supervisor.agent.runtimes.githi.prompt import WORKSPACE, system_prompt
 from supervisor.agent.seams import RuntimeSeams
+from supervisor.blocking import run_blocking
 from supervisor.seams import ChatMessage, PromptBindings, ToolInvokeContext
 from supervisor.seams.core.types import invalid_arguments
 from supervisor.tools import Workspace
@@ -217,7 +217,7 @@ class AgentLoop:
         if self._logins is not None:
             extra["logins"] = self._logins
         try:
-            outcome = await asyncio.to_thread(
+            outcome = await run_blocking(
                 provider.invoke, ToolInvokeContext(trace_id=call_id, extra=extra), name, args
             )
         except Exception as exc:  # a provider bug is the model's to read, not a crash

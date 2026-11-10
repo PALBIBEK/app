@@ -61,6 +61,8 @@ class ScriptedGateway:
     malformed_first: bool = False
     # Answers to memory's one-shot prompts (extraction, classification), kept out of `seen`.
     extract: str = "NONE"
+    # Raised by the next extraction calls, one each, before ``extract`` answers again.
+    extract_errors: list[Exception] = dataclasses.field(default_factory=list)
     sensitivity: str = "ordinary"
     resolution: str = '{"facts": []}'  # supervisor.memory.resolution: nothing duplicated or contradicted
     # What the gateway reports as the model's context window (ModelCatalog); None: unknown.
@@ -240,6 +242,8 @@ class ScriptedGateway:
             return None
         with self._lock:
             self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
+            if system.startswith("You extract durable facts") and self.extract_errors:
+                raise self.extract_errors.pop(0)
         return answer
 
     def context_window(self, model: str) -> int | None:
@@ -262,18 +266,25 @@ def scripted_model(gateway: ScriptedGateway) -> Iterator[ScriptedGateway]:
 
 @contextmanager
 def slow_tool(name: str, seconds: float) -> Iterator[None]:
-    """Make one catalog tool take ``seconds`` (in the worker's thread)."""
+    """Make one catalog tool take ``seconds`` (in the worker's thread).
+
+    A thread cannot be cancelled, so a call a test stops (an abort, a run's bound) would
+    otherwise sleep on past its test and run the tool into the interpreter's exit. Leaving
+    the block releases every call still waiting, and a released call ends as a failure
+    without running the tool."""
     original = RegistryToolProvider.invoke
+    released = threading.Event()
 
     def invoke(self: RegistryToolProvider, ctx: Any, tool: str, args: dict[str, Any]) -> Any:
-        if tool == name:
-            time.sleep(seconds)
+        if tool == name and released.wait(seconds):
+            raise RuntimeError(f"slow_tool({name!r}) released: its test ended")
         return original(self, ctx, tool, args)
 
     RegistryToolProvider.invoke = invoke  # type: ignore[method-assign]
     try:
         yield
     finally:
+        released.set()
         RegistryToolProvider.invoke = original  # type: ignore[method-assign]
 
 

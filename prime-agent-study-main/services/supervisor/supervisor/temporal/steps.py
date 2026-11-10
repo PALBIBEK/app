@@ -72,6 +72,7 @@ from supervisor.agent.runtimes.githi.render import (
     tool_result_text,
 )
 from supervisor.agent.runtimes.githi.runtime import GithiRuntime
+from supervisor.blocking import run_blocking
 from supervisor.hands.keys import take_hand, with_hand_argument
 from supervisor.harness import BudgetSpec, RecoveryAction
 from supervisor.harness.core.enums import ToolClass as HarnessToolClass
@@ -713,7 +714,7 @@ class GithiSteps:
             sink = PartialSink(self._partials, sid, run_id, req.step) if _streams(gateway) else None
             try:
                 call = asyncio.ensure_future(
-                    asyncio.to_thread(
+                    run_blocking(
                         gateway.complete,
                         chat,
                         schemas,

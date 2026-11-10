@@ -12,8 +12,11 @@ reuses it (a replayed model step sees exactly the memory the first attempt saw).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import random
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -27,6 +30,8 @@ from supervisor.agent.events import (
     RunEnd,
     ToolStart,
 )
+from supervisor.agent.runtimes.githi.classify import is_context_overflow, is_retryable
+from supervisor.blocking import run_blocking
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import keyed_event_id
@@ -37,12 +42,18 @@ from supervisor.memory.client import MemoryRefused, MemoryRequestInvalid, Memory
 from supervisor.memory.cross import recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta
 from supervisor.memory.disclosure import Audience
-from supervisor.memory.extraction import Exchange, extract_facts
+from supervisor.memory.extraction import Exchange, Extracted, extract_transcript
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.resolution import resolve
 from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
+from supervisor.memory.transcript import (
+    Item,
+    TranscriptBudget,
+    condense,
+    run_items,
+)
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
@@ -356,7 +367,9 @@ class SessionMemory:
     # --- automatic capture -------------------------------------------------------
 
     async def capture(self, session_id: str, run_ids: Sequence[str]) -> int:
-        """Extract and save durable facts from these runs' exchanges (QM per-turn burst)."""
+        """Extract and save durable facts from these runs (QM per-turn burst), read whole:
+        every step of each run, its tool calls and results included, and a run the user
+        stopped up to where they stopped it (``supervisor.memory.transcript``)."""
         scope = await self.scope(session_id)
         if scope is None:
             return 0
@@ -369,17 +382,23 @@ class SessionMemory:
             return 0
         context = await self._latest_context(session_id)
         through = -1 if context is None else context.through_seq
+        items: list[Item] = []
         exchanges, runs = [], []
         for run_id in run_ids:
+            # One run's events, by the journal's (session, run, seq) index: never the session.
             run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
-            if (exchange := _exchange(run)) is not None:
-                exchanges.append(exchange)
-                runs.extend(run)
-        if not exchanges:
+            steps = run_items(run, withheld=PLATFORM_TOOLS)
+            said = _said(run)
+            if not _learnable(said, steps):
+                continue
+            items += steps
+            exchanges.append(said)
+            runs.extend(run)
+        if not items:
             return 0
         one_shot = await self._one_shot_for(session_id)
-        extracted = await extract_facts(one_shot, exchanges)
-        if not extracted.facts:
+        extracted = await _extract(one_shot, session_id, items)
+        if extracted is None or not extracted.facts:
             return 0
         # Resolve against what the notebook holds (supervisor.memory.resolution): a
         # duplicate is not added; a fact the new ones make false is retired after them.
@@ -428,8 +447,9 @@ class SessionMemory:
                 sensitivity=sensitivity,
                 # Everything these turns could have drawn on (QM captureDependencies).
                 inherited=dependencies(runs),
-                input="\n\n".join(x.input for x in exchanges),
-                reply="\n\n".join(x.reply for x in exchanges),
+                # None, not "", when there is none (a run stopped before its answer).
+                input="\n\n".join(x.input for x in exchanges if x.input) or None,
+                reply="\n\n".join(x.reply for x in exchanges if x.reply) or None,
                 idempotency_key=key,
             ),
         )
@@ -455,23 +475,105 @@ def _checkpoint(event: object) -> list[dict[str, Any]] | None:
     return None
 
 
-def _exchange(run: Sequence[Envelope]) -> Exchange | None:
-    """The user's message and the final reply of one completed run."""
+CAPTURE_ATTEMPTS: Final = 4
+"""Extraction calls one capture makes at most, so a failing capture costs a bounded number
+of calls (and of the session's spend)."""
+RETRY_PAUSE_S: Final = 1.0
+"""The pause before retrying a failure that may pass, doubled before each later one and
+jittered, so every capture failing at once does not retry at once."""
+RETRY_WINDOW_S: Final = 240.0
+"""No retry starts past this long into a capture's extraction, its pause included: the
+capture activity has ten minutes (``temporal.policies``) for extraction, resolution and
+the save, and one that ran out would be retried whole, its calls made and charged again.
+The window bounds when attempts start; each call is bounded by its own timeout."""
+
+
+async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
+    """The burst's facts, from its transcript condensed to fit; None when extraction failed
+    for good. What is tried again depends on why the call failed (the agent loop's own rules,
+    ``supervisor.agent.runtimes.githi.classify``):
+
+    * the transcript did not fit the model's window: the next, halved budget (Grok Build's
+      per-attempt budget), while one is shorter;
+    * a failure that may pass (a rate limit, an overloaded or unreachable provider): the
+      same transcript, after a pause, so nothing is condensed away for a failure that has
+      nothing to do with length;
+    * anything else (a refused key, a spent budget, an unknown model): not at all, since
+      it would fail the same way, and each call may be charged.
+    """
+    budget, began = 1, time.monotonic()
+    # Condensing is CPU work that grows with the burst (megabytes of tool output are
+    # re-encoded at each stage): off the loop, which carries every other session's steps.
+    condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
+    for attempt in range(1, CAPTURE_ATTEMPTS + 1):
+        if condensed.stats.over_budget:
+            logger.info(
+                "session %s: memory extraction sent over its %d-byte budget (%d bytes): the user's own words "
+                "outweigh it at their floor", session_id, TranscriptBudget.for_attempt(budget).max_bytes,
+                condensed.stats.final_bytes,
+            )
+        try:
+            return await extract_transcript(one_shot, condensed)
+        except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
+            pause: float | None = None
+            again_on = condensed
+            if is_context_overflow(exc) and attempt < CAPTURE_ATTEMPTS:  # a last attempt condenses nothing more
+                shorter = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget + 1))
+                # Only a transcript that really is shorter (a burst of many runs keeps every
+                # request and stop marker, so condensing can reach a floor).
+                if shorter.stats.final_bytes < condensed.stats.final_bytes:
+                    budget, again_on, pause = budget + 1, shorter, 0.0
+            elif is_retryable(exc):
+                backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
+                asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit
+                # A provider's wait, when it asks for one longer than ours; never shorter (a 0
+                # would retry at once, into the same rate limit).
+                pause = max(backoff, asked) if isinstance(asked, (int, float)) else backoff
+            if pause is not None and time.monotonic() + pause - began > RETRY_WINDOW_S:
+                # A retry that would start past the window is not made: one asking for a wait
+                # longer than the window has is not retried early into its limit either.
+                pause = None
+            again = pause is not None and attempt < CAPTURE_ATTEMPTS
+            logger.warning(
+                "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",
+                session_id, condensed.stats.final_bytes, attempt, CAPTURE_ATTEMPTS,
+                ", retrying" if again else ", not retried", exc,
+            )
+            if not again:
+                return None
+            condensed = again_on
+            await asyncio.sleep(pause or 0.0)
+    return None
+
+
+def _learnable(said: Exchange, steps: Sequence[Item]) -> bool:
+    """Whether a run gives an extraction anything to learn from: the user's words, or work
+    done (a tool's result). A run with neither (an image alone, or nothing in this audience)
+    costs no extraction call."""
+    return bool(said.input) or any(
+        item["type"] == "tool_result" and item["name"] not in PLATFORM_TOOLS for item in steps
+    )  # a lookup (memory, history: withheld from the transcript) is not work the extractor could read
+
+
+def _said(run: Sequence[Envelope]) -> Exchange:
+    """What the user said in a run and the assistant's answer: the capture's provenance
+    record. The answer is the run's last reply that called no tool (its final word); a run
+    stopped before one has only narration between calls, and its last is taken; empty when
+    there was none."""
     user = next(
         (e.payload for e in run if isinstance(e.payload, MessageEnd) and e.payload.role == "user"),
         None,
     )
+    replies = [
+        e.payload
+        for e in reversed(run)
+        if isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and message_text(e.payload).strip()
+    ]
     reply = next(
-        (
-            e.payload
-            for e in reversed(run)
-            if isinstance(e.payload, MessageEnd)
-            and e.payload.role == "assistant"
-            and not any(p.get("type") == "tool_call" for p in e.payload.content)
-        ),
-        None,
+        (r for r in replies if not any(part.get("type") == "tool_call" for part in r.content)),
+        replies[0] if replies else None,
     )
-    if user is None or reply is None:
-        return None
-    text, answer = message_text(user).strip(), message_text(reply).strip()
-    return Exchange(text, answer) if text and answer else None
+    return Exchange(
+        message_text(user).strip() if user is not None else "",
+        message_text(reply).strip() if reply is not None else "",
+    )

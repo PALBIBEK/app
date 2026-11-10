@@ -150,7 +150,66 @@ without ever dropping it. A stopped turn is captured as unfinished work, never a
 `trim_middle_respects_char_boundaries`. Add one of ours: a stopped run's exchange is
 captured and labelled unfinished.
 
-*Scale:* condensation reads only the run range being captured, through the journal's seq
+*Done (G1):*
+- **Transcript:** `memory/transcript.py` ports `capture_transcript.rs` stage for stage.
+  `run_items` turns a run's journal into user, assistant (with tool calls), tool result and
+  reasoning items, and adds a stop marker where the user stopped the run.
+- **Images:** they are always placeholders, since our extractor is text-only and an
+  image's base64 would be most of the bytes.
+- **Prompt:** extraction gets the JSON under QM's prompt, followed by Grok's transcript
+  rules (`TRANSCRIPT_EXTRACTION_PROMPT`).
+- **Retries:** what is retried depends on why the call failed, by the agent loop's own
+  rules (`githi/classify.py`), at most 4 calls in all (`CAPTURE_ATTEMPTS`):
+  - a transcript too long for the model is retried on the next, halved budget, and only
+    while that is really shorter;
+  - a failure that may pass (a 429 or a 503) is retried on the same transcript, after a
+    jittered pause that doubles (or the provider's `Retry-After` when longer), so nothing is
+    condensed away for it. No retry starts, its pause included, past 4 minutes into
+    extraction (inside the capture activity's 10), so a provider asking for a longer wait is
+    not retried early into its limit;
+  - a refusal (bad key, spent budget, unknown model) is not retried.
+
+  Durable retries across workers are G3.
+- **Memory is not captured twice:** the results of the memory, history and sessions tools
+  keep their place in the transcript, but their content is withheld (`WITHHELD_RESULT`).
+  That content is facts already held, with their own provenance and audience, which a fact
+  extracted from them again would lose. It may also be another conversation's history.
+- **Beyond Grok's stages:** an assistant reply long enough to outlast every other stage
+  (a pasted file, say) is trimmed, head and tail, before the user's words are. A trim that
+  would grow the text (just over its cap, the marker costs more than the cut saves) is not
+  made.
+- **Stop markers are kept whole:** omitting middle steps never removes a run's stop
+  marker. Each stretch of steps omitted gets its own marker, so in a burst of several runs
+  a stopped run never reads as finished.
+- **Stopped runs:** the workflow now queues a run the user stopped for capture
+  (`workflow.patched("capture-stopped-runs")`).
+- **What is not yet extracted:** facts found in tool results are given to the extractor,
+  but QM's user-only rules still decide what it keeps. Project facts are G2.
+
+*Found by G1's load test, and fixed in G1:* G1's added captures (two model calls and the
+notebook writes each) were more than the stack carried. That was not from volume but from
+three limits that held every session back.
+
+| | Limit | Effect under load | Fix |
+|---|---|---|---|
+| S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256), which counts its running and queued calls (`busy`) and logs when calls wait |
+| S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.WithRequestThreads` widens each served app's loop as it starts, without changing the app |
+| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) and idle ones kept 5 s. A shared client keeps no cookies (`supervisor.http_cookies`; the memory client too), so nothing one caller was sent goes out on another's call. Every upstream stream gives its connection back: when read to its end, when closed partway, or when dropped unread |
+
+*Follow-up outside G1:* other process-wide clients that predate G1 still keep cookies
+(`seams` `HttpGateway`, `VirtualKeyClient`, the MCP clients, `memory_service`'s
+`ModelExtractor`). They should take `supervisor.http_cookies.no_cookies` too.
+
+Same load (4 tenants × 50 sessions, capture on), G0 then G1:
+
+| Measure | G0 | G1 |
+|---|---|---|
+| Session errors | 9 | 0 |
+| Stopped-run facts captured | 0/191 | 200/200 (p95 4.8 s) |
+| Recall p95 | 999 ms | 601 ms |
+
+*Scale:* condensing runs on the long-call pool, off the event loop that carries every
+other session's steps. It reads only the run range being captured, through the journal's seq
 index, never the whole session. Its budget is fixed per attempt, so its cost does not grow
 with session length. *Concurrency tests:* 50 sessions' captures condensed at once give each
 session only its own events. A 1,000-step run stays inside the budget and within a fixed
@@ -594,7 +653,7 @@ requires before any gap is ported.
 | Gap | Pri | Tests ported | Concurrency tests | Green | Review clean | Load targets | Verified | PR |
 |---|---|---|---|---|---|---|---|---|
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
-| G1 transcript of the whole turn, condensed; stopped turns | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [ ] | [~] correctness and capture met; recall latency needs a sized environment | [ ] | |
 | G2 typed observations, strict schema | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
@@ -612,8 +671,10 @@ requires before any gap is ported.
 Each line holds for one session, and under the load script (G0) for every concurrent session.
 
 
-- **G1:** a turn that found the answer in a tool result and was then stopped still yields
-  the fact.
+- **G1:** a turn that found the answer only in a tool result and was then stopped
+  reaches the extractor with that result and the stop marker, and yields the fact
+  (`e2e/bench_memory.py --capture-route`, whose relay extracts what the transcript states).
+  Whether a real model keeps a project fact is G2.
 - **G2:** "the build runs with `make check`" said in a session is recalled in the next
   session of the same project, typed `project`.
 - **G3:** a capture activity that fails three times is retried later and the fact appears;

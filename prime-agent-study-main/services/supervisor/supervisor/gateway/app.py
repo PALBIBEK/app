@@ -536,7 +536,11 @@ def _metered(
             tap.feed(chunk)
             yield chunk
     finally:
-        _charge(store, caller, cost_usd(tap.usage() or TokenUsage(), route))
+        try:  # what was streamed is charged whatever closing the upstream does
+            _charge(store, caller, cost_usd(tap.usage() or TokenUsage(), route))
+        finally:
+            if close := getattr(stream, "close", None):
+                close()  # the upstream's connection, at once, even when the caller left mid-stream
 
 
 def _infer(
