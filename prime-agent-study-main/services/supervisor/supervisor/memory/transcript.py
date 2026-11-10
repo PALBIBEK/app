@@ -117,6 +117,11 @@ class CondensationStats:
         """What the extractor is told was removed; None when nothing was."""
         if not self.is_condensed():
             return None
+        if not any((self.reasoning_dropped, self.tool_results_trimmed, self.tool_args_trimmed, self.steps_omitted,
+                    self.assistant_text_trimmed, self.user_text_trimmed)):
+            # Only images, whatever the budget: nothing was cut to fit, and saying so would
+            # have the extractor treat a whole transcript as partial.
+            return 'The transcript is whole, its images omitted ("[... image omitted ...]"): the extractor reads text only.'
         parts = [
             text
             for count, text in (

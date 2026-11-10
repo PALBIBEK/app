@@ -457,6 +457,8 @@ class AgentSessionWorkflow:
                 if workflow.patched(_PHASE_LOOP)
                 else self._run_steps(message, plan)
             )
+            # Only stepped (githi) runs capture (a whole run's plan has none), and they end a
+            # stop as an outcome, so a stopped run reaches here as "aborted".
             if plan.capture is not None and (
                 outcome.stop_reason == "stop"
                 or (outcome.stop_reason == "aborted" and workflow.patched(_CAPTURE_STOPPED))

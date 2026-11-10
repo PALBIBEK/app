@@ -202,7 +202,8 @@ Same load (4 tenants × 50 sessions, capture on), G0 then G1:
 | Stopped-run facts captured | 0/191 | 200/200 (p95 4.8 s) |
 | Recall p95 | 999 ms | 601 ms |
 
-*Scale:* condensation reads only the run range being captured, through the journal's seq
+*Scale:* condensing runs on the long-call pool, off the event loop that carries every
+other session's steps. It reads only the run range being captured, through the journal's seq
 index, never the whole session. Its budget is fixed per attempt, so its cost does not grow
 with session length. *Concurrency tests:* 50 sessions' captures condensed at once give each
 session only its own events. A 1,000-step run stays inside the budget and within a fixed

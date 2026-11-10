@@ -465,3 +465,27 @@ def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkey
 
     asyncio.run(run())
     assert waits == [turn.RETRY_PAUSE_S, 12.0, turn.MAX_RETRY_PAUSE_S], "ours, theirs when longer, never past the cap"
+
+
+def test_a_transcript_whose_only_change_is_its_images_is_not_called_condensed() -> None:
+    """Nothing was cut to fit: the extractor is not told the transcript is partial."""
+    pasted = MessageEnd(role="user", content=[{"type": "text", "text": "look"}, {"type": "image", "data": "B" * 10}])
+
+    note = condense(run_items([env(1, pasted)]), FIRST).stats.prompt_note() or ""
+
+    assert "images omitted" in note and "condensed" not in note and "removed" not in note
+
+
+def test_the_provenance_reply_is_the_final_answer_not_narration_between_calls() -> None:
+    narrating = MessageEnd(role="assistant", content=[
+        {"type": "text", "text": "Let me check that file."},
+        {"type": "tool_call", "id": "c1", "name": "read", "arguments": {}},
+    ])
+    answer = MessageEnd(role="assistant", content=[{"type": "text", "text": "It builds with make check."}])
+    asked = MessageEnd(role="user", content=[{"type": "text", "text": "how does it build?"}])
+
+    finished = turn._said([env(1, asked), env(2, answer), env(3, narrating)])
+    stopped = turn._said([env(1, asked), env(2, narrating), env(3, TurnEnd(stop_reason="aborted"))])
+
+    assert finished.reply == "It builds with make check.", "the final word, even with narration after it"
+    assert stopped.reply == "Let me check that file.", "a stopped run has only its narration"

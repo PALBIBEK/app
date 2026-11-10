@@ -30,6 +30,7 @@ from supervisor.agent.events import (
     ToolStart,
 )
 from supervisor.agent.runtimes.githi.classify import is_context_overflow, is_retryable
+from supervisor.blocking import run_blocking
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
 from supervisor.journal.writer import keyed_event_id
@@ -491,7 +492,9 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
       it would fail the same way, and each call may be charged.
     """
     budget = 1
-    condensed = condense(items, TranscriptBudget.for_attempt(budget))
+    # Condensing is CPU work that grows with the burst (megabytes of tool output are
+    # re-encoded at each stage): off the loop, which carries every other session's steps.
+    condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
     for attempt in range(1, CAPTURE_ATTEMPTS + 1):
         try:
             return await extract_transcript(one_shot, condensed)
@@ -499,7 +502,7 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
             pause: float | None = None
             again_on = condensed
             if is_context_overflow(exc):
-                shorter = condense(items, TranscriptBudget.for_attempt(budget + 1))
+                shorter = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget + 1))
                 # Only a transcript that really is shorter (a burst of many runs keeps every
                 # request and stop marker, so condensing can reach a floor).
                 if shorter.stats.final_bytes < condensed.stats.final_bytes:
@@ -524,19 +527,22 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
 
 
 def _said(run: Sequence[Envelope]) -> Exchange:
-    """What the user said in a run and what the assistant last answered (empty when the
-    run was stopped before any answer): the capture's provenance record."""
+    """What the user said in a run and the assistant's answer: the capture's provenance
+    record. The answer is the run's last reply that called no tool (its final word); a run
+    stopped before one has only narration between calls, and its last is taken; empty when
+    there was none."""
     user = next(
         (e.payload for e in run if isinstance(e.payload, MessageEnd) and e.payload.role == "user"),
         None,
     )
+    replies = [
+        e.payload
+        for e in reversed(run)
+        if isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and message_text(e.payload).strip()
+    ]
     reply = next(
-        (
-            e.payload
-            for e in reversed(run)
-            if isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and message_text(e.payload).strip()
-        ),
-        None,
+        (r for r in replies if not any(part.get("type") == "tool_call" for part in r.content)),
+        replies[0] if replies else None,
     )
     return Exchange(
         message_text(user).strip() if user is not None else "",

@@ -172,5 +172,8 @@ async def test_running_and_queued_calls_are_counted_and_a_full_pool_is_logged(
     release.set()
     started.abort()  # the one still waiting never meets the barrier: let it through
     await asyncio.gather(*calls, *waiting, return_exceptions=True)
-    assert blocking.busy() == (0, 0)
+    # The cancelled caller returned at once; its call ends on its thread a moment later.
+    async with asyncio.timeout(5):
+        while blocking.busy() != (0, 0):
+            await asyncio.sleep(0.01)
     blocking.pool().shutdown()
