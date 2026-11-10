@@ -80,3 +80,15 @@ def test_a_stream_dropped_before_its_first_read_gives_its_connection_back() -> N
     gc.collect()
 
     assert bodies[0].closed
+
+
+def test_a_closed_stream_ends_cleanly_and_a_closed_upstream_makes_a_new_client() -> None:
+    up, _ = upstream()
+    relay = stream(up)
+    relay.close()  # type: ignore[attr-defined]
+
+    assert list(relay) == [], "a stream closed by its consumer has ended, not failed"
+
+    first = up.client()
+    up.close()
+    assert first.is_closed and up.client() is not first

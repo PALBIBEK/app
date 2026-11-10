@@ -59,6 +59,7 @@ MIN_MAX_TRANSCRIPT_ITEMS: Final = 64
 TOOL_RESULT_TIERS: Final = (4 * 1024, 1024, 256)
 TOOL_ARGS_TIERS: Final = (2 * 1024, 512, 256)
 KEEP_EDGE_START: Final = 8
+ASSISTANT_TEXT_TIERS: Final = (16 * 1024, 4 * 1024, 1024)
 USER_TEXT_FLOOR_BYTES: Final = 4 * 1024
 STOPPED_MARKER: Final = "[... the user stopped this turn here, before it finished ...]"
 """Where a run the user stopped ends: what it did up to here is unfinished work."""
@@ -102,13 +103,14 @@ class CondensationStats:
     tool_results_trimmed: int = 0
     tool_args_trimmed: int = 0
     steps_omitted: int = 0
+    assistant_text_trimmed: int = 0
     user_text_trimmed: int = 0
     over_budget: bool = False
 
     def is_condensed(self) -> bool:
         return any(
             (self.reasoning_dropped, self.images_dropped, self.tool_results_trimmed, self.tool_args_trimmed,
-             self.steps_omitted, self.user_text_trimmed)
+             self.steps_omitted, self.assistant_text_trimmed, self.user_text_trimmed)
         )
 
     def prompt_note(self) -> str | None:
@@ -123,6 +125,7 @@ class CondensationStats:
                 (self.tool_results_trimmed, "tool outputs truncated"),
                 (self.tool_args_trimmed, "tool arguments truncated"),
                 (self.steps_omitted, f"{self.steps_omitted} intermediate steps omitted"),
+                (self.assistant_text_trimmed, "assistant replies truncated"),
                 (self.user_text_trimmed, "user text truncated"),
             )
             if count
@@ -241,15 +244,7 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
         return _finish(encoded, len(items), stats)
 
     for result_cap, args_cap in zip(TOOL_RESULT_TIERS, TOOL_ARGS_TIERS, strict=True):
-        for item in items:
-            if item["type"] == "tool_result" and (trimmed := trim_middle(item["content"], result_cap)) is not None:
-                item["content"] = trimmed
-                stats.tool_results_trimmed += 1
-            elif item["type"] == "assistant":
-                for call in item["tool_calls"]:
-                    if (trimmed := trim_middle(call["arguments"], args_cap)) is not None:
-                        call["arguments"] = trimmed
-                        stats.tool_args_trimmed += 1
+        _trim_tools(items, result_cap, args_cap, stats)
         encoded = _serialize(items)
         if budget.fits(encoded, len(items)):
             return _finish(encoded, len(items), stats)
@@ -264,6 +259,15 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
                 return _finish(encoded, len(items), stats)
             break
         keep_edge //= 2
+
+    # Ours, beyond Grok's stages: an assistant reply long enough (a pasted file, a long
+    # report) outlasts every stage before, and would leave the transcript over budget at
+    # every attempt. The agent's own words go before the user's, head and tail kept.
+    for cap in ASSISTANT_TEXT_TIERS:
+        _trim_assistant_text(items, cap, stats)
+        encoded = _serialize(items)
+        if budget.fits(encoded, len(items)):
+            return _finish(encoded, len(items), stats)
 
     users = max(1, sum(1 for item in items if item["type"] == "user"))
     others = sum(_size(_serialize(item)) for item in items if item["type"] != "user")
@@ -285,6 +289,29 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
     return _finish(encoded, len(items), stats)
 
 
+def _trim_tools(items: list[Item], result_cap: int, args_cap: int, stats: CondensationStats) -> None:
+    """One tool tier: every result to ``result_cap`` and every call's arguments to ``args_cap``."""
+    for item in items:
+        if item["type"] == "tool_result" and (trimmed := trim_middle(item["content"], result_cap)) is not None:
+            item["content"] = trimmed
+            stats.tool_results_trimmed += 1
+        elif item["type"] == "assistant":
+            for call in item["tool_calls"]:
+                if (trimmed := trim_middle(call["arguments"], args_cap)) is not None:
+                    call["arguments"] = trimmed
+                    stats.tool_args_trimmed += 1
+
+
+def _trim_assistant_text(items: list[Item], cap: int, stats: CondensationStats) -> None:
+    """One assistant-text tier: every reply to ``cap``, condensing's own markers left alone."""
+    for item in items:
+        if item["type"] == "assistant" and not _is_marker(item["content"]) and (
+            trimmed := trim_middle(item["content"], cap)
+        ) is not None:
+            item["content"] = trimmed
+            stats.assistant_text_trimmed += 1
+
+
 def trim_middle(text: str, max_bytes: int) -> str | None:
     """``text`` with its middle replaced by a marker so that head and tail together take
     ``max_bytes`` of UTF-8 (two thirds head); None when it already fits. Cuts fall on
@@ -297,7 +324,15 @@ def trim_middle(text: str, max_bytes: int) -> str | None:
     head = raw[:head_len].decode("utf-8", errors="ignore")  # a cut character is dropped: floor
     tail = raw[len(raw) - tail_len :].decode("utf-8", errors="ignore") if tail_len else ""  # and ceil
     omitted = len(raw) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
-    return f"{head}\n[... {omitted} bytes omitted ...]\n{tail}"
+    trimmed = f"{head}\n[... {omitted} bytes omitted ...]\n{tail}"
+    # Ours: just over the cap, the marker would cost more than the cut saves (Grok's adds it
+    # anyway), and a stage meant to shrink the transcript would grow it.
+    return trimmed if len(trimmed.encode("utf-8")) < len(raw) else None
+
+
+def _is_marker(text: object) -> bool:
+    """Whether an assistant item is one of condensing's own markers, never trimmed."""
+    return isinstance(text, str) and text.startswith("[... ") and text.endswith(" ...]")
 
 
 def _kept_whole(item: Item) -> bool:

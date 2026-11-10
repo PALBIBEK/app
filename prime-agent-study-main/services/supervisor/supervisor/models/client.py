@@ -103,7 +103,8 @@ class ModelRouter:
     def http_client(self) -> httpx.Client:
         """A client of the caller's own, which the caller closes. Its connections are
         bounded by the threads that make calls (``supervisor.blocking``), not by httpx's
-        default of 100, which a busy worker's shared client would wait on."""
+        default of 100, which a busy worker's shared client would wait on. The limits are
+        the default transport's; a transport given to the router (a test's) has its own."""
         return httpx.Client(
             transport=self._transport,
             follow_redirects=False,
@@ -121,6 +122,14 @@ class ModelRouter:
             if self._shared is None:
                 self._shared = self.http_client()
             return self._shared
+
+    def close(self) -> None:
+        """Close the shared client and its connections (a router being replaced, a test's
+        end); a later call makes a new one."""
+        with self._shared_lock:
+            shared, self._shared = self._shared, None
+        if shared is not None:
+            shared.close()
 
     def refresh(self) -> None:
         self.catalog.refresh()

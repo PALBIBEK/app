@@ -21,7 +21,8 @@ from supervisor.gateway.providers.base import (
 _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
 _LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0)
-"""Connections are bounded by the gateway's request threads (``supervisor.main``), not
+"""For the default transport (a transport given to an upstream, a test's, has its own).
+Connections are bounded by the gateway's request threads (``supervisor.main``), not
 here; up to 64 stay open between calls for the next one to reuse, each for 5 s idle: well
 inside any vendor's or balancer's idle timeout, so a pooled connection is not one the far
 end has closed (and httpx checks one before reusing it)."""
@@ -173,11 +174,16 @@ class _Relay(Iterator[bytes]):
     that goes away before the first read (a client that disconnects, a wrapper that fails
     first) would leave the response holding its pooled connection for good."""
 
+    _response: httpx.Response | None = None  # set first: a failed __init__ leaves None for __del__
+    _closed: bool = False
+
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
         self._bytes = response.iter_bytes()
 
     def __next__(self) -> bytes:
+        if self._closed:
+            raise StopIteration  # closed (by its consumer, or at its end): it has ended
         try:
             return next(self._bytes)
         except BaseException:  # the end of the stream, or its failure
@@ -185,7 +191,9 @@ class _Relay(Iterator[bytes]):
             raise
 
     def close(self) -> None:
-        self._response.close()  # idempotent
+        self._closed = True
+        if self._response is not None:
+            self._response.close()  # idempotent
 
     def __del__(self) -> None:
         self.close()

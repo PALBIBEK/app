@@ -19,8 +19,8 @@ CPU), and leaves the default executor to short work and the loop's own. Like
 caller does not stop a call already running: its thread runs it to its end (every call
 sent here is bounded by its own timeout). The pool is made, and its size read, once per
 process, on first use, and lives as long as the process. ``busy`` counts the calls
-running on it, a stopped run's still-running call included, and a full pool is logged
-(once a minute at most): the size is a setting, and saturation says to raise it.
+running on it (a stopped run's still-running call included) and those queued for a
+thread, and a full pool is logged (once a minute at most): the size is a setting, and saturation says to raise it.
 
 The served apps have the same limit one layer up: Starlette runs each synchronous route
 (the model gateway's every model call) and each read of a synchronous streamed response
@@ -53,8 +53,10 @@ FULL_WARNING_INTERVAL_S: Final = 60.0
 """How often, at most, a full pool is logged."""
 
 _pool: ThreadPoolExecutor | None = None
+_pool_size = 0
 _lock = threading.Lock()
-_busy = 0
+_running = 0
+_queued = 0
 _warned_at = float("-inf")
 logger = logging.getLogger(__name__)
 
@@ -77,47 +79,71 @@ def _size() -> int:
 def pool() -> ThreadPoolExecutor:
     """The process's pool for long blocking calls, made on first use (its threads start
     only as calls need them)."""
-    global _pool
+    global _pool, _pool_size
     with _lock:
         if _pool is None:
-            _pool = ThreadPoolExecutor(max_workers=_size(), thread_name_prefix="blocking")
+            _pool_size = _size()
+            _pool = ThreadPoolExecutor(max_workers=_pool_size, thread_name_prefix="blocking")
         return _pool
 
 
-def busy() -> int:
-    """Calls running on the pool now, those whose callers were cancelled included: with
-    the pool's size, how near it is to full (each further call would queue)."""
+def busy() -> tuple[int, int]:
+    """(running, queued): the calls on the pool's threads now, those whose callers were
+    cancelled included, and the calls waiting for a thread. Queued calls mean the pool is
+    full: every further model call and tool waits."""
     with _lock:
-        return _busy
+        return _running, _queued
 
 
 def _counted[T](func: Callable[[], T]) -> T:
-    """``func()`` counted as a running call while it runs on its thread."""
-    global _busy, _warned_at
+    """``func()``, counted as running (no longer queued) while it runs on its thread."""
+    global _running, _queued
     with _lock:
-        _busy += 1
-        full = _pool is not None and _busy >= _pool._max_workers
-        if full and time.monotonic() - _warned_at >= FULL_WARNING_INTERVAL_S:
-            _warned_at = time.monotonic()
-        else:
-            full = False
-    if full:
-        logger.warning(
-            "every one of the %d long-call threads is busy: further model calls and tools queue "
-            "until one ends (%s)", _busy, BLOCKING_THREADS_ENV,
-        )
+        _queued -= 1
+        _running += 1
     try:
         return func()
     finally:
         with _lock:
-            _busy -= 1
+            _running -= 1
+
+
+def _queue_one() -> None:
+    """Count a call submitted, and log (once a minute at most) when it must wait."""
+    global _queued, _warned_at
+    with _lock:
+        _queued += 1
+        running, queued, size = _running, _queued, _pool_size
+        warn = running + queued > size and time.monotonic() - _warned_at >= FULL_WARNING_INTERVAL_S
+        if warn:
+            _warned_at = time.monotonic()
+    if warn:
+        logger.warning(
+            "all %d long-call threads are busy (calls waiting for one: %d): model calls and tools "
+            "queue until a thread frees (raise %s)", running, running + queued - size, BLOCKING_THREADS_ENV,
+        )
 
 
 async def run_blocking[T](func: Callable[..., T], /, *args: object, **kwargs: object) -> T:
     """``func(*args, **kwargs)`` on the long-call pool, with the caller's context
     variables: ``asyncio.to_thread`` for calls that wait a long time."""
     call = functools.partial(contextvars.copy_context().run, func, *args, **kwargs)
-    return await asyncio.get_running_loop().run_in_executor(pool(), _counted, call)
+    executor = pool()
+    _queue_one()
+    try:
+        submitted = executor.submit(_counted, call)
+    except BaseException:
+        _unqueue()
+        raise
+    # A call cancelled before a thread took it never runs ``_counted``: it leaves the queue here.
+    submitted.add_done_callback(lambda done: _unqueue() if done.cancelled() else None)
+    return await asyncio.wrap_future(submitted)
+
+
+def _unqueue() -> None:
+    global _queued
+    with _lock:
+        _queued -= 1
 
 
 def widen_request_threads() -> int:

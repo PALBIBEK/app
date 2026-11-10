@@ -44,3 +44,12 @@ def test_a_client_of_the_callers_own_is_still_new() -> None:
     router = ModelRouter(CONFIG)
     with router.http_client() as own:
         assert own is not router.shared_http_client()
+
+
+def test_closing_the_router_closes_its_shared_client() -> None:
+    router = ModelRouter(CONFIG)
+    shared = router.shared_http_client()
+
+    router.close()
+
+    assert shared.is_closed and router.shared_http_client() is not shared

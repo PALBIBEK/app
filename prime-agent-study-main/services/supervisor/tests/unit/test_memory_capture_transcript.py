@@ -417,3 +417,51 @@ def test_a_burst_of_many_stopped_runs_condenses_and_an_overflow_at_its_floor_is_
     extracted, sent = _attempts(always_too_long, monkeypatch, burst)
     assert extracted is None
     assert len(sent) == len(set(sent)), "never the same transcript twice"
+
+
+def test_a_huge_assistant_reply_is_trimmed_so_the_transcript_fits() -> None:
+    """Ours: a reply long enough (a pasted file) outlasted every stage of Grok's and left
+    the transcript over budget at every attempt; it is trimmed, head and tail, before the
+    user's words are."""
+    items = [user("dump the schema"), assistant("s" * 400 * 1024)]
+    budget = TranscriptBudget.for_attempt(4)
+
+    condensed = condense(items, budget)
+
+    assert size(condensed.json) <= budget.max_bytes and not condensed.stats.over_budget
+    assert condensed.stats.assistant_text_trimmed == 1 and condensed.stats.user_text_trimmed == 0
+    assert "dump the schema" in condensed.json
+    assert "assistant replies truncated" in (condensed.stats.prompt_note() or "")
+
+
+def test_trimming_never_makes_text_longer() -> None:
+    """Just over the cap, the marker would cost more than the cut saves."""
+    assert trim_middle("x" * 260, 256) is None
+    trimmed = trim_middle("x" * 2000, 256)
+    assert trimmed is not None and len(trimmed) < 2000
+
+
+def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(turn.asyncio, "sleep", sleep)
+    monkeypatch.setattr(turn.random, "random", lambda: 0.5)  # no jitter: the pause is RETRY_PAUSE_S doubling
+    now = ModelGatewayError(429, "rate limit", retry_after=0.0)
+    later = ModelGatewayError(429, "rate limit", retry_after=12.0)
+    forever = ModelGatewayError(429, "rate limit", retry_after=3600.0)
+
+    async def run() -> None:
+        errors = [now, later, forever]
+
+        async def one_shot(system: str, content: str) -> str:
+            if errors:
+                raise errors.pop(0)
+            return "SENSITIVITY: ordinary\n- ok"
+
+        assert await turn._extract(one_shot, "s1", tool_loop(1, 10)) is not None
+
+    asyncio.run(run())
+    assert waits == [turn.RETRY_PAUSE_S, 12.0, turn.MAX_RETRY_PAUSE_S], "ours, theirs when longer, never past the cap"

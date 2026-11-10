@@ -505,9 +505,11 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
                 if shorter.stats.final_bytes < condensed.stats.final_bytes:
                     budget, again_on, pause = budget + 1, shorter, 0.0
             elif is_retryable(exc):
-                asked = getattr(exc, "retry_after", None)
-                pause = min(MAX_RETRY_PAUSE_S, asked if isinstance(asked, (int, float)) else
-                            RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random()))
+                backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
+                asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit
+                # A provider's wait, when it asks for one longer than ours; never shorter
+                # (a 0 would retry at once, into the same rate limit), never past the cap.
+                pause = min(MAX_RETRY_PAUSE_S, max(backoff, asked) if isinstance(asked, (int, float)) else backoff)
             again = pause is not None and attempt < CAPTURE_ATTEMPTS
             logger.warning(
                 "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",

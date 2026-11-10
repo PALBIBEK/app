@@ -163,7 +163,7 @@ captured and labelled unfinished.
   - a transcript too long for the model is retried on the next, halved budget, and only
     while that is really shorter;
   - a failure that may pass (a 429 or a 503) is retried on the same transcript, after a
-    jittered pause that doubles (or the provider's `Retry-After`, up to 30 s), so nothing
+    jittered pause that doubles (or the provider's `Retry-After` when longer, up to 30 s), so nothing
     is condensed away for it;
   - a refusal (bad key, spent budget, unknown model) is not retried.
 
@@ -172,6 +172,10 @@ captured and labelled unfinished.
   keep their place in the transcript, but their content is withheld (`WITHHELD_RESULT`).
   That content is facts already held, with their own provenance and audience, which a fact
   extracted from them again would lose. It may also be another conversation's history.
+- **Beyond Grok's stages:** an assistant reply long enough to outlast every other stage
+  (a pasted file, say) is trimmed, head and tail, before the user's words are. A trim that
+  would grow the text (just over its cap, the marker costs more than the cut saves) is not
+  made.
 - **Stop markers are kept whole:** omitting middle steps never removes a run's stop
   marker. Each stretch of steps omitted gets its own marker, so in a burst of several runs
   a stopped run never reads as finished.
@@ -186,7 +190,7 @@ three limits that held every session back.
 
 | | Limit | Effect under load | Fix |
 |---|---|---|---|
-| S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256), which counts its running calls (`busy`) and logs when full |
+| S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256), which counts its running and queued calls (`busy`) and logs when calls wait |
 | S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.WithRequestThreads` widens each served app's loop as it starts, without changing the app |
 | S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) and idle ones kept 5 s. Every upstream stream gives its connection back: when read to its end, when closed partway, or when dropped unread |
 

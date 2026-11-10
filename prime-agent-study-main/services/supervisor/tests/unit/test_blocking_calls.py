@@ -139,11 +139,12 @@ async def test_request_threads_are_set_to_the_setting_below_anyios_default_too(m
     assert anyio.to_thread.current_default_thread_limiter().total_tokens == 8
 
 
-async def test_running_calls_are_counted_and_a_full_pool_is_logged(
+async def test_running_and_queued_calls_are_counted_and_a_full_pool_is_logged(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A call keeps its thread to its end, its caller cancelled or not, so the pool says
-    how full it is: ``busy`` counts the calls running, and a full pool is logged."""
+    how full it is: ``busy`` counts the calls running and those waiting for a thread, and a
+    pool that makes calls wait is logged. A waiting call whose caller goes leaves the queue."""
     monkeypatch.setattr(blocking, "_pool", None)
     monkeypatch.setattr(blocking, "_warned_at", float("-inf"))
     monkeypatch.setenv(blocking.BLOCKING_THREADS_ENV, "3")
@@ -157,11 +158,19 @@ async def test_running_calls_are_counted_and_a_full_pool_is_logged(
     calls = [asyncio.create_task(blocking.run_blocking(hold)) for _ in range(3)]
     await asyncio.to_thread(started.wait)
     calls[0].cancel()  # its caller goes; its call keeps the thread
+    waiting = [asyncio.create_task(blocking.run_blocking(hold)) for _ in range(2)]
+    await asyncio.sleep(0)
 
-    assert blocking.busy() == 3
-    assert "every one of the 3 long-call threads is busy" in caplog.text
+    assert blocking.busy() == (3, 2)
+    full = [r.getMessage() for r in caplog.records if "long-call threads are busy" in r.getMessage()]
+    assert len(full) == 1 and "all 3 long-call threads are busy (calls waiting for one: 1)" in full[0], (
+        "logged as the first call waits, once a minute at most")
+    waiting[0].cancel()  # cancelled while it waits: it never takes a thread
+    await asyncio.sleep(0.05)
+    assert blocking.busy() == (3, 1)
+
     release.set()
-    await asyncio.gather(*calls, return_exceptions=True)
-    while blocking.busy():
-        await asyncio.sleep(0.01)
+    started.abort()  # the one still waiting never meets the barrier: let it through
+    await asyncio.gather(*calls, *waiting, return_exceptions=True)
+    assert blocking.busy() == (0, 0)
     blocking.pool().shutdown()

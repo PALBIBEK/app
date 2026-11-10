@@ -280,6 +280,11 @@ class WithRequestThreads:
             widen_request_threads()
         await self.app(scope, receive, send)
 
+    def __getattr__(self, name: str) -> Any:
+        """The app's own attributes (``state``, ``router``), for whatever reads them through
+        the server's config."""
+        return getattr(self.app, name)
+
 
 def listeners(settings: Settings) -> list[tuple[str, Any]]:
     """What this process serves: the API, the model gateway, the memory service.
