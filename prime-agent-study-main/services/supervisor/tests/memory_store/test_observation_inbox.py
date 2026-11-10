@@ -332,3 +332,60 @@ async def test_the_facts_as_they_were_keep_their_type(svc: MemoryServiceHandle) 
     (then,) = await client.facts_at(nb.id, 1)
 
     assert then.typed == fact.typed
+
+
+async def test_a_queued_capture_that_cannot_land_is_set_aside_not_the_queue_behind_it(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.types import Provenance
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    store = memory.notebooks.store
+    await store.append_inbox(nb.id, [{"type": "bogus"}], Provenance(Sensitivity.ORDINARY, (), False),
+                             author=None, expires_on=None, idempotency_key="bad")  # a row no longer readable
+    await client.observe(nb.id, [draft("Lands behind it")], context=OWN)
+
+    await memory.inbox.drain()
+
+    assert [f.text for f in await client.facts(nb.id)] == ["Lands behind it"]
+    for _ in range(PROMOTE_ATTEMPTS):
+        await memory.notebooks.promote(nb.id)
+    assert await store.pending() == 0, "given up after its attempts, never retried forever"
+
+
+async def test_a_retire_id_that_is_not_one_is_refused(svc: MemoryServiceHandle) -> None:
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+
+    for bad in ("abc", "9" * 30):
+        with pytest.raises(InvalidObservation, match="not a fact id"):
+            await client.observe(nb.id, [draft("x")], context=OWN, retire=[bad])
+
+
+async def test_a_fact_the_capture_restates_is_never_the_one_it_retires(svc: MemoryServiceHandle) -> None:
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["User prefers tabs"], context=OWN)
+    (old,) = await client.facts(nb.id)
+
+    await client.observe(nb.id, [draft("user prefers tabs")], context=OWN, retire=[old.id])
+    await svc.app.state.memory.inbox.drain()
+
+    assert [f.text for f in await client.facts(nb.id)] == ["User prefers tabs"]
+
+
+async def test_a_full_notebook_still_takes_a_repeat_or_a_replacement(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
+    (old,) = await client.facts(nb.id)
+
+    assert await client.observe(nb.id, [draft("deploys use flag a")], context=OWN) == 1, "a repeat adds nothing"
+    assert await client.observe(nb.id, [draft("Deploys use flag B")], context=OWN, retire=[old.id]) == 1

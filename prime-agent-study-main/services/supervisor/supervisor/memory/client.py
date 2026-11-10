@@ -281,20 +281,12 @@ class NotebookClient:
             "retire": list(retire),
             "idempotency_key": idempotency_key,
         }
-        for attempt in range(OBSERVE_ATTEMPTS):
-            try:
-                return int((await self._on(notebook_id, "POST", "/observations", json=body))["queued"])
-            except RouteMissing:
-                # Remembered a while, then asked again (a rolling upgrade brings the route).
-                self._no_observations_until = time.monotonic() + OLDER_SERVICE_RECHECK_S
-                return None
-            except RateLimited as exc:
-                # Queuing is cheap and keyed: a burst from one tenant waits its turn rather
-                # than losing its memories (a capture that fails is dropped, G3).
-                if attempt + 1 == OBSERVE_ATTEMPTS:
-                    raise
-                await asyncio.sleep(min(exc.retry_after, 2.0) * (0.5 + random.random()))
-        raise AssertionError("unreachable")
+        try:
+            return int((await self._on(notebook_id, "POST", "/observations", json=body))["queued"])
+        except RouteMissing:
+            # Remembered a while, then asked again (a rolling upgrade brings the route).
+            self._no_observations_until = time.monotonic() + OLDER_SERVICE_RECHECK_S
+            return None
 
     async def edit(
         self,
@@ -348,6 +340,20 @@ class NotebookClient:
         return await self._call(tenant, method, f"/v1/notebooks/{notebook_id}{suffix}", **kw)
 
     async def _call(self, tenant_id: str, method: str, path: str, **kw: Any) -> Any:
+        """One request; one the service's per-tenant change limit refused is asked again
+        (``RATE_LIMITED_ATTEMPTS``, Retry-After apart): it was refused before it ran, so
+        asking again is safe whatever it does, and a burst of one tenant's sessions waits
+        its turn instead of failing (a memory write, a notebook ensured, a capture)."""
+        for attempt in range(RATE_LIMITED_ATTEMPTS):
+            try:
+                return await self._request(tenant_id, method, path, **kw)
+            except RateLimited as exc:
+                if attempt + 1 == RATE_LIMITED_ATTEMPTS:
+                    raise
+                await asyncio.sleep(min(exc.retry_after, 2.0) * (0.5 + random.random()))
+        raise AssertionError("unreachable")
+
+    async def _request(self, tenant_id: str, method: str, path: str, **kw: Any) -> Any:
         headers = {}
         if token := self._credential(tenant_id):
             headers["Authorization"] = f"Bearer {token}"
@@ -457,8 +463,8 @@ class RateLimited(MemoryUnavailable):
 
 OLDER_SERVICE_RECHECK_S = 600.0
 """How long a service found without ``/observations`` is taken as older than G2."""
-OBSERVE_ATTEMPTS = 4
-"""Tries a rate-limited ``observe`` makes (Retry-After apart, at most 2 s each)."""
+RATE_LIMITED_ATTEMPTS = 4
+"""Tries a rate-limited request makes (Retry-After apart, at most 2 s each)."""
 
 
 class RouteMissing(NotebookNotFound):

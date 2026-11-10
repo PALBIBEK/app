@@ -88,3 +88,27 @@ async def test_the_memory_client_keeps_no_cookie_from_one_tenant_for_another() -
     await client.aclose()
 
     assert sent == [None, None]
+
+
+async def test_a_rate_limited_memory_request_is_asked_again() -> None:
+    """Refused before it ran, so safe to ask again whatever it does: a burst of one
+    tenant's sessions waits its turn instead of failing (the load test's one error)."""
+    import httpx
+
+    from supervisor.memory.client import NotebookClient
+
+    answers = [429, 429, 200]
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        status = answers.pop(0)
+        if status == 429:
+            return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow down"}},
+                                  headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"added": 1})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        assert await client.capture("t1~abc", ["x"]) == 1
+    finally:
+        await client.aclose()
+    assert answers == []

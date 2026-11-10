@@ -591,6 +591,38 @@ class NotebookStore:
             await db.commit()
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
 
+    async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, dict[str, str]]:
+        """In one read: the notebook's live facts, and the live text of each of ``retire``."""
+        async with self._db() as db:
+            live = int(
+                await db.scalar(
+                    select(func.count())
+                    .select_from(FactRow)
+                    .where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
+                )
+                or 0
+            )
+            texts: dict[str, str] = {}
+            if retire:
+                rows = await db.execute(
+                    select(FactRow.id, FactRow.text).where(
+                        FactRow.notebook_id == notebook_id,
+                        FactRow.id.in_([int(i) for i in retire]),
+                        FactRow.deleted_at.is_(None),
+                    )
+                )
+                texts = {str(i): str(t) for i, t in rows}
+            return live, texts
+
+    async def all_texts(self, notebook_id: str) -> list[str]:
+        """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""
+        async with self._db() as db:
+            return list(
+                await db.scalars(
+                    select(FactRow.text).where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
+                )
+            )
+
     async def live_count(self, notebook_id: str) -> int:
         """The notebook's live facts."""
         async with self._db() as db:

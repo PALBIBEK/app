@@ -55,16 +55,24 @@ class InboxDrainer:
         promotion keeps failing is tried again later, backing off, so it never holds up
         the others' (nor fills a pass with failures)."""
         landed = 0
-        while notebooks := await self._ops.store.pending_notebooks(limit=NOTEBOOKS_PER_PASS, skip=self._backing_off()):
+        while True:
+            await self._prune()  # here too: under steady load a drain may never end
+            notebooks = await self._ops.store.pending_notebooks(limit=NOTEBOOKS_PER_PASS, skip=self._backing_off())
+            if not notebooks:
+                break
             done = await asyncio.gather(*(self._promote(n) for n in notebooks))
             landed += sum(c for c in done if c)
             if not any(done):
                 break  # promoting elsewhere (another replica took its turn): the next pass sees
-        await self._prune()
         return landed
 
     def _backing_off(self) -> list[str]:
+        """The notebooks to leave for now; one whose backoff ran out long ago is forgotten
+        (erased, say, or emptied elsewhere): nothing is kept for it."""
         now = time.monotonic()
+        for notebook_id, (_, until) in list(self._failing.items()):
+            if until + MAX_BACKOFF_S < now:
+                del self._failing[notebook_id]
         return [n for n, (_, until) in self._failing.items() if until > now]
 
     async def _promote(self, notebook_id: str) -> int:

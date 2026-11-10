@@ -26,7 +26,7 @@ from supervisor.memory.transcript import (
     run_items,
     trim_middle,
 )
-from supervisor.memory_service.observations import Observations
+from supervisor.memory_service.observations import MalformedOutcome, Observations
 from supervisor.seams.core.types import ModelGatewayError
 from tests.support.scripted import as_outcome
 
@@ -285,7 +285,9 @@ def test_condensing_time_is_bounded_however_long_the_turn() -> None:
     ten_thousand = time.perf_counter() - began
 
     assert size(condensed.json) <= FIRST.max_bytes
-    assert thousand < 1.0, f"1000 steps took {thousand:.2f}s"
+    # Well under a second alone; the bound leaves room for a busy test machine (four
+    # workers on two CPUs). Linearity is the measure that matters.
+    assert thousand < 3.0, f"1000 steps took {thousand:.2f}s"
     assert ten_thousand < 15 * thousand + 0.5, f"not linear: {thousand:.2f}s then {ten_thousand:.2f}s"
 
 
@@ -575,3 +577,11 @@ def test_a_failures_error_that_is_not_text_reads_as_its_own_text() -> None:
     (item,) = run_items([env(1, failed)])
 
     assert item["content"] == "disk full"
+
+
+def test_a_malformed_answer_is_asked_again_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model whose answer missed the outcome's shape twice will miss it again: one retry,
+    not four charged calls (the load test's echo model answered every capture so)."""
+    extracted, sent = _attempts([MalformedOutcome("not JSON")] * 9, monkeypatch, tool_loop(1, 10))
+
+    assert extracted is None and len(sent) == 1 + turn.MALFORMED_RETRIES

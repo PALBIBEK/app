@@ -236,7 +236,7 @@ async def capture_facts(notebook_id: str, body: CaptureIn, request: Request) -> 
 async def observe(notebook_id: str, body: ObserveIn, request: Request) -> dict[str, int]:
     """Queue an automatic capture's typed observations (G2): accepted now, facts once the
     inbox is drained (``notebooks.inbox``)."""
-    await _owned(request, notebook_id)
+    notebook = await _owned(request, notebook_id)
     try:
         drafts = [wire.observation_in(o) for o in body.observations]
         queued = await _ops(request).observe(
@@ -246,6 +246,7 @@ async def observe(notebook_id: str, body: ObserveIn, request: Request) -> dict[s
             context=wire.context_in(body.context),
             retire=body.retire,
             idempotency_key=body.idempotency_key,
+            notebook=notebook,
         )
     except ObservationInvalid as exc:
         raise _error(InvalidObservation(str(exc))) from exc

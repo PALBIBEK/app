@@ -519,6 +519,8 @@ of calls (and of the session's spend)."""
 RETRY_PAUSE_S: Final = 1.0
 """The pause before retrying a failure that may pass, doubled before each later one and
 jittered, so every capture failing at once does not retry at once."""
+MALFORMED_RETRIES: Final = 1
+"""Retries an extraction makes for answers that are not a valid outcome."""
 RETRY_WINDOW_S: Final = 240.0
 """No retry starts past this long into a capture's extraction, its pause included: the
 capture activity has ten minutes (``temporal.policies``) for extraction, resolution and
@@ -537,12 +539,12 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
       same transcript, after a pause, so nothing is condensed away for a failure that has
       nothing to do with length;
     * an answer that is not a valid outcome (``MalformedOutcome``: not JSON, an unknown
-      field, an observation past its bounds): the same transcript, at once (Grok Build
-      retries malformed output; a model's next answer often parses);
+      field, an observation past its bounds): the same transcript, at once, once (Grok
+      Build retries malformed output; a model's next answer often parses, a third rarely);
     * anything else (a refused key, a spent budget, an unknown model): not at all, since
       it would fail the same way, and each call may be charged.
     """
-    budget, began = 1, time.monotonic()
+    budget, began, malformed = 1, time.monotonic(), 0
     # Condensing is CPU work that grows with the burst (megabytes of tool output are
     # re-encoded at each stage): off the loop, which carries every other session's steps.
     condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
@@ -565,7 +567,10 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
                 if shorter.stats.final_bytes < condensed.stats.final_bytes:
                     budget, again_on, pause = budget + 1, shorter, 0.0
             elif isinstance(exc, MalformedOutcome):
-                pause = 0.0
+                # Once: a model whose answer missed the outcome's shape twice will miss it
+                # again, and each call is charged (the load test found four a capture).
+                malformed += 1
+                pause = 0.0 if malformed <= MALFORMED_RETRIES else None
             elif is_retryable(exc):
                 backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
                 asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit
