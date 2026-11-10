@@ -151,6 +151,7 @@ jobs:
           --health-cmd "pg_isready -U prime" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SUPERVISOR_TEST_PG_URL: postgresql+asyncpg://prime:prime@127.0.0.1:5432/postgres
+      MEMORY_CONCURRENCY_REQUIRED: "1"  # memory's concurrency tests fail here, never skip (tests/support/memory_pg.py)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

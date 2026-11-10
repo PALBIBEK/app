@@ -126,12 +126,13 @@ async def test_a_capture_waits_only_on_its_own_notebooks_lock(replicas: Replicas
                 assert await asyncio.wait_for(second.capture(b.id, ["Never waits"], context=OWN), 10) == 1
                 await asyncio.sleep(0.5)
                 assert not waiting.done(), "a capture into the locked notebook waits"
+            finally:
+                # Whatever failed: release the lock first, so the service finishes the waiting
+                # capture (cancelling only the client would leave it running server-side
+                # into the database's teardown), then wait for it.
                 await holder.rollback()
-                assert await asyncio.wait_for(waiting, 10) == 1
-            finally:  # never left running into the next test, whatever failed
-                if not waiting.done():
-                    waiting.cancel()
-                await asyncio.gather(waiting, return_exceptions=True)
+                landed = await asyncio.wait_for(asyncio.gather(waiting, return_exceptions=True), 10)
+            assert landed == [1]
     finally:
         await engine.dispose()
     assert [f.text for f in await first.facts(a.id)] == ["Waits for the lock"]

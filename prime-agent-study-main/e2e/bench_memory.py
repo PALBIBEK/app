@@ -28,8 +28,9 @@ When every session is done, each owner's notebook is read once more, and the che
 on that final read:
 
 * every fact a session wrote, and its owner's shared fact, is there exactly once (lost,
-  duplicated); an owner whose final read failed is *unverified*, never scored from an
-  earlier, partial read;
+  duplicated): the shared fact is written by every session of its owner, at once, and by
+  any retry, so a second copy is memory failing to deduplicate, not the harness; an owner
+  whose final read failed is *unverified*, never scored from an earlier, partial read;
 * each session's own facts were in its owner's next recall, when recall had room
   (unrecalled); a run that recalled nothing is a session error;
 * no notebook or injection holds another owner's token (crossed);
@@ -55,6 +56,8 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from client import User, payloads, runs_ended
 
@@ -94,7 +97,8 @@ def token(run: str, owner: str, what: str) -> str:
 def owner_of(run: str, tenant: str, agent: str, session: int, per_owner: int) -> str:
     """The user a session runs as: ``per_owner`` sessions each, new users every run, so one
     run's notebooks hold only its own facts."""
-    return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}"
+    # No part of a token may hold its end marker, or ``TOKEN`` would stop inside it.
+    return f"{tenant}-{agent}-{run}-u{session // per_owner:03d}".replace("qz", "q-z")
 
 
 def pin(composition: dict[str, Any]) -> str:
@@ -159,13 +163,13 @@ def wait_for_capture(user: User, composition: dict[str, Any], said: str, began: 
     deadline. Polls back off, and a failed poll is retried, not a failed session: polling
     must neither load the stack it measures nor turn a transient error into a lost fact."""
     deadline, wait = began + 2 * args.quiet + 120, 1.0
-    time.sleep(args.quiet)  # nothing is captured before the quiet window ends
+    time.sleep(args.quiet)  # the quiet window, from the turn's end: nothing is captured before it
     while time.time() < deadline:
         try:
             if any(said in f for f in notebook_facts(user, composition)):
                 return round(time.time() - began, 1)
-        except RuntimeError:
-            pass  # a refused or failed read: the next poll asks again
+        except (RuntimeError, httpx.HTTPError):
+            pass  # a refused, failed or timed-out read: the next poll asks again
         time.sleep(wait)
         wait = min(wait * 2, 10.0)
     return None
@@ -188,6 +192,8 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
         run = turn(user, sid, "/tool memory " + json.dumps({"action": "add", "facts": facts}), 1, args.timeout)
         ends = payloads(run, "ToolEnd")
         out["write_ok"] = bool(ends) and (ends[0].get("result") or {}).get("ok") is True
+        if not out["write_ok"]:  # never a clean session with its facts unscored
+            raise RuntimeError(f"the memory tool did not write: {(ends[0].get('result') if ends else 'no ToolEnd')!r:.200}")
 
         later = session(user, composition)
         run = turn(user, later, "What are my locker words?", 1, args.timeout)
@@ -200,11 +206,13 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
         if args.capture_model:
             out["said"] = token(run_id, owner, f"s{s}a{attempt}said")
             spoke = session(user, composition, args.capture_model, capture_quiet_s=args.quiet, capture_max_turns=1)
-            began = time.time()
             turn(user, spoke, f"Please remember for later: my locker word is {out['said']}.", 1, args.timeout)
-            out["capture_s"] = wait_for_capture(user, composition, out["said"], began, args)
+            # From the turn's end, where capture's quiet window starts (not the model's reply).
+            out["capture_s"] = wait_for_capture(user, composition, out["said"], time.time(), args)
     except Exception as exc:  # noqa: BLE001 — a session's failure is its row, the load goes on
         out["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        user.http.close()
     return out
 
 
@@ -239,7 +247,11 @@ def run(args: argparse.Namespace) -> bool:
             done.add(key)
     tenants = [f"bench{t}" for t in range(args.tenants)]
     names = args.compositions.split(",")
-    compositions = {name: User(tenants[0], "bench-admin").latest("composition", name) for name in names}
+    admin = User(tenants[0], "bench-admin")
+    try:
+        compositions = {name: admin.latest("composition", name) for name in names}
+    finally:
+        admin.http.close()
     cells = [(t, a, s) for t in tenants for a in names for s in range(args.sessions)]
     todo = [c for c in cells if c not in done]
     print(f"run {run_id}: {len(cells)} sessions ({len(tenants)} tenants x {len(names)} agents x {args.sessions}), "
@@ -262,10 +274,13 @@ def run(args: argparse.Namespace) -> bool:
     # before its owner's other sessions wrote): what lost and duplicated are judged on.
     for t, a, owner in sorted({(t, a, owner_of(run_id, t, a, s, args.per_owner)) for t, a, s in cells}):
         final: Row = {"run": run_id, "final": owner, "tenant": t, "agent": a}
+        reader = User(t, owner)
         try:
-            final["notebook"] = notebook_facts(User(t, owner), compositions[a])
+            final["notebook"] = notebook_facts(reader, compositions[a])
         except Exception as exc:  # noqa: BLE001 — the owner is then unverified, not scored
             final["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            reader.http.close()
         write(final)
     print(f"done in {time.time() - began:.0f}s", flush=True)
     return report([str(results)], quiet_s=args.quiet, run_id=run_id)
@@ -309,7 +324,9 @@ def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) ->
     by_owner: dict[str, list[Row]] = {}
     for r in rows:
         by_owner.setdefault(r["owner"], []).append(r)
-    owner_by_token = {t: r["owner"] for r in every if "final" not in r for t in [*r.get("mine", []), r.get("shared", "")]}
+    owner_by_token = {
+        t: r["owner"] for r in every if "final" not in r for t in [*r.get("mine", []), r.get("shared", ""), r.get("said", "")] if t
+    }
 
     lost = duplicated = crossed = unrecalled = unverified = 0
     for owner, sessions in by_owner.items():
@@ -323,7 +340,7 @@ def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) ->
             lost += n == 0
             duplicated += n > 1
         seen = set(TOKEN.findall(" ".join(notebook) + " " + " ".join(r.get("injected", "") for r in sessions)))
-        crossed += sum(1 for t in seen if owner_by_token.get(t, owner) != owner)
+        crossed += sum(1 for t in seen if owner_by_token.get(t) != owner)  # a token no session made crossed too
     for r in rows:
         injected = r.get("injected")
         if r.get("error") or injected is None or len(injected) >= ROOM * RECALL_MAX_CHARS:

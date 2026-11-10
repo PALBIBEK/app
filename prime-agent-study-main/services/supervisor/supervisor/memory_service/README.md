@@ -59,6 +59,7 @@ which knows scopes and their members; this service never imports it.
 | Metrics | `GET /v1/metrics` |
 | Cost | Embed cache (LRU, 20,000 vectors per process); skip barren `turn/end` extraction |
 | Vector search | On Postgres with the pgvector extension (images: `pgvector/pgvector:0.8.0-pg16`), `memory_item.embedding_vec` (kept in step by a trigger) gives bank recall the 80 nearest live items of a scope, found exactly through the scope index; without it (or on SQLite) recall ranks every live item. A managed Postgres needs `vector` available to `CREATE EXTENSION` |
+| Connections | Each replica holds up to `MEMORY_DB_POOL_SIZE` (5) + `MEMORY_DB_MAX_OVERFLOW` (10) Postgres connections: keep replicas × their sum under the server's `max_connections`, or put a pooler (PgBouncer) in front |
 | Database | `MEMORY_DATABASE_URL`; unset falls back to `./memory.db` locally only: with `ENV` production or staging it must be set, and in production it must not be SQLite (unless `MEMORY_ALLOW_SQLITE=1`) |
 | Tenant | `TenantGate`; Postgres `rls_postgres.sql` |
 

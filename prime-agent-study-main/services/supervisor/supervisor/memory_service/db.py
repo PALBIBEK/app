@@ -38,12 +38,38 @@ def database_url_from_env(environ: Mapping[str, str] = os.environ) -> str:
     return url
 
 
+POOL_SIZE_ENV = "MEMORY_DB_POOL_SIZE"
+MAX_OVERFLOW_ENV = "MEMORY_DB_MAX_OVERFLOW"
+
+
+def pool_settings(environ: Mapping[str, str] = os.environ) -> dict[str, int]:
+    """One replica's Postgres connections: ``MEMORY_DB_POOL_SIZE`` kept open (5) and
+    ``MEMORY_DB_MAX_OVERFLOW`` more under load (10), SQLAlchemy's own defaults.
+
+    Every replica holds up to their sum, so replicas × (pool + overflow) has to stay under
+    the server's ``max_connections`` (100 by default) with room for everything else that
+    connects: scaling the service out means sizing these down, or putting a pooler such as
+    PgBouncer in front."""
+    def number(name: str, default: int) -> int:
+        raw = environ.get(name, "").strip()
+        if not raw:
+            return default
+        value = int(raw)  # a typo fails the replica's start, not its first busy minute
+        if value < 0:
+            raise ValueError(f"{name} must be 0 or more, not {value}")
+        return value
+
+    return {"pool_size": number(POOL_SIZE_ENV, 5), "max_overflow": number(MAX_OVERFLOW_ENV, 10)}
+
+
 def make_engine(database_url: str = "sqlite+aiosqlite:///:memory:") -> AsyncEngine:
     kwargs: dict = {"echo": False}
     if database_url.startswith("sqlite") and ":memory:" in database_url:
         kwargs["connect_args"] = {"check_same_thread": False}
         kwargs["poolclass"] = StaticPool
         database_url = "sqlite+aiosqlite://"
+    elif database_url.startswith("postgresql"):
+        kwargs.update(pool_settings())
     return create_async_engine(database_url, **kwargs)
 
 

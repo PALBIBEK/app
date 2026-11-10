@@ -6,9 +6,14 @@ memory-service replicas that share one Postgres. A test of a memory guarantee is
 worth its name when it holds there, so:
 
 * **Postgres only.** SQLite serializes writers in one file and has no ``FOR UPDATE SKIP
-  LOCKED``, so a race run on it proves nothing. Locally the fixture skips without a test
-  server (``MEMORY_TEST_PG_URL`` or ``SUPERVISOR_TEST_PG_URL``); in CI (``CI`` set) a
-  missing server fails the test instead, so a broken job cannot pass by skipping.
+  LOCKED``, so a race run on it proves nothing. Without a test server
+  (``MEMORY_TEST_PG_URL`` or ``SUPERVISOR_TEST_PG_URL``) the tests skip, unless
+  ``MEMORY_CONCURRENCY_REQUIRED`` is set (CI's ``tests`` job sets it beside its server):
+  then they fail, so that job cannot pass by skipping.
+* **Within the server's connections.** Each replica's pool is small
+  (``MEMORY_DB_POOL_SIZE`` / ``MEMORY_DB_MAX_OVERFLOW``: 2 + 2), so four test workers, each
+  with up to eight replicas, stay under a default server's 100 connections; writers still
+  contend, on the rows, as production replicas do.
 * **Real replicas.** Each replica is its own memory-service app: its own engine and
   connection pool and its own background loops (extraction worker, buffer sweeper,
   archiver), on the shared database, as production replicas are. Replicas start together, so their schema bootstrap races too.
@@ -33,6 +38,8 @@ from supervisor.memory.client import NotebookClient
 from tests.support.notebooks import MemoryServiceHandle, memory_service
 
 PG_URL = os.environ.get("MEMORY_TEST_PG_URL") or os.environ.get("SUPERVISOR_TEST_PG_URL") or ""
+POOL = {"MEMORY_DB_POOL_SIZE": "2", "MEMORY_DB_MAX_OVERFLOW": "2"}
+"""Each replica's connections in these tests (see the module's docstring)."""
 
 
 class Replicas:
@@ -58,16 +65,18 @@ class Replicas:
 
 def _require_server() -> str:
     if not PG_URL:
-        if os.environ.get("CI"):
+        if os.environ.get("MEMORY_CONCURRENCY_REQUIRED"):
             pytest.fail("memory concurrency tests need Postgres: set SUPERVISOR_TEST_PG_URL")
         pytest.skip("no Postgres test server (set MEMORY_TEST_PG_URL or SUPERVISOR_TEST_PG_URL)")
     return PG_URL
 
 
 @pytest_asyncio.fixture
-async def replicas() -> AsyncIterator[Replicas]:
+async def replicas(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Replicas]:
     """A fresh Postgres database for one test, and the replicas it starts on it."""
     server = _require_server()
+    for name, value in POOL.items():
+        monkeypatch.setenv(name, value)
     name = f"memrace_{uuid.uuid4().hex[:10]}"
     admin = create_async_engine(server, isolation_level="AUTOCOMMIT")
     try:
