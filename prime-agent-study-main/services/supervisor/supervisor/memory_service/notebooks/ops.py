@@ -14,10 +14,11 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
-from typing import Literal
+from typing import Final, Literal
 
-from sqlalchemy import delete, select, update
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy import select, update
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -66,6 +67,9 @@ logger = logging.getLogger(__name__)
 
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
+_TRANSIENT: Final = (OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError, TimeoutError)
+"""Failures of the database's connection or the network, which pass: never a capture's own.
+A constraint or data error (``IntegrityError``, ``DataError``) is the capture's, and counted."""
 PROMOTE_ATTEMPTS = 5
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
@@ -166,7 +170,7 @@ class NotebookOps:
         retire_ids = [_fact_id(i) for i in retire]
         drafts = [c for c in (_cleaned(d) for d in drafts) if c is not None]
         if not drafts:
-            return 0
+            raise InvalidObservation("every statement is empty")  # said, not a capture that quietly did nothing
         for draft in drafts:
             try:
                 draft.validate()
@@ -180,14 +184,16 @@ class NotebookOps:
         # One read: the notebook's size, and each fact to retire with its text now (it is
         # retired when the capture lands only if it still says that: a fact edited meanwhile
         # is not the one resolution judged false).
-        live, texts = await self.store.capacity(notebook_id, retire_ids)
-        if live - len(texts) >= MAX_FACTS_PER_NOTEBOOK:
-            # Full, with no room made by what it retires: refused now, as ``capture`` refuses,
-            # unless it only repeats facts it holds (that read only when full, never near it;
-            # near it, what overfills is dropped as it lands, logged).
+        live, queued, texts = await self.store.capacity(notebook_id, retire_ids)
+        if live + queued + len(drafts) - len(texts) > MAX_FACTS_PER_NOTEBOOK:
+            # Past the limit, counting what is queued (so concurrent captures cannot all pass on
+            # one count) and the room its retirements free: refused now, as ``capture``
+            # refuses, unless what it adds that is new fits (a repeat adds nothing). Every
+            # text is read only here, past the limit.
             known = {normalize(t) for t in await self.store.all_texts(notebook_id)}
-            new = sum(1 for d in drafts if normalize(d.statement) not in known)
-            _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + new - len(texts))
+            pending = {normalize(t) for t in await self.store.queued_statements(notebook_id)} - known
+            new = {normalize(d.statement) for d in drafts} - known - pending
+            _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + len(pending) + len(new) - len(texts))
         retired = [{"id": fact_id, "text": text} for fact_id, text in texts.items()]
         provenance = capture_provenance(notebook.home, context)
         queued = await self.store.append_inbox(
@@ -231,8 +237,8 @@ class NotebookOps:
             dropped = await self.store.drop_inbox(notebook_id)
             logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
             return dropped, 0
-        except (DBAPIError, OSError, TimeoutError):
-            raise  # the database or the network, not the capture: nothing counted against it
+        except _TRANSIENT:
+            raise  # the database's connection or the network, not the capture: nothing counted against it
         except Exception:
             if batch == 1:
                 await self._count_failure(notebook_id)
@@ -268,11 +274,13 @@ class NotebookOps:
                 )
             )
             added = 0
-            existing = await live_facts(tx) if rows else {}  # once a batch, kept current
+            current = await tx.current() if rows else []
+            existing = {normalize(f.text): f for f in current}  # once a batch, kept current
+            by_id = {f.id: f for f in current}  # every live fact, two of one text included
             for row in rows:
                 drafts = _readable(notebook_id, row)
                 if drafts is not None:  # one that cannot be read never will be: set aside, not the queue
-                    added += await _promote_row(tx, row, drafts, existing)
+                    added += await _promote_row(tx, row, drafts, existing, by_id)
             # Any other failure (the database, the embedder) fails the whole batch, rolled back
             # with nothing marked: the drainer backs the notebook off and tries it again.
             if rows:
@@ -332,8 +340,12 @@ class NotebookOps:
         async def run(tx: FactTx) -> int:
             facts = await tx.current()
             await tx.remove(facts)
+            # Marked as handled, not deleted: a retried burst still finds its key (and lands
+            # nothing); pruned with the rest in time.
             await tx.db.execute(
-                delete(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                update(InboxRow)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .values(promoted_at=tx.at)
             )
             return len(facts)
 
@@ -410,6 +422,7 @@ async def land(
     existing: dict[str, Fact] | None = None,
     over_limit: Literal["refuse", "drop"] = "refuse",
     room: int = 0,
+    by_id: dict[str, Fact] | None = None,
 ) -> tuple[int, bool]:
     """Add each (text, type) to the notebook, under the caller's lock: (facts added,
     whether every entry was kept).
@@ -435,6 +448,8 @@ async def land(
             if typed is not None and duplicate.typed is None:
                 await tx.set_typed(duplicate, typed)
                 duplicate = existing[key] = replace(duplicate, typed=typed)
+            if by_id is not None:
+                by_id[duplicate.id] = duplicate
             continue
         if len(existing) + 1 > MAX_FACTS_PER_NOTEBOOK + room:
             if over_limit == "drop":
@@ -446,6 +461,8 @@ async def land(
             _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
         fact_id = await tx.insert(text, provenance, expires_on=expires_on, typed=typed)
         existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, tx.author, expires_on, typed)
+        if by_id is not None:  # the caller's id index, kept current
+            by_id[fact_id] = existing[key]
         added += 1
     return added, True
 
@@ -492,7 +509,9 @@ def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
     return drafts
 
 
-async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDraft], existing: dict[str, Fact]) -> int:
+async def _promote_row(
+    tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDraft], existing: dict[str, Fact], by_id: dict[str, Fact]
+) -> int:
     """Land one queued capture, then retire what it makes false (only when all of it was
     kept, only facts that still say what resolution judged, and never one the capture
     itself just restated); the facts added."""
@@ -500,11 +519,10 @@ async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDr
     provenance = Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown))
     entries = [(d.statement, typed_of(d)) for d in drafts]
     restated = {normalize(text) for text, _ in entries}
-    by_id = {f.id: key for key, f in existing.items()}
     gone = [
         by_id[r["id"]]
         for r in row.retire or ()
-        if r["id"] in by_id and existing[by_id[r["id"]]].text == r["text"] and by_id[r["id"]] not in restated
+        if r["id"] in by_id and by_id[r["id"]].text == r["text"] and normalize(by_id[r["id"]].text) not in restated
     ]
     # What it retires makes room for what replaces it (as observe counted): a full notebook
     # takes the replacement, then loses the fact it replaces. Only when all of it fits:
@@ -512,12 +530,15 @@ async def _promote_row(tx: FactTx, row: InboxRow, drafts: Sequence[ObservationDr
     new = len({key for key in restated if key not in existing})
     room = len(gone) if len(existing) + new <= MAX_FACTS_PER_NOTEBOOK + len(gone) else 0
     landed, whole = await land(
-        tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=room
+        tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=room, by_id=by_id
     )
     if gone and whole:
-        await tx.remove([existing[key] for key in gone])
-        for key in gone:
-            del existing[key]
+        await tx.remove(gone)
+        for fact in gone:
+            del by_id[fact.id]
+            key = normalize(fact.text)
+            if key in existing and existing[key].id == fact.id:
+                del existing[key]
     return landed
 
 

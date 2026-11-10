@@ -147,6 +147,7 @@ class InboxRow(Base):
     )
     idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     observations: Mapped[list] = mapped_column(JSON, nullable=False)  # wire.observation_out each
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # len(observations): counted, not parsed
     retire: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # fact ids it makes false
     sensitivity: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

@@ -348,8 +348,8 @@ class NotebookClient:
             try:
                 return await self._request(tenant_id, method, path, **kw)
             except RateLimited as exc:
-                if attempt + 1 == RATE_LIMITED_ATTEMPTS:
-                    raise
+                if attempt + 1 == RATE_LIMITED_ATTEMPTS or exc.retry_after > MAX_RATE_WAIT_S:
+                    raise  # a wait longer than ours would end inside the window: not asked again
                 # The wait asked for, never less (a retry inside the window meets the same
                 # limit), jittered upward so a burst's retries spread; at most MAX_RATE_WAIT_S.
                 await asyncio.sleep(min(max(exc.retry_after, 0.2) * (1 + random.random() / 2), MAX_RATE_WAIT_S))

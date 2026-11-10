@@ -549,6 +549,7 @@ class NotebookStore:
                     notebook_id=notebook_id,
                     idempotency_key=idempotency_key,
                     observations=list(observations),
+                    size=len(observations),
                     retire=list(retire),
                     author=author,
                     expires_on=expires_on,
@@ -599,8 +600,9 @@ class NotebookStore:
             await db.commit()
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
 
-    async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, dict[str, str]]:
-        """In one read: the notebook's live facts, and the live text of each of ``retire``."""
+    async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, int, dict[str, str]]:
+        """In one read: the notebook's live facts, the facts its captures queued hold, and
+        the live text of each of ``retire``."""
         async with self._db() as db:
             live = int(
                 await db.scalar(
@@ -620,20 +622,38 @@ class NotebookStore:
                     )
                 )
                 texts = {str(i): str(t) for i, t in rows}
-            return live, texts
+            queued = int(
+                await db.scalar(
+                    select(func.coalesce(func.sum(InboxRow.size), 0))
+                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                )
+                or 0
+            )
+            return live, queued, texts
 
     async def embed_queued(self, notebook_id: str, *, limit: int) -> None:
         """Embed the facts of the notebook's oldest queued captures now, outside its lock:
         the embedder keeps them (``cost.CachingEmbedder``), so landing them under the lock
         embeds nothing."""
         async with self._db() as db:
+            notebook = await db.get(NotebookRow, notebook_id)
+            if notebook is None:
+                return
             rows = await db.scalars(
-                select(InboxRow.observations)
+                select(InboxRow)
                 .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
                 .order_by(InboxRow.id)
                 .limit(limit)
             )
-            statements = [o.get("statement") for observations in rows for o in observations or () if isinstance(o, dict)]
+            statements = [
+                o.get("statement")
+                for row in rows
+                # Only what will be indexed: a fact the bank may not hold is embedded by no one.
+                if bankable(notebook, Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()),
+                                                 bool(row.source_unknown)), row.expires_on)
+                for o in row.observations or ()
+                if isinstance(o, dict)
+            ]
         texts = [s for s in statements if isinstance(s, str) and s]
         if texts:
             # On a thread: an embedder may be slow, and the loop serves every other request.
@@ -657,6 +677,19 @@ class NotebookStore:
             await db.commit()
             return int(row.attempts), int(row.id)
 
+    async def queued_statements(self, notebook_id: str) -> list[str]:
+        """Every statement the notebook's queued captures hold."""
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(InboxRow.observations).where(
+                    InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None)
+                )
+            )
+            return [
+                str(o["statement"]) for observations in rows for o in observations or ()
+                if isinstance(o, dict) and isinstance(o.get("statement"), str)
+            ]
+
     async def all_texts(self, notebook_id: str) -> list[str]:
         """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""
         async with self._db() as db:
@@ -678,10 +711,13 @@ class NotebookStore:
             return {str(r.id): t for r in rows if (t := _typed(r)) is not None}
 
     async def drop_inbox(self, notebook_id: str) -> int:
-        """Discard a notebook's queued captures (it was archived after they were queued)."""
+        """Discard a notebook's queued captures (it was archived after they were queued):
+        marked handled, not deleted, so a retried burst still finds its key."""
         async with self._db() as db:
             dropped = await db.execute(
-                delete(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                update(InboxRow)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .values(promoted_at=now_ms())
             )
             await db.commit()
             return int(dropped.rowcount or 0)  # type: ignore[attr-defined]

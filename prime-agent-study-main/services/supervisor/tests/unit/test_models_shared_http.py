@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from supervisor.models.client import ModelRouter, RoutedModelClient
 from supervisor.models.endpoints import GatewayConfig
 
@@ -141,3 +143,25 @@ async def test_a_rate_limited_request_waits_the_time_asked(monkeypatch: object) 
         await client.aclose()
     (waited,) = waits
     assert 3.0 <= waited <= memory_client.MAX_RATE_WAIT_S, "never sooner than asked, never past the cap"
+
+
+async def test_a_wait_longer_than_ours_is_not_retried_inside_its_window() -> None:
+    import httpx
+
+    from supervisor.memory.client import NotebookClient, RateLimited
+
+    calls = 0
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow"}},
+                              headers={"Retry-After": "30"})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(RateLimited):
+            await client.capture("t1~abc", ["x"])
+    finally:
+        await client.aclose()
+    assert calls == 1
