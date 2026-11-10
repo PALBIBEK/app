@@ -20,9 +20,11 @@ from supervisor.gateway.providers.base import (
 
 _TRANSIENT_STATUS = frozenset({408, 409, 429}) | frozenset(range(500, 600))
 _MAX_BACKOFF_S = 5.0
-_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=64)
+_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0)
 """Connections are bounded by the gateway's request threads (``supervisor.main``), not
-here; up to 64 stay open between calls for the next one to reuse."""
+here; up to 64 stay open between calls for the next one to reuse, each for 5 s idle: well
+inside any vendor's or balancer's idle timeout, so a pooled connection is not one the far
+end has closed (and httpx checks one before reusing it)."""
 
 type AuthHeaders = Callable[[str], Mapping[str, str]]
 type ApiKey = str | Callable[[], str]
@@ -155,11 +157,34 @@ def _json(response: httpx.Response, vendor: str) -> Body:
     return parsed
 
 
-def _relay(response: httpx.Response) -> Iterator[bytes]:
-    try:
-        yield from response.iter_bytes()
-    finally:
-        response.close()  # its connection goes back to the pool
+class _Relay(Iterator[bytes]):
+    """An upstream stream's bytes, its response closed (its connection back in the shared
+    pool) when the stream ends, fails, is closed, or is dropped unread.
+
+    Not a generator: one that is never started never runs its ``finally``, and a caller
+    that goes away before the first read (a client that disconnects, a wrapper that fails
+    first) would leave the response holding its pooled connection for good."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self._bytes = response.iter_bytes()
+
+    def __next__(self) -> bytes:
+        try:
+            return next(self._bytes)
+        except BaseException:  # the end of the stream, or its failure
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self._response.close()  # idempotent
+
+    def __del__(self) -> None:
+        self.close()
+
+
+def _relay(response: httpx.Response) -> _Relay:
+    return _Relay(response)
 
 
 def _error_detail(response: httpx.Response, *, stream: bool) -> str:

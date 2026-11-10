@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -39,6 +40,7 @@ __all__ = [
     "BASE_MAX_TRANSCRIPT_BYTES",
     "BASE_MAX_TRANSCRIPT_ITEMS",
     "STOPPED_MARKER",
+    "WITHHELD_RESULT",
     "CondensationStats",
     "CondensedTranscript",
     "Item",
@@ -58,9 +60,9 @@ TOOL_ARGS_TIERS: Final = (2 * 1024, 512, 256)
 KEEP_EDGE_START: Final = 8
 USER_TEXT_FLOOR_BYTES: Final = 4 * 1024
 STOPPED_MARKER: Final = "[... the user stopped this turn here, before it finished ...]"
+WITHHELD_RESULT: Final = "[... memory or history the agent looked up: already held, not captured again ...]"
 """Where a run the user stopped ends: what it did up to here is unfinished work."""
 _IMAGE: Final = "[... image omitted ...]"
-_STEPS_OMITTED: Final = "[... intermediate steps omitted ...]"
 _IMAGE_PARTS: Final = frozenset({"image", "image_url", "input_image"})
 
 type Item = dict[str, Any]
@@ -136,11 +138,16 @@ class CondensedTranscript:
 # --- from the journal ---------------------------------------------------------------------
 
 
-def run_items(events: Iterable[Envelope]) -> list[Item]:
+def run_items(events: Iterable[Envelope], *, withheld: AbstractSet[str] = frozenset()) -> list[Item]:
     """One run's transcript items, in journal order: ``user``, ``reasoning``, ``assistant``
     (its text and tool calls) and ``tool_result`` items, and the stop marker where the user
     stopped the run. Only readable text is kept: a reasoning part's signature or encrypted
-    content, and a redacted block, never are."""
+    content, and a redacted block, never are.
+
+    A ``withheld`` tool's result keeps its place but not its content: capture withholds
+    the memory and history tools', whose content is facts already held (with provenance
+    and an audience of their own, which a fact extracted from them again would lose) or
+    another conversation's history."""
     items: list[Item] = []
     for envelope in events:
         event = envelope.payload
@@ -149,7 +156,10 @@ def run_items(events: Iterable[Envelope]) -> list[Item]:
         elif isinstance(event, MessageEnd) and event.role == "assistant":
             items.extend(_assistant_items(event.content))
         elif isinstance(event, ToolEnd):
-            items.append(_tool_result(event))
+            item = _tool_result(event)
+            if event.tool_name in withheld:
+                item.update(content=WITHHELD_RESULT, images=[])
+            items.append(item)
         elif isinstance(event, TurnEnd) and event.stop_reason == "aborted":
             items.append({"type": "assistant", "content": STOPPED_MARKER, "tool_calls": []})
     return items
@@ -284,27 +294,37 @@ def trim_middle(text: str, max_bytes: int) -> str | None:
     return f"{head}\n[... {omitted} bytes omitted ...]\n{tail}"
 
 
+def _kept_whole(item: Item) -> bool:
+    """What omitting steps never removes: the user's words, and a run's stop marker (a burst
+    holds several runs, and losing the marker would present a stopped run's work as done)."""
+    return item["type"] == "user" or (item["type"] == "assistant" and item.get("content") == STOPPED_MARKER)
+
+
 def _omit_middle_steps(items: list[Item], keep_edge: int) -> tuple[list[Item], int]:
-    """Every user item, the first and last ``keep_edge`` other items, and one marker for
-    the steps between them."""
-    steps = [i for i, item in enumerate(items) if item["type"] != "user"]
+    """Every user item and stop marker, the first and last ``keep_edge`` other items, and a
+    marker for each stretch of steps omitted between them."""
+    steps = [i for i, item in enumerate(items) if not _kept_whole(item)]
     if len(steps) <= keep_edge * 2:
         return items, 0
     first, last = steps[keep_edge], steps[len(steps) - keep_edge - 1]
     reduced: list[Item] = []
-    omitted = 0
-    marker: Item | None = None
+    omitted = gap = 0
     for i, item in enumerate(items):
-        if item["type"] != "user" and first <= i <= last:
+        if first <= i <= last and not _kept_whole(item):
             omitted += 1
-            if marker is None:
-                marker = {"type": "assistant", "content": _STEPS_OMITTED, "tool_calls": []}
-                reduced.append(marker)
+            gap += 1
             continue
+        if gap:
+            reduced.append(_steps_omitted(gap))
+            gap = 0
         reduced.append(item)
-    if marker is not None:
-        marker["content"] = f"[... {omitted} intermediate steps omitted ...]"
+    if gap:
+        reduced.append(_steps_omitted(gap))
     return reduced, omitted
+
+
+def _steps_omitted(count: int) -> Item:
+    return {"type": "assistant", "content": f"[... {count} intermediate steps omitted ...]", "tool_calls": []}
 
 
 def _strip_images(item: Item) -> int:

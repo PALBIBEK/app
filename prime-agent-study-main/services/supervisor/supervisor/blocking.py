@@ -15,7 +15,10 @@ for as long as its command runs, so a worker holding many sessions:
 ``run_blocking`` runs such a call on a pool sized for calls that wait, not for CPU
 (``BLOCKING_CALL_THREADS``, 256 by default: a waiting thread costs a little memory, no
 CPU), and leaves the default executor to short work and the loop's own. Like
-``asyncio.to_thread``, the call sees the caller's context variables.
+``asyncio.to_thread``, the call sees the caller's context variables, and cancelling the
+caller does not stop a call already running: its thread runs it to its end (every call
+sent here is bounded by its own timeout). The pool is made, and its size read, once per
+process, on first use, and lives as long as the process.
 
 The served apps have the same limit one layer up: Starlette runs each synchronous route
 (the model gateway's every model call) and each read of a synchronous streamed response

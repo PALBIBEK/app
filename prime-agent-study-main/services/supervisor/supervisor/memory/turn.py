@@ -12,8 +12,10 @@ reuses it (a replayed model step sees exactly the memory the first attempt saw).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -377,7 +379,7 @@ class SessionMemory:
         for run_id in run_ids:
             # One run's events, by the journal's (session, run, seq) index: never the session.
             run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
-            steps = run_items(run)
+            steps = run_items(run, withheld=PLATFORM_TOOLS)
             if not any(item["type"] == "user" for item in steps):
                 continue  # nothing the user said in this audience: nothing to learn
             items += steps
@@ -436,8 +438,9 @@ class SessionMemory:
                 sensitivity=sensitivity,
                 # Everything these turns could have drawn on (QM captureDependencies).
                 inherited=dependencies(runs),
-                input="\n\n".join(x.input for x in exchanges if x.input),
-                reply="\n\n".join(x.reply for x in exchanges if x.reply),
+                # None, not "", when there is none (a run stopped before its answer).
+                input="\n\n".join(x.input for x in exchanges if x.input) or None,
+                reply="\n\n".join(x.reply for x in exchanges if x.reply) or None,
                 idempotency_key=key,
             ),
         )
@@ -467,27 +470,29 @@ CAPTURE_ATTEMPTS: Final = 4
 """Extraction calls one capture makes at most: the transcript's budget halves each time
 (512, 256, 128, 64 KiB), so a model whose window the first was too long for gets one
 that fits, and a failing capture costs a bounded number of calls."""
+RETRY_PAUSE_S: Final = 1.0
+"""The pause before the second attempt, doubled before each later one: a rate limit or an
+overloaded gateway gets a moment, and every capture failing at once does not retry at
+once."""
 
 
 async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
     """The burst's facts, from its transcript condensed to fit (Grok Build's per-attempt
-    budget); None when every attempt failed. A retry is made only when it would read a
-    shorter transcript: the same one again would fail the same way."""
+    budget); None when every attempt failed. Any failure is retried, on the next, shorter
+    budget: a transcript too long for the model shrinks, and one that already fits is
+    sent again after a pause, for a failure that passes (a 429, a 503, a timeout)."""
     for attempt in range(1, CAPTURE_ATTEMPTS + 1):
         condensed = condense(items, TranscriptBudget.for_attempt(attempt))
         try:
             return await extract_transcript(one_shot, condensed)
         except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
-            shorter = TranscriptBudget.for_attempt(attempt + 1)
-            again = attempt < CAPTURE_ATTEMPTS and (
-                condensed.stats.final_bytes > shorter.max_bytes or condensed.stats.final_items > shorter.max_items
-            )
+            again = attempt < CAPTURE_ATTEMPTS
             logger.warning(
-                "session %s: memory extraction failed on a %d-byte transcript (attempt %d)%s: %s",
-                session_id, condensed.stats.final_bytes, attempt, ", retrying shorter" if again else "", exc,
+                "session %s: memory extraction failed on a %d-byte transcript (attempt %d of %d)%s: %s",
+                session_id, condensed.stats.final_bytes, attempt, CAPTURE_ATTEMPTS, ", retrying" if again else "", exc,
             )
-            if not again:
-                return None
+            if again:
+                await asyncio.sleep(RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random()))
     return None
 
 

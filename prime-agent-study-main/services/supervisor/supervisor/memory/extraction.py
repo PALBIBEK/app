@@ -53,7 +53,7 @@ TRANSCRIPT_EXTRACTION_PROMPT: Final = "\n".join((MEMORY_EXTRACTION_PROMPT, *_TRA
 
 async def extract_transcript(one_shot: OneShot, condensed: CondensedTranscript) -> Extracted:
     """The facts in a burst's condensed transcript. Raises when the model call fails: the
-    caller decides whether a shorter transcript is worth another call."""
+    caller decides whether to try again (``supervisor.memory.turn``)."""
     system = TRANSCRIPT_EXTRACTION_PROMPT
     if note := condensed.stats.prompt_note():
         system = f"{system}\n{note}"

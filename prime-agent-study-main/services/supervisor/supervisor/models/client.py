@@ -107,7 +107,7 @@ class ModelRouter:
         return httpx.Client(
             transport=self._transport,
             follow_redirects=False,
-            limits=httpx.Limits(max_connections=None, max_keepalive_connections=64),
+            limits=httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0),
         )
 
     def shared_http_client(self) -> httpx.Client:

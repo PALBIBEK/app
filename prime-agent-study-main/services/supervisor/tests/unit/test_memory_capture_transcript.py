@@ -4,17 +4,22 @@ case, then ours: how a run's journal becomes items, and how long condensing take
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
 
+import pytest
+
 from supervisor.agent.events import Envelope, MessageEnd, ToolEnd, TurnEnd
+from supervisor.memory import turn
 from supervisor.memory.transcript import (
     BASE_MAX_TRANSCRIPT_BYTES,
     BASE_MAX_TRANSCRIPT_ITEMS,
     MIN_MAX_TRANSCRIPT_BYTES,
     MIN_MAX_TRANSCRIPT_ITEMS,
     STOPPED_MARKER,
+    WITHHELD_RESULT,
     TranscriptBudget,
     condense,
     run_items,
@@ -278,3 +283,85 @@ def test_condensing_time_is_bounded_however_long_the_turn() -> None:
     assert size(condensed.json) <= FIRST.max_bytes
     assert thousand < 1.0, f"1000 steps took {thousand:.2f}s"
     assert ten_thousand < 15 * thousand + 0.5, f"not linear: {thousand:.2f}s then {ten_thousand:.2f}s"
+
+
+# --- extraction attempts (supervisor.memory.turn._extract) --------------------------------
+
+
+def _attempts(failures: int, monkeypatch: pytest.MonkeyPatch, items: list[dict[str, Any]]) -> tuple[Any, list[str]]:
+    monkeypatch.setattr(turn, "RETRY_PAUSE_S", 0.0)
+    sent: list[str] = []
+
+    async def one_shot(system: str, content: str) -> str:
+        sent.append(content)
+        if len(sent) <= failures:
+            raise RuntimeError("HTTP 503 from the gateway")
+        return "SENSITIVITY: ordinary\n- Builds with make check"
+
+    return asyncio.run(turn._extract(one_shot, "s1", items)), sent
+
+
+def test_a_failure_that_passes_is_retried_even_when_the_transcript_already_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short turn's extraction that fails once (a 429, a 503) is sent again, the same
+    transcript, and its fact lands: only a transcript too long used to be retried."""
+    extracted, sent = _attempts(1, monkeypatch, tool_loop(2, 100))
+
+    assert extracted is not None and extracted.facts == ["Builds with make check"]
+    assert len(sent) == 2 and sent[0] == sent[1], "the same transcript, again"
+
+
+def test_a_long_transcript_is_retried_on_the_shorter_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    extracted, sent = _attempts(1, monkeypatch, tool_loop(60, 20 * 1024))
+
+    assert extracted is not None
+    assert len(sent[0].encode()) > len(sent[1].encode()), "the retry read the half budget"
+
+
+def test_a_capture_that_always_fails_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    extracted, sent = _attempts(99, monkeypatch, tool_loop(2, 100))
+
+    assert extracted is None
+    assert len(sent) == turn.CAPTURE_ATTEMPTS, "a bounded number of calls"
+
+
+# --- stop markers survive condensing --------------------------------------------------------
+
+
+def test_a_stopped_runs_marker_survives_omitting_the_middle_steps() -> None:
+    """A burst of runs, the first stopped: omitting middle steps keeps every run's stop
+    marker where it was, so the extractor never reads a stopped run's work as done."""
+    stopped = [*tool_loop(500, 3000)[:-1], assistant(STOPPED_MARKER)]
+    finished = tool_loop(500, 3000)
+    items = stopped + finished
+
+    condensed = condense(items, TranscriptBudget.for_attempt(4))
+    parsed = json.loads(condensed.json)
+
+    assert condensed.stats.steps_omitted > 0
+    contents = [item.get("content") for item in parsed if item["type"] == "assistant"]
+    assert contents.count(STOPPED_MARKER) == 1
+    users = [i for i, item in enumerate(parsed) if item["type"] == "user"]
+    marker = next(i for i, item in enumerate(parsed) if item.get("content") == STOPPED_MARKER)
+    assert users[0] < marker < users[1], "the marker ends the run it stopped, before the next run's request"
+    assert "intermediate steps omitted" in parsed[marker - 1]["content"], "the first run's gap ends at its stop"
+
+
+def test_a_withheld_tools_result_keeps_its_place_but_not_its_content() -> None:
+    """Capture withholds the memory and history tools' results: their content is facts held
+    elsewhere, with an audience of their own, that extraction would copy without it."""
+    from supervisor.memory.tools import MEMORY_TOOL, PLATFORM_TOOLS
+
+    events = [
+        MessageEnd(role="user", content=[{"type": "text", "text": "what do you know about the launch?"}]),
+        ToolEnd(tool_call_id="c1", tool_name=MEMORY_TOOL, result={"ok": True, "payload": "Launch slips to May (private)"}),
+        ToolEnd(tool_call_id="c2", tool_name="bash", result={"ok": True, "payload": "launch.md"}),
+    ]
+
+    items = run_items([env(i, e) for i, e in enumerate(events)], withheld=PLATFORM_TOOLS)
+
+    memory, other = (i for i in items if i["type"] == "tool_result")
+    assert (memory["name"], memory["content"]) == (MEMORY_TOOL, WITHHELD_RESULT)
+    assert "slips" not in json.dumps(items)
+    assert other["content"] == "launch.md", "any other tool's result is read whole"

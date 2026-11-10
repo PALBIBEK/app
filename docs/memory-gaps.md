@@ -158,9 +158,18 @@ captured and labelled unfinished.
   image's base64 would be most of the bytes.
 - **Prompt:** extraction gets the JSON under QM's prompt, followed by Grok's transcript
   rules (`TRANSCRIPT_EXTRACTION_PROMPT`).
-- **Retries:** a failed extraction retries at most 3 more times, only when the next budget
-  would give a shorter transcript (`CAPTURE_ATTEMPTS`), so a failing capture costs a
-  bounded number of calls. Durable retries across workers are G3.
+- **Retries:** a failed extraction is retried at most 3 more times (`CAPTURE_ATTEMPTS`),
+  each on the next, halved budget and after a jittered pause that doubles. A transcript too
+  long for the model shrinks, and one that already fits is sent again for a failure that
+  passes (a 429 or a 503). A failing capture costs a bounded number of calls. Durable
+  retries across workers are G3.
+- **Memory is not captured twice:** the results of the memory, history and sessions tools
+  keep their place in the transcript, but their content is withheld (`WITHHELD_RESULT`).
+  That content is facts already held, with their own provenance and audience, which a fact
+  extracted from them again would lose. It may also be another conversation's history.
+- **Stop markers are kept whole:** omitting middle steps never removes a run's stop
+  marker. Each stretch of steps omitted gets its own marker, so in a burst of several runs
+  a stopped run never reads as finished.
 - **Stopped runs:** the workflow now queues a run the user stopped for capture
   (`workflow.patched("capture-stopped-runs")`).
 - **What is not yet extracted:** facts found in tool results are given to the extractor,
@@ -173,8 +182,8 @@ three limits that held every session back.
 | | Limit | Effect under load | Fix |
 |---|---|---|---|
 | S5 | Long blocking calls (agent model calls, tools, memory one-shots, recall, compaction) used the loop's default executor: `min(32, CPUs + 4)` threads, which the loop also uses for `getaddrinfo` | A worker admitting 50 runs ran 6 model calls at once (on 2 CPUs). While they ran, new connections could not resolve a host, memory-service connects timed out, the client's breaker opened, and sessions lost memory | `supervisor.blocking.run_blocking`: a pool sized for waiting (`BLOCKING_CALL_THREADS`, 256) |
-| S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.with_request_threads` widens each served app's loop as it starts |
-| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) |
+| S6 | Starlette runs synchronous routes on anyio's limiter, 40 threads per loop | One gateway replica served at most 40 generations at once | `main.WithRequestThreads` widens each served app's loop as it starts, without changing the app |
+| S7 | A new `httpx.Client` per session (`RoutedModelClient`) and per gateway upstream call | Each one built a TLS context from the CA bundle (a quarter of a worker's CPU) and reused no connection | One client per router and one per upstream, with connections uncapped (threads bound them) and idle ones kept 5 s. Every upstream stream gives its connection back: when read to its end, when closed partway, or when dropped unread |
 
 Same load (4 tenants × 50 sessions, capture on), G0 then G1:
 

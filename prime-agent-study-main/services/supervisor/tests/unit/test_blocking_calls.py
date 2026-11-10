@@ -102,14 +102,15 @@ def test_the_pool_is_sized_by_setting_and_a_bad_setting_fails(monkeypatch: pytes
 
 async def test_a_served_app_starts_with_its_loops_request_threads_widened() -> None:
     """Starlette's synchronous routes (the gateway's model calls) share anyio's limiter: 40
-    threads a loop unless widened. ``with_request_threads`` widens it as the app starts, and
-    the app's own lifespan still runs inside."""
+    threads a loop unless widened. ``WithRequestThreads`` widens it as the app starts, the
+    app's own lifespan still runs inside, and the app itself is left as it was."""
     from contextlib import asynccontextmanager
 
     import anyio.to_thread
     from fastapi import FastAPI
+    from starlette.testclient import TestClient
 
-    from supervisor.main import with_request_threads
+    from supervisor.main import WithRequestThreads
 
     started: list[int] = []
 
@@ -118,8 +119,10 @@ async def test_a_served_app_starts_with_its_loops_request_threads_widened() -> N
         started.append(int(anyio.to_thread.current_default_thread_limiter().total_tokens))
         yield
 
-    served = with_request_threads(FastAPI(lifespan=own))
-    async with served.router.lifespan_context(served):
+    served = FastAPI(lifespan=own)
+    lifespan = served.router.lifespan_context
+    with TestClient(WithRequestThreads(WithRequestThreads(served))):  # wrapped twice, harmlessly
         pass
 
-    assert started == [blocking.DEFAULT_THREADS], "widened before the app's own start"
+    assert started == [blocking.DEFAULT_THREADS], "widened before the app's own start, which ran once"
+    assert served.router.lifespan_context is lifespan, "the app is not changed"

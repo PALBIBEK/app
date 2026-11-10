@@ -27,6 +27,16 @@ SESSIONS = 50
 STEPS = 40
 
 
+@pytest.fixture(autouse=True)
+def _bounded_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fifty captures on ten connections, as a worker's captures share its pool: the reads
+    queue for a connection, and four test workers stay inside a default server's 100
+    connections (a worker's own pool, 20 + 10, would not). Set before ``factory`` makes its
+    engine: an autouse fixture is set up first."""
+    monkeypatch.setenv("DB_POOL_SIZE", "5")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "5")
+
+
 async def _write_run(w: JournalWriter, sid: str, run_id: str, steps: int, *, stopped: bool = False) -> None:
     await w.ensure_session(sid)
     await w.append(sid, RunStart(), turn_id=run_id, trace_id=None)
