@@ -489,3 +489,25 @@ def test_the_provenance_reply_is_the_final_answer_not_narration_between_calls() 
 
     assert finished.reply == "It builds with make check.", "the final word, even with narration after it"
     assert stopped.reply == "Let me check that file.", "a stopped run has only its narration"
+
+
+def test_many_long_user_messages_condense_in_a_few_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The user-text stage takes each overshoot out of every share at once: a few passes,
+    not one per 10% from the budget down to the floor."""
+    from supervisor.memory import transcript
+
+    passes = 0
+    serialize = transcript._serialize
+
+    def counted(value: Any) -> str:
+        nonlocal passes
+        passes += 1
+        return serialize(value)
+
+    monkeypatch.setattr(transcript, "_serialize", counted)
+    items = [m for n in range(12) for m in (user(f"log {n}\n" + "é" * 60_000), assistant(f"ok {n}"))]
+
+    condensed = condense(items, FIRST)
+
+    assert size(condensed.json) <= FIRST.max_bytes and not condensed.stats.over_budget
+    assert passes < 30, f"{passes} serializations"

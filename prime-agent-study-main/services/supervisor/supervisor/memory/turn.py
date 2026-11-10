@@ -382,10 +382,11 @@ class SessionMemory:
             # One run's events, by the journal's (session, run, seq) index: never the session.
             run = [e for e in await self._reader.read_turn(session_id, run_id) if e.seq > through]
             steps = run_items(run, withheld=PLATFORM_TOOLS)
-            if not any(item["type"] == "user" for item in steps):
-                continue  # nothing the user said in this audience: nothing to learn
+            said = _said(run)
+            if not said.input:
+                continue  # no words of the user's in this audience (none, or an image only): nothing to learn
             items += steps
-            exchanges.append(_said(run))
+            exchanges.append(said)
             runs.extend(run)
         if not items:
             return 0
@@ -496,12 +497,18 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
     # re-encoded at each stage): off the loop, which carries every other session's steps.
     condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
     for attempt in range(1, CAPTURE_ATTEMPTS + 1):
+        if condensed.stats.over_budget:
+            logger.info(
+                "session %s: memory extraction sent over its %d-byte budget (%d bytes): the user's own words "
+                "outweigh it at their floor", session_id, TranscriptBudget.for_attempt(budget).max_bytes,
+                condensed.stats.final_bytes,
+            )
         try:
             return await extract_transcript(one_shot, condensed)
         except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
             pause: float | None = None
             again_on = condensed
-            if is_context_overflow(exc):
+            if is_context_overflow(exc) and attempt < CAPTURE_ATTEMPTS:  # a last attempt condenses nothing more
                 shorter = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget + 1))
                 # Only a transcript that really is shorter (a burst of many runs keeps every
                 # request and stop marker, so condensing can reach a floor).

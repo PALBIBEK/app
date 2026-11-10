@@ -289,7 +289,10 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
         encoded = _serialize(items)
         if budget.fits(encoded, len(items)) or share <= USER_TEXT_FLOOR_BYTES:
             break
-        share = max(share * 9 // 10, USER_TEXT_FLOOR_BYTES)  # JSON escaping costs bytes the share did not count
+        # JSON escaping and the markers cost bytes the share did not count: take the
+        # overshoot out of every user's share at once (a few passes, not one per 10%).
+        excess = max(_size(encoded) - budget.max_bytes, 1)
+        share = max(min(share * 9 // 10, share - -(-excess // users)), USER_TEXT_FLOOR_BYTES)
     stats.over_budget = not budget.fits(encoded, len(items))
     return _finish(encoded, len(items), stats)
 

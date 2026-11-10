@@ -92,3 +92,18 @@ def test_a_closed_stream_ends_cleanly_and_a_closed_upstream_makes_a_new_client()
     first = up.client()
     up.close()
     assert first.is_closed and up.client() is not first
+
+
+def test_a_client_closed_under_a_call_is_retried_on_a_new_one() -> None:
+    """``close`` on another thread (a reload, a teardown) while a call runs: the call gets
+    a new client on its retry, not a raw error."""
+    made: HttpUpstream
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    made = HttpUpstream(vendor="v", api_key="k", base_url="https://v.example", key_env_name="V_KEY",
+                        transport=httpx.MockTransport(handle), backoff_s=0.0)
+    made.client().close()  # closed under it, its cached client left in place
+
+    assert made.post("/chat", {}) == {"ok": True}

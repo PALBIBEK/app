@@ -72,7 +72,7 @@ class HttpUpstream:
         """The upstream's one client, made on first use from ``transport`` and
         ``timeout_s`` (read then, once: an upstream's connection settings are fixed)."""
         with self._lock:
-            if self._client is None:
+            if self._client is None or self._client.is_closed:
                 self._client = httpx.Client(transport=self.transport, timeout=self.timeout_s, limits=_LIMITS)
             return self._client
 
@@ -106,10 +106,16 @@ class HttpUpstream:
             raise ProviderUnconfigured(f"{missing} is not configured on the gateway", vendor=self.vendor)
         attempts = 1 + max(0, self.retries if retries is None else retries)
         stream = body.get("stream") is True
-        client = self.client()
         for attempt in range(attempts):
+            client = self.client()  # each attempt: one closed meanwhile (``close``) is made anew
             try:
-                response = client.send(self._request(client, path, body), stream=stream)
+                try:
+                    response = client.send(self._request(client, path, body), stream=stream)
+                except RuntimeError as exc:
+                    if not client.is_closed:
+                        raise
+                    # Closed by another thread under this call: retried, like a dropped connection.
+                    raise httpx.TransportError("the upstream's client was closed during the call") from exc
             except httpx.TransportError as exc:
                 if attempt + 1 < attempts:
                     self._sleep(attempt, None)

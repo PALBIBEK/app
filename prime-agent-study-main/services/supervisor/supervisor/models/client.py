@@ -119,7 +119,7 @@ class ModelRouter:
         session that much again, and holds sockets nothing reuses. ``httpx.Client`` is safe
         to share across threads; it lives as long as the router (the process)."""
         with self._shared_lock:
-            if self._shared is None:
+            if self._shared is None or self._shared.is_closed:
                 self._shared = self.http_client()
             return self._shared
 
