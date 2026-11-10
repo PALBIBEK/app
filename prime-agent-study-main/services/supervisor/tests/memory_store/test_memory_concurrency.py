@@ -64,8 +64,12 @@ async def test_replicas_booting_together_share_one_schema(replicas: Replicas) ->
         REPLICAS,
         lambda i: started[i].client().ensure(tenant_id="t1", owner=f"u{i}", agent_pin=PIN, name="default"),
     )
+    await run_workers(REPLICAS, lambda i: started[i].client().capture(made[i].id, [f"Made on replica {i}"], context=OWN))
 
-    assert len({nb.id for nb in made}) == REPLICAS, "every replica serves the one database"
+    for i in range(REPLICAS):  # what one replica wrote, every other replica reads
+        reader = started[(i + 1) % REPLICAS].client()
+        assert (await reader.get(made[i].id)).id == made[i].id
+        assert [f.text for f in await reader.facts(made[i].id)] == [f"Made on replica {i}"]
 
 
 async def test_one_notebook_ensured_from_everywhere_at_once_is_one_notebook(replicas: Replicas) -> None:

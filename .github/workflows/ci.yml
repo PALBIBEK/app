@@ -196,10 +196,22 @@ jobs:
           }
       - name: Memory concurrency, 20 runs in a row (a race that fails once in twenty fails daily at scale)
         # docs/memory-gaps.md, G0: memory's concurrency tests on this job's Postgres, each run 20
-        # times; once, on the first half's runner, since they need no split.
+        # times (about 2 minutes on four workers; each run has a database of its own); on the
+        # first half's runner only, since they need no split. Failures and a stuck run are
+        # annotated as the suite's are.
         if: matrix.group == 1
         working-directory: ${{ env.PROJECT }}/services/supervisor
-        run: timeout --signal=INT --kill-after=60 15m pytest -q -rfE --count 20 tests/memory_store/test_memory_concurrency.py
+        run: |
+          set -o pipefail
+          timeout --signal=INT --kill-after=60 15m pytest -q -rfE -n 4 --count 20 \
+            tests/memory_store/test_memory_concurrency.py 2>&1 | tee concurrency.out || {
+            status=$?
+            grep -E '^(FAILED|ERROR) ' concurrency.out | head -40 | sed 's/^/::error title=memory concurrency::/' || true
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              echo "::error title=memory concurrency stuck (stopped after 15 minutes)::$(tail -c 4000 concurrency.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            fi
+            exit 1
+          }
 
   e2e:
     runs-on: ubuntu-latest

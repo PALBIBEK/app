@@ -1,8 +1,8 @@
 """Memory under load on a running stack: many tenants, agents and concurrent sessions.
 
-    e2e/bench_memory.py run [--tenants 4] [--compositions fx-full,...] [--sessions 50]
-                            [--facts 3] [--capture-model ROUTE] [--quiet 5] [--results PATH]
-    e2e/bench_memory.py report [PATH]
+    e2e/bench_memory.py run [--tenants 4] [--compositions githi-v1,...] [--sessions 50]
+                            [--facts 3] [--capture-model ROUTE] [--quiet 5] [--results PATH] [--resume]
+    e2e/bench_memory.py report [PATH] [--run ID]
 
 The load harness of ``docs/memory-gaps.md`` (G0): every memory gap is verified against it,
 and its scorecard is kept in the gap's PR so the next gap can be compared with it.
@@ -28,8 +28,10 @@ Then the checks: every fact, the owner's shared one included, is in its owner's 
 exactly once (lost, duplicated); each session's own facts are in its owner's next recall
 (unrecalled), and a run that recalls nothing is a session error;
 no notebook or injection holds another tenant's or owner's token (crossed); and the
-latencies against the targets. Cells already in the results file are skipped (resume).
-Both subcommands exit 1 when a target fails.
+latencies against the targets. A run is fresh unless ``--resume`` is given: it then goes
+on with the file's last run, skipping its finished sessions and retrying its failed ones.
+A report scores one run (the file's last, or ``--run``). Both subcommands exit 1 when a
+target fails.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 import threading
 import time
@@ -54,8 +57,11 @@ TARGETS = {
     "lost": 0,
     "duplicated": 0,
     "crossed": 0,
-    "unrecalled": 0,  # a session's own facts missing from its owner's next recall
+    "unrecalled": 0,  # a session's own facts missing from its owner's next recall, when recall had room
 }
+RECALL_BUDGET_CHARS = 6_000
+"""Recall's default budget (``supervisor.memory_service.notebooks.types.RECALL_MAX_CHARS``):
+an injection near it may have left facts out by rank, which is not a lost fact."""
 """``docs/memory-gaps.md``'s targets. Capture lag's is 2 × the quiet window + 30 s."""
 _WRITE = threading.Lock()
 
@@ -65,6 +71,10 @@ def token(run: str, owner: str, what: str) -> str:
     found in another owner's notebook or injection, it crossed a boundary. It ends in a
     marker no part of it holds, so no token is a prefix of another (``f1`` of ``f10``)."""
     return f"zq{run}-{owner}-{what}".replace("_", "") + "qz"
+
+
+TOKEN = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
+"""Every token in a text (``token``'s shape), read once instead of searched per token."""
 
 
 def count(word: str, texts: list[str]) -> int:
@@ -161,12 +171,14 @@ def cell(args: argparse.Namespace, run_id: str, tenant: str, agent: str, composi
             spoke = session(talker, composition, args.capture_model, capture_quiet_s=args.quiet, capture_max_turns=1)
             began = time.time()
             turn(talker, spoke, f"Please remember for later: my locker word is {said}.", 1, args.timeout)
-            deadline = began + 2 * args.quiet + 120
+            deadline, wait = began + 2 * args.quiet + 120, 1.0
+            time.sleep(args.quiet)  # nothing is captured before the quiet window ends
             while time.time() < deadline:
                 if any(said in f for f in notebook_facts(user, composition)):
                     out["capture_s"] = round(time.time() - began, 1)
                     break
-                time.sleep(1)
+                time.sleep(wait)
+                wait = min(wait * 2, 10.0)  # backing off: polling must not load the stack it measures
             out["said"] = said
         out["notebook"] = notebook_facts(user, composition)
     except Exception as exc:  # noqa: BLE001 — a session's failure is its row, the load goes on
@@ -180,15 +192,14 @@ def run(args: argparse.Namespace) -> bool:
     results.parent.mkdir(parents=True, exist_ok=True)
     done: set[tuple[str, str, int]] = set()
     run_id = uuid.uuid4().hex[:6]
-    if results.exists():
-        for line in results.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-                run_id = row["run"]  # resume the same run: its tokens are in the notebooks
-                if not row.get("error"):  # a failed session runs again
-                    done.add((row["tenant"], row["agent"], int(row["session"])))
-            except (ValueError, KeyError):
-                continue  # a final read, or a partial line
+    if args.resume and results.exists():
+        rows = _rows(results)
+        run_id = rows[-1]["run"] if rows else run_id  # its tokens are in the notebooks
+        done = {
+            (r["tenant"], r["agent"], int(r["session"]))
+            for r in rows
+            if r.get("run") == run_id and "final" not in r and not r.get("error")  # a failed session runs again
+        }
     tenants = [f"bench{t}" for t in range(args.tenants)]
     names = args.compositions.split(",")
     compositions = {name: User(tenants[0], "bench-admin").latest("composition", name) for name in names}
@@ -218,7 +229,7 @@ def run(args: argparse.Namespace) -> bool:
                 final = {"error": f"{type(exc).__name__}: {exc}"}
             f.write(json.dumps({"run": run_id, "final": owner, "tenant": t, "agent": a} | final) + "\n")
     print(f"done in {time.time() - began:.0f}s", flush=True)
-    return report([str(results)], quiet_s=args.quiet)
+    return report([str(results)], quiet_s=args.quiet, run_id=run_id)
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -237,9 +248,12 @@ def pct(values: list[float], q: float) -> float:
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)] if ordered else float("nan")
 
 
-def report(paths: list[str], quiet_s: float = 5.0) -> bool:
-    """The scorecard; whether every target holds."""
+def report(paths: list[str], quiet_s: float = 5.0, run_id: str | None = None) -> bool:
+    """One run's scorecard (``run_id``, else the last run in the files); whether every
+    target holds."""
     every = [row for p in paths for row in _rows(Path(p))]
+    run_id = run_id or (every[-1]["run"] if every else None)
+    every = [r for r in every if r.get("run") == run_id]
     rows = [r for r in every if "final" not in r]
     finals = {r["final"]: r["notebook"] for r in every if "final" in r and "notebook" in r}  # the latest read wins
     if not rows:
@@ -251,10 +265,13 @@ def report(paths: list[str], quiet_s: float = 5.0) -> bool:
     for r in rows:
         if not r.get("error"):
             latest.setdefault(r["owner"], r.get("notebook", []))
-            seen = " ".join(r.get("notebook", [])) + " " + r.get("injected", "")
-            crossed += sum(1 for t, owner in owner_by_token.items() if owner != r["owner"] and t in seen)
-            # Written before its later session started, so that session's recall shows them.
-            unrecalled += any(t not in r.get("injected", "") for t in r.get("mine", []))
+            seen = set(TOKEN.findall(" ".join(r.get("notebook", [])) + " " + r.get("injected", "")))
+            crossed += sum(1 for t in seen if owner_by_token.get(t, r["owner"]) != r["owner"])
+            # Written before its later session started, so that session's recall shows them
+            # (unless recall ran out of room and ranked them out, which is not a loss).
+            injected = r.get("injected", "")
+            if len(injected) < 0.9 * RECALL_BUDGET_CHARS:
+                unrecalled += any(t not in injected for t in r.get("mine", []))
     for r in rows:
         if r.get("error") or r["owner"] not in latest:
             continue
@@ -318,11 +335,13 @@ def main() -> int:
     go.add_argument("--quiet", type=float, default=5.0, help="capture quiet window, seconds")
     go.add_argument("--timeout", type=float, default=180)
     go.add_argument("--results", default=str(RESULTS))
+    go.add_argument("--resume", action="store_true", help="go on with the file's last run instead of a new one")
     show = sub.add_parser("report")
     show.add_argument("paths", nargs="*", default=[str(RESULTS)])
     show.add_argument("--quiet", type=float, default=5.0)
+    show.add_argument("--run", default=None, help="the run to score (default: the file's last)")
     args = parser.parse_args()
-    passed = run(args) if args.command == "run" else report(args.paths, quiet_s=args.quiet)
+    passed = run(args) if args.command == "run" else report(args.paths, quiet_s=args.quiet, run_id=args.run)
     return 0 if passed else 1
 
 

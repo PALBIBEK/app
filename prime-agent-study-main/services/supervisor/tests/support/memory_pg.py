@@ -70,14 +70,16 @@ async def replicas() -> AsyncIterator[Replicas]:
     server = _require_server()
     name = f"memrace_{uuid.uuid4().hex[:10]}"
     admin = create_async_engine(server, isolation_level="AUTOCOMMIT")
-    async with admin.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{name}"'))
     try:
-        async with AsyncExitStack() as stack:
-            yield Replicas(make_url(server).set(database=name).render_as_string(hide_password=False), stack)
-    finally:
         async with admin.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}"'))
+        try:
+            async with AsyncExitStack() as stack:
+                yield Replicas(make_url(server).set(database=name).render_as_string(hide_password=False), stack)
+        finally:
+            async with admin.connect() as conn:
+                await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    finally:  # disposed even when the database could not be created
         await admin.dispose()
 
 
