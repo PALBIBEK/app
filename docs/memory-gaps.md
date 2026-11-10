@@ -517,21 +517,38 @@ because every later gap's concurrency tests and load check run on it.
 **G0 (P0). Concurrency and load harness.** This is not a Grok gap; it is what our scale
 requires before any gap is ported.
 
-- *Postgres fixture:* `tests/support/memory_pg.py` gives the memory service a real Postgres
-  with pgvector, the one CI's `tests` job already runs (`SUPERVISOR_TEST_PG_URL`). SQLite
-  has neither `SKIP LOCKED` nor real concurrent writers, so every concurrency test runs on
-  Postgres. It is skipped locally without one and required in CI. G0 also adds
-  `pytest-repeat` to the dev extras for the 20-run check.
-- *Worker fixture:* `run_workers(n, fn)` runs n asyncio tasks, or n processes for a lease
-  test, against one database, with injectable clocks so a lease can expire on demand.
-- *Load script:* `e2e/bench_memory.py` runs on a running stack. It drives T tenants × A agents
-  × S concurrent sessions through scripted turns that state facts, then checks four things:
-  - nothing is lost: every stated fact is captured once, by the barrier;
-  - nothing is duplicated;
-  - nothing crosses tenants or audiences;
+- *Postgres replicas:* `tests/support/memory_pg.py`'s `replicas` fixture starts N
+  memory-service replicas on one fresh Postgres database. Each has its own app, engine, pool
+  and background loops, and they boot together.
+  - It runs on the Postgres CI's `tests` job already has (`SUPERVISOR_TEST_PG_URL`). SQLite
+    has neither `SKIP LOCKED` nor real concurrent writers, so every concurrency test runs on
+    Postgres.
+  - It skips locally without a server and fails in CI (`MEMORY_CONCURRENCY_REQUIRED`).
+  - Test replicas use 2 + 2 connections each (`MEMORY_DB_POOL_SIZE`,
+    `MEMORY_DB_MAX_OVERFLOW`, the memory service's new pool settings), so four test workers
+    fit a default server's 100 connections.
+- *Workers:* `run_workers(n, fn)` releases n tasks at one gate, so they really overlap, and
+  raises their failures together. Injectable clocks for leases come with the first gap
+  that has a lease (G3).
+- *Baseline:* `tests/memory_store/test_memory_concurrency.py` covers five guarantees. CI
+  runs it 20 times in a row on four workers (`pytest-repeat`).
+  - Replicas share one schema.
+  - One notebook ensured from everywhere at once is one notebook.
+  - 40 concurrent captures into one notebook land once each.
+  - A capture waits only on its own notebook's lock (S1, pinned).
+  - Extraction claims run each job once.
+- *Load script:* `e2e/bench_memory.py` runs on a running stack. It drives T tenants × A
+  agents × S concurrent sessions, several per user so that they share a notebook. Each
+  session writes facts with the memory tool and then recalls them in a new session; with
+  `--capture-model` it also states a fact for automatic capture. On each owner's final
+  notebook it checks:
+  - nothing is lost or duplicated;
+  - each session's own facts were recalled;
+  - nothing crossed owners or tenants;
   - the latencies meet the targets below.
 
-  It is resume-safe and prints a scorecard, like `e2e/bench_browser.py`.
+  It runs fresh or `--resume`s, scores each session's latest attempt, prints a scorecard,
+  and exits 1 when a check fails.
 
 **Targets** (on the load script's default 4 tenants × 5 agents × 50 sessions):
 
@@ -576,7 +593,7 @@ requires before any gap is ported.
 
 | Gap | Pri | Tests ported | Concurrency tests | Green | Review clean | Load targets | Verified | PR |
 |---|---|---|---|---|---|---|---|---|
-| G0 Postgres fixture, workers, load script and targets | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
 | G1 transcript of the whole turn, condensed; stopped turns | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G2 typed observations, strict schema | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |

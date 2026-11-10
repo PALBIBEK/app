@@ -8,8 +8,8 @@ worth its name when it holds there, so:
 * **Postgres only.** SQLite serializes writers in one file and has no ``FOR UPDATE SKIP
   LOCKED``, so a race run on it proves nothing. Without a test server
   (``MEMORY_TEST_PG_URL`` or ``SUPERVISOR_TEST_PG_URL``) the tests skip, unless
-  ``MEMORY_CONCURRENCY_REQUIRED`` is set (CI's ``tests`` job sets it beside its server):
-  then they fail, so that job cannot pass by skipping.
+  ``MEMORY_CONCURRENCY_REQUIRED`` is set to anything but an explicit off (CI's ``tests``
+  job sets it beside its server): then they fail, so that job cannot pass by skipping.
 * **Within the server's connections.** Each replica's pool is small
   (``MEMORY_DB_POOL_SIZE`` / ``MEMORY_DB_MAX_OVERFLOW``: 2 + 2), so four test workers, each
   with up to eight replicas, stay under a default server's 100 connections; writers still
@@ -73,7 +73,8 @@ class Replicas:
 
 def _require_server() -> str:
     if not PG_URL:
-        if os.environ.get("MEMORY_CONCURRENCY_REQUIRED", "").strip().lower() in ("1", "true", "yes"):
+        # Fails closed: any setting but an explicit off requires the server.
+        if os.environ.get("MEMORY_CONCURRENCY_REQUIRED", "").strip().lower() not in ("", "0", "false", "no", "off"):
             pytest.fail("memory concurrency tests need Postgres: set SUPERVISOR_TEST_PG_URL")
         pytest.skip("no Postgres test server (set MEMORY_TEST_PG_URL or SUPERVISOR_TEST_PG_URL)")
     return PG_URL

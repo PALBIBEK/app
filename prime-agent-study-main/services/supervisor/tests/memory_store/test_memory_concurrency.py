@@ -142,9 +142,12 @@ async def test_extraction_jobs_claimed_by_many_processors_each_run_once(replicas
     """Eight processors (the extraction half of eight replicas, without their apps) drain
     twenty sessions' jobs at once, three at a time, so their claims contend round after
     round: every job runs exactly once and ends done."""
-    processors = [MemoryService(database_url=replicas.url, extractor=scripted_extractor()) for _ in range(8)]
+    made = [MemoryService(database_url=replicas.url, extractor=scripted_extractor()) for _ in range(8)]
+    booted = await asyncio.gather(*(p.startup() for p in made), return_exceptions=True)
+    processors = [p for p, b in zip(made, booted, strict=True) if not isinstance(b, BaseException)]
     try:
-        await asyncio.gather(*(p.startup() for p in processors))
+        if len(processors) < len(made):  # every boot settled; the ones that started are closed below
+            raise BaseExceptionGroup("processors did not start", [b for b in booted if isinstance(b, BaseException)])
         scope = Scope("t1", "user:alice", "agent")
         for n in range(20):
             handle = await processors[n % 8].create_session(scope)
