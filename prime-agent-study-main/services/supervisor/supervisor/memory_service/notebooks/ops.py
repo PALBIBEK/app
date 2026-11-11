@@ -10,6 +10,7 @@ and the write that depends on it never cross the network apart.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -44,6 +45,7 @@ from supervisor.memory_service.notebooks.render import (
     parse_fact_id,
 )
 from supervisor.memory_service.notebooks.store import (
+    HANDLED_PAYLOAD,
     FactTx,
     NotebookStore,
     mark_handled,
@@ -95,6 +97,9 @@ def is_transient(exc: BaseException) -> bool:
     return False
 PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
+LANDING_EVIDENCE_S = 300.0
+"""A lone queued capture failing is counted against it only when another landed on this
+replica this recently: the service lands captures, so the fault is that capture's own."""
 KEEP_SET_ASIDE_MS = 7 * 24 * 3600 * 1000
 """How long a set-aside capture is kept (to look into, and queue again) before it is pruned."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
@@ -143,6 +148,14 @@ class NotebookOps:
         self.on_queued: Callable[[], None] | None = None
         """Told when a capture is queued: the inbox's drainer, once it runs
         (``notebooks.inbox``). Without one, ``observe`` lands its capture itself."""
+        self._landed_at: float | None = None  # when a promotion here last landed a capture (monotonic)
+
+    def _landed(self, captures: int) -> None:
+        if captures:
+            self._landed_at = time.monotonic()
+
+    def _landing_lately(self) -> bool:
+        return self._landed_at is not None and time.monotonic() - self._landed_at < LANDING_EVIDENCE_S
 
     async def capture(
         self,
@@ -263,7 +276,9 @@ class NotebookOps:
         except Exception:  # an aid only: landing embeds again, where a capture's own failure is handled
             logger.warning("notebook %s: embedding queued facts ahead failed", notebook_id, exc_info=True)
         try:
-            return await self._promote_batch(notebook_id, batch)
+            landed = await self._promote_batch(notebook_id, batch)
+            self._landed(landed[0])
+            return landed
         except NotebookArchived:
             dropped = await self.store.drop_inbox(notebook_id)
             logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
@@ -293,11 +308,13 @@ class NotebookOps:
                 failed.append((row_id, exc))
                 continue
             captures, added = captures + one, added + facts
+        self._landed(captures)
         if not failed:
             return captures, added
-        if len(failed) == len(queued) > 1:
-            # Every one of them fails, each on its own: the fault is not theirs (a bug, a bank
-            # or an embedder down for all). Nothing is counted, so none is lost to it.
+        if len(failed) == len(queued) and (len(queued) > 1 or not self._landing_lately()):
+            # Every one of them fails, each on its own, or the only one does while nothing lands
+            # here: the fault is not theirs (a bug, a bank or an embedder down for all).
+            # Nothing is counted, so none is lost to it.
             logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
             raise failed[0][1]
         for row_id, error in failed:
@@ -396,6 +413,12 @@ class NotebookOps:
             # Marked as handled, not deleted: a retried burst still finds its key (and lands
             # nothing); pruned with the rest in time.
             await tx.db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=tx.at))
+            # Set-aside ones too, emptied: none queued again later brings back what was cleared.
+            await tx.db.execute(
+                update(InboxRow)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0)
+                .values(**HANDLED_PAYLOAD)
+            )
             return len(facts)
 
         return await self.store.transact(notebook_id, run, author=author)
@@ -495,7 +518,10 @@ async def land(
             if not merged.same_as(duplicate.provenance):
                 await tx.update(duplicate.id, duplicate.text, merged)
                 duplicate = existing[key] = replace(duplicate, provenance=merged)
-            if expires_on is not None and duplicate.expires_on != expires_on:
+            # A repeat brings its own expiry; one with none restates an expired fact as true again.
+            if (expires_on is not None and duplicate.expires_on != expires_on) or (
+                expires_on is None and duplicate.expired()
+            ):
                 await tx.set_expiry(duplicate, expires_on)
                 duplicate = existing[key] = replace(duplicate, expires_on=expires_on)
             if typed is not None and duplicate.typed is None:

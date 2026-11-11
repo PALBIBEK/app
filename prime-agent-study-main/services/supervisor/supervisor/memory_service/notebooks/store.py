@@ -57,8 +57,11 @@ from supervisor.memory_service.notebooks.types import (
 )
 from supervisor.memory_service.notebooks.wire import typed_in, typed_out
 
-HANDLED_PAYLOAD: Final[dict[str, object]] = {"observations": [], "retire": [], "sources": [], "author": None}
-"""What a handled queued row keeps of its capture: nothing but its key and its counts."""
+HANDLED_PAYLOAD: Final[dict[str, object]] = {
+    "observations": [], "size": 0, "retire": [], "sources": [], "author": None, "attempts": 0,
+}
+"""What a handled queued row keeps of its capture: nothing but its key (never set aside,
+never queued again)."""
 
 
 def mark_handled(*where: ColumnElement[bool], at: int) -> Update:
@@ -758,10 +761,11 @@ class NotebookStore:
             await db.commit()
             return int(deleted.rowcount or 0)  # type: ignore[attr-defined]
 
-    async def requeue_set_aside(self, notebook_id: str | None = None) -> int:
-        """Queue again the captures set aside (in one notebook, or every one): an operator's
-        step once the fault that set them aside is fixed. Each gets its tries afresh."""
-        query = update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0)
+    async def requeue_set_aside(self, notebook_id: str | None = None, *, give_up_at: int) -> int:
+        """Queue again the captures set aside (``give_up_at`` failures; in one notebook, or
+        every one): an operator's step once the fault that set them aside is fixed. Each
+        gets its tries afresh; one handled (landed, cleared) never comes back."""
+        query = update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts >= give_up_at)
         if notebook_id is not None:
             query = query.where(InboxRow.notebook_id == notebook_id)
         async with self._db() as db:

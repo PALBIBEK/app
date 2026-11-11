@@ -882,7 +882,7 @@ async def test_a_set_aside_capture_is_kept_past_the_day_and_can_be_queued_again(
 
     day = now_ms() + KEEP_PROMOTED_MS
     assert await store.prune_inbox(before=day, set_aside_before=day - KEEP_SET_ASIDE_MS, give_up_at=PROMOTE_ATTEMPTS) == 0
-    assert await store.requeue_set_aside(nb.id) == 1, "queued again once its fault is fixed"
+    assert await store.requeue_set_aside(nb.id, give_up_at=PROMOTE_ATTEMPTS) == 1, "queued again once its fault is fixed"
     await memory.inbox.drain()
     assert [f.text for f in await client.facts(nb.id)] == ["Never lands"]
     week = now_ms() + KEEP_SET_ASIDE_MS
@@ -1026,6 +1026,130 @@ async def test_a_topic_or_body_that_is_not_text_is_refused(svc: MemoryServiceHan
         r = await raw.post(f"/v1/notebooks/{nb.id}/observations", json={"observations": [body]},
                            headers={"Authorization": f"Bearer {memory_service_credential('t1')}"})
     assert r.status_code == 422 and r.json()["detail"]["code"] == "InvalidObservation"
+
+
+async def test_a_lone_capture_is_not_counted_for_a_fault_while_nothing_lands(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One queued capture is the usual case: failing while nothing lands on the replica,
+    the fault is the service's, and the capture is never set aside for it."""
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Alone in the queue")], context=OWN)
+    insert, broken = FactTx.insert, [True]
+
+    async def bug(self: FactTx, *args: object, **kw: object) -> str:
+        if broken[0]:
+            raise ValueError("a bug in the bank's index")
+        return await insert(self, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", bug)
+    for _ in range(PROMOTE_ATTEMPTS + 1):
+        with pytest.raises(ValueError):
+            await memory.notebooks.promote(nb.id)
+    broken[0] = False
+
+    await memory.notebooks.promote(nb.id)
+    assert [f.text for f in await client.facts(nb.id)] == ["Alone in the queue"]
+
+
+async def test_a_lone_capture_failing_while_others_land_is_counted_and_set_aside(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    fine = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="fine")
+    bad = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="bad")
+    await client.observe(fine.id, [draft("Lands")], context=OWN)
+    await client.observe(bad.id, [draft("Its own fault")], context=OWN)
+    insert = FactTx.insert
+
+    async def picky(self: FactTx, text: str, *args: object, **kw: object) -> str:
+        if text == "Its own fault":
+            raise ValueError("this capture's own data")
+        return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", picky)
+    await memory.notebooks.promote(fine.id)  # the service lands captures
+    for _ in range(PROMOTE_ATTEMPTS):
+        with pytest.raises(ValueError):
+            await memory.notebooks.promote(bad.id)
+
+    assert await memory.notebooks.store.pending() == 0, "set aside: the fault was its own"
+
+
+async def test_a_capture_that_landed_after_failing_is_never_queued_again(
+    svc: MemoryServiceHandle,
+) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Failed once, then landed")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+    await memory.inbox.drain()
+
+    assert await store.requeue_set_aside(give_up_at=PROMOTE_ATTEMPTS) == 0
+    assert await store.pending() == 0
+
+
+async def test_clearing_a_notebook_empties_its_set_aside_captures(svc: MemoryServiceHandle) -> None:
+    from sqlalchemy import select
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Set aside, then cleared")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    for _ in range(PROMOTE_ATTEMPTS):
+        await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+    await client.clear(nb.id)
+
+    assert await store.requeue_set_aside(nb.id, give_up_at=PROMOTE_ATTEMPTS) == 0, "nothing cleared comes back"
+    async with store._db() as db:
+        (row,) = list(await db.scalars(select(InboxRow)))
+    assert row.observations == [] and row.attempts == 0
+
+
+async def test_a_repeat_with_no_expiry_makes_an_expired_fact_true_again(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks import ops
+    from supervisor.memory_service.notebooks.store import FactTx
+    from supervisor.memory_service.notebooks.types import Provenance
+
+    store = svc.app.state.memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    own = Provenance(Sensitivity.ORDINARY, (), False)
+
+    def landing(text: str, expires_on: str | None):  # type: ignore[no-untyped-def]
+        async def run(tx: FactTx) -> tuple[int, bool]:
+            return await ops.land(tx, [(text, None)], own, expires_on)
+
+        return run
+
+    await store.transact(nb.id, landing("The freeze is on", "2020-01-01"))
+    await store.transact(nb.id, landing("the freeze is on", None))
+
+    (fact,) = await client.facts(nb.id)
+    assert fact.expires_on is None and fact.text == "The freeze is on"
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:
