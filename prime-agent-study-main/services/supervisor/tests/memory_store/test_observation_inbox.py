@@ -1276,6 +1276,102 @@ async def test_the_facts_as_they_were_carry_a_type_only_where_they_had_its_words
     assert now.text == "Uses pnpm" and now.typed is not None
 
 
+async def test_a_set_aside_capture_never_brings_back_words_deleted_since(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys on Fridays"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Deploys on Fridays")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    for _ in range(PROMOTE_ATTEMPTS):
+        await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+    await client.delete(nb.id, [fact.id])
+
+    assert await store.requeue_set_aside(nb.id, give_up_at=PROMOTE_ATTEMPTS) == 0, "nothing left of it to land"
+    await memory.inbox.drain()
+    assert await client.facts(nb.id) == []
+
+
+@pytest.mark.parametrize("change", ["case edit", "a twin survives"])
+async def test_words_a_fact_still_has_are_kept_in_the_queue_to_tighten_it(svc: MemoryServiceHandle, change: str) -> None:
+    from supervisor.memory_service.notebooks.types import Edit
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["likes tea", "likes coffee"], context=OWN)
+    tea, coffee = sorted(await client.facts(nb.id), key=lambda f: f.text, reverse=True)
+    await client.observe(nb.id, [draft("Likes tea")], context=OWN)
+    if change == "case edit":
+        await client.edit(nb.id, [Edit(tea.id, "Likes tea")], context=OWN)
+    else:
+        await client.edit(nb.id, [Edit(coffee.id, "likes tea")], context=OWN)  # two facts, one text
+        await client.delete(nb.id, [tea.id])
+
+    await memory.inbox.drain()
+
+    (kept,) = [f for f in await client.facts(nb.id) if f.text.lower() == "likes tea"]
+    assert kept.typed is not None, "the queued restatement still landed on it"
+
+
+async def test_a_capture_emptied_by_a_delete_still_retires_what_it_makes_false(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Lives in Paris", "Lives in Berlin"], context=OWN)
+    facts = {f.text: f for f in await client.facts(nb.id)}
+    await client.observe(nb.id, [draft("Lives in Berlin")], context=OWN, retire=[facts["Lives in Paris"].id])
+    await client.delete(nb.id, [facts["Lives in Berlin"].id])
+
+    await memory.inbox.drain()
+
+    assert await client.facts(nb.id) == [], "Paris retired though Berlin's restatement was taken out"
+
+
+async def test_many_captures_failing_while_others_land_are_each_counted(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for text in ("Poison one", "Poison two"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
+
+    async def poison(self: FactTx, *args: object, **kw: object) -> str:
+        raise ValueError("these captures' own data")
+
+    monkeypatch.setattr(FactTx, "insert", poison)
+    memory.notebooks._landed(1)  # captures land elsewhere on this replica
+    for _ in range(PROMOTE_ATTEMPTS):
+        with pytest.raises(ValueError):
+            await memory.notebooks.promote(nb.id)
+        memory.notebooks._landed(1)
+
+    assert await memory.notebooks.store.pending() == 0, "set aside, not at the head of the queue for good"
+
+
+async def test_a_capture_retiring_too_many_facts_is_refused(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.limits import MAX_FACTS_PER_CAPTURE
+    from supervisor.memory_service.notebooks.errors import MemoryLimitExceeded
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+
+    with pytest.raises(MemoryLimitExceeded):
+        await client.observe(nb.id, [draft("x")], context=OWN, retire=[str(i) for i in range(MAX_FACTS_PER_CAPTURE + 1)])
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 

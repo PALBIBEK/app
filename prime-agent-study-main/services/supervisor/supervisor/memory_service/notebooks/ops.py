@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from datetime import date
 from typing import Final, Literal
@@ -205,6 +205,7 @@ class NotebookOps:
         if not drafts:
             return 0
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(drafts))
+        _within("facts retired in one capture", MAX_FACTS_PER_CAPTURE, len(retire))
         retire_ids = [_fact_id(i) for i in retire]
         drafts = [c for c in (_cleaned(d) for d in drafts) if c is not None]
         if not drafts:
@@ -293,7 +294,8 @@ class NotebookOps:
             try:
                 one, facts = await self._promote_batch(notebook_id, 1, only=row_id)
             except (NotebookArchived, NotebookNotFound) as exc:  # the notebook's, not the capture's
-                return await self._notebook_gone(notebook_id, exc)
+                dropped, _ = await self._notebook_gone(notebook_id, exc)
+                return captures + dropped, added  # with those landed before it went
             except Exception as exc:
                 if is_transient(exc):
                     raise
@@ -302,10 +304,10 @@ class NotebookOps:
             captures, added = captures + one, added + facts
         if not failed:
             return captures, added
-        if len(failed) == len(queued) and (len(queued) > 1 or not self._landing_lately()):
-            # Every one of them fails, each on its own, or the only one does while nothing lands
-            # here: the fault is not theirs (a bug, a bank or an embedder down for all).
-            # Nothing is counted, so none is lost to it.
+        if len(failed) == len(queued) and not self._landing_lately():
+            # Every one of them fails, each on its own, while nothing lands here: the fault is
+            # not theirs (a bug, a bank or an embedder down for all). Nothing is counted, so
+            # none is lost to it. While captures land elsewhere, each failure is its own.
             logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
             raise failed[0][1]
         for row_id, error in failed:
@@ -384,8 +386,10 @@ class NotebookOps:
         exposure = capture_provenance(notebook.home, context) if context else None
 
         async def run(tx: FactTx) -> None:
-            targets = resolve_ids(await tx.current(), [e.id for e in edits])
-            await _forget_queued(tx, [f.text for e, f in zip(edits, targets, strict=True) if edited_text(e.text) != f.text])
+            current = await tx.current()
+            targets = resolve_ids(current, [e.id for e in edits])
+            rewritten = {f.id: edited_text(e.text) for e, f in zip(edits, targets, strict=True)}
+            await _forget_queued(tx, [f.text for f in current], [rewritten.get(f.id, f.text) for f in current])
             for edit, fact in zip(edits, targets, strict=True):
                 provenance = (
                     merge_provenance([fact.provenance, exposure], fact.provenance.sensitivity)
@@ -404,9 +408,11 @@ class NotebookOps:
 
     async def delete(self, notebook_id: str, ids: Sequence[str], *, author: str | None = None) -> None:
         async def run(tx: FactTx) -> None:
-            removed = resolve_ids(await tx.current(), ids)
+            current = await tx.current()
+            removed = resolve_ids(current, ids)
             await tx.remove(removed)
-            await _forget_queued(tx, [f.text for f in removed])
+            gone = {f.id for f in removed}
+            await _forget_queued(tx, [f.text for f in current], [f.text for f in current if f.id not in gone])
 
         await self.store.transact(notebook_id, run, author=author)
 
@@ -457,9 +463,7 @@ class NotebookOps:
             current = {f.id: f for f in await tx.current()}
             removed = [f for i, f in current.items() if i not in target]
             await tx.remove(removed)
-            await _forget_queued(
-                tx, [f.text for f in removed] + [f.text for i, f in current.items() if i in target and target[i].text != f.text]
-            )
+            await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
             for fact_id, fact in target.items():
                 live = current.get(fact_id)
                 if live is None:
@@ -476,26 +480,34 @@ class NotebookOps:
         await self.store.transact(notebook_id, run, author=author)
 
 
-async def _forget_queued(tx: FactTx, texts: Sequence[str]) -> None:
-    """Take out of the notebook's queued captures what restates ``texts``: words a person
-    just deleted or rewrote. Queued before the change, a capture landed after it would
-    bring them back (before the inbox it had landed first, and the change undid it).
-    Under the notebook's lock, in the change's transaction; a capture left with nothing is
-    handled."""
-    gone = {normalize(t) for t in texts}
+async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]) -> None:
+    """Take out of the notebook's queued (and set-aside) captures what restates words a
+    person just deleted or rewrote: in ``before`` (the facts' words before the change), in
+    no fact ``after`` it. Queued before the change, such a capture would land after it and
+    bring them back; before the inbox it had landed first, and the change undid it. Words a
+    fact still has (a case edit, another fact with the same text) are kept, to tighten it.
+
+    Under the notebook's lock, in the change's transaction. A capture left with no
+    statement keeps its retirements, still to be made; one left with nothing is handled."""
+    gone = {normalize(t) for t in before} - {normalize(t) for t in after}
     if not gone:
         return
-    rows = await tx.db.scalars(
-        select(InboxRow).where(InboxRow.notebook_id == tx.notebook.id, InboxRow.promoted_at.is_(None))
+    rows = await tx.db.execute(
+        select(InboxRow.id, InboxRow.observations, InboxRow.retire, InboxRow.promoted_at).where(
+            InboxRow.notebook_id == tx.notebook.id,
+            InboxRow.promoted_at.is_(None) | (InboxRow.attempts >= PROMOTE_ATTEMPTS),  # queued, or set aside
+        )
     )
-    for row in rows:
-        kept = [o for o in row.observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
-        if len(kept) == len(row.observations):
+    for row_id, observations, retire, promoted_at in rows.all():
+        kept = [o for o in observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
+        if len(kept) == len(observations):
             continue
-        if kept:
-            await tx.db.execute(update(InboxRow).where(InboxRow.id == row.id).values(observations=kept, size=len(kept)))
-        else:
-            await tx.db.execute(mark_handled(InboxRow.id == row.id, at=tx.at))
+        if kept or retire:
+            await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(observations=kept, size=len(kept)))
+        elif promoted_at is None:
+            await tx.db.execute(mark_handled(InboxRow.id == row_id, at=tx.at))
+        else:  # set aside, now with nothing to land: never queued again
+            await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(**HANDLED_PAYLOAD))
 
 
 def _within(what: str, limit: int, got: int) -> None:

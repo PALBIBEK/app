@@ -220,3 +220,20 @@ async def test_a_capture_retires_every_contradicted_fact_its_audience_may_change
             await asyncio.sleep(0.05)
     assert "ordinary personal" not in texts, "the one it may change is retired"
     assert "learned in x" in texts, "the hidden one is kept"
+
+
+async def test_an_automatic_retirement_keeps_only_the_facts_it_may_not_change(notebooks: NotebookClient) -> None:
+    """One retire id hidden (or gone) fails the delete; the others are deleted still."""
+    from types import SimpleNamespace
+
+    from supervisor.memory.turn import SessionMemory
+
+    memory, nb = await _seeded(notebooks)
+    facts = {f.text: f for f in await memory.facts(nb)}
+    private = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), Members(x=set())))
+    scope = SimpleNamespace(view=private, audience=SimpleNamespace(actor=ALICE))
+
+    await SessionMemory._retire(None, scope, nb, "s1", [facts["ordinary personal"].id, facts["learned in x"].id])  # type: ignore[arg-type]
+
+    texts = {f.text for f in await memory.facts(nb)}
+    assert "ordinary personal" not in texts and "learned in x" in texts

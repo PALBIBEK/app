@@ -438,9 +438,17 @@ class SessionMemory:
         if not ids:
             return
         try:
-            await scope.view.delete(notebook, list(ids), author=scope.audience.actor)
+            try:
+                await scope.view.delete(notebook, list(ids), author=scope.audience.actor)
+            except MemoryFactsMissing as exc:
+                # Some already gone (a retried capture) or hidden from this audience: those are
+                # kept, every other one it makes false is still retired.
+                missing = set(exc.ids)
+                if rest := [i for i in ids if i.strip().removeprefix("#") not in missing]:
+                    await scope.view.delete(notebook, rest, author=scope.audience.actor)
+                logger.info("session %s: %d contradicted facts not retired: %s", session_id, len(ids) - len(rest), exc)
         except (MemoryFactsMissing, MemoryDisclosureDenied, NotebookArchived) as exc:
-            # Already gone (a retried capture), not this audience's to change, or archived.
+            # Gone meanwhile, not this audience's to change, or archived.
             logger.info("session %s: contradicted facts not retired: %s", session_id, exc)
 
     async def _capture_observations(
