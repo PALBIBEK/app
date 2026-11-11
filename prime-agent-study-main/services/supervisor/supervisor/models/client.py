@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from supervisor.http_cookies import no_cookies
+from supervisor.http_cookies import SHARED_LIMITS, no_cookies
 from supervisor.models.audit import ModelCallAudit, ModelCallRecord
 from supervisor.models.catalog import GatewayCatalog
 from supervisor.models.endpoints import (
@@ -109,7 +109,7 @@ class ModelRouter:
         return httpx.Client(
             transport=self._transport,
             follow_redirects=False,
-            limits=httpx.Limits(max_connections=None, max_keepalive_connections=64, keepalive_expiry=5.0),
+            limits=SHARED_LIMITS,
             cookies=no_cookies(),  # one client serves every session: nothing one is sent carries to another
         )
 

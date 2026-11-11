@@ -286,7 +286,10 @@ class WithRequestThreads:
 
     def __getattr__(self, name: str) -> Any:
         """The app's own attributes (``state``, ``router``), for whatever reads them through
-        the server's config."""
+        the server's config. ``app`` itself, asked before it is set (a copy, an unpickle),
+        is missing, not looked up through itself without end."""
+        if name == "app":
+            raise AttributeError(name)
         return getattr(self.app, name)
 
 

@@ -232,7 +232,9 @@ class ScriptedGateway:
 
     def _one_shot(self, messages: list[ChatMessage]) -> str | None:
         system = messages[0].content if messages and messages[0].role == "system" else ""
-        if system.startswith("You extract durable facts"):
+        if system.startswith("You extract durable observations"):
+            answer = as_outcome(self.extract)
+        elif system.startswith("You extract durable facts"):
             answer = self.extract
         elif system.startswith("Classify sensitivity"):
             answer = self.sensitivity
@@ -242,7 +244,7 @@ class ScriptedGateway:
             return None
         with self._lock:
             self.one_shots.append((system.split("\n", 1)[0], messages[-1].content))
-            if system.startswith("You extract durable facts") and self.extract_errors:
+            if system.startswith("You extract durable") and self.extract_errors:
                 raise self.extract_errors.pop(0)
         return answer
 
@@ -388,3 +390,32 @@ def huge_result(name: str, chars: int) -> Iterator[None]:
         yield
     finally:
         RegistryToolProvider.invoke = original  # type: ignore[method-assign]
+
+
+def as_outcome(answer: str) -> str:
+    """A scripted extraction answer as the typed outcome automatic capture reads (G2): one
+    already JSON as it is; QM's bullet form (``SENSITIVITY: <label>`` then ``- fact`` lines,
+    or ``NONE``) as observations of type ``user``, or a ``project`` one for a bullet that
+    starts ``project:`` (so tests stay as short as they were)."""
+    if answer.lstrip().startswith(("{", "```")):
+        return answer
+    lines = answer.strip().splitlines()
+    sensitivity = "unknown"
+    if lines and lines[0].startswith("SENSITIVITY:"):
+        sensitivity = lines.pop(0).split(":", 1)[1].strip()
+    facts = [line[2:].strip() for line in lines if line.startswith("- ")]
+    if not facts:
+        return json.dumps({"outcome": "noop", "observations": [], "sensitivity": sensitivity})
+    observations = []
+    for fact in facts:
+        kind, _, rest = fact.partition(":")
+        typed = kind in ("project", "reference", "feedback") and rest.strip()
+        observations.append({
+            "type": kind if typed else "user",
+            "topic_hint": None,
+            "statement": rest.strip() if typed else fact,
+            "keywords": [],
+            "aliases": [],
+            "body": None,
+        })
+    return json.dumps({"outcome": "observations", "observations": observations, "sensitivity": sensitivity})

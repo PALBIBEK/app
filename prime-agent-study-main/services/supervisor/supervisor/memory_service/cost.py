@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -16,22 +17,31 @@ EMBED_CACHE_SIZE = 20_000
 class CachingEmbedder:
     """Wraps an Embedder; cache by content hash (Phase 5 cost control), bounded (LRU)."""
 
+    caches = True
+    """Embedding a text again is free: what ``NotebookStore.embed_queued`` relies on."""
+
     def __init__(self, inner: Embedder | None = None, *, size: int = EMBED_CACHE_SIZE) -> None:
         self._inner = inner or HashingEmbedder()
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._size = size
+        # Used from threads too (the inbox embeds queued facts off the loop): the LRU's
+        # read-then-move and insert-then-evict are each one step. The inner call is outside.
+        self._lock = threading.Lock()
 
     def embed(self, text: str) -> list[float]:
         key = content_hash(text)
-        if (vec := self._cache.get(key)) is not None:
-            self._cache.move_to_end(key)
-            METRICS.inc("embed_cache_hits")
-            return vec
+        with self._lock:
+            if (vec := self._cache.get(key)) is not None:
+                self._cache.move_to_end(key)
+                METRICS.inc("embed_cache_hits")
+                return vec
         METRICS.inc("embed_cache_misses")
         vec = self._inner.embed(text)
-        self._cache[key] = vec
-        if len(self._cache) > self._size:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self._cache[key] = vec
+            self._cache.move_to_end(key)
+            if len(self._cache) > self._size:
+                self._cache.popitem(last=False)
         return vec
 
 

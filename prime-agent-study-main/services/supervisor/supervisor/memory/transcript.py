@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from supervisor.agent.events import Envelope, MessageEnd, ToolEnd, TurnEnd
+from supervisor.memory_service.observations import well_formed
 
 __all__ = [
     "BASE_MAX_TRANSCRIPT_BYTES",
@@ -61,8 +62,9 @@ TOOL_ARGS_TIERS: Final = (2 * 1024, 512, 256)
 KEEP_EDGE_START: Final = 8
 ASSISTANT_TEXT_TIERS: Final = (16 * 1024, 4 * 1024, 1024)
 USER_TEXT_FLOOR_BYTES: Final = 4 * 1024
-STOPPED_MARKER: Final = "[... the user stopped this turn here, before it finished ...]"
-"""Where a run the user stopped ends: what it did up to here is unfinished work."""
+STOPPED_MARKER: Final = "[... this turn was stopped here, before it finished ...]"
+"""Where a stopped run ends (by the user, or its deadline: the journal says only
+"aborted"): what it did up to here is unfinished work."""
 WITHHELD_RESULT: Final = "[... memory or history the agent looked up: already held, not captured again ...]"
 """What a withheld tool's result reads as (``run_items``)."""
 WITHHELD_ARGUMENTS: Final = "[... withheld ...]"
@@ -180,6 +182,8 @@ def run_items(events: Iterable[Envelope], *, withheld: AbstractSet[str] = frozen
 def _user_parts(content: Sequence[Mapping[str, Any]]) -> list[Item]:
     parts: list[Item] = []
     for part in content:
+        if not isinstance(part, Mapping):
+            continue  # another runtime's shape: nothing to read, never the capture failed
         if part.get("type") == "text":
             parts.append({"type": "text", "text": str(part.get("text", ""))})
         elif part.get("type") in _IMAGE_PARTS:
@@ -188,6 +192,7 @@ def _user_parts(content: Sequence[Mapping[str, Any]]) -> list[Item]:
 
 
 def _assistant_items(content: Sequence[Mapping[str, Any]], withheld: AbstractSet[str] = frozenset()) -> list[Item]:
+    content = [part for part in content if isinstance(part, Mapping)]  # as _user_parts
     reasoning = [
         {"type": "reasoning", "text": str(part["text"])}
         for part in content
@@ -273,6 +278,11 @@ def condense(items: list[Item], budget: TranscriptBudget) -> CondensedTranscript
             break
         keep_edge //= 2
 
+    if _size(encoded) <= budget.max_bytes:
+        # Over on items alone (what the stages keep: the user's words, the markers): no
+        # text cut takes an item away, so none is cut for nothing.
+        stats.over_budget = True
+        return _finish(encoded, len(items), stats)
     # Ours, beyond Grok's stages: an assistant reply long enough (a pasted file, a long
     # report) outlasts every stage before, and would leave the transcript over budget at
     # every attempt. The agent's own words go before the user's, head and tail kept.
@@ -399,12 +409,20 @@ def _strip_images(item: Item) -> int:
 
 
 def _copy(item: Item) -> Item:
-    """A copy condensing may change without touching the caller's items."""
-    copied = dict(item)
-    for key in ("content", "images", "tool_calls"):
-        if isinstance(copied.get(key), list):
-            copied[key] = [dict(part) for part in copied[key]]
-    return copied
+    """A copy condensing may change without touching the caller's items, every text in it
+    well formed (``observations.well_formed``): a lone surrogate in the journal (a cut
+    emoji) is no reason for UTF-8 to fail the capture."""
+    return _well_formed(item)
+
+
+def _well_formed(value: Any) -> Any:
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        return {k: _well_formed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_well_formed(v) for v in value]
+    return value
 
 
 def _serialize(value: Any) -> str:

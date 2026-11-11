@@ -21,19 +21,22 @@ per call.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import random
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
-from supervisor.http_cookies import no_cookies
+from supervisor.http_cookies import SHARED_LIMITS, no_cookies
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
     InvalidExpiry,
+    InvalidObservation,
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
@@ -53,6 +56,7 @@ from supervisor.memory_service.notebooks.types import (
     subject_of,
     tenant_of,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,17 @@ class _Breaker:
             self._trial = False
 
 
+MEMORY_LIMITS: Final = httpx.Limits(
+    max_connections=256,
+    max_keepalive_connections=SHARED_LIMITS.max_keepalive_connections,
+    keepalive_expiry=SHARED_LIMITS.keepalive_expiry,
+)
+"""Connections of the one client every session shares (async: nothing else bounds them, as
+the threads bound the model router's, ``http_cookies.SHARED_LIMITS``): past 256 at once a
+call waits for one, within its timeout, rather than opening ever more against the memory
+service and its database; kept open between calls as every shared client keeps them."""
+
+
 class NotebookClient:
     """Notebooks and their facts, through the memory service."""
 
@@ -154,9 +169,12 @@ class NotebookClient:
             transport=transport,
             timeout=httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s)),
             cookies=no_cookies(),  # one client for every session and tenant (supervisor.http_cookies)
+            limits=MEMORY_LIMITS,
         )
         self._credential = credential
         self._breaker = breaker or _Breaker()
+        self._no_observations_until = 0.0
+        """Until when the service is known to lack ``/observations`` (older than G2)."""
 
     @classmethod
     def from_env(cls) -> NotebookClient | None:
@@ -252,6 +270,36 @@ class NotebookClient:
         body = {"facts": list(facts), "author": author, "context": wire.context_out(context)}
         return int((await self._on(notebook_id, "POST", "/facts:capture", json=body))["added"])
 
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureMetadata | None = None,
+        retire: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Queue an automatic capture's typed observations (G2): facts once the service's
+        inbox lands them, ``retire`` (the facts they make false) after them. The number
+        queued (0 when ``idempotency_key`` was queued already); None from a service older
+        than G2, which takes plain captures only."""
+        if time.monotonic() < self._no_observations_until:
+            return None  # asked lately: an older service, so a plain capture, with no probe each time
+        body = {
+            "observations": [wire.observation_out(d) for d in drafts],
+            "author": author,
+            "context": wire.context_out(context),
+            "retire": list(retire),
+            "idempotency_key": idempotency_key,
+        }
+        try:
+            return int((await self._on(notebook_id, "POST", "/observations", json=body))["queued"])
+        except RouteMissing:
+            # Remembered a while, then asked again (a rolling upgrade brings the route).
+            self._no_observations_until = time.monotonic() + OLDER_SERVICE_RECHECK_S
+            return None
+
     async def edit(
         self,
         notebook_id: str,
@@ -304,12 +352,33 @@ class NotebookClient:
         return await self._call(tenant, method, f"/v1/notebooks/{notebook_id}{suffix}", **kw)
 
     async def _call(self, tenant_id: str, method: str, path: str, **kw: Any) -> Any:
+        """One request; one the service's per-tenant change limit refused is asked again
+        (``RATE_LIMITED_ATTEMPTS``, Retry-After apart): it was refused before it ran, so
+        asking again is safe whatever it does, and a burst of one tenant's sessions waits
+        its turn instead of failing (a memory write, a notebook ensured, a capture)."""
+        for attempt in range(RATE_LIMITED_ATTEMPTS):
+            try:
+                return await self._request(tenant_id, method, path, **kw)
+            except RateLimited as exc:
+                if attempt + 1 == RATE_LIMITED_ATTEMPTS or exc.retry_after > MAX_RATE_WAIT_S:
+                    raise  # a wait longer than ours would end inside the window: not asked again
+                # The wait asked for, never less (a retry inside the window meets the same
+                # limit), jittered upward so a burst's retries spread; at most MAX_RATE_WAIT_S.
+                await asyncio.sleep(min(max(exc.retry_after, 0.2) * (1 + random.random() / 2), MAX_RATE_WAIT_S))
+        raise AssertionError("unreachable")
+
+    async def _request(self, tenant_id: str, method: str, path: str, **kw: Any) -> Any:
         headers = {}
         if token := self._credential(tenant_id):
             headers["Authorization"] = f"Bearer {token}"
         trial = self._breaker.before()
         try:
             response = await self._http.request(method, path, headers=headers, **kw)
+        except httpx.PoolTimeout as exc:
+            # This client's own connections all busy (a burst past MEMORY_LIMITS): the service
+            # never heard of it, so the breaker does not count it against the service.
+            self._breaker.abandoned(trial)
+            raise MemoryUnavailable(f"memory calls busy: {exc}") from exc
         except httpx.HTTPError as exc:
             self._breaker.failed()
             raise MemoryUnavailable(f"memory service unreachable: {exc}") from exc
@@ -368,6 +437,8 @@ def _error(response: httpx.Response) -> NotebookError:
         return EmptyFact(tuple(str(i) for i in detail.get("ids") or ()))
     if code == "InvalidExpiry":
         return InvalidExpiry(str(detail.get("value", "")))
+    if code == "InvalidObservation":
+        return InvalidObservation(str(detail.get("reason", "")))
     if code == "MemoryLimitExceeded":
         return MemoryLimitExceeded(
             str(detail.get("what", "")), int(detail.get("limit", -1)), int(detail.get("got", -1))
@@ -380,16 +451,48 @@ def _error(response: httpx.Response) -> NotebookError:
             f"{detail.get('message', detail)}"
         )
     if response.status_code == 404:
+        if code is None:
+            # Not the service's own answer (a missing notebook says NotebookNotFound): no such
+            # route there, FastAPI's "Not Found" or a proxy's page in front of it.
+            return RouteMissing(response.request.url.path)
         # A notebook of another tenant is "not found" too, by design.
         return NotebookNotFound(str(detail.get("message", "")))
     if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
         return MemoryRequestInvalid(
             f"memory service rejected the request ({response.status_code}): {detail.get('message', detail)}"
         )
+    if response.status_code == 429 and code == "RATE_LIMITED":
+        try:
+            retry_after = float(response.headers.get("retry-after", "1"))
+        except ValueError:
+            retry_after = 1.0
+        return RateLimited(f"memory service rate limit: {detail.get('message', detail)}", max(0.0, retry_after))
     logger.warning("memory service refused %s: %s %s", response.request.url.path, response.status_code, detail)
     return MemoryUnavailable(
         f"memory service returned {response.status_code}: {detail.get('message', detail)}"
     )
+
+
+class RateLimited(MemoryUnavailable):
+    """The memory service's per-tenant limit on changes (``memory_service.rate_limit``):
+    asking again after ``retry_after`` seconds may pass."""
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+OLDER_SERVICE_RECHECK_S = 60.0
+"""How long a service found without ``/observations`` is taken as older than G2."""
+RATE_LIMITED_ATTEMPTS = 4
+"""Tries a rate-limited request makes, Retry-After apart."""
+MAX_RATE_WAIT_S = 5.0
+"""The longest one wait for the change limit lasts (the service asks for 1 s)."""
+
+
+class RouteMissing(NotebookNotFound):
+    """The memory service has no such route: it is older than this supervisor (one without
+    G2's ``/observations``, say). A ``NotebookNotFound`` to every caller that does not ask."""
 
 
 class UnavailableNotebooks:

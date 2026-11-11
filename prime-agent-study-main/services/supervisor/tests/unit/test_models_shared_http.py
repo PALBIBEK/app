@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from supervisor.models.client import ModelRouter, RoutedModelClient
 from supervisor.models.endpoints import GatewayConfig
 
@@ -88,3 +90,78 @@ async def test_the_memory_client_keeps_no_cookie_from_one_tenant_for_another() -
     await client.aclose()
 
     assert sent == [None, None]
+
+
+async def test_a_rate_limited_memory_request_is_asked_again() -> None:
+    """Refused before it ran, so safe to ask again whatever it does: a burst of one
+    tenant's sessions waits its turn instead of failing (the load test's one error)."""
+    import httpx
+
+    from supervisor.memory.client import NotebookClient
+
+    answers = [429, 429, 200]
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        status = answers.pop(0)
+        if status == 429:
+            return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow down"}},
+                                  headers={"Retry-After": "0.01"})
+        return httpx.Response(200, json={"added": 1})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        assert await client.capture("t1~abc", ["x"]) == 1
+    finally:
+        await client.aclose()
+    assert answers == []
+
+
+async def test_a_rate_limited_request_waits_the_time_asked(monkeypatch: object) -> None:
+    import httpx
+
+    from supervisor.memory import client as memory_client
+    from supervisor.memory.client import NotebookClient
+
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(memory_client.asyncio, "sleep", sleep)  # type: ignore[attr-defined]
+    answers = [429, 200]
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if answers.pop(0) == 429:
+            return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow"}},
+                                  headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"added": 1})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        await client.capture("t1~abc", ["x"])
+    finally:
+        await client.aclose()
+    (waited,) = waits
+    assert 3.0 <= waited <= memory_client.MAX_RATE_WAIT_S, "never sooner than asked, never past the cap"
+
+
+async def test_a_wait_longer_than_ours_is_not_retried_inside_its_window() -> None:
+    import httpx
+
+    from supervisor.memory.client import NotebookClient, RateLimited
+
+    calls = 0
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, json={"detail": {"code": "RATE_LIMITED", "message": "slow"}},
+                              headers={"Retry-After": "30"})
+
+    client = NotebookClient("http://memory.test", transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(RateLimited):
+            await client.capture("t1~abc", ["x"])
+    finally:
+        await client.aclose()
+    assert calls == 1

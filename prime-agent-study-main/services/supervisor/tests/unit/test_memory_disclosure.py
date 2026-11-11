@@ -188,3 +188,79 @@ async def test_a_failing_classifier_means_unknown(notebooks: NotebookClient) -> 
     assert {f.provenance.sensitivity for f in await NotebookMemory(store).facts(nb)} == {
         Sensitivity.UNKNOWN
     }
+
+
+async def test_a_capture_retires_every_contradicted_fact_its_audience_may_change(notebooks: NotebookClient) -> None:
+    """One retire id hidden from the audience (or gone) keeps that fact only: the others it
+    makes false are still retired."""
+    import asyncio
+
+    from supervisor.memory_service.observations import (
+        PROMPT_VERSION,
+        ObservationDraft,
+        ObservationType,
+    )
+
+    memory, nb = await _seeded(notebooks)
+    facts = {f.text: f for f in await memory.facts(nb)}
+    members = Members(x=set())  # "learned in x" hidden from alice
+    private = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), members))
+    replacement = ObservationDraft(
+        observation_type=ObservationType.USER, topic_hint=None, statement="Replaces both", keywords=(),
+        aliases=(), extraction_model="m", prompt_version=PROMPT_VERSION, created_at=1, body=None,
+    )
+
+    await private.observe(
+        nb, [replacement], context=CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=()),
+        retire=[facts["ordinary personal"].id, facts["learned in x"].id],
+    )
+
+    async with asyncio.timeout(10):
+        while "Replaces both" not in (texts := {f.text for f in await memory.facts(nb)}):
+            await asyncio.sleep(0.05)
+    assert "ordinary personal" not in texts, "the one it may change is retired"
+    assert "learned in x" in texts, "the hidden one is kept"
+
+
+async def test_an_automatic_retirement_keeps_only_the_facts_it_may_not_change(notebooks: NotebookClient) -> None:
+    """One retire id hidden (or gone) fails the delete; the others are deleted still."""
+    from types import SimpleNamespace
+
+    from supervisor.memory.turn import SessionMemory
+
+    memory, nb = await _seeded(notebooks)
+    facts = {f.text: f for f in await memory.facts(nb)}
+    private = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), Members(x=set())))
+    scope = SimpleNamespace(view=private, audience=SimpleNamespace(actor=ALICE))
+
+    await SessionMemory._retire(None, scope, nb, "s1", [facts["ordinary personal"].id, facts["learned in x"].id])  # type: ignore[arg-type]
+
+    texts = {f.text for f in await memory.facts(nb)}
+    assert "ordinary personal" not in texts and "learned in x" in texts
+
+
+async def test_observations_with_no_label_are_classified_as_captures_are(notebooks: NotebookClient) -> None:
+    import asyncio
+
+    from supervisor.memory_service.observations import (
+        PROMPT_VERSION,
+        ObservationDraft,
+        ObservationType,
+    )
+
+    nb = (await notebooks.ensure(tenant_id="t1", owner=ALICE, agent_pin="p", name="default")).id
+
+    async def model(system: str, content: str) -> str:
+        return "sensitive"
+
+    memory = ClassifiedMemory(NotebookMemory(notebooks), model)
+    draft = ObservationDraft(
+        observation_type=ObservationType.USER, topic_hint=None, statement="Salary is 100k", keywords=(),
+        aliases=(), extraction_model="m", prompt_version=PROMPT_VERSION, created_at=1, body=None,
+    )
+    await memory.observe(nb, [draft], context=CaptureContext(inherited=()))
+
+    async with asyncio.timeout(10):
+        while not (facts := await memory.facts(nb)):
+            await asyncio.sleep(0.05)
+    assert facts[0].provenance.sensitivity is Sensitivity.SENSITIVE

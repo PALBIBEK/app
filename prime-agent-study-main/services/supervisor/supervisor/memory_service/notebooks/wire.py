@@ -17,6 +17,14 @@ from supervisor.memory_service.notebooks.types import (
     Provenance,
     Revision,
     Sensitivity,
+    Typed,
+)
+from supervisor.memory_service.observations import (
+    ObservationDraft,
+    ObservationInvalid,
+    ObservationType,
+    checked_string,
+    checked_strings,
 )
 
 
@@ -71,6 +79,7 @@ def fact_out(f: Fact) -> dict[str, Any]:
         "updated_at": f.updated_at,
         "author": f.author,
         "expires_on": f.expires_on,
+        "typed": typed_out(f.typed),
     }
 
 
@@ -83,7 +92,102 @@ def fact_in(d: dict[str, Any]) -> Fact:
         updated_at=int(d["updated_at"]),
         author=d.get("author"),
         expires_on=d.get("expires_on"),
+        typed=typed_in(d.get("typed")),  # absent from a service before G2
     )
+
+
+def typed_out(t: Typed | None) -> dict[str, Any] | None:
+    if t is None:
+        return None
+    return {
+        "kind": t.kind,
+        "topic": t.topic,
+        "keywords": list(t.keywords),
+        "aliases": list(t.aliases),
+        "body": t.body,
+        "extraction_model": t.extraction_model,
+        "prompt_version": t.prompt_version,
+    }
+
+
+def typed_in(d: dict[str, Any] | None) -> Typed | None:
+    if d is None:
+        return None
+    return Typed(
+        kind=str(d["kind"]),
+        topic=d.get("topic"),
+        keywords=tuple(d.get("keywords") or ()),
+        aliases=tuple(d.get("aliases") or ()),
+        body=d.get("body"),
+        extraction_model=d.get("extraction_model"),
+        prompt_version=d.get("prompt_version"),
+    )
+
+
+def observation_out(o: ObservationDraft) -> dict[str, Any]:
+    return {
+        "type": o.observation_type.value,
+        "topic_hint": o.topic_hint,
+        "statement": o.statement,
+        "keywords": list(o.keywords),
+        "aliases": list(o.aliases),
+        "body": o.body,
+        "extraction_model": o.extraction_model,
+        "prompt_version": o.prompt_version,
+        "created_at": o.created_at,
+    }
+
+
+def observation_in(d: dict[str, Any]) -> ObservationDraft:
+    """An observation as sent, unchecked (``ObservationDraft.validate`` checks it); a
+    field of the wrong shape is ``ObservationInvalid``."""
+    try:
+        return ObservationDraft(
+            observation_type=ObservationType.parse(_text(d["type"], "type")),
+            topic_hint=_text_or_none(d.get("topic_hint"), "topic_hint"),
+            statement=_text(d["statement"], "statement"),
+            keywords=_terms(d.get("keywords")),
+            aliases=_terms(d.get("aliases")),
+            extraction_model=_text(d["extraction_model"], "extraction_model"),
+            prompt_version=_text(d["prompt_version"], "prompt_version"),
+            created_at=_whole(d["created_at"], "created_at"),
+            body=_text_or_none(d.get("body"), "body"),
+        )
+    except ObservationInvalid:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ObservationInvalid(f"malformed observation: {exc}") from None
+
+
+def typed_of(o: ObservationDraft) -> Typed:
+    """What a fact keeps of the observation it came from."""
+    return Typed(
+        kind=o.observation_type.value,
+        topic=o.topic_hint,
+        keywords=o.keywords,
+        aliases=o.aliases,
+        body=o.body,
+        extraction_model=o.extraction_model,
+        prompt_version=o.prompt_version,
+    )
+
+
+def _terms(value: object) -> tuple[str, ...]:
+    return tuple(checked_strings(value, "terms", ObservationInvalid))
+
+
+def _text(value: object, name: str) -> str:
+    return checked_string(value, name, ObservationInvalid, required=True) or ""
+
+
+def _whole(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ObservationInvalid(f"{name} must be an integer, not {type(value).__name__}")
+    return value
+
+
+def _text_or_none(value: object, name: str) -> str | None:
+    return checked_string(value, name, ObservationInvalid)
 
 
 def revision_out(r: Revision) -> dict[str, Any]:

@@ -252,6 +252,91 @@ concurrent captures into one notebook all land, and none blocks another. A per-t
 on extraction calls holds under a burst from one tenant while another tenant's captures
 proceed.
 
+*Done (G2):*
+- **Typed, strict outcome:** `memory_service/observations.py` ports Grok's
+  `parse_model_outcome`, `extraction_schema` and `ObservationDraft::validate` with their
+  limits, test for test.
+  - `noop` and `observations` are exclusive; an unknown field anywhere fails the outcome.
+  - Each observation is normalized to the store's limits rather than failing on them, and
+    the store checks every bound again before it keeps one.
+  - The host sets the provenance: extraction model, `PROMPT_VERSION` and time.
+  - Ours: QM's sensitivity label rides on the outcome (`unknown` when missing), and a JSON
+    answer in a code fence is unwrapped.
+- **Prompt:** `OBSERVATION_EXTRACTION_PROMPT` keeps QM's rules as the `user` and
+  `feedback` types (user's own words only, directives verbatim) and adds `project` and
+  `reference`. Those may come from what the work established, such as a tool's result,
+  never from the assistant's guesses. Grok's transcript rules follow. A malformed answer is
+  retried on the same transcript. The memory service's own Tier 1 extraction keeps QM's
+  bullet prompt.
+- **Facts keep their type:** `memory_facts` gains kind, topic, keywords, aliases, body,
+  extraction model and prompt version (migration 8). A repeat of a plain fact gives it the
+  type it lacked, with no revision. Until G8 adds project notebooks, `project` and
+  `reference` facts go to the session's writable notebook, typed, so G8 can move them.
+- **Inbox (S1):** an automatic capture is one insert into `memory_observation_inbox`, with
+  no lock on its notebook. Each replica's drainer (`notebooks/inbox.py`) lands a notebook's
+  queue in batches of 100 under one lock, reading its facts once a batch, and is woken at
+  once when a capture is queued there. Where no background loop runs (an in-memory
+  database), a capture lands as it is queued. A promoted row is kept for a day (a partial
+  index keeps the drainer's reads to the queue), so a retried burst's idempotency key still
+  holds. Erasure deletes queued captures too; an archived notebook drops what was queued.
+- **Retirement after the replacement:** the facts a capture makes false travel with it in
+  the inbox and are removed after it lands, in the same transaction, and only if all of it
+  was kept, so a capture that does not land leaves both facts. Only what the audience may
+  change is retired (the disclosure layer's rule for deletes). Statements are cleaned as
+  any captured fact is (a model's "(said in X)" is marked as a claim). The inbox backlog is
+  reported in the service's metrics (`inbox_backlog`).
+- **A failing capture is set aside:** a batch that fails is rolled back and its captures
+  landed one at a time, so the good ones land. One that fails on its own is counted and
+  set aside at its fifth failure, spaced by the drainer's backoff. One that cannot be read
+  is set aside at once. Facts are embedded before the notebook's lock is taken, so the
+  lock covers the writes only. A replacement in a full notebook counts the room its
+  retirement frees, and editing a typed fact's words takes its type away.
+- **Known limit:** resolution compares a burst with the facts that have landed, not those
+  still queued. Promotion wakes at once on the replica that queued the capture, and within
+  a second elsewhere, while a session's next burst is a quiet window away. A contradiction
+  that slips through that gap is for consolidation (G5).
+- **Robust draining:** a notebook whose promotion keeps failing is backed off (5 s doubling
+  to 5 minutes), so it never holds up the others. Promoted rows are pruned in every
+  notebook once a minute. A full notebook refuses a capture up front, as `capture` does. A
+  fact is retired only if it still says what resolution judged (one edited meanwhile is
+  kept). A client that finds an older service probes it again after a minute, not on
+  every capture. A fact's type is on its row, so the facts as they were at a revision
+  keep it.
+- **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404
+  on `/observations`), gets the statements as a plain capture.
+- **Per-tenant fairness:** capture's model calls (extraction, resolution) take one of their
+  tenant's slots on the worker (`memory/fairness.py`, `MEMORY_CAPTURE_PER_TENANT`, 8).
+  One tenant's burst waits its turn and other tenants' captures go straight through. A
+  rate-limited `observe` (the service's per-tenant change limit) is retried briefly,
+  honouring `Retry-After`, rather than losing the burst.
+
+*Load (4 tenants × 50 sessions, capture on), G1 then G2, on the same machine in the same
+hour:* G1's numbers recorded earlier were taken when this shared machine was quieter, so
+`main` (G1) was run again beside G2.
+
+| Measure | G1 (`main`) | G2 |
+|---|---|---|
+| Session errors | 1 (create 500, overloaded Temporal) | 0 |
+| Captured | 199/200 | 200/200 (p95 5.6 s) |
+| Lost, duplicated, crossed, unrecalled | 0 | 0 |
+| Recall p50 / p95 | 2,245 / 3,304 ms | 1,959 / 2,965 ms |
+| First step p95 | 10,974 ms | 9,310 ms |
+
+Found by G2's first load run, and fixed in G2:
+- **Malformed answers:** a model answering capture in prose (the stack's stand-in) made
+  every capture four charged calls. A malformed answer is now retried once.
+- **Rate limits:** one session's `notebooks:ensure` was refused by the per-tenant change
+  limit, and the session failed. The client now asks again for any request the limit
+  refused, waiting the `Retry-After` asked: it ran nothing, so asking again is safe.
+
+The recall target (150 ms p95) still needs a sized environment, as for G0 and G1.
+
+*Concurrency tests:* on four replicas, 100 captures into one notebook whose lock another
+transaction holds all queue in under 2 s, none landing past the lock. Once it is released
+they land once each, in batches (fewer revisions than a quarter of the captures). The same
+burst queued by two replicas at once is one row and one fact. On one worker, a 40-capture
+burst from one tenant runs at its cap while another tenant's capture goes straight through.
+
 ### G3 (P0). A failed capture burst is dropped
 
 *Ours:* `temporal/workflow.py::_flush_capture` says "a failed burst is dropped, never
@@ -653,8 +738,8 @@ requires before any gap is ported.
 | Gap | Pri | Tests ported | Concurrency tests | Green | Review clean | Load targets | Verified | PR |
 |---|---|---|---|---|---|---|---|---|
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
-| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [ ] | [~] correctness and capture met; recall latency needs a sized environment | [ ] | |
-| G2 typed observations, strict schema | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [~] eight review rounds; merged on request | [~] correctness and capture met; recall latency needs a sized environment | [x] | #197 |
+| G2 typed observations, strict schema | P0 | [x] | [x] | [ ] | [ ] | [ ] | [ ] | |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G5 consolidation (Dream) | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
