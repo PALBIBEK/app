@@ -295,8 +295,10 @@ class NotebookOps:
         except (NotebookArchived, NotebookNotFound) as exc:
             return await self._notebook_gone(notebook_id, exc)
         except Exception as exc:
-            if is_transient(exc):
+            if is_transient(exc) and not await self._stuck(notebook_id):
                 raise  # the database's contention or connection, not a capture: nothing counted
+            # A "passing" fault met for a day by the head of the queue is no longer taken as
+            # passing: the captures are tried one at a time, and counted (STUCK_AFTER_MS).
             logger.warning("notebook %s: a batch of queued captures failed: landing them one at a time",
                            notebook_id, exc_info=True)
         # Each on its own, in its own transaction: the good ones land, one that fails is counted
@@ -314,7 +316,7 @@ class NotebookOps:
                 dropped, _ = await self._notebook_gone(notebook_id, exc)
                 return captures + dropped, added  # with those landed before it went
             except Exception as exc:  # noqa: BLE001 — each is counted and logged below, or raised
-                if is_transient(exc):
+                if is_transient(exc) and not await self.store.received_before([row_id], before=_stuck_since()):
                     interrupted, tried = exc, tried - 1  # not this capture's: not tried
                     break
                 failed.append((row_id, exc))
@@ -332,7 +334,7 @@ class NotebookOps:
             # one failing for a day (an outage that long is seen) is counted all the same,
             # never retried for good: set aside, it is kept and can be queued again.
             exc_of_all = failed[0][1]
-            stale = await self.store.received_before([r for r, _ in failed], before=now_ms() - STUCK_AFTER_MS)
+            stale = await self.store.received_before([r for r, _ in failed], before=_stuck_since())
             failed = [(r, e) for r, e in failed if r in stale]
             if not failed:
                 logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
@@ -350,6 +352,11 @@ class NotebookOps:
         if captures:
             return captures, added  # others landed: the notebook is not backed off for the failed one
         raise interrupted or failed[0][1]  # for the drainer to back off before the next try
+
+    async def _stuck(self, notebook_id: str) -> bool:
+        """Whether the notebook's oldest queued capture has waited past ``STUCK_AFTER_MS``."""
+        (oldest,) = await self.store.queued_ids(notebook_id, limit=1) or (None,)
+        return oldest is not None and bool(await self.store.received_before([oldest], before=_stuck_since()))
 
     async def _notebook_gone(self, notebook_id: str, exc: NotebookArchived | NotebookNotFound) -> tuple[int, int]:
         """The notebook's queue when the notebook itself is past taking it, which is no
@@ -540,6 +547,11 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
             await tx.db.execute(mark_handled(InboxRow.id == row_id, at=tx.at))
         else:  # set aside, now with nothing to land: never queued again
             await tx.db.execute(empty_set_aside(InboxRow.id == row_id))
+
+
+def _stuck_since() -> int:
+    """Captures queued before this (epoch ms) have waited past ``STUCK_AFTER_MS``."""
+    return now_ms() - STUCK_AFTER_MS
 
 
 def _within(what: str, limit: int, got: int) -> None:

@@ -237,3 +237,30 @@ async def test_an_automatic_retirement_keeps_only_the_facts_it_may_not_change(no
 
     texts = {f.text for f in await memory.facts(nb)}
     assert "ordinary personal" not in texts and "learned in x" in texts
+
+
+async def test_observations_with_no_label_are_classified_as_captures_are(notebooks: NotebookClient) -> None:
+    import asyncio
+
+    from supervisor.memory_service.observations import (
+        PROMPT_VERSION,
+        ObservationDraft,
+        ObservationType,
+    )
+
+    nb = (await notebooks.ensure(tenant_id="t1", owner=ALICE, agent_pin="p", name="default")).id
+
+    async def model(system: str, content: str) -> str:
+        return "sensitive"
+
+    memory = ClassifiedMemory(NotebookMemory(notebooks), model)
+    draft = ObservationDraft(
+        observation_type=ObservationType.USER, topic_hint=None, statement="Salary is 100k", keywords=(),
+        aliases=(), extraction_model="m", prompt_version=PROMPT_VERSION, created_at=1, body=None,
+    )
+    await memory.observe(nb, [draft], context=CaptureContext(inherited=()))
+
+    async with asyncio.timeout(10):
+        while not (facts := await memory.facts(nb)):
+            await asyncio.sleep(0.05)
+    assert facts[0].provenance.sensitivity is Sensitivity.SENSITIVE

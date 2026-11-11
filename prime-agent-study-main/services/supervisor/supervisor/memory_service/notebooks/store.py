@@ -588,11 +588,7 @@ class NotebookStore:
                 await db.commit()
             except IntegrityError:
                 await db.rollback()
-                if idempotency_key is not None and await db.scalar(
-                    select(InboxRow.id).where(
-                        InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key == idempotency_key
-                    )
-                ):
+                if idempotency_key is not None and await self.has_key(notebook_id, idempotency_key):
                     return False  # queued already: a retried burst
                 if await db.get(NotebookRow, notebook_id) is None:
                     raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued

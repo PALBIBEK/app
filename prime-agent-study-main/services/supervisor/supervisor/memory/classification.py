@@ -18,6 +18,7 @@ from supervisor.memory_service.extraction_prompt import SENSITIVITY_PROMPT
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
 from supervisor.memory_service.observations import (
     MAX_MODEL_BYTES,
+    ObservationDraft,
     normalize_term,
 )
 
@@ -78,6 +79,27 @@ class ClassifiedMemory(MemoryView):
             facts,
             author=author,
             context=_with_sensitivity(context, sensitivity),
+        )
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureContext | None = None,
+        retire: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Labelled as ``capture`` labels: an automatic capture arrives labelled (the
+        extraction's own), anything else is classified."""
+        context = context or CaptureContext()
+        sensitivity = context.sensitivity
+        if drafts and (context.mode != "automatic" or sensitivity is None):
+            sensitivity = stricter(sensitivity, await classify(self._one_shot, [d.statement for d in drafts]))
+            context = _with_sensitivity(context, sensitivity)
+        return await super().observe(
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
         )
 
     async def edit(

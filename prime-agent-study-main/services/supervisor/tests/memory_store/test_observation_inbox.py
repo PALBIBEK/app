@@ -1696,6 +1696,43 @@ async def test_a_capture_that_only_retires_lands_in_its_place_and_strips_no_one_
     assert sorted(f.text for f in await client.facts(nb.id)) == ["Uses spaces"], "both retirements made"
 
 
+async def test_a_passing_fault_met_for_a_day_is_no_longer_taken_as_passing(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capture whose text a remote embedder resets the connection on, every time: after a
+    day it is counted, and the queue behind it lands."""
+    from sqlalchemy import select, update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import STUCK_AFTER_MS
+    from supervisor.memory_service.notebooks.store import FactTx, now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Resets the embedder")], context=OWN)
+    await client.observe(nb.id, [draft("Behind it")], context=OWN)
+    stuck, _ = await store.queued_ids(nb.id, limit=10)
+    async with store._db() as db:
+        await db.execute(update(InboxRow).where(InboxRow.id == stuck).values(received_at=now_ms() - STUCK_AFTER_MS - 1))
+        await db.commit()
+    insert = FactTx.insert
+
+    async def resets(self: FactTx, text: str, *args: object, **kw: object) -> str:
+        if text == "Resets the embedder":
+            raise httpx.ConnectError("connection reset")
+        return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", resets)
+    assert await memory.notebooks.promote(nb.id) == (1, 1)
+
+    assert [f.text for f in await client.facts(nb.id)] == ["Behind it"]
+    async with store._db() as db:
+        assert (await db.scalar(select(InboxRow.attempts).where(InboxRow.id == stuck))) == 1
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 
