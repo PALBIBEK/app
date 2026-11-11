@@ -276,12 +276,12 @@ class NotebookOps:
         captures landed one at a time instead: the good ones land, and one that fails on its
         own again is counted against it and set aside at ``PROMOTE_ATTEMPTS`` (the drainer
         spaces the tries); the failure is raised, for the drainer to back off."""
+        if not await self.store.queued_ids(notebook_id, limit=1):
+            return 0, 0  # landed already (another replica's turn): never the notebook's lock for nothing
         try:
             await self.store.embed_queued(notebook_id, limit=batch)
         except Exception:  # an aid only: landing embeds again, where a capture's own failure is handled
             logger.warning("notebook %s: embedding queued facts ahead failed", notebook_id, exc_info=True)
-        if not await self.store.queued_ids(notebook_id, limit=1):
-            return 0, 0  # landed already (another replica's turn): never the notebook's lock for nothing
         try:
             return await self._promote_batch(notebook_id, batch)
         except (NotebookArchived, NotebookNotFound) as exc:
@@ -510,6 +510,8 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
         columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts >= PROMOTE_ATTEMPTS)
     )
     for row_id, observations, _retire, promoted_at in [*queued.all(), *set_aside.all()]:
+        if not isinstance(observations, list):
+            continue  # stored by another version: unreadable, set aside as such (``_readable``)
         kept = [o for o in observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
         if len(kept) == len(observations):
             continue

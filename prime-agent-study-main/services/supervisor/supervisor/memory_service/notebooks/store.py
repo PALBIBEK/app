@@ -20,6 +20,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -56,6 +57,10 @@ from supervisor.memory_service.notebooks.types import (
     subject_of,
 )
 from supervisor.memory_service.notebooks.wire import typed_in, typed_out
+
+_EMBED_AHEAD: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memory-embed-ahead")
+"""Threads embedding queued captures ahead of landing (``embed_queued``), never the loop's
+default executor."""
 
 HANDLED_PAYLOAD: Final[dict[str, object]] = {
     "observations": [], "size": 0, "retire": [], "sources": [], "author": None, "attempts": 0,
@@ -693,8 +698,11 @@ class NotebookStore:
             ]
         texts = [s for s in statements if isinstance(s, str) and s]
         if texts:
-            # On a thread: an embedder may be slow, and the loop serves every other request.
-            await asyncio.to_thread(lambda: [self._embedder.embed(t) for t in texts])
+            # On a thread of its own: an embedder may be slow, and the loop's default executor
+            # does its address lookups (a new database connection waits on it).
+            await asyncio.get_running_loop().run_in_executor(
+                _EMBED_AHEAD, lambda: [self._embedder.embed(t) for t in texts]
+            )
 
     async def received_before(self, row_ids: Sequence[int], *, before: int) -> set[int]:
         """Those of ``row_ids`` queued before ``before`` (epoch ms)."""
@@ -803,7 +811,8 @@ class NotebookStore:
         if notebook_id is not None:
             query = query.where(InboxRow.notebook_id == notebook_id)
         async with self._db() as db:
-            requeued = await db.execute(query.values(promoted_at=None, attempts=0))
+            # Its time afresh too: a day of failing counts from now (``ops.STUCK_AFTER_MS``).
+            requeued = await db.execute(query.values(promoted_at=None, attempts=0, received_at=now_ms()))
             await db.commit()
             return int(requeued.rowcount or 0)  # type: ignore[attr-defined]
 

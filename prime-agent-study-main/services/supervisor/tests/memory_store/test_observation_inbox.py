@@ -1484,6 +1484,55 @@ async def test_promoting_a_notebook_with_nothing_queued_takes_no_lock(
     assert await memory.notebooks.promote(nb.id) == (0, 0)
 
 
+async def test_a_queued_row_of_another_shape_never_stops_a_person_s_delete(svc: MemoryServiceHandle) -> None:
+    from sqlalchemy import update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys on Fridays"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Anything")], context=OWN)
+    async with store._db() as db:  # as another version might have stored it
+        await db.execute(update(InboxRow).values(observations={"shape": "other"}))
+        await db.commit()
+
+    await client.delete(nb.id, [fact.id])
+
+    assert await client.facts(nb.id) == []
+
+
+async def test_a_requeued_capture_has_its_day_afresh(svc: MemoryServiceHandle) -> None:
+    from sqlalchemy import select, update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, STUCK_AFTER_MS
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Set aside days ago")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    async with store._db() as db:
+        await db.execute(update(InboxRow).values(received_at=now_ms() - 3 * STUCK_AFTER_MS))
+        await db.commit()
+    for _ in range(PROMOTE_ATTEMPTS):
+        await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+
+    await store.requeue_set_aside(nb.id, give_up_at=PROMOTE_ATTEMPTS)
+
+    async with store._db() as db:
+        (row,) = list(await db.scalars(select(InboxRow)))
+    assert row.received_at > now_ms() - STUCK_AFTER_MS, "not counted as failing a day from its first try"
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 
