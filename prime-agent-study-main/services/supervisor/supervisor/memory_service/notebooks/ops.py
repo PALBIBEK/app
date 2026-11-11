@@ -221,8 +221,6 @@ class NotebookOps:
         # One read: the notebook's size, and each fact to retire with its text now (it is
         # retired when the capture lands only if it still says that: a fact edited meanwhile
         # is not the one resolution judged false).
-        if idempotency_key is not None and await self.store.has_key(notebook_id, idempotency_key):
-            return 0  # a retried burst, queued already: never refused for its own queued facts
         live, queued, texts = await self.store.capacity(notebook_id, retire_ids)
         # A fact a draft restates is never retired (``_promote_row``): it frees no room.
         restated = {normalize(d.statement) for d in drafts}
@@ -231,7 +229,10 @@ class NotebookOps:
             # Past the limit, counting what is queued (so concurrent captures cannot all pass on
             # one count) and the room its retirements free: refused now, as ``capture``
             # refuses, unless what it adds that is new fits (a repeat adds nothing). Every
-            # text is read only here, past the limit.
+            # text is read only here, past the limit; a retried burst (its key queued already) is
+            # never refused for its own queued facts.
+            if idempotency_key is not None and await self.store.has_key(notebook_id, idempotency_key):
+                return 0
             known = {normalize(t) for t in await self.store.all_texts(notebook_id)}
             pending = {normalize(t) for t in await self.store.queued_statements(notebook_id)} - known
             new = {normalize(d.statement) for d in drafts} - known - pending

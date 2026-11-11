@@ -17,6 +17,9 @@ EMBED_CACHE_SIZE = 20_000
 class CachingEmbedder:
     """Wraps an Embedder; cache by content hash (Phase 5 cost control), bounded (LRU)."""
 
+    caches = True
+    """Embedding a text again is free: what ``NotebookStore.embed_queued`` relies on."""
+
     def __init__(self, inner: Embedder | None = None, *, size: int = EMBED_CACHE_SIZE) -> None:
         self._inner = inner or HashingEmbedder()
         self._cache: OrderedDict[str, list[float]] = OrderedDict()

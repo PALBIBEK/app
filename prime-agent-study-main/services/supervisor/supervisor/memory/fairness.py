@@ -19,7 +19,7 @@ import asyncio
 import os
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from typing import Final
 
 __all__ = ["PER_TENANT_ENV", "GatedOneShot", "TenantGate", "capture_gate"]
@@ -100,27 +100,12 @@ class GatedOneShot:
         self.model = getattr(one_shot, "model", None)
 
     async def __call__(self, system: str, content: str) -> str:
-        """Waiting for a slot can be cancelled; the call, once made, holds its slot to its
-        end: a gateway call runs on a thread no cancel stops (``supervisor.blocking``), so
-        a cancelled caller freeing its slot early would let the tenant hold more threads
-        than its slots."""
-        held = AsyncExitStack()
-        await held.enter_async_context(self._gate.slot(self._tenant))
-
-        async def call() -> str:
-            try:
-                return await self._one_shot(system, content)
-            finally:
-                await held.aclose()
-
-        made = asyncio.ensure_future(call())
-        made.add_done_callback(_retrieved)  # a caller cancelled meanwhile reads no result
-        return await asyncio.shield(made)
-
-
-def _retrieved(task: asyncio.Future[str]) -> None:
-    if not task.cancelled():
-        task.exception()
+        """The slot is the caller's: a cancelled caller frees it (and cancels a call still
+        waiting for a thread). Threads are bounded for every tenant together by
+        ``supervisor.blocking``'s pool; the slots share out the calls of callers still
+        waiting for an answer."""
+        async with self._gate.slot(self._tenant):
+            return await self._one_shot(system, content)
 
 
 _gate: TenantGate | None = None

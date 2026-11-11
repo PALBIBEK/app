@@ -662,8 +662,9 @@ class NotebookStore:
     async def embed_queued(self, notebook_id: str, *, limit: int) -> None:
         """Embed the facts of the notebook's oldest queued captures now, outside its lock:
         the embedder keeps them (``cost.CachingEmbedder``), so landing them under the lock
-        embeds nothing. An embedder that keeps nothing would embed each twice: none then."""
-        if not isinstance(self._embedder, CachingEmbedder):
+        embeds nothing. An embedder that keeps nothing (no ``caches``) would embed each
+        twice: none then."""
+        if not getattr(self._embedder, "caches", False):
             return
         async with self._db() as db:
             notebook = await db.get(NotebookRow, notebook_id)

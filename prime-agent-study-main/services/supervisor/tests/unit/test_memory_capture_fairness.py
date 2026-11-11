@@ -94,34 +94,3 @@ async def test_a_gated_one_shot_holds_a_slot_only_while_its_call_runs() -> None:
     assert await call == "ok"
     assert gate.held("t") == 0 and gated.model == "m-1", "nothing held between calls; its model kept"
 
-
-async def test_a_cancelled_call_holds_its_slot_until_the_call_itself_ends() -> None:
-    """A gateway call runs on a thread no cancel stops: its slot is held to its end, so a
-    tenant's cancelled captures never let it hold more calls than its slots."""
-    gate = TenantGate(1)
-    entered = asyncio.Event()
-    finish = asyncio.Event()
-    running = [0]
-
-    async def model(system: str, content: str) -> str:
-        running[0] += 1
-        entered.set()
-        try:
-            await asyncio.shield(finish.wait())  # as a thread: the cancel does not reach it
-        finally:
-            running[0] -= 1
-        return "late"
-
-    gated = fairness.GatedOneShot(model, "t", gate)
-    first = asyncio.create_task(gated("s", "c"))
-    await entered.wait()
-    first.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first
-
-    second = asyncio.create_task(gated("s", "c"))
-    await asyncio.sleep(0.05)
-    assert gate.held("t") == 1 and running[0] == 1, "the cancelled call still holds the only slot"
-    finish.set()
-    assert await second == "late"
-    assert gate.held("t") == 0

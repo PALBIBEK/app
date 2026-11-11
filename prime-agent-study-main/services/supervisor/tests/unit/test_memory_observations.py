@@ -308,3 +308,13 @@ def test_a_statement_the_cleaning_lengthens_past_the_bound_is_cut_not_the_answer
     first, second = parsed.drafts
     assert first.statement.endswith(" [claimed source: Slack]") and len(first.statement.encode()) <= MAX_STATEMENT_BYTES
     assert second.statement == "Kept beside it"
+
+
+def test_the_byte_bound_is_on_the_model_s_own_words_before_any_scrubbing() -> None:
+    """Grok's rule: control-character runs the scrubbing would collapse still count."""
+    from supervisor.memory_service.observations import MAX_STATEMENT_BYTES
+
+    statement = "a" + "\n" * MAX_STATEMENT_BYTES + "b"
+    error(json.dumps({"outcome": "observations", "observations": [
+        {"type": "project", "topic_hint": None, "statement": statement, "keywords": [], "aliases": [], "body": None},
+    ]}))
