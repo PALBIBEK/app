@@ -152,7 +152,8 @@ class Observations:
 
 _OUTCOME_FIELDS: Final = frozenset({"outcome", "observations", "sensitivity"})
 _OBSERVATION_FIELDS: Final = frozenset({"type", "topic_hint", "statement", "keywords", "aliases", "body"})
-_FENCE: Final = re.compile(r"\A```(?:json)?[ \t]*\n(?P<body>.*)\n```\Z", re.DOTALL)
+_FENCE: Final = re.compile(r"\A```(?:json)?[ \t]*\n(?P<body>.*?)\n?[ \t]*```\Z", re.DOTALL | re.IGNORECASE)
+"""A fenced answer (```json, ```JSON or bare), its closing fence on its own line or not."""
 
 
 def parse_model_outcome(text: str, model: str, created_at: int) -> Noop | Observations:

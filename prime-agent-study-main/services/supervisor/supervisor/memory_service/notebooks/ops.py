@@ -488,8 +488,10 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
     bring them back; before the inbox it had landed first, and the change undid it. Words a
     fact still has (a case edit, another fact with the same text) are kept, to tighten it.
 
-    Under the notebook's lock, in the change's transaction. A capture left with no
-    statement keeps its retirements, still to be made; one left with nothing is handled."""
+    Under the notebook's lock, in the change's transaction. A capture that loses any
+    statement loses its retirements too: they were judged with what replaced them, and
+    which statement replaced which fact is not known, so (as when a capture does not land)
+    both facts are kept. One left with no statement is handled."""
     gone = {normalize(t) for t in before} - {normalize(t) for t in after}
     if not gone:
         return
@@ -499,12 +501,14 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
     set_aside = await tx.db.execute(
         columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts >= PROMOTE_ATTEMPTS)
     )
-    for row_id, observations, retire, promoted_at in [*queued.all(), *set_aside.all()]:
+    for row_id, observations, _retire, promoted_at in [*queued.all(), *set_aside.all()]:
         kept = [o for o in observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
         if len(kept) == len(observations):
             continue
-        if kept or retire:
-            await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(observations=kept, size=len(kept)))
+        if kept:
+            await tx.db.execute(
+                update(InboxRow).where(InboxRow.id == row_id).values(observations=kept, size=len(kept), retire=[])
+            )
         elif promoted_at is None:
             await tx.db.execute(mark_handled(InboxRow.id == row_id, at=tx.at))
         else:  # set aside, now with nothing to land: never queued again

@@ -1318,19 +1318,24 @@ async def test_words_a_fact_still_has_are_kept_in_the_queue_to_tighten_it(svc: M
     assert kept.typed is not None, "the queued restatement still landed on it"
 
 
-async def test_a_capture_emptied_by_a_delete_still_retires_what_it_makes_false(svc: MemoryServiceHandle) -> None:
+@pytest.mark.parametrize("statements", [["Lives in Berlin"], ["Lives in Berlin", "Has a cat"]])
+async def test_a_capture_that_loses_a_statement_to_a_person_retires_nothing(
+    svc: MemoryServiceHandle, statements: list[str]
+) -> None:
+    """Its retirements were judged with what replaced them, and which statement replaced
+    which fact is not known: as when a capture does not land, both facts are kept."""
     memory = svc.app.state.memory
     await hold(memory)
     client = svc.client()
     nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
     await client.capture(nb.id, ["Lives in Paris", "Lives in Berlin"], context=OWN)
     facts = {f.text: f for f in await client.facts(nb.id)}
-    await client.observe(nb.id, [draft("Lives in Berlin")], context=OWN, retire=[facts["Lives in Paris"].id])
+    await client.observe(nb.id, [draft(t) for t in statements], context=OWN, retire=[facts["Lives in Paris"].id])
     await client.delete(nb.id, [facts["Lives in Berlin"].id])
 
     await memory.inbox.drain()
 
-    assert await client.facts(nb.id) == [], "Paris retired though Berlin's restatement was taken out"
+    assert sorted(f.text for f in await client.facts(nb.id)) == sorted(["Lives in Paris", *statements[1:]])
 
 
 async def test_many_captures_failing_while_others_land_are_each_counted(
@@ -1410,6 +1415,26 @@ async def test_a_retried_burst_is_never_refused_for_its_own_queued_facts(
     await client.capture(nb.id, ["Since then the notebook filled"], context=OWN)
 
     assert await client.observe(nb.id, [draft("Queued once")], context=OWN, idempotency_key="k") == 0
+
+
+async def test_an_operator_queues_set_aside_captures_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from supervisor.memory_service.notebooks import requeue
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'memory.db'}"
+    async with memory_service(url) as handle:
+        memory = handle.app.state.memory
+        await hold(memory)
+        client = handle.client()
+        nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+        await client.observe(nb.id, [draft("Set aside by an outage")], context=OWN)
+        (row_id,) = await memory.notebooks.store.queued_ids(nb.id, limit=10)
+        for _ in range(PROMOTE_ATTEMPTS):
+            await memory.notebooks.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+
+        assert await requeue.requeue(url, nb.id) == 1
+        await memory.inbox.drain()
+        assert [f.text for f in await client.facts(nb.id)] == ["Set aside by an outage"]
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

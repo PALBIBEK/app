@@ -318,3 +318,9 @@ def test_the_byte_bound_is_on_the_model_s_own_words_before_any_scrubbing() -> No
     error(json.dumps({"outcome": "observations", "observations": [
         {"type": "project", "topic_hint": None, "statement": statement, "keywords": [], "aliases": [], "body": None},
     ]}))
+
+
+@pytest.mark.parametrize("fence", ["```json\n{body}\n```", "```JSON\n{body}\n```", "```json\n{body}```", "```\n{body}\n```"])
+def test_a_fenced_answer_is_read_whatever_its_fence(fence: str) -> None:
+    body = json.dumps({"outcome": "noop"})
+    assert isinstance(parse(fence.replace("{body}", body)), Noop)
