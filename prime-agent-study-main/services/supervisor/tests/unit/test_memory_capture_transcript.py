@@ -623,3 +623,16 @@ def test_a_content_part_of_another_shape_is_passed_over_not_the_capture_failed()
 
     assert items[0]["content"] == [{"type": "text", "text": "Kept"}]
     assert items[1]["content"] == "Said"
+
+
+def test_a_lone_surrogate_in_the_journal_never_fails_the_capture() -> None:
+    from supervisor.memory.transcript import TranscriptBudget, condense
+
+    items = [
+        {"type": "user", "content": [{"type": "text", "text": "a cut emoji: \ud83d"}]},
+        {"type": "tool_result", "call_id": "c", "content": "x" * 10_000 + "\udc00"},
+    ]
+
+    condensed = condense(items, TranscriptBudget(max_bytes=2_000, max_items=10))
+
+    assert "\ufffd" in condensed.json and condensed.json.encode("utf-8")

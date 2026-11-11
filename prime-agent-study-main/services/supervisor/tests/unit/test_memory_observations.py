@@ -324,3 +324,14 @@ def test_the_byte_bound_is_on_the_model_s_own_words_before_any_scrubbing() -> No
 def test_a_fenced_answer_is_read_whatever_its_fence(fence: str) -> None:
     body = json.dumps({"outcome": "noop"})
     assert isinstance(parse(fence.replace("{body}", body)), Noop)
+
+
+def test_a_lone_surrogate_in_the_model_s_answer_is_made_well_formed_never_a_crash() -> None:
+    parsed = parse('{"outcome":"observations","observations":[{"type":"project","topic_hint":null,'
+                   '"statement":"Uses \\ud83d emoji","keywords":["\\udc00"],"aliases":[],"body":null}]}')
+
+    assert isinstance(parsed, Observations)
+    (draft,) = parsed.drafts
+    assert draft.statement == "Uses \ufffd emoji"
+    draft.validate()  # every bound counts UTF-8 it can encode
+    assert draft.statement.encode("utf-8")

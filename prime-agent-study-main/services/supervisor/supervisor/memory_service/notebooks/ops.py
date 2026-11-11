@@ -304,7 +304,8 @@ class NotebookOps:
         # against itself alone, and none holds up the captures queued behind it.
         captures = added = 0
         failed: list[tuple[int, BaseException]] = []
-        interrupted: BaseException | None = None  # a transient fault: the rest wait for next time
+        interrupted: BaseException | None = None  # a transient fault: counted against no one
+        in_a_row = 0
         queued = await self.store.queued_ids(notebook_id, limit=batch)
         tried = 0
         for row_id in queued:
@@ -316,11 +317,16 @@ class NotebookOps:
                 return captures + dropped, added  # with those landed before it went
             except Exception as exc:  # noqa: BLE001 — each is counted and logged below, or raised
                 if is_transient(exc) and not await self.store.received_before([row_id], before=_stuck_since()):
-                    interrupted, tried = exc, tried - 1  # not this capture's: not tried
-                    break
+                    # Not counted, and no reason to hold up the captures behind it: they are
+                    # tried, unless the next fails so too (the database's, then: stop).
+                    interrupted, tried, in_a_row = exc, tried - 1, in_a_row + 1
+                    if in_a_row >= 2:
+                        break
+                    continue
                 failed.append((row_id, exc))
+                in_a_row = 0
                 continue
-            captures, added = captures + one, added + facts
+            captures, added, in_a_row = captures + one, added + facts, 0
         if not failed:
             if interrupted is not None and not captures:
                 raise interrupted
@@ -658,7 +664,7 @@ def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
         for entry in row.retire or ():
             if not (isinstance(entry.get("id"), str) and isinstance(entry.get("text"), str)):
                 raise ObservationInvalid(f"retire entry {entry!r}")
-    except (ObservationInvalid, TypeError, AttributeError):
+    except (ObservationInvalid, TypeError, AttributeError, UnicodeError):
         logger.warning("notebook %s: queued capture %s cannot be read: set aside", notebook_id, row.id, exc_info=True)
         return None
     return drafts

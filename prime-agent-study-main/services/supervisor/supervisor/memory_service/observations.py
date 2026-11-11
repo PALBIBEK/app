@@ -58,6 +58,7 @@ __all__ = [
     "scrub_control_characters",
     "truncate_utf8",
     "utf8_bytes",
+    "well_formed",
 ]
 
 # Grok's limits (xai-grok-memory/src/v2_capture.rs), unchanged.
@@ -247,7 +248,7 @@ def checked_string(
         return None
     if not isinstance(value, str):
         raise error(f"`{name}` must be a string, not {type(value).__name__}")
-    return value
+    return well_formed(value)
 
 
 def checked_strings(value: object, name: str, error: Callable[[str], Exception]) -> list[str]:
@@ -258,7 +259,7 @@ def checked_strings(value: object, name: str, error: Callable[[str], Exception])
         return []
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise error(f"`{name}` must be a list of strings, not {type(value).__name__}")
-    return value
+    return [well_formed(v) for v in value]
 
 
 def _malformed(reason: str) -> MalformedOutcome:
@@ -314,6 +315,15 @@ def scrub_control_characters(text: str) -> str:
 
 _CONTROLS: Final = re.compile("[" + "".join(re.escape(chr(c)) for c in [*range(0x20), *range(0x7F, 0xA0)]) + "]")
 """Unicode's control characters (Cc), Rust's ``char::is_control``."""
+
+
+def well_formed(text: str) -> str:
+    """``text`` with any lone UTF-16 surrogate (JSON's ``"\\ud83d"`` alone, half of a cut
+    emoji) as U+FFFD: what no UTF-8 can hold never reaches a bound, a store or a model."""
+    return _SURROGATE.sub("\ufffd", text)
+
+
+_SURROGATE: Final = re.compile("[\ud800-\udfff]")
 
 
 def truncate_utf8(text: str, max_bytes: int) -> str:

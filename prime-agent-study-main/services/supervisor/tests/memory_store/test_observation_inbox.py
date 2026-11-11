@@ -1782,6 +1782,40 @@ async def test_one_prune_makes_a_bounded_number_of_transactions(
     assert await prune(before=later, set_aside_before=later, give_up_at=8) == 2
 
 
+@pytest.mark.parametrize("head", [1, 2])
+async def test_a_capture_meeting_a_passing_fault_holds_up_none_behind_it_but_two_stop_the_pass(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch, head: int
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for i in range(head):
+        await client.observe(nb.id, [draft(f"Times out {i}")], context=OWN)
+    await client.observe(nb.id, [draft("Behind them")], context=OWN)
+    *timing_out, behind = await store.queued_ids(nb.id, limit=10)
+    tried: list[int] = []
+
+    async def batch(notebook_id: str, size: int, *, only: int | None = None) -> tuple[int, int]:
+        if only is None:
+            raise ValueError("the batch fails")
+        tried.append(only)
+        if only in timing_out:
+            raise OperationalError("INSERT", {}, Exception("lock timeout"))
+        return 1, 1
+
+    monkeypatch.setattr(memory.notebooks, "_promote_batch", batch)
+    if head == 1:
+        assert await memory.notebooks.promote(nb.id) == (1, 1), "the one behind it landed"
+    else:
+        with pytest.raises(OperationalError):
+            await memory.notebooks.promote(nb.id)
+        assert behind not in tried, "two in a row: the database's fault, the pass stops"
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 

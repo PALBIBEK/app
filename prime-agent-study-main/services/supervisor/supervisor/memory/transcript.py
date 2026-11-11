@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from supervisor.agent.events import Envelope, MessageEnd, ToolEnd, TurnEnd
+from supervisor.memory_service.observations import well_formed
 
 __all__ = [
     "BASE_MAX_TRANSCRIPT_BYTES",
@@ -408,12 +409,20 @@ def _strip_images(item: Item) -> int:
 
 
 def _copy(item: Item) -> Item:
-    """A copy condensing may change without touching the caller's items."""
-    copied = dict(item)
-    for key in ("content", "images", "tool_calls"):
-        if isinstance(copied.get(key), list):
-            copied[key] = [dict(part) for part in copied[key]]
-    return copied
+    """A copy condensing may change without touching the caller's items, every text in it
+    well formed (``observations.well_formed``): a lone surrogate in the journal (a cut
+    emoji) is no reason for UTF-8 to fail the capture."""
+    return _well_formed(item)
+
+
+def _well_formed(value: Any) -> Any:
+    if isinstance(value, str):
+        return well_formed(value)
+    if isinstance(value, dict):
+        return {k: _well_formed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_well_formed(v) for v in value]
+    return value
 
 
 def _serialize(value: Any) -> str:
