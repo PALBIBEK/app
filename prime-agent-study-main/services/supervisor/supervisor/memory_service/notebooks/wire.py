@@ -23,6 +23,8 @@ from supervisor.memory_service.observations import (
     ObservationDraft,
     ObservationInvalid,
     ObservationType,
+    checked_string,
+    checked_strings,
 )
 
 
@@ -171,20 +173,11 @@ def typed_of(o: ObservationDraft) -> Typed:
 
 
 def _terms(value: object) -> tuple[str, ...]:
-    """A list of strings, as sent; anything else (a string, which would be split into its
-    characters) is malformed."""
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise ObservationInvalid(f"terms must be a list of strings, not {type(value).__name__}")
-    return tuple(value)
+    return tuple(checked_strings(value, "terms", ObservationInvalid))
 
 
 def _text(value: object, name: str) -> str:
-    """A string, as sent; anything else is malformed, never stored as its ``str()``."""
-    if not isinstance(value, str):
-        raise ObservationInvalid(f"{name} must be a string, not {type(value).__name__}")
-    return value
+    return checked_string(value, name, ObservationInvalid, required=True) or ""
 
 
 def _whole(value: object, name: str) -> int:
@@ -194,11 +187,7 @@ def _whole(value: object, name: str) -> int:
 
 
 def _text_or_none(value: object, name: str) -> str | None:
-    """A string, as sent, or none; anything else (an object, a number) is malformed, never
-    stored as its ``str()``."""
-    if value is None or isinstance(value, str):
-        return value
-    raise ObservationInvalid(f"{name} must be a string, not {type(value).__name__}")
+    return checked_string(value, name, ObservationInvalid)
 
 
 def revision_out(r: Revision) -> dict[str, Any]:

@@ -941,19 +941,17 @@ async def test_a_full_notebook_still_merges_a_repeat_after_one_that_does_not_fit
     assert fact.provenance.sensitivity == Sensitivity.SENSITIVE, "the repeat behind it still tightened it"
 
 
-async def test_the_notebook_client_shares_the_unbounded_connection_pool() -> None:
-    """Not httpx's 100 connections: a burst of sessions never waits in the client's pool."""
-    import sys
-
-    from supervisor.http_cookies import SHARED_LIMITS
+async def test_the_notebook_client_has_a_bounded_pool_past_httpx_s_default() -> None:
+    """Async calls have nothing else to bound them: a cap, though well past httpx's 100."""
+    from supervisor.memory.client import MEMORY_LIMITS
 
     client = NotebookClient("http://memory.test")
     pool = client._http._transport._pool  # type: ignore[attr-defined]
     try:
-        assert SHARED_LIMITS.max_connections is None and pool._max_connections == sys.maxsize
+        assert pool._max_connections == MEMORY_LIMITS.max_connections > 100, "bounded, past httpx's 100"
     finally:
         await client.aclose()
-    assert pool._max_keepalive_connections == SHARED_LIMITS.max_keepalive_connections
+    assert pool._max_keepalive_connections == MEMORY_LIMITS.max_keepalive_connections
 
 
 async def test_captures_queued_into_a_notebook_erased_under_them_are_deleted(svc: MemoryServiceHandle) -> None:
@@ -1370,6 +1368,32 @@ async def test_a_capture_retiring_too_many_facts_is_refused(svc: MemoryServiceHa
 
     with pytest.raises(MemoryLimitExceeded):
         await client.observe(nb.id, [draft("x")], context=OWN, retire=[str(i) for i in range(MAX_FACTS_PER_CAPTURE + 1)])
+
+
+async def test_retiring_one_of_two_twin_facts_leaves_the_other_for_later_captures(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.types import Edit
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Uses pnpm", "Uses npm"], context=OWN)
+    _, npm = sorted(await client.facts(nb.id), key=lambda f: f.text, reverse=True)
+    await client.edit(nb.id, [Edit(npm.id, "uses pnpm")], context=OWN)  # two live facts, one text
+    await client.observe(nb.id, [draft("Uses bun")], context=OWN, retire=[npm.id])
+    await client.observe(nb.id, [draft("Uses pnpm")], context=OWN)
+
+    await memory.inbox.drain()  # one batch
+
+    assert sorted(f.text.lower() for f in await client.facts(nb.id)) == ["uses bun", "uses pnpm"], "no third twin"
+
+
+def test_the_drainer_takes_a_third_of_the_connection_pool_at_most() -> None:
+    from supervisor.memory_service.notebooks.inbox import CONCURRENCY, drainer_concurrency
+
+    assert drainer_concurrency({"pool_size": 5, "max_overflow": 10}) == 5
+    assert drainer_concurrency({"pool_size": 1, "max_overflow": 0}) == 1
+    assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}) == CONCURRENCY
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

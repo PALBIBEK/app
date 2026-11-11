@@ -14,14 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from supervisor.memory_service.bank import MemoryBank
 from supervisor.memory_service.buffer import WriteBehindBuffer
 from supervisor.memory_service.cost import CachingEmbedder, flush_batch_is_barren
-from supervisor.memory_service.db import init_db, make_engine, make_session_factory
+from supervisor.memory_service.db import init_db, make_engine, make_session_factory, pool_settings
 from supervisor.memory_service.embed import Embedder
 from supervisor.memory_service.erase import EraseService
 from supervisor.memory_service.extract import ExtractionQueue, Extractor
 from supervisor.memory_service.leases import LeaseManager
 from supervisor.memory_service.limits import BUFFER_IDLE_MS
 from supervisor.memory_service.metrics import METRICS
-from supervisor.memory_service.notebooks.inbox import InboxDrainer
+from supervisor.memory_service.notebooks.inbox import InboxDrainer, drainer_concurrency
 from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps
 from supervisor.memory_service.notebooks.store import NotebookStore
 from supervisor.memory_service.outbox import Outbox
@@ -95,7 +95,7 @@ class MemoryService:
         self._erase = EraseService(self._factory)
         # The one long-term store: notebooks of facts, indexed into the same bank.
         self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
-        self.inbox = InboxDrainer(self.notebooks)
+        self.inbox = InboxDrainer(self.notebooks, concurrency=drainer_concurrency(pool_settings()))
         """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(

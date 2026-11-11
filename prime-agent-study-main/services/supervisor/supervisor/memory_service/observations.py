@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
@@ -50,6 +51,9 @@ __all__ = [
     "ObservationInvalid",
     "ObservationType",
     "Observations",
+    "checked_string",
+    "checked_strings",
+    "fit_cleaned_statement",
     "parse_model_outcome",
     "scrub_control_characters",
     "truncate_utf8",
@@ -206,8 +210,10 @@ def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
         # The store would refuse it, and the whole capture with it: malformed, so the
         # extractor is asked again instead.
         raise MalformedOutcome("malformed extraction output: statement is empty")
-    if _bytes(statement) > MAX_STATEMENT_BYTES:
+    raw = _string(observation, "statement", required=True) or ""
+    if _bytes(raw) > MAX_STATEMENT_BYTES:  # Grok's rule: the model's own words over the bound
         raise MalformedOutcome("malformed extraction output: statement exceeds byte limit")
+    statement = fit_cleaned_statement(raw, statement)  # lengthened by the cleaning only: cut, as the store cuts
     try:
         kind = ObservationType.parse(_string(observation, "type", required=True) or "")
     except ObservationInvalid as exc:
@@ -227,24 +233,55 @@ def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
     )
 
 
-def _string(observation: dict[str, Any], name: str, *, required: bool = False) -> str | None:
-    value = observation.get(name)
+def checked_string(
+    value: object, name: str, error: Callable[[str], Exception], *, required: bool = False
+) -> str | None:
+    """``value`` when it is a string (or absent, unless ``required``); anything else is
+    ``error``, never its ``str()``. One check for every reader of an observation: the
+    model's answer here, the wire's (``notebooks.wire``)."""
     if value is None:
         if required:
-            raise MalformedOutcome(f"malformed extraction output: missing field `{name}`")
+            raise error(f"missing field `{name}`")
         return None
     if not isinstance(value, str):
-        raise MalformedOutcome(f"malformed extraction output: `{name}` must be a string")
+        raise error(f"`{name}` must be a string, not {type(value).__name__}")
     return value
+
+
+def checked_strings(value: object, name: str, error: Callable[[str], Exception]) -> list[str]:
+    """``value`` when it is a list of strings (none when absent: serde's
+    ``#[serde(default)]``); anything else, a lone string included (it would be split into
+    its characters), is ``error``."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise error(f"`{name}` must be a list of strings, not {type(value).__name__}")
+    return value
+
+
+def _malformed(reason: str) -> MalformedOutcome:
+    return MalformedOutcome(f"malformed extraction output: {reason}")
+
+
+def _string(observation: dict[str, Any], name: str, *, required: bool = False) -> str | None:
+    return checked_string(observation.get(name), name, _malformed, required=required)
 
 
 def _strings(observation: dict[str, Any], name: str) -> list[str]:
-    value = observation.get(name)
-    if value is None:
-        return []  # serde's #[serde(default)]
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise MalformedOutcome(f"malformed extraction output: `{name}` must be a list of strings")
-    return value
+    return checked_strings(observation.get(name), name, _malformed)
+
+
+def fit_cleaned_statement(raw: str, cleaned: str) -> str:
+    """``cleaned`` (``render.clean_captured`` of ``raw``) within the statement's bound when
+    the cleaning alone took it past (a "(said in X)" made a "[claimed source: X]" label):
+    the words are cut, never the label, unless the label alone is past the bound."""
+    if not utf8_bytes(raw) <= MAX_STATEMENT_BYTES < utf8_bytes(cleaned):
+        return cleaned
+    head, marker, claim = cleaned.rpartition(" [claimed source: ")
+    room = MAX_STATEMENT_BYTES - utf8_bytes(marker + claim)
+    if marker and room > 0:
+        return truncate_utf8(head, room).rstrip() + marker + claim
+    return truncate_utf8(cleaned, MAX_STATEMENT_BYTES).rstrip()
 
 
 # --- Grok's normalization ---------------------------------------------------------------------

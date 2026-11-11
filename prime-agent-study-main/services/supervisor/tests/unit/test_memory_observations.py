@@ -290,3 +290,21 @@ def test_the_model_named_in_provenance_is_within_the_store_s_bounds() -> None:
     assert one_shot_model(Named("é" * 100)).encode() == ("é" * 64).encode()
     assert one_shot_model(Named("\x07")) == DEFAULT_MODEL
     assert one_shot_model(Named(None)) == DEFAULT_MODEL
+
+
+def test_a_statement_the_cleaning_lengthens_past_the_bound_is_cut_not_the_answer_refused() -> None:
+    """Grok refuses the model's own words over the bound; a "(said in X)" the cleaning makes
+    a longer "[claimed source: X]" label is ours, cut as the store cuts it."""
+    from supervisor.memory_service.observations import MAX_STATEMENT_BYTES
+
+    statement = "w" * (MAX_STATEMENT_BYTES - 16) + " (said in Slack)"
+    assert len(statement.encode()) <= MAX_STATEMENT_BYTES
+    parsed = parse(json.dumps({"outcome": "observations", "observations": [
+        {"type": "user", "topic_hint": None, "statement": statement, "keywords": [], "aliases": [], "body": None},
+        {"type": "project", "topic_hint": None, "statement": "Kept beside it", "keywords": [], "aliases": [], "body": None},
+    ]}))
+
+    assert isinstance(parsed, Observations)
+    first, second = parsed.drafts
+    assert first.statement.endswith(" [claimed source: Slack]") and len(first.statement.encode()) <= MAX_STATEMENT_BYTES
+    assert second.statement == "Kept beside it"

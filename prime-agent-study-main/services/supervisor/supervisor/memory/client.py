@@ -27,11 +27,11 @@ import os
 import random
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
-from supervisor.http_cookies import SHARED_LIMITS, no_cookies
+from supervisor.http_cookies import no_cookies
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
@@ -141,6 +141,13 @@ class _Breaker:
             self._trial = False
 
 
+MEMORY_LIMITS: Final = httpx.Limits(max_connections=256, max_keepalive_connections=64, keepalive_expiry=5.0)
+"""Connections of the one client every session shares (async: nothing else bounds them, as
+the threads bound the model router's, ``http_cookies.SHARED_LIMITS``): past 256 at once a
+call waits for one, within its timeout, rather than opening ever more against the memory
+service and its database; up to 64 kept open between calls, each 5 s idle."""
+
+
 class NotebookClient:
     """Notebooks and their facts, through the memory service."""
 
@@ -158,7 +165,7 @@ class NotebookClient:
             transport=transport,
             timeout=httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s)),
             cookies=no_cookies(),  # one client for every session and tenant (supervisor.http_cookies)
-            limits=SHARED_LIMITS,
+            limits=MEMORY_LIMITS,
         )
         self._credential = credential
         self._breaker = breaker or _Breaker()

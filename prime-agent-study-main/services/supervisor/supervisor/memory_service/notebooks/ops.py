@@ -64,11 +64,9 @@ from supervisor.memory_service.notebooks.types import (
 )
 from supervisor.memory_service.notebooks.wire import observation_in, observation_out, typed_of
 from supervisor.memory_service.observations import (
-    MAX_STATEMENT_BYTES,
     ObservationDraft,
     ObservationInvalid,
-    truncate_utf8,
-    utf8_bytes,
+    fit_cleaned_statement,
 )
 
 logger = logging.getLogger(__name__)
@@ -606,16 +604,7 @@ def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
     cleaned = clean_captured([draft.statement])
     if not cleaned:
         return None
-    statement = cleaned[0]
-    if utf8_bytes(draft.statement) <= MAX_STATEMENT_BYTES < utf8_bytes(statement):  # lengthened by the cleaning only
-        # Cut the words, never the "[claimed source: ...]" label the cleaning added.
-        head, marker, claim = statement.rpartition(" [claimed source: ")
-        room = MAX_STATEMENT_BYTES - utf8_bytes(marker + claim)
-        if marker and room > 0:
-            statement = truncate_utf8(head, room).rstrip() + marker + claim
-        else:  # no label, or one longer than the bound itself: cut plainly
-            statement = truncate_utf8(statement, MAX_STATEMENT_BYTES).rstrip()
-    return replace(draft, statement=statement)
+    return replace(draft, statement=fit_cleaned_statement(draft.statement, cleaned[0]))
 
 
 def _readable(notebook_id: str, row: InboxRow) -> list[ObservationDraft] | None:
@@ -664,7 +653,12 @@ async def _promote_row(
             del by_id[fact.id]
             key = normalize(fact.text)
             if key in existing and existing[key].id == fact.id:
-                del existing[key]
+                # Its twin (another live fact of the same text) stands for the text now, so a
+                # later capture in the batch merges into it rather than adding a third.
+                if (twin := next((f for f in by_id.values() if normalize(f.text) == key), None)) is not None:
+                    existing[key] = twin
+                else:
+                    del existing[key]
     return landed
 
 

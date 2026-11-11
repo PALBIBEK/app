@@ -28,7 +28,7 @@ from supervisor.memory_service.notebooks.ops import (
 )
 from supervisor.memory_service.notebooks.store import now_ms
 
-__all__ = ["InboxDrainer"]
+__all__ = ["InboxDrainer", "drainer_concurrency"]
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,16 @@ PASSES_PER_DRAIN: Final = 16
 notebook one drain passed over is tried again in the next, never left skipped."""
 
 
+def drainer_concurrency(pool: dict[str, int]) -> int:
+    """Promotions at once for a replica's connection ``pool`` (``db.pool_settings``): a third
+    of it at most, so landing a burst of captures never takes the connections the requests
+    (captures, recalls, edits) wait on; up to ``CONCURRENCY``."""
+    return max(1, min(CONCURRENCY, (pool["pool_size"] + pool["max_overflow"]) // 3))
+
+
 class InboxDrainer:
     def __init__(self, ops: NotebookOps, *, concurrency: int = CONCURRENCY) -> None:
+        """``concurrency``: promotions at once, each holding a connection (``drainer_concurrency``)."""
         self._ops = ops
         self._wake = asyncio.Event()
         self._gate = asyncio.Semaphore(concurrency)
