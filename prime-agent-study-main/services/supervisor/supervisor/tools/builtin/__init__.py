@@ -6,6 +6,8 @@ a tool, add a module here and import it below.
 
 from supervisor.tools.builtin import (  # noqa: F401 — imported to register
     bash,
+    browser_cdp,
+    browser_dialog,
     browser_exec,
     browser_vault,
     echo,

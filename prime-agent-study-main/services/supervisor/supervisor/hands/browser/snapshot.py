@@ -4,11 +4,15 @@
 A snapshot is the page's accessibility tree, trimmed where it is read rather than cut
 afterwards: interactive elements and the structure around them (headings, rows, list
 items, dialogs, forms), each line with an ID, labels beside a control kept with it, long
-runs of alike siblings collapsed, and an open dialog shown alone. Iframes of the same
-process are included, as frames of their own.
+runs of alike siblings collapsed, and an open dialog shown alone. Every iframe is
+included as a frame of its own: those of the page's process, and those of other sites,
+each in a process of its own (an out-of-process iframe: a payment form, a login widget, a
+CAPTCHA), read through a CDP session of their own.
 
 IDs are ``<frame>-<backend node id>``: Chrome's own id for the element, kept while the
 element lives, so an ID never moves to another element when the page changes around it.
+A backend id is unique within a process, so the snapshot keeps which process each frame
+ordinal is read through, and an ID is resolved there.
 Each snapshot replaces the tab's IDs; acting by an ID that is not in the tab's latest
 snapshot, after the tab navigated, or on an element that is gone, is refused with what to
 do, rather than landing on whatever now sits there (found when IDs numbered by position
@@ -21,6 +25,7 @@ the DOM going quiet.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from collections.abc import Callable, Iterator
@@ -163,13 +168,14 @@ class Snapshots:
     def __init__(self, home: Path, settle: Callable[[Any], None]) -> None:
         self.home = home
         self.settle = settle
+        self._sessions: list[Any] = []
 
     # Snapshot ----------------------------------------------------------------
 
     def snapshot(self, page: Any, tab: str, *, contains: str | None = None, max_lines: int = DEFAULT_MAX_LINES) -> str:
         """The tab's trimmed tree as text; its IDs replace the tab's earlier ones."""
         lines: list[tuple[int, str, Node]] = []
-        trees = self._frames(page)
+        trees, processes = self._frames(page)
         focus = next((d for _, tree in trees if (d := _dialog(tree)) is not None), None)
         shown = [(0, focus)] if focus is not None else trees
         for ordinal, root in shown:
@@ -178,7 +184,7 @@ class Snapshots:
                 lines.append((0, f"frame {ordinal}:", root))
             lines.extend(_render(root, ordinal, 1 if ordinal else 0, collapse=not contains))
         ids = [f"{o}-{n.backend}" for o, t in trees for n in _walk(t) if n.backend is not None]
-        (self.home / f"snapshot-{tab}.json").write_text(json.dumps({"url": page.url, "ids": ids}))
+        (self.home / f"snapshot-{tab}.json").write_text(json.dumps({"url": page.url, "ids": ids, "processes": processes}))
         picked = _matching(lines, contains) if contains else lines
         header = f"{page.title()} — {page.url}" + (" (an open dialog; the rest of the page is behind it)" if focus else "")
         body = ["  " * d + text for d, text, _ in picked[:max_lines]]
@@ -186,25 +192,52 @@ class Snapshots:
             body.append(f"… {len(picked) - max_lines} more lines: snapshot(contains=...) narrows it")
         return "\n".join([header, *body])
 
-    def _frames(self, page: Any) -> list[tuple[int, Node]]:
-        """(ordinal, tree) of the main frame (0) and each iframe the page's process holds.
-        An iframe of another site runs in a process of its own, out of reach here: its
-        element says so, and how to act in it."""
+    def _frames(self, page: Any) -> tuple[list[tuple[int, Node]], dict[str, str]]:
+        """(ordinal, tree) of the main frame (0), each iframe the page's process holds, then
+        each out-of-process iframe (and the iframes its process holds); and, for each ordinal
+        read through an out-of-process iframe's session, that iframe's frame id (to resolve
+        its IDs in its process). An iframe element hosting one is named by its ordinal."""
+        out: list[tuple[int, Node]] = []
+        processes: dict[str, str] = {}
+        hosts: list[tuple[Any, Node]] = []
         cdp = page.context.new_cdp_session(page)
         try:
             frame_ids = [f["frame"]["id"] for f in _frame_list(cdp.send("Page.getFrameTree")["frameTree"])]
-            out: list[tuple[int, Node]] = []
-            for ordinal, frame_id in enumerate(frame_ids):
-                tree = _tree(cdp.send("Accessibility.getFullAXTree", {"frameId": frame_id})["nodes"])
-                if tree is not None:
-                    out.append((ordinal, tree))
-            for _, tree in out:
-                for node in _walk(tree):
-                    if node.role == "Iframe" and node.backend is not None and _hosted_frame(cdp, node.backend) not in frame_ids:
-                        node.name = OTHER_SITE
-            return out
+            known = set(frame_ids)
+            out.extend(_trees(cdp, frame_ids, 0))
+            hosts.extend((cdp, node) for _, tree in out for node in _walk(tree) if node.role == "Iframe" and node.backend is not None)
+            remote: dict[str, int] = {}
+            next_ordinal = len(frame_ids)
+            for frame in page.frames[1:]:
+                child = _process_of(page, frame)
+                if child is None:
+                    continue
+                child_ids = [f["frame"]["id"] for f in _frame_list(child.send("Page.getFrameTree")["frameTree"])]
+                if not child_ids or child_ids[0] in remote:
+                    child.detach()
+                    continue
+                known.update(child_ids)
+                first, next_ordinal = next_ordinal, next_ordinal + len(child_ids)
+                read = _trees(child, child_ids, first)
+                remote[child_ids[0]] = first
+                for ordinal, tree in read:
+                    processes[str(ordinal)] = child_ids[0]
+                    hosts.extend((child, node) for node in _walk(tree) if node.role == "Iframe" and node.backend is not None)
+                out.extend(read)
+                self._sessions.append(child)
+            for session, node in hosts:
+                hosted = _hosted_frame(session, node.backend) if node.backend is not None else None
+                if hosted in remote:
+                    node.name = f"frame {remote[hosted]}"
+                elif hosted not in known:
+                    node.name = OTHER_SITE
+            return out, processes
         finally:
             cdp.detach()
+            for session in self._sessions:
+                with contextlib.suppress(Exception):
+                    session.detach()
+            self._sessions.clear()
 
     # Act ---------------------------------------------------------------------
 
@@ -230,9 +263,12 @@ class Snapshots:
             raise StaleSnapshot("the tab navigated since its snapshot: call snapshot() again")
         if gid not in state["ids"]:
             raise StaleSnapshot(f"{gid} is not in this tab's latest snapshot: call snapshot() and use its IDs")
-        backend = int(gid.split("-", 1)[1])
+        ordinal, backend = (int(part) for part in gid.split("-", 1))
         mark = f"githi-{gid}"
-        cdp = page.context.new_cdp_session(page)
+        process = state.get("processes", {}).get(str(ordinal))
+        cdp = page.context.new_cdp_session(page) if process is None else _session_for(page, process)
+        if cdp is None:
+            raise StaleSnapshot(f"{gid} is in an iframe that is gone from the page: call snapshot() again")
         try:
             try:
                 obj = cdp.send("DOM.resolveNode", {"backendNodeId": backend})["object"]["objectId"]
@@ -264,6 +300,39 @@ ACTIONS: dict[str, Callable[..., Any]] = {
 
 
 OTHER_SITE = "another site's frame, not read here: act in it with page.frame_locator(...)"
+
+
+def _trees(cdp: Any, frame_ids: list[str], first: int) -> list[tuple[int, Node]]:
+    """The accessibility tree of each of ``frame_ids`` (all of one process), numbered from ``first``."""
+    out: list[tuple[int, Node]] = []
+    for offset, frame_id in enumerate(frame_ids):
+        with contextlib.suppress(Exception):  # the frame went while we read
+            tree = _tree(cdp.send("Accessibility.getFullAXTree", {"frameId": frame_id})["nodes"])
+            if tree is not None:
+                out.append((first + offset, tree))
+    return out
+
+
+def _process_of(page: Any, frame: Any) -> Any | None:
+    """A CDP session of the out-of-process iframe ``frame``; None for a frame of its
+    parent's process (Playwright gives a frame a session only when it has a process of its own)."""
+    try:
+        return page.context.new_cdp_session(frame)
+    except Exception:  # noqa: BLE001 — "This frame does not have a separate CDP session"
+        return None
+
+
+def _session_for(page: Any, frame_id: str) -> Any | None:
+    """A CDP session of the out-of-process iframe whose root frame is ``frame_id``."""
+    for frame in page.frames[1:]:
+        session = _process_of(page, frame)
+        if session is None:
+            continue
+        with contextlib.suppress(Exception):  # the frame went while we looked
+            if session.send("Page.getFrameTree")["frameTree"]["frame"]["id"] == frame_id:
+                return session
+        session.detach()
+    return None
 
 
 def _hosted_frame(cdp: Any, backend: int) -> str | None:
