@@ -97,9 +97,6 @@ def is_transient(exc: BaseException) -> bool:
     return False
 PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
-QUEUE_ORDER: Final = (InboxRow.attempts, InboxRow.id)
-"""The queue's order: oldest first, a capture that has failed behind those that have not,
-so failing ones never fill the batch and hold up the good ones queued after them."""
 FAILURE_SPACING_MS = 30_000
 """A queued capture's failures are counted at most this often: a busy notebook landing
 others beside it (no backoff for it) and every replica's tries together still give it
@@ -303,24 +300,29 @@ class NotebookOps:
         # against itself alone, and none holds up the captures queued behind it.
         captures = added = 0
         failed: list[tuple[int, BaseException]] = []
+        interrupted: BaseException | None = None  # a transient fault: the rest wait for next time
         queued = await self.store.queued_ids(notebook_id, limit=batch)
+        tried = 0
         for row_id in queued:
+            tried += 1
             try:
                 one, facts = await self._promote_batch(notebook_id, 1, only=row_id)
             except (NotebookArchived, NotebookNotFound) as exc:  # the notebook's, not the capture's
                 dropped, _ = await self._notebook_gone(notebook_id, exc)
                 return captures + dropped, added  # with those landed before it went
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — each is counted and logged below, or raised
                 if is_transient(exc):
-                    if captures:
-                        return captures, added  # what landed before it stands: the rest next time
-                    raise
+                    interrupted, tried = exc, tried - 1  # not this capture's: not tried
+                    break
                 failed.append((row_id, exc))
                 continue
             captures, added = captures + one, added + facts
         if not failed:
-            return captures, added
-        if len(failed) == len(queued) and not self._landing_lately():
+            if interrupted is not None and not captures:
+                raise interrupted
+            return captures, added  # what landed before a transient fault stands
+        # The failures gathered before a transient fault are counted as any others.
+        if len(failed) == tried and not self._landing_lately():
             # Every one of them fails, each on its own, while nothing lands here: the fault is
             # not theirs (a bug, a bank or an embedder down for all). Nothing is counted, so
             # none is lost to it. While captures land elsewhere, each failure is its own; and
@@ -344,7 +346,7 @@ class NotebookOps:
             )
         if captures:
             return captures, added  # others landed: the notebook is not backed off for the failed one
-        raise failed[0][1]  # for the drainer to back off before the failed ones' next try
+        raise interrupted or failed[0][1]  # for the drainer to back off before the next try
 
     async def _notebook_gone(self, notebook_id: str, exc: NotebookArchived | NotebookNotFound) -> tuple[int, int]:
         """The notebook's queue when the notebook itself is past taking it, which is no
@@ -366,7 +368,7 @@ class NotebookOps:
             query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
             if only is not None:
                 query = query.where(InboxRow.id == only)
-            rows = list(await tx.db.scalars(query.order_by(*QUEUE_ORDER).limit(batch)))
+            rows = list(await tx.db.scalars(query.order_by(InboxRow.id).limit(batch)))
             added = 0
             current = await tx.current() if rows else []
             existing = {normalize(f.text): f for f in current}  # once a batch, kept current

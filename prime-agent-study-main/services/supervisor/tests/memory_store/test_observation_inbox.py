@@ -1566,22 +1566,6 @@ def test_the_drainer_promotes_one_at_a_time_on_sqlite() -> None:
     assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}, "postgresql+asyncpg") > 1
 
 
-async def test_captures_that_have_failed_queue_behind_those_that_have_not(svc: MemoryServiceHandle) -> None:
-    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
-
-    memory = svc.app.state.memory
-    await hold(memory)
-    store = memory.notebooks.store
-    client = svc.client()
-    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
-    await client.observe(nb.id, [draft("Failed once")], context=OWN)
-    await client.observe(nb.id, [draft("Never failed")], context=OWN)
-    first, second = await store.queued_ids(nb.id, limit=10)
-    await store.count_failure(first, give_up_at=PROMOTE_ATTEMPTS)
-
-    assert await store.queued_ids(nb.id, limit=1) == [second], "the good one first: never held up by the other"
-
-
 async def test_a_transient_fault_mid_way_keeps_what_landed_before_it(
     svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1623,6 +1607,76 @@ async def test_handled_captures_are_pruned_in_batches(svc: MemoryServiceHandle, 
 
     later = now_ms() + KEEP_PROMOTED_MS
     assert await memory.notebooks.store.prune_inbox(before=later, set_aside_before=later, give_up_at=8) == 5
+
+
+async def test_a_capture_failing_before_a_transient_fault_is_counted_still(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for text in ("Poison", "Good", "Interrupted"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
+    poison, good, _ = await store.queued_ids(nb.id, limit=10)
+
+    async def batch(notebook_id: str, size: int, *, only: int | None = None) -> tuple[int, int]:
+        if only is None:
+            raise ValueError("the batch fails")
+        if only == poison:
+            raise ValueError("its own data")
+        if only == good:
+            return 1, 1
+        raise OperationalError("SELECT", {}, Exception("statement timeout"))
+
+    monkeypatch.setattr(memory.notebooks, "_promote_batch", batch)
+    assert await memory.notebooks.promote(nb.id) == (1, 1)
+
+    from sqlalchemy import select
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+
+    async with store._db() as db:
+        attempts = dict((await db.execute(select(InboxRow.id, InboxRow.attempts))).all())
+    assert attempts[poison] == 1, "counted, though a transient fault cut the pass short"
+
+
+async def test_a_prune_keeps_a_capture_queued_again_meanwhile(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row is found due, then queued again (``requeue_set_aside``) before the delete:
+    the delete repeats the conditions, so it is kept."""
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import KEEP_PROMOTED_MS
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Handled")], context=OWN, idempotency_key="k")
+    await memory.inbox.drain()
+    scalars = AsyncSession.scalars
+
+    async def then_requeued(self: AsyncSession, statement: object, *args: object, **kw: object) -> list[object]:
+        due = list(await scalars(self, statement, *args, **kw))  # type: ignore[arg-type]
+        async with store._db() as other:
+            await other.execute(update(InboxRow).values(promoted_at=None))
+            await other.commit()
+        return due
+
+    monkeypatch.setattr(AsyncSession, "scalars", then_requeued)
+    later = now_ms() + KEEP_PROMOTED_MS
+    assert await store.prune_inbox(before=later, set_aside_before=later, give_up_at=8) == 0
+    monkeypatch.undo()
+    assert await store.pending() == 1, "queued again: never deleted"
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

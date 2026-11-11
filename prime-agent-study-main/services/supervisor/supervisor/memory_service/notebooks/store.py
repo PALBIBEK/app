@@ -634,18 +634,20 @@ class NotebookStore:
         # One set aside (``give_up_at`` failures) is kept until ``set_aside_before``, to be
         # looked into and queued again (``inbox_set_aside`` counts them). In batches, each its
         # own short transaction: never one long delete holding the table under appends.
-        due = select(InboxRow.id).where(
+        conditions = (
             InboxRow.promoted_at < before,
             (InboxRow.attempts < give_up_at) | (InboxRow.promoted_at < set_aside_before),
         )
+        due = select(InboxRow.id).where(*conditions)
         pruned = 0
         while True:
             async with self._db() as db:
                 ids = list(await db.scalars(due.limit(PRUNE_BATCH)))
                 if ids:
-                    await db.execute(delete(InboxRow).where(InboxRow.id.in_(ids)))
+                    # Due still: one queued again meanwhile (``requeue_set_aside``) is kept.
+                    deleted = await db.execute(delete(InboxRow).where(InboxRow.id.in_(ids), *conditions))
                     await db.commit()
-            pruned += len(ids)
+                    pruned += int(deleted.rowcount or 0)  # type: ignore[attr-defined]
             if len(ids) < PRUNE_BATCH:
                 return pruned
 
@@ -694,7 +696,7 @@ class NotebookStore:
             rows = await db.scalars(
                 select(InboxRow)
                 .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                .order_by(InboxRow.attempts, InboxRow.id)  # as ops.QUEUE_ORDER
+                .order_by(InboxRow.id)
                 .limit(limit)
             )
             statements = [
@@ -741,7 +743,7 @@ class NotebookStore:
                 for i in await db.scalars(
                     select(InboxRow.id)
                     .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                    .order_by(InboxRow.attempts, InboxRow.id)  # as ops.QUEUE_ORDER
+                    .order_by(InboxRow.id)
                     .limit(limit)
                 )
             ]
