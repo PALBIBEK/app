@@ -63,7 +63,7 @@ _EMBED_AHEAD: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memo
 default executor."""
 
 HANDLED_PAYLOAD: Final[dict[str, object]] = {
-    "observations": [], "size": 0, "retire": [], "sources": [], "author": None, "attempts": 0,
+    "observations": [], "size": 0, "retire": [], "sources": [], "author": None, "attempts": 0, "failed_at": None,
 }
 """What a handled queued row keeps of its capture: nothing but its key (never set aside,
 never queued again)."""
@@ -737,18 +737,28 @@ class NotebookStore:
                 )
             ]
 
-    async def count_failure(self, row_id: int, *, give_up_at: int) -> int:
+    async def count_failure(self, row_id: int, *, give_up_at: int, spacing_ms: int = 0) -> int:
         """Count a failure against one queued capture, setting it aside (marked promoted, so
-        it is pruned in time) at ``give_up_at``: its failures."""
+        it is pruned in time) at ``give_up_at``: its failures. One within ``spacing_ms`` of
+        the last counted is not counted: the tries are spaced in the database, whichever
+        replica makes them and however often its passes come."""
+        now = now_ms()
         async with self._db() as db:
             # Only while it is queued: landed or cleared meanwhile (another replica, a clear),
             # it is handled, and nothing is counted against it.
             attempts = await db.scalar(
                 update(InboxRow)
-                .where(InboxRow.id == row_id, InboxRow.promoted_at.is_(None))
-                .values(attempts=InboxRow.attempts + 1)
+                .where(
+                    InboxRow.id == row_id,
+                    InboxRow.promoted_at.is_(None),
+                    InboxRow.failed_at.is_(None) | (InboxRow.failed_at <= now - spacing_ms),
+                )
+                .values(attempts=InboxRow.attempts + 1, failed_at=now)
                 .returning(InboxRow.attempts)
             )
+            if attempts is None:  # handled meanwhile, or counted too lately: as it stands
+                await db.rollback()
+                return int(await db.scalar(select(InboxRow.attempts).where(InboxRow.id == row_id)) or 0)
             if attempts is not None and attempts >= give_up_at:
                 await db.execute(update(InboxRow).where(InboxRow.id == row_id).values(promoted_at=now_ms()))
             await db.commit()
@@ -812,7 +822,7 @@ class NotebookStore:
             query = query.where(InboxRow.notebook_id == notebook_id)
         async with self._db() as db:
             # Its time afresh too: a day of failing counts from now (``ops.STUCK_AFTER_MS``).
-            requeued = await db.execute(query.values(promoted_at=None, attempts=0, received_at=now_ms()))
+            requeued = await db.execute(query.values(promoted_at=None, attempts=0, failed_at=None, received_at=now_ms()))
             await db.commit()
             return int(requeued.rowcount or 0)  # type: ignore[attr-defined]
 

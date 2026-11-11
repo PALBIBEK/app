@@ -166,3 +166,4 @@ class InboxRow(Base):
     received_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     promoted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # failures landing on its own
+    failed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # its last counted failure

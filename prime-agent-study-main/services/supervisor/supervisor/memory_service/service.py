@@ -95,7 +95,7 @@ class MemoryService:
         self._erase = EraseService(self._factory)
         # The one long-term store: notebooks of facts, indexed into the same bank.
         self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
-        self.inbox = InboxDrainer(self.notebooks, concurrency=drainer_concurrency(pool_settings()))
+        self.inbox = InboxDrainer(self.notebooks, concurrency=drainer_concurrency(pool_settings(), self._engine.url.drivername))
         """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(

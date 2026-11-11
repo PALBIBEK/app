@@ -48,10 +48,12 @@ PASSES_PER_DRAIN: Final = 16
 notebook one drain passed over is tried again in the next, never left skipped."""
 
 
-def drainer_concurrency(pool: dict[str, int]) -> int:
+def drainer_concurrency(pool: dict[str, int], database_url: str = "") -> int:
     """Promotions at once for a replica's connection ``pool`` (``db.pool_settings``): a third
     of it at most, so landing a burst of captures never takes the connections the requests
-    (captures, recalls, edits) wait on; up to ``CONCURRENCY``."""
+    (captures, recalls, edits) wait on; up to ``CONCURRENCY``. One on SQLite: one writer."""
+    if database_url.startswith("sqlite"):
+        return 1
     return max(1, min(CONCURRENCY, (pool["pool_size"] + pool["max_overflow"]) // 3))
 
 

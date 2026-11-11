@@ -46,6 +46,15 @@ async def svc(tmp_path: Path) -> AsyncIterator[MemoryServiceHandle]:
         yield handle
 
 
+@pytest.fixture(autouse=True)
+def _failures_counted_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Counting a capture's failures is spaced (``ops.FAILURE_SPACING_MS``); these tests
+    count them try by try, but for the one on the spacing."""
+    from supervisor.memory_service.notebooks import ops
+
+    monkeypatch.setattr(ops, "FAILURE_SPACING_MS", 0)
+
+
 async def hold(memory: object) -> None:
     """Keep captures queued until the test drains them (``memory.inbox.drain``): the drainer
     stopped, and none landed as it is queued."""
@@ -1531,6 +1540,30 @@ async def test_a_requeued_capture_has_its_day_afresh(svc: MemoryServiceHandle) -
     async with store._db() as db:
         (row,) = list(await db.scalars(select(InboxRow)))
     assert row.received_at > now_ms() - STUCK_AFTER_MS, "not counted as failing a day from its first try"
+
+
+async def test_a_capture_s_failures_are_counted_spaced_whichever_replica_tries(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Fails beside others")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+
+    counted = [await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS, spacing_ms=60_000) for _ in range(5)]
+
+    assert counted == [1, 1, 1, 1, 1], "one count in the spacing, however many passes try it"
+    assert await store.pending() == 1
+
+
+def test_the_drainer_promotes_one_at_a_time_on_sqlite() -> None:
+    from supervisor.memory_service.notebooks.inbox import drainer_concurrency
+
+    assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}, "sqlite+aiosqlite") == 1
+    assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}, "postgresql+asyncpg") > 1
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

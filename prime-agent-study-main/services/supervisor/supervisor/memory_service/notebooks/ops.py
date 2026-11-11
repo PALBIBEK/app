@@ -96,6 +96,10 @@ def is_transient(exc: BaseException) -> bool:
     return False
 PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
+FAILURE_SPACING_MS = 30_000
+"""A queued capture's failures are counted at most this often: a busy notebook landing
+others beside it (no backoff for it) and every replica's tries together still give it
+``PROMOTE_ATTEMPTS`` over minutes, not one burst of passes."""
 STUCK_AFTER_MS = 24 * 3600 * 1000
 """A queued capture failing this long is counted against it even while nothing lands."""
 LANDING_EVIDENCE_S = 300.0
@@ -324,7 +328,9 @@ class NotebookOps:
                 raise exc_of_all
 
         for row_id, error in failed:
-            attempts = await self.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+            attempts = await self.store.count_failure(
+                row_id, give_up_at=PROMOTE_ATTEMPTS, spacing_ms=FAILURE_SPACING_MS
+            )
             logger.warning(
                 "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
                 notebook_id, row_id, attempts, PROMOTE_ATTEMPTS,
