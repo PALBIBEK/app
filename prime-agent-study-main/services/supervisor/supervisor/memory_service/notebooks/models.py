@@ -123,7 +123,9 @@ class InboxRow(Base):
     from many sessions never wait on each other. The inbox's drainer
     (``notebooks.inbox``) promotes a notebook's rows in a batch, under that notebook's lock
     once per batch, marking them promoted in the same transaction. A promoted row is kept
-    (``KEEP_PROMOTED_MS``) so a retried burst still finds its idempotency key, then pruned.
+    (``KEEP_PROMOTED_MS``) so a retried burst still finds its idempotency key, then pruned;
+    what it held is emptied once it is handled (``store.mark_handled``), so the captured words
+    live only in the notebook, under its history and erasure. One set aside keeps them.
     """
 
     __tablename__ = "memory_observation_inbox"
@@ -139,6 +141,13 @@ class InboxRow(Base):
             sqlite_where=text("promoted_at IS NULL"),
         ),
         Index("ix_memory_inbox_promoted", "promoted_at"),  # pruning
+        # The few set aside (and failing), counted on every metrics scrape.
+        Index(
+            "ix_memory_inbox_attempts",
+            "attempts",
+            postgresql_where=text("attempts > 0"),
+            sqlite_where=text("attempts > 0"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(_Id, primary_key=True, autoincrement=True)

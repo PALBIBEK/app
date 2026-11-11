@@ -353,6 +353,7 @@ async def test_a_queued_capture_that_cannot_be_read_is_set_aside_not_the_queue_b
 
     assert [f.text for f in await client.facts(nb.id)] == ["Lands behind it"]
     assert await store.pending() == 0
+    assert (await memory.metrics_snapshot())["inbox_set_aside"] == 1, "set aside as a failing one is: counted, kept"
 
 
 async def test_a_batch_that_fails_to_write_is_landed_one_capture_at_a_time(
@@ -707,6 +708,7 @@ def test_postgres_contention_reported_as_a_plain_dbapi_error_is_transient() -> N
             super().__init__(sqlstate)
             self.sqlstate = sqlstate
 
+    assert is_transient(httpx.ConnectError("the bank's embedder is out of reach"))
     for state in ("40P01", "40001", "57014", "55P03", "08006"):
         assert is_transient(DBAPIError("x", {}, Orig(state))), state
     assert not is_transient(DBAPIError("x", {}, Orig("23505"))), "a unique violation is the capture's"
@@ -859,7 +861,7 @@ async def test_a_drain_under_steady_load_ends_and_the_next_tries_what_it_passed(
     assert [f.text for f in await client.facts(skipped.id)] == ["Waits a drain"]
 
 
-async def test_a_set_aside_capture_is_kept_past_the_day_promoted_ones_are(svc: MemoryServiceHandle) -> None:
+async def test_a_set_aside_capture_is_kept_past_the_day_and_can_be_queued_again(svc: MemoryServiceHandle) -> None:
     from supervisor.memory_service.notebooks.ops import (
         KEEP_PROMOTED_MS,
         KEEP_SET_ASIDE_MS,
@@ -880,6 +882,9 @@ async def test_a_set_aside_capture_is_kept_past_the_day_promoted_ones_are(svc: M
 
     day = now_ms() + KEEP_PROMOTED_MS
     assert await store.prune_inbox(before=day, set_aside_before=day - KEEP_SET_ASIDE_MS, give_up_at=PROMOTE_ATTEMPTS) == 0
+    assert await store.requeue_set_aside(nb.id) == 1, "queued again once its fault is fixed"
+    await memory.inbox.drain()
+    assert [f.text for f in await client.facts(nb.id)] == ["Never lands"]
     week = now_ms() + KEEP_SET_ASIDE_MS
     assert await store.prune_inbox(before=week, set_aside_before=week, give_up_at=PROMOTE_ATTEMPTS) == 1
 
@@ -944,8 +949,83 @@ async def test_the_notebook_client_shares_the_unbounded_connection_pool() -> Non
 
     client = NotebookClient("http://memory.test")
     pool = client._http._transport._pool  # type: ignore[attr-defined]
-    assert SHARED_LIMITS.max_connections is None and pool._max_connections == sys.maxsize
+    try:
+        assert SHARED_LIMITS.max_connections is None and pool._max_connections == sys.maxsize
+    finally:
+        await client.aclose()
     assert pool._max_keepalive_connections == SHARED_LIMITS.max_keepalive_connections
+
+
+async def test_captures_queued_into_a_notebook_erased_under_them_are_deleted(svc: MemoryServiceHandle) -> None:
+    """SQLite does not hold the inbox's foreign key: a capture can queue into a notebook
+    erased under it. Promoting finds no notebook and deletes the rows, counting none."""
+    from sqlalchemy import func, select
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.types import Provenance
+    from supervisor.memory_service.notebooks.wire import observation_out
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await store.erase_owner(tenant_id="t1", owner="alice")
+    for key in ("a", "b"):
+        await store.append_inbox(nb.id, [observation_out(draft(f"Alice's {key}"))], Provenance(Sensitivity.ORDINARY, (), False),
+                                 author=None, expires_on=None, idempotency_key=key)
+
+    assert await memory.notebooks.promote(nb.id) == (2, 0)
+    async with store._db() as db:
+        assert await db.scalar(select(func.count()).select_from(InboxRow)) == 0, "nothing of hers kept"
+
+
+async def test_a_handled_capture_keeps_its_key_but_not_its_words(svc: MemoryServiceHandle) -> None:
+    from sqlalchemy import select
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Landed")], context=OWN, idempotency_key="landed")
+    await memory.inbox.drain()
+    await client.observe(nb.id, [draft("Cleared")], context=OWN, idempotency_key="cleared")
+    await client.clear(nb.id)
+
+    async with memory.notebooks.store._db() as db:
+        rows = list(await db.scalars(select(InboxRow).order_by(InboxRow.id)))
+    assert [r.idempotency_key for r in rows] == ["landed", "cleared"]
+    assert all(r.promoted_at and r.observations == [] and r.retire == [] and r.sources == [] for r in rows)
+
+
+async def test_a_notebook_still_failing_keeps_its_backoff_past_its_retry(svc: MemoryServiceHandle) -> None:
+    import time
+
+    from supervisor.memory_service.notebooks import inbox
+
+    drainer = svc.app.state.memory.inbox
+    drainer._failing["t1~slow"] = (6, time.monotonic() - inbox.MAX_BACKOFF_S - 1)
+    drainer._failing["t1~gone"] = (6, time.monotonic() - inbox.FORGET_AFTER_S - 1)
+
+    assert drainer._backing_off() == []
+    assert drainer._failing == {"t1~slow": drainer._failing["t1~slow"]}, "its count kept: the next failure waits longer"
+
+
+@pytest.mark.parametrize("field,value", [("topic_hint", 42), ("body", {"cmd": "x"})])
+async def test_a_topic_or_body_that_is_not_text_is_refused(svc: MemoryServiceHandle, field: str, value: object) -> None:
+    from supervisor.memory_service.notebooks.wire import observation_out
+    from supervisor.seams.services.memory_service_client import memory_service_credential
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    body = observation_out(draft("Deploys on Fridays")) | {field: value}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=svc.app), base_url="http://memory.test") as raw:
+        r = await raw.post(f"/v1/notebooks/{nb.id}/observations", json={"observations": [body]},
+                           headers={"Authorization": f"Bearer {memory_service_credential('t1')}"})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "InvalidObservation"
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

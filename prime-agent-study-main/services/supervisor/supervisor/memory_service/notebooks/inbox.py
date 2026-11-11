@@ -39,6 +39,9 @@ CONCURRENCY: Final = 8
 BACKOFF_S: Final = 5.0
 MAX_BACKOFF_S: Final = 300.0
 """A notebook whose promotion failed is tried again after 5 s, doubling to 5 minutes."""
+FORGET_AFTER_S: Final = 3600.0
+"""A notebook still failing keeps its backoff until it lands; one no drain has reached for
+an hour past its retry (erased, or drained by another replica) is forgotten."""
 PRUNE_EVERY_S: Final = 60.0
 PASSES_PER_DRAIN: Final = 16
 """Passes one drain makes at most: under steady load the queue is never empty, and a
@@ -81,7 +84,7 @@ class InboxDrainer:
         (erased, say, or emptied elsewhere): nothing is kept for it."""
         now = time.monotonic()
         for notebook_id, (_, until) in list(self._failing.items()):
-            if until + MAX_BACKOFF_S < now:
+            if until + FORGET_AFTER_S < now:
                 del self._failing[notebook_id]
         return [n for n, (_, until) in self._failing.items() if until > now]
 

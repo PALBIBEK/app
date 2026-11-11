@@ -142,14 +142,14 @@ def observation_in(d: dict[str, Any]) -> ObservationDraft:
     try:
         return ObservationDraft(
             observation_type=ObservationType.parse(str(d["type"])),
-            topic_hint=_optional_str(d.get("topic_hint")),
+            topic_hint=_text_or_none(d.get("topic_hint"), "topic_hint"),
             statement=str(d["statement"]),
             keywords=_terms(d.get("keywords")),
             aliases=_terms(d.get("aliases")),
             extraction_model=str(d["extraction_model"]),
             prompt_version=str(d["prompt_version"]),
             created_at=int(d["created_at"]),
-            body=_optional_str(d.get("body")),
+            body=_text_or_none(d.get("body"), "body"),
         )
     except ObservationInvalid:
         raise
@@ -180,8 +180,12 @@ def _terms(value: object) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _optional_str(value: object) -> str | None:
-    return None if value is None else str(value)
+def _text_or_none(value: object, name: str) -> str | None:
+    """A string, as sent, or none; anything else (an object, a number) is malformed, never
+    stored as its ``str()``."""
+    if value is None or isinstance(value, str):
+        return value
+    raise ObservationInvalid(f"{name} must be a string, not {type(value).__name__}")
 
 
 def revision_out(r: Revision) -> dict[str, Any]:

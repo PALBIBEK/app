@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import ColumnElement, Update, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -56,6 +56,15 @@ from supervisor.memory_service.notebooks.types import (
     subject_of,
 )
 from supervisor.memory_service.notebooks.wire import typed_in, typed_out
+
+HANDLED_PAYLOAD: Final[dict[str, object]] = {"observations": [], "retire": [], "sources": [], "author": None}
+"""What a handled queued row keeps of its capture: nothing but its key and its counts."""
+
+
+def mark_handled(*where: ColumnElement[bool], at: int) -> Update:
+    """The update marking queued rows handled (promoted, archived away or cleared): kept,
+    for a retried burst to find its key, and emptied of the captured words."""
+    return update(InboxRow).where(InboxRow.promoted_at.is_(None), *where).values(promoted_at=at, **HANDLED_PAYLOAD)
 
 BANK_CONFIDENCE = 0.9
 """A fact a user or agent wrote down is surer than one extracted from a transcript."""
@@ -588,7 +597,8 @@ class NotebookStore:
             return [str(r[0]) for r in rows]
 
     async def set_aside(self, *, give_up_at: int) -> int:
-        """Captures set aside after failing to land on their own, and kept."""
+        """Captures set aside (failing to land on their own, or unreadable), and kept: the
+        few rows ``ix_memory_inbox_attempts`` holds."""
         async with self._db() as db:
             query = select(func.count()).select_from(InboxRow).where(InboxRow.attempts >= give_up_at)
             return int(await db.scalar(query) or 0)
@@ -736,13 +746,28 @@ class NotebookStore:
         """Discard a notebook's queued captures (it was archived after they were queued):
         marked handled, not deleted, so a retried burst still finds its key."""
         async with self._db() as db:
-            dropped = await db.execute(
-                update(InboxRow)
-                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                .values(promoted_at=now_ms())
-            )
+            dropped = await db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=now_ms()))
             await db.commit()
             return int(dropped.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def delete_inbox(self, notebook_id: str) -> int:
+        """Delete every queued row of a notebook that is gone (erased under its captures):
+        nothing of an erased owner is kept, not even set aside."""
+        async with self._db() as db:
+            deleted = await db.execute(delete(InboxRow).where(InboxRow.notebook_id == notebook_id))
+            await db.commit()
+            return int(deleted.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def requeue_set_aside(self, notebook_id: str | None = None) -> int:
+        """Queue again the captures set aside (in one notebook, or every one): an operator's
+        step once the fault that set them aside is fixed. Each gets its tries afresh."""
+        query = update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0)
+        if notebook_id is not None:
+            query = query.where(InboxRow.notebook_id == notebook_id)
+        async with self._db() as db:
+            requeued = await db.execute(query.values(promoted_at=None, attempts=0))
+            await db.commit()
+            return int(requeued.rowcount or 0)  # type: ignore[attr-defined]
 
     async def erase_owner(self, *, tenant_id: str, owner: str) -> int:
         """Delete every notebook of ``owner`` with its facts, history and bank items.

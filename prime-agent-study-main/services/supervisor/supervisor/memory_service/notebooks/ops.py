@@ -16,6 +16,7 @@ from dataclasses import replace
 from datetime import date
 from typing import Final, Literal
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
@@ -32,6 +33,7 @@ from supervisor.memory_service.notebooks.errors import (
     MemoryFactsMissing,
     MemoryLimitExceeded,
     NotebookArchived,
+    NotebookNotFound,
     RevisionOutOfRange,
 )
 from supervisor.memory_service.notebooks.models import InboxRow
@@ -41,7 +43,12 @@ from supervisor.memory_service.notebooks.render import (
     normalize,
     parse_fact_id,
 )
-from supervisor.memory_service.notebooks.store import FactTx, NotebookStore, row_provenance
+from supervisor.memory_service.notebooks.store import (
+    FactTx,
+    NotebookStore,
+    mark_handled,
+    row_provenance,
+)
 from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
     Edit,
@@ -66,7 +73,10 @@ logger = logging.getLogger(__name__)
 
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
-_TRANSIENT: Final = (OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError, TimeoutError)
+_TRANSIENT: Final = (
+    OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError, TimeoutError,
+    httpx.TransportError,  # a remote embedder or bank out of reach: not the capture's fault
+)
 _TRANSIENT_STATES: Final = frozenset({"40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03"})
 """Postgres SQLSTATEs that pass: a serialization failure, a deadlock, a lock not to be had,
 a statement timeout or cancel, the server shutting down (class 08, the connection, too)."""
@@ -258,6 +268,12 @@ class NotebookOps:
             dropped = await self.store.drop_inbox(notebook_id)
             logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
             return dropped, 0
+        except NotebookNotFound:
+            # Erased under its captures (a database that does not enforce the foreign key):
+            # none of them is the capture's fault, and nothing of the erased owner is kept.
+            deleted = await self.store.delete_inbox(notebook_id)
+            logger.info("notebook %s is gone with %d captures queued: deleted", notebook_id, deleted)
+            return deleted, 0
         except Exception as exc:
             if is_transient(exc):
                 raise  # the database's contention or connection, not a capture: nothing counted
@@ -308,16 +324,22 @@ class NotebookOps:
             current = await tx.current() if rows else []
             existing = {normalize(f.text): f for f in current}  # once a batch, kept current
             by_id = {f.id: f for f in current}  # every live fact, two of one text included
+            unreadable = []
             for row in rows:
                 drafts = _readable(notebook_id, row)
-                if drafts is not None:  # one that cannot be read never will be: set aside, not the queue
+                if drafts is None:  # one that cannot be read never will be: set aside, not the queue
+                    unreadable.append(row.id)
+                else:
                     added += await _promote_row(tx, row, drafts, existing, by_id)
             # Any other failure (the database, the embedder) fails the whole batch, rolled back
             # with nothing marked: the drainer backs the notebook off and tries it again.
-            if rows:
+            if unreadable:  # set aside as one that keeps failing is: kept, counted, to look into
                 await tx.db.execute(
-                    update(InboxRow).where(InboxRow.id.in_([r.id for r in rows])).values(promoted_at=tx.at)
+                    update(InboxRow).where(InboxRow.id.in_(unreadable)).values(promoted_at=tx.at, attempts=PROMOTE_ATTEMPTS)
                 )
+            landed = [r.id for r in rows if r.id not in unreadable]
+            if landed:
+                await tx.db.execute(mark_handled(InboxRow.id.in_(landed), at=tx.at))
             return len(rows), added
 
         return await self.store.transact(notebook_id, run)
@@ -373,11 +395,7 @@ class NotebookOps:
             await tx.remove(facts)
             # Marked as handled, not deleted: a retried burst still finds its key (and lands
             # nothing); pruned with the rest in time.
-            await tx.db.execute(
-                update(InboxRow)
-                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                .values(promoted_at=tx.at)
-            )
+            await tx.db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=tx.at))
             return len(facts)
 
         return await self.store.transact(notebook_id, run, author=author)
