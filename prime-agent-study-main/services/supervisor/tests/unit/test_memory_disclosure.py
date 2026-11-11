@@ -188,3 +188,35 @@ async def test_a_failing_classifier_means_unknown(notebooks: NotebookClient) -> 
     assert {f.provenance.sensitivity for f in await NotebookMemory(store).facts(nb)} == {
         Sensitivity.UNKNOWN
     }
+
+
+async def test_a_capture_retires_every_contradicted_fact_its_audience_may_change(notebooks: NotebookClient) -> None:
+    """One retire id hidden from the audience (or gone) keeps that fact only: the others it
+    makes false are still retired."""
+    import asyncio
+
+    from supervisor.memory_service.observations import (
+        PROMPT_VERSION,
+        ObservationDraft,
+        ObservationType,
+    )
+
+    memory, nb = await _seeded(notebooks)
+    facts = {f.text: f for f in await memory.facts(nb)}
+    members = Members(x=set())  # "learned in x" hidden from alice
+    private = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), members))
+    replacement = ObservationDraft(
+        observation_type=ObservationType.USER, topic_hint=None, statement="Replaces both", keywords=(),
+        aliases=(), extraction_model="m", prompt_version=PROMPT_VERSION, created_at=1, body=None,
+    )
+
+    await private.observe(
+        nb, [replacement], context=CaptureContext(sensitivity=Sensitivity.ORDINARY, inherited=()),
+        retire=[facts["ordinary personal"].id, facts["learned in x"].id],
+    )
+
+    async with asyncio.timeout(10):
+        while "Replaces both" not in (texts := {f.text for f in await memory.facts(nb)}):
+            await asyncio.sleep(0.05)
+    assert "ordinary personal" not in texts, "the one it may change is retired"
+    assert "learned in x" in texts, "the hidden one is kept"

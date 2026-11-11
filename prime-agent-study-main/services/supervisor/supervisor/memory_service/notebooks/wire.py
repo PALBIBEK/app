@@ -141,14 +141,14 @@ def observation_in(d: dict[str, Any]) -> ObservationDraft:
     field of the wrong shape is ``ObservationInvalid``."""
     try:
         return ObservationDraft(
-            observation_type=ObservationType.parse(str(d["type"])),
+            observation_type=ObservationType.parse(_text(d["type"], "type")),
             topic_hint=_text_or_none(d.get("topic_hint"), "topic_hint"),
-            statement=str(d["statement"]),
+            statement=_text(d["statement"], "statement"),
             keywords=_terms(d.get("keywords")),
             aliases=_terms(d.get("aliases")),
-            extraction_model=str(d["extraction_model"]),
-            prompt_version=str(d["prompt_version"]),
-            created_at=int(d["created_at"]),
+            extraction_model=_text(d["extraction_model"], "extraction_model"),
+            prompt_version=_text(d["prompt_version"], "prompt_version"),
+            created_at=_whole(d["created_at"], "created_at"),
             body=_text_or_none(d.get("body"), "body"),
         )
     except ObservationInvalid:
@@ -178,6 +178,19 @@ def _terms(value: object) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ObservationInvalid(f"terms must be a list of strings, not {type(value).__name__}")
     return tuple(value)
+
+
+def _text(value: object, name: str) -> str:
+    """A string, as sent; anything else is malformed, never stored as its ``str()``."""
+    if not isinstance(value, str):
+        raise ObservationInvalid(f"{name} must be a string, not {type(value).__name__}")
+    return value
+
+
+def _whole(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ObservationInvalid(f"{name} must be an integer, not {type(value).__name__}")
+    return value
 
 
 def _text_or_none(value: object, name: str) -> str | None:

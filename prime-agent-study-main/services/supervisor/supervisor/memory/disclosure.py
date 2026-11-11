@@ -239,11 +239,18 @@ class DisclosedMemory(MemoryView):
         audience may change (``delete``'s rule): otherwise the observations alone, so both
         facts are kept, as a refused delete keeps them."""
         if retire:
-            try:
-                await self._require_editable(notebook_id, retire)
-            except (MemoryDisclosureDenied, MemoryFactsMissing) as exc:
-                logger.info("notebook %s: contradicted facts not retired: %s", notebook_id, exc)
+            # Each fact on its own: one this audience may not change (or already gone) is
+            # kept, and every other one it makes false is still retired.
+            if not await self._policy().narrow(await self._home_of(notebook_id)):
+                logger.info("notebook %s: contradicted facts not retired: not this audience's to change", notebook_id)
                 retire = ()
+            else:
+                shown = {f.id for f in await self._visible(notebook_id)}
+                kept = [i for i in retire if parse_fact_id(i) in shown]
+                if len(kept) != len(retire):
+                    logger.info("notebook %s: %d contradicted facts not retired: hidden or gone",
+                                notebook_id, len(retire) - len(kept))
+                retire = kept
         return await super().observe(
             notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
         )

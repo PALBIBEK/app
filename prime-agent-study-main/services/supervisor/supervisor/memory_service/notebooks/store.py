@@ -703,14 +703,18 @@ class NotebookStore:
         """Count a failure against one queued capture, setting it aside (marked promoted, so
         it is pruned in time) at ``give_up_at``: its failures."""
         async with self._db() as db:
-            row = await db.get(InboxRow, row_id)
-            if row is None:
-                return 0
-            row.attempts = int(row.attempts or 0) + 1
-            if row.attempts >= give_up_at:
-                row.promoted_at = now_ms()
+            # Only while it is queued: landed or cleared meanwhile (another replica, a clear),
+            # it is handled, and nothing is counted against it.
+            attempts = await db.scalar(
+                update(InboxRow)
+                .where(InboxRow.id == row_id, InboxRow.promoted_at.is_(None))
+                .values(attempts=InboxRow.attempts + 1)
+                .returning(InboxRow.attempts)
+            )
+            if attempts is not None and attempts >= give_up_at:
+                await db.execute(update(InboxRow).where(InboxRow.id == row_id).values(promoted_at=now_ms()))
             await db.commit()
-            return int(row.attempts)
+            return int(attempts or 0)
 
     async def queued_statements(self, notebook_id: str) -> list[str]:
         """Every statement the notebook's queued captures hold."""
@@ -734,16 +738,16 @@ class NotebookStore:
                 )
             )
 
-    async def typed_of(self, notebook_id: str, ids: Sequence[str]) -> dict[str, Typed]:
-        """The type each of ``ids`` carries now, live or deleted (a fact's type is not in its
-        history: it says what the fact is, not what it said)."""
+    async def typed_of(self, notebook_id: str, ids: Sequence[str]) -> dict[str, tuple[str, Typed]]:
+        """The words each of ``ids`` has now and the type describing them, live or deleted
+        (a fact's type is not in its history)."""
         if not ids:
             return {}
         async with self._db() as db:
             rows = await db.scalars(
                 select(FactRow).where(FactRow.notebook_id == notebook_id, FactRow.id.in_([int(i) for i in ids]))
             )
-            return {str(r.id): t for r in rows if (t := _typed(r)) is not None}
+            return {str(r.id): (r.text, t) for r in rows if (t := _typed(r)) is not None}
 
     async def drop_inbox(self, notebook_id: str) -> int:
         """Discard a notebook's queued captures (it was archived after they were queued):

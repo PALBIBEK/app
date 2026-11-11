@@ -1013,8 +1013,12 @@ async def test_a_notebook_still_failing_keeps_its_backoff_past_its_retry(svc: Me
     assert drainer._failing == {"t1~slow": drainer._failing["t1~slow"]}, "its count kept: the next failure waits longer"
 
 
-@pytest.mark.parametrize("field,value", [("topic_hint", 42), ("body", {"cmd": "x"})])
-async def test_a_topic_or_body_that_is_not_text_is_refused(svc: MemoryServiceHandle, field: str, value: object) -> None:
+@pytest.mark.parametrize(
+    "field,value",
+    [("topic_hint", 42), ("body", {"cmd": "x"}), ("statement", {"a": 1}), ("type", 3),
+     ("extraction_model", None), ("prompt_version", 1), ("created_at", "1700000000"), ("created_at", True)],
+)
+async def test_a_field_of_the_wrong_kind_is_refused_never_stringified(svc: MemoryServiceHandle, field: str, value: object) -> None:
     from supervisor.memory_service.notebooks.wire import observation_out
     from supervisor.seams.services.memory_service_client import memory_service_credential
 
@@ -1150,6 +1154,126 @@ async def test_a_repeat_with_no_expiry_makes_an_expired_fact_true_again(svc: Mem
 
     (fact,) = await client.facts(nb.id)
     assert fact.expires_on is None and fact.text == "The freeze is on"
+
+
+@pytest.mark.parametrize("change", ["delete", "edit"])
+async def test_a_queued_capture_never_brings_back_words_a_person_deleted_or_rewrote(
+    svc: MemoryServiceHandle, change: str
+) -> None:
+    """Queued before the change, it would land after it: what restates the old words is
+    taken out of the queue in the change's transaction, the rest of the capture lands."""
+    from supervisor.memory_service.notebooks.types import Edit
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Prefers tabs"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("prefers tabs"), draft("Uses vim")], context=OWN)
+    if change == "delete":
+        await client.delete(nb.id, [fact.id])
+    else:
+        await client.edit(nb.id, [Edit(fact.id, "Prefers spaces")], context=OWN)
+
+    await memory.inbox.drain()
+
+    expected = ["Uses vim"] if change == "delete" else ["Prefers spaces", "Uses vim"]
+    assert sorted(f.text for f in await client.facts(nb.id)) == expected
+
+
+async def test_a_capture_left_with_nothing_by_a_delete_is_handled(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Prefers tabs"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Prefers tabs")], context=OWN)
+
+    await client.delete(nb.id, [fact.id])
+
+    assert await memory.notebooks.store.pending() == 0
+    assert await client.facts(nb.id) == []
+
+
+async def test_a_batch_of_only_unreadable_captures_is_no_evidence_captures_land(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.types import Provenance
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await memory.notebooks.store.append_inbox(nb.id, [{"type": "bogus"}], Provenance(Sensitivity.ORDINARY, (), False),
+                                              author=None, expires_on=None, idempotency_key="bad")
+
+    assert await memory.notebooks.promote(nb.id) == (1, 0)
+    assert not memory.notebooks._landing_lately()
+
+
+@pytest.mark.parametrize("gone", ["archived", "erased"])
+async def test_a_notebook_gone_during_the_one_at_a_time_landing_counts_against_no_capture(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch, gone: str
+) -> None:
+    from supervisor.memory_service.notebooks.errors import NotebookNotFound
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Queued")], context=OWN)
+    memory.notebooks._landed(1)  # captures land elsewhere: a lone failure would be counted
+    calls = [0]
+
+    async def batch(notebook_id: str, size: int, *, only: int | None = None) -> tuple[int, int]:
+        calls[0] += 1
+        if only is None:
+            raise ValueError("the batch fails")
+        raise NotebookArchived(notebook_id) if gone == "archived" else NotebookNotFound(notebook_id)
+
+    monkeypatch.setattr(memory.notebooks, "_promote_batch", batch)
+    assert await memory.notebooks.promote(nb.id) == (1, 0)
+    assert await memory.notebooks.store.pending() == 0
+    assert (await memory.metrics_snapshot())["inbox_set_aside"] == 0, "dropped, never set aside"
+
+
+async def test_a_failure_is_never_counted_against_a_capture_handled_meanwhile(svc: MemoryServiceHandle) -> None:
+    from sqlalchemy import select
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Landed by another replica")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    await memory.inbox.drain()
+
+    assert await store.count_failure(row_id, give_up_at=1) == 0
+    async with store._db() as db:
+        (row,) = list(await db.scalars(select(InboxRow)))
+    assert row.attempts == 0
+
+
+async def test_the_facts_as_they_were_carry_a_type_only_where_they_had_its_words(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.types import Edit
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Uses npm"], context=OWN)  # revision 1
+    (fact,) = await client.facts(nb.id)
+    await client.edit(nb.id, [Edit(fact.id, "Uses pnpm")], context=OWN)  # revision 2
+    await client.observe(nb.id, [draft("Uses pnpm")], context=OWN)
+    async with asyncio.timeout(10):
+        while (await client.facts(nb.id))[0].typed is None:
+            await asyncio.sleep(0.05)
+
+    (then,) = await client.facts_at(nb.id, 1)
+    (now,) = await client.facts_at(nb.id, 2)
+    assert then.text == "Uses npm" and then.typed is None
+    assert now.text == "Uses pnpm" and now.typed is not None
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

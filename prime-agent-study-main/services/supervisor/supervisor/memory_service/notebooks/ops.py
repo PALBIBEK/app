@@ -276,19 +276,9 @@ class NotebookOps:
         except Exception:  # an aid only: landing embeds again, where a capture's own failure is handled
             logger.warning("notebook %s: embedding queued facts ahead failed", notebook_id, exc_info=True)
         try:
-            landed = await self._promote_batch(notebook_id, batch)
-            self._landed(landed[0])
-            return landed
-        except NotebookArchived:
-            dropped = await self.store.drop_inbox(notebook_id)
-            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
-            return dropped, 0
-        except NotebookNotFound:
-            # Erased under its captures (a database that does not enforce the foreign key):
-            # none of them is the capture's fault, and nothing of the erased owner is kept.
-            deleted = await self.store.delete_inbox(notebook_id)
-            logger.info("notebook %s is gone with %d captures queued: deleted", notebook_id, deleted)
-            return deleted, 0
+            return await self._promote_batch(notebook_id, batch)
+        except (NotebookArchived, NotebookNotFound) as exc:
+            return await self._notebook_gone(notebook_id, exc)
         except Exception as exc:
             if is_transient(exc):
                 raise  # the database's contention or connection, not a capture: nothing counted
@@ -302,13 +292,14 @@ class NotebookOps:
         for row_id in queued:
             try:
                 one, facts = await self._promote_batch(notebook_id, 1, only=row_id)
+            except (NotebookArchived, NotebookNotFound) as exc:  # the notebook's, not the capture's
+                return await self._notebook_gone(notebook_id, exc)
             except Exception as exc:
                 if is_transient(exc):
                     raise
                 failed.append((row_id, exc))
                 continue
             captures, added = captures + one, added + facts
-        self._landed(captures)
         if not failed:
             return captures, added
         if len(failed) == len(queued) and (len(queued) > 1 or not self._landing_lately()):
@@ -328,11 +319,23 @@ class NotebookOps:
             return captures, added  # others landed: the notebook is not backed off for the failed one
         raise failed[0][1]  # for the drainer to back off before the failed ones' next try
 
+    async def _notebook_gone(self, notebook_id: str, exc: NotebookArchived | NotebookNotFound) -> tuple[int, int]:
+        """The notebook's queue when the notebook itself is past taking it, which is no
+        capture's fault: an archived one's is dropped, and an erased one's (a database that
+        does not enforce the foreign key) deleted, nothing of the erased owner kept."""
+        if isinstance(exc, NotebookArchived):
+            dropped = await self.store.drop_inbox(notebook_id)
+            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
+            return dropped, 0
+        deleted = await self.store.delete_inbox(notebook_id)
+        logger.info("notebook %s is gone with %d captures queued: deleted", notebook_id, deleted)
+        return deleted, 0
+
     async def _promote_batch(self, notebook_id: str, batch: int, *, only: int | None = None) -> tuple[int, int]:
         """One transaction: up to ``batch`` of the queued captures (or the one ``only``
         names), landed and marked."""
 
-        async def run(tx: FactTx) -> tuple[int, int]:
+        async def run(tx: FactTx) -> tuple[int, int, int]:
             query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
             if only is not None:
                 query = query.where(InboxRow.id == only)
@@ -357,9 +360,11 @@ class NotebookOps:
             landed = [r.id for r in rows if r.id not in unreadable]
             if landed:
                 await tx.db.execute(mark_handled(InboxRow.id.in_(landed), at=tx.at))
-            return len(rows), added
+            return len(rows), added, len(landed)
 
-        return await self.store.transact(notebook_id, run)
+        captures, added, landed = await self.store.transact(notebook_id, run)
+        self._landed(landed)  # evidence the service lands captures: never one only set aside
+        return captures, added
 
     async def edit(
         self,
@@ -380,6 +385,7 @@ class NotebookOps:
 
         async def run(tx: FactTx) -> None:
             targets = resolve_ids(await tx.current(), [e.id for e in edits])
+            await _forget_queued(tx, [f.text for e, f in zip(edits, targets, strict=True) if edited_text(e.text) != f.text])
             for edit, fact in zip(edits, targets, strict=True):
                 provenance = (
                     merge_provenance([fact.provenance, exposure], fact.provenance.sensitivity)
@@ -398,7 +404,9 @@ class NotebookOps:
 
     async def delete(self, notebook_id: str, ids: Sequence[str], *, author: str | None = None) -> None:
         async def run(tx: FactTx) -> None:
-            await tx.remove(resolve_ids(await tx.current(), ids))
+            removed = resolve_ids(await tx.current(), ids)
+            await tx.remove(removed)
+            await _forget_queued(tx, [f.text for f in removed])
 
         await self.store.transact(notebook_id, run, author=author)
 
@@ -430,10 +438,14 @@ class NotebookOps:
         """The facts as they were at ``revision`` (0, before any change, to the current one)."""
         _in_range(revision, (await self.store.get(notebook_id)).revision)
         state = state_at(await self.history(notebook_id), revision)
-        # A fact's type says what it is, not what it said: it is the fact's own, kept on its
-        # row (deleted facts too), so the facts as they were carry it.
+        # A fact's type is kept on its row (deleted facts too), describing its words now: the
+        # facts as they were carry it only where they said those words.
         typed = await self.store.typed_of(notebook_id, list(state))
-        facts = [replace(f, typed=typed.get(f.id)) for f in state.values()]
+        def at_the_time(fact: Fact) -> Fact:
+            words, kind = typed.get(fact.id, (None, None))
+            return replace(fact, typed=kind if words == fact.text else None)
+
+        facts = [at_the_time(f) for f in state.values()]
         return sorted(facts, key=lambda f: int(f.id))
 
     async def restore(self, notebook_id: str, revision: int, *, author: str | None = None) -> None:
@@ -443,7 +455,11 @@ class NotebookOps:
             _in_range(revision, int(tx.notebook.revision))
             target = state_at(await tx.history(), revision)
             current = {f.id: f for f in await tx.current()}
-            await tx.remove([f for i, f in current.items() if i not in target])
+            removed = [f for i, f in current.items() if i not in target]
+            await tx.remove(removed)
+            await _forget_queued(
+                tx, [f.text for f in removed] + [f.text for i, f in current.items() if i in target and target[i].text != f.text]
+            )
             for fact_id, fact in target.items():
                 live = current.get(fact_id)
                 if live is None:
@@ -458,6 +474,28 @@ class NotebookOps:
                         await tx.set_typed(live, None)  # its type described the words it no longer has
 
         await self.store.transact(notebook_id, run, author=author)
+
+
+async def _forget_queued(tx: FactTx, texts: Sequence[str]) -> None:
+    """Take out of the notebook's queued captures what restates ``texts``: words a person
+    just deleted or rewrote. Queued before the change, a capture landed after it would
+    bring them back (before the inbox it had landed first, and the change undid it).
+    Under the notebook's lock, in the change's transaction; a capture left with nothing is
+    handled."""
+    gone = {normalize(t) for t in texts}
+    if not gone:
+        return
+    rows = await tx.db.scalars(
+        select(InboxRow).where(InboxRow.notebook_id == tx.notebook.id, InboxRow.promoted_at.is_(None))
+    )
+    for row in rows:
+        kept = [o for o in row.observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
+        if len(kept) == len(row.observations):
+            continue
+        if kept:
+            await tx.db.execute(update(InboxRow).where(InboxRow.id == row.id).values(observations=kept, size=len(kept)))
+        else:
+            await tx.db.execute(mark_handled(InboxRow.id == row.id, at=tx.at))
 
 
 def _within(what: str, limit: int, got: int) -> None:
