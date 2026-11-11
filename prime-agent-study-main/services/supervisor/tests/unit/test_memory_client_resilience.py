@@ -137,3 +137,27 @@ async def test_a_session_s_tenant_keys_its_capture_lane_when_its_notebook_names_
 
     assert await platform.session_tenant("s-1") == "acme"
     assert await platform.session_tenant("s-unknown") is None
+
+
+async def test_the_client_s_own_pool_being_busy_never_opens_the_breaker() -> None:
+    """A burst past the client's connections waits in its pool, and one that waits too long
+    times out there: the service never heard of it, so it is no failure of the service."""
+    calls = [0]
+
+    class Busy(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            calls[0] += 1
+            if calls[0] <= 5:
+                raise httpx.PoolTimeout("all connections busy")
+            return httpx.Response(200, json=[])
+
+    client = NotebookClient(
+        "http://mem", transport=Busy(), credential=lambda t: None,
+        breaker=_Breaker(threshold=3, cooldown_s=30, clock=_Clock()),
+    )
+    for _ in range(5):
+        with pytest.raises(MemoryUnavailable, match="busy"):
+            await client.facts("t1~a")
+
+    assert await client.facts("t1~a") == [], "the breaker stayed closed"
+    await client.aclose()

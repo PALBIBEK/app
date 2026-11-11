@@ -75,12 +75,13 @@ logger = logging.getLogger(__name__)
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
 _TRANSIENT: Final = (
-    OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError, TimeoutError,
+    OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError,  # TimeoutError among them
     httpx.TransportError,  # a remote embedder or bank out of reach: not the capture's fault
 )
 _TRANSIENT_STATES: Final = frozenset({"40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03"})
 """Postgres SQLSTATEs that pass: a serialization failure, a deadlock, a lock not to be had,
-a statement timeout or cancel, the server shutting down (class 08, the connection, too)."""
+a statement timeout or cancel, the server shutting down (class 08, the connection, and
+class 53, the server out of connections, memory or disk, too)."""
 
 
 def is_transient(exc: BaseException) -> bool:
@@ -92,10 +93,13 @@ def is_transient(exc: BaseException) -> bool:
         return True
     if isinstance(exc, DBAPIError):
         state = str(getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None) or "")
-        return state in _TRANSIENT_STATES or state.startswith("08")
+        return state in _TRANSIENT_STATES or state.startswith(("08", "53"))
     return False
 PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
+QUEUE_ORDER: Final = (InboxRow.attempts, InboxRow.id)
+"""The queue's order: oldest first, a capture that has failed behind those that have not,
+so failing ones never fill the batch and hold up the good ones queued after them."""
 FAILURE_SPACING_MS = 30_000
 """A queued capture's failures are counted at most this often: a busy notebook landing
 others beside it (no backoff for it) and every replica's tries together still give it
@@ -308,6 +312,8 @@ class NotebookOps:
                 return captures + dropped, added  # with those landed before it went
             except Exception as exc:
                 if is_transient(exc):
+                    if captures:
+                        return captures, added  # what landed before it stands: the rest next time
                     raise
                 failed.append((row_id, exc))
                 continue
@@ -360,7 +366,7 @@ class NotebookOps:
             query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
             if only is not None:
                 query = query.where(InboxRow.id == only)
-            rows = list(await tx.db.scalars(query.order_by(InboxRow.id).limit(batch)))
+            rows = list(await tx.db.scalars(query.order_by(*QUEUE_ORDER).limit(batch)))
             added = 0
             current = await tx.current() if rows else []
             existing = {normalize(f.text): f for f in current}  # once a batch, kept current

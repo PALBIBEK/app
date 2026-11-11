@@ -374,6 +374,11 @@ class NotebookClient:
         trial = self._breaker.before()
         try:
             response = await self._http.request(method, path, headers=headers, **kw)
+        except httpx.PoolTimeout as exc:
+            # This client's own connections all busy (a burst past MEMORY_LIMITS): the service
+            # never heard of it, so the breaker does not count it against the service.
+            self._breaker.abandoned(trial)
+            raise MemoryUnavailable(f"memory calls busy: {exc}") from exc
         except httpx.HTTPError as exc:
             self._breaker.failed()
             raise MemoryUnavailable(f"memory service unreachable: {exc}") from exc

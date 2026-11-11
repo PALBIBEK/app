@@ -58,6 +58,9 @@ from supervisor.memory_service.notebooks.types import (
 )
 from supervisor.memory_service.notebooks.wire import typed_in, typed_out
 
+PRUNE_BATCH: Final = 1_000
+"""Handled inbox rows one prune deletes per transaction."""
+
 _EMBED_AHEAD: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memory-embed-ahead")
 """Threads embedding queued captures ahead of landing (``embed_queued``), never the loop's
 default executor."""
@@ -628,17 +631,23 @@ class NotebookStore:
     async def prune_inbox(self, *, before: int, set_aside_before: int, give_up_at: int) -> int:
         """Delete promoted rows promoted before ``before`` (epoch ms), in every notebook: past
         the window a retried burst could come in, nothing of a capture is kept there."""
-        async with self._db() as db:
-            # One set aside (``give_up_at`` failures) is kept until ``set_aside_before``, to be
-            # looked into and queued again (``inbox_set_aside`` counts them).
-            pruned = await db.execute(
-                delete(InboxRow).where(
-                    InboxRow.promoted_at < before,
-                    (InboxRow.attempts < give_up_at) | (InboxRow.promoted_at < set_aside_before),
-                )
-            )
-            await db.commit()
-            return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
+        # One set aside (``give_up_at`` failures) is kept until ``set_aside_before``, to be
+        # looked into and queued again (``inbox_set_aside`` counts them). In batches, each its
+        # own short transaction: never one long delete holding the table under appends.
+        due = select(InboxRow.id).where(
+            InboxRow.promoted_at < before,
+            (InboxRow.attempts < give_up_at) | (InboxRow.promoted_at < set_aside_before),
+        )
+        pruned = 0
+        while True:
+            async with self._db() as db:
+                ids = list(await db.scalars(due.limit(PRUNE_BATCH)))
+                if ids:
+                    await db.execute(delete(InboxRow).where(InboxRow.id.in_(ids)))
+                    await db.commit()
+            pruned += len(ids)
+            if len(ids) < PRUNE_BATCH:
+                return pruned
 
     async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, int, dict[str, str]]:
         """In one read: the notebook's live facts, the facts its captures queued hold, and
@@ -685,7 +694,7 @@ class NotebookStore:
             rows = await db.scalars(
                 select(InboxRow)
                 .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                .order_by(InboxRow.id)
+                .order_by(InboxRow.attempts, InboxRow.id)  # as ops.QUEUE_ORDER
                 .limit(limit)
             )
             statements = [
@@ -732,7 +741,7 @@ class NotebookStore:
                 for i in await db.scalars(
                     select(InboxRow.id)
                     .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                    .order_by(InboxRow.id)
+                    .order_by(InboxRow.attempts, InboxRow.id)  # as ops.QUEUE_ORDER
                     .limit(limit)
                 )
             ]
@@ -759,7 +768,7 @@ class NotebookStore:
             if attempts is None:  # handled meanwhile, or counted too lately: as it stands
                 await db.rollback()
                 return int(await db.scalar(select(InboxRow.attempts).where(InboxRow.id == row_id)) or 0)
-            if attempts is not None and attempts >= give_up_at:
+            if attempts >= give_up_at:
                 await db.execute(update(InboxRow).where(InboxRow.id == row_id).values(promoted_at=now_ms()))
             await db.commit()
             return int(attempts or 0)

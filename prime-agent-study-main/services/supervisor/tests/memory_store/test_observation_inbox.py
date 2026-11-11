@@ -718,7 +718,7 @@ def test_postgres_contention_reported_as_a_plain_dbapi_error_is_transient() -> N
             self.sqlstate = sqlstate
 
     assert is_transient(httpx.ConnectError("the bank's embedder is out of reach"))
-    for state in ("40P01", "40001", "57014", "55P03", "08006"):
+    for state in ("40P01", "40001", "57014", "55P03", "08006", "53300", "53200"):
         assert is_transient(DBAPIError("x", {}, Orig(state))), state
     assert not is_transient(DBAPIError("x", {}, Orig("23505"))), "a unique violation is the capture's"
     assert not is_transient(DataError("x", {}, Orig("22001")))
@@ -1564,6 +1564,65 @@ def test_the_drainer_promotes_one_at_a_time_on_sqlite() -> None:
 
     assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}, "sqlite+aiosqlite") == 1
     assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}, "postgresql+asyncpg") > 1
+
+
+async def test_captures_that_have_failed_queue_behind_those_that_have_not(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Failed once")], context=OWN)
+    await client.observe(nb.id, [draft("Never failed")], context=OWN)
+    first, second = await store.queued_ids(nb.id, limit=10)
+    await store.count_failure(first, give_up_at=PROMOTE_ATTEMPTS)
+
+    assert await store.queued_ids(nb.id, limit=1) == [second], "the good one first: never held up by the other"
+
+
+async def test_a_transient_fault_mid_way_keeps_what_landed_before_it(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for text in ("One", "Two"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
+    landed = [0]
+
+    async def batch(notebook_id: str, size: int, *, only: int | None = None) -> tuple[int, int]:
+        if only is None:
+            raise ValueError("the batch fails")
+        if landed[0]:
+            raise OperationalError("SELECT", {}, Exception("connection lost"))
+        landed[0] += 1
+        return 1, 1
+
+    monkeypatch.setattr(memory.notebooks, "_promote_batch", batch)
+    assert await memory.notebooks.promote(nb.id) == (1, 1), "progress reported, not a failure"
+
+
+async def test_handled_captures_are_pruned_in_batches(svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch) -> None:
+    from supervisor.memory_service.notebooks import store as store_module
+    from supervisor.memory_service.notebooks.ops import KEEP_PROMOTED_MS
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    monkeypatch.setattr(store_module, "PRUNE_BATCH", 2)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for i in range(5):
+        await client.observe(nb.id, [draft(f"Captured {i}")], context=OWN, idempotency_key=f"k{i}")
+    await memory.inbox.drain()
+
+    later = now_ms() + KEEP_PROMOTED_MS
+    assert await memory.notebooks.store.prune_inbox(before=later, set_aside_before=later, give_up_at=8) == 5
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:
