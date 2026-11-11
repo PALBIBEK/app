@@ -294,11 +294,10 @@ class NotebookOps:
             return await self._promote_batch(notebook_id, batch)
         except (NotebookArchived, NotebookNotFound) as exc:
             return await self._notebook_gone(notebook_id, exc)
-        except Exception as exc:
-            if is_transient(exc) and not await self._stuck(notebook_id):
-                raise  # the database's contention or connection, not a capture: nothing counted
-            # A "passing" fault met for a day by the head of the queue is no longer taken as
-            # passing: the captures are tried one at a time, and counted (STUCK_AFTER_MS).
+        except Exception:
+            # Then one at a time, whatever failed the batch: a fault of its size (a statement
+            # timeout) or of one capture passes that way, and a passing fault of the database
+            # stops the first of them (counting nothing) unless it has been met for a day.
             logger.warning("notebook %s: a batch of queued captures failed: landing them one at a time",
                            notebook_id, exc_info=True)
         # Each on its own, in its own transaction: the good ones land, one that fails is counted
@@ -353,18 +352,13 @@ class NotebookOps:
             return captures, added  # others landed: the notebook is not backed off for the failed one
         raise interrupted or failed[0][1]  # for the drainer to back off before the next try
 
-    async def _stuck(self, notebook_id: str) -> bool:
-        """Whether the notebook's oldest queued capture has waited past ``STUCK_AFTER_MS``."""
-        (oldest,) = await self.store.queued_ids(notebook_id, limit=1) or (None,)
-        return oldest is not None and bool(await self.store.received_before([oldest], before=_stuck_since()))
-
     async def _notebook_gone(self, notebook_id: str, exc: NotebookArchived | NotebookNotFound) -> tuple[int, int]:
         """The notebook's queue when the notebook itself is past taking it, which is no
         capture's fault: an archived one's is dropped, and an erased one's (a database that
         does not enforce the foreign key) deleted, nothing of the erased owner kept."""
         if isinstance(exc, NotebookArchived):
             dropped = await self.store.drop_inbox(notebook_id)
-            logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
+            logger.warning("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
             return dropped, 0
         deleted = await self.store.delete_inbox(notebook_id)
         logger.info("notebook %s is gone with %d captures queued: deleted", notebook_id, deleted)
@@ -531,7 +525,7 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
     # Two reads, each on its partial index: the queue, and the few set aside.
     queued = await tx.db.execute(columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.promoted_at.is_(None)))
     set_aside = await tx.db.execute(
-        columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts >= PROMOTE_ATTEMPTS)
+        columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts > 0, InboxRow.attempts >= PROMOTE_ATTEMPTS)
     )
     for row_id, observations, _retire, promoted_at in [*queued.all(), *set_aside.all()]:
         if not isinstance(observations, list):

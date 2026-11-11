@@ -60,6 +60,8 @@ from supervisor.memory_service.notebooks.wire import typed_in, typed_out
 
 PRUNE_BATCH: Final = 1_000
 """Handled inbox rows one prune deletes per transaction."""
+PRUNE_BATCHES_PER_PASS: Final = 10
+"""Transactions one prune makes at most (a drain runs it first): the rest the next one."""
 
 _EMBED_AHEAD: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memory-embed-ahead")
 """Threads embedding queued captures ahead of landing (``embed_queued``), never the loop's
@@ -614,7 +616,9 @@ class NotebookStore:
         """Captures set aside (failing to land on their own, or unreadable), and kept: the
         few rows ``ix_memory_inbox_attempts`` holds."""
         async with self._db() as db:
-            query = select(func.count()).select_from(InboxRow).where(InboxRow.attempts >= give_up_at)
+            # ``attempts > 0`` as written: the partial index's own predicate, which a prepared
+            # statement's generic plan cannot derive from the bound one.
+            query = select(func.count()).select_from(InboxRow).where(InboxRow.attempts > 0, InboxRow.attempts >= give_up_at)
             return int(await db.scalar(query) or 0)
 
     async def pending(self) -> int:
@@ -636,7 +640,7 @@ class NotebookStore:
         )
         due = select(InboxRow.id).where(*conditions)
         pruned = 0
-        while True:
+        for _ in range(PRUNE_BATCHES_PER_PASS):  # the rest next time: a drain never waits long on it
             async with self._db() as db:
                 ids = list(await db.scalars(due.limit(PRUNE_BATCH)))
                 if ids:
@@ -645,7 +649,8 @@ class NotebookStore:
                     await db.commit()
                     pruned += int(deleted.rowcount or 0)  # type: ignore[attr-defined]
             if len(ids) < PRUNE_BATCH:
-                return pruned
+                break
+        return pruned
 
     async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, int, dict[str, str]]:
         """In one read: the notebook's live facts, the facts its captures queued hold, and
@@ -824,7 +829,9 @@ class NotebookStore:
         """Queue again the captures set aside (``give_up_at`` failures; in one notebook, or
         every one): an operator's step once the fault that set them aside is fixed. Each
         gets its tries afresh; one handled (landed, cleared) never comes back."""
-        query = update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts >= give_up_at)
+        query = update(InboxRow).where(
+            InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0, InboxRow.attempts >= give_up_at
+        )
         if notebook_id is not None:
             query = query.where(InboxRow.notebook_id == notebook_id)
         async with self._db() as db:

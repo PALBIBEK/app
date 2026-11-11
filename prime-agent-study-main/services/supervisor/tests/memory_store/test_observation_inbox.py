@@ -1597,6 +1597,7 @@ async def test_handled_captures_are_pruned_in_batches(svc: MemoryServiceHandle, 
     from supervisor.memory_service.notebooks.store import now_ms
 
     monkeypatch.setattr(store_module, "PRUNE_BATCH", 2)
+    monkeypatch.setattr(store_module, "PRUNE_BATCHES_PER_PASS", 10)
     memory = svc.app.state.memory
     await hold(memory)
     client = svc.client()
@@ -1731,6 +1732,54 @@ async def test_a_passing_fault_met_for_a_day_is_no_longer_taken_as_passing(
     assert [f.text for f in await client.facts(nb.id)] == ["Behind it"]
     async with store._db() as db:
         assert (await db.scalar(select(InboxRow.attempts).where(InboxRow.id == stuck))) == 1
+
+
+async def test_a_batch_too_big_for_the_statement_timeout_lands_one_capture_at_a_time(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    class Timeout(Exception):
+        sqlstate = "57014"
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for text in ("One", "Two"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
+    batch = memory.notebooks._promote_batch
+
+    async def sized(notebook_id: str, size: int, *, only: int | None = None) -> tuple[int, int]:
+        if only is None:
+            raise DBAPIError("INSERT", {}, Timeout("canceling statement due to statement timeout"))
+        return await batch(notebook_id, size, only=only)
+
+    monkeypatch.setattr(memory.notebooks, "_promote_batch", sized)
+    assert await memory.notebooks.promote(nb.id) == (2, 2), "never retried at the size that fails"
+
+
+async def test_one_prune_makes_a_bounded_number_of_transactions(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import store as store_module
+    from supervisor.memory_service.notebooks.ops import KEEP_PROMOTED_MS
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    monkeypatch.setattr(store_module, "PRUNE_BATCH", 1)
+    monkeypatch.setattr(store_module, "PRUNE_BATCHES_PER_PASS", 2)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for i in range(5):
+        await client.observe(nb.id, [draft(f"Captured {i}")], context=OWN, idempotency_key=f"k{i}")
+    await memory.inbox.drain()
+
+    later = now_ms() + KEEP_PROMOTED_MS
+    prune = memory.notebooks.store.prune_inbox
+    assert await prune(before=later, set_aside_before=later, give_up_at=8) == 2, "the rest next time"
+    assert await prune(before=later, set_aside_before=later, give_up_at=8) == 2
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:
