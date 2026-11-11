@@ -65,7 +65,12 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _provenance(row: FactRow | FactRevisionRow) -> Provenance:
+def row_provenance(row: FactRow | FactRevisionRow | InboxRow) -> Provenance:
+    """The provenance a row's sensitivity, sources and source_unknown columns hold."""
+    return _provenance(row)
+
+
+def _provenance(row: FactRow | FactRevisionRow | InboxRow) -> Provenance:
     return Provenance(
         Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown)
     )
@@ -649,8 +654,7 @@ class NotebookStore:
                 o.get("statement")
                 for row in rows
                 # Only what will be indexed: a fact the bank may not hold is embedded by no one.
-                if bankable(notebook, Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()),
-                                                 bool(row.source_unknown)), row.expires_on)
+                if bankable(notebook, _provenance(row), row.expires_on)
                 for o in row.observations or ()
                 if isinstance(o, dict)
             ]
@@ -659,23 +663,31 @@ class NotebookStore:
             # On a thread: an embedder may be slow, and the loop serves every other request.
             await asyncio.to_thread(lambda: [self._embedder.embed(t) for t in texts])
 
-    async def count_failure(self, notebook_id: str, *, give_up_at: int) -> tuple[int, int | None]:
-        """Count a failure against the notebook's oldest queued capture, setting it aside
-        (marked promoted, so it is pruned in time) at ``give_up_at``: (its failures, its id)."""
+    async def queued_ids(self, notebook_id: str, *, limit: int) -> list[int]:
+        """The notebook's oldest queued captures' ids."""
         async with self._db() as db:
-            row = await db.scalar(
-                select(InboxRow)
-                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                .order_by(InboxRow.id)
-                .limit(1)
-            )
+            return [
+                int(i)
+                for i in await db.scalars(
+                    select(InboxRow.id)
+                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                    .order_by(InboxRow.id)
+                    .limit(limit)
+                )
+            ]
+
+    async def count_failure(self, row_id: int, *, give_up_at: int) -> int:
+        """Count a failure against one queued capture, setting it aside (marked promoted, so
+        it is pruned in time) at ``give_up_at``: its failures."""
+        async with self._db() as db:
+            row = await db.get(InboxRow, row_id)
             if row is None:
-                return 0, None
+                return 0
             row.attempts = int(row.attempts or 0) + 1
             if row.attempts >= give_up_at:
                 row.promoted_at = now_ms()
             await db.commit()
-            return int(row.attempts), int(row.id)
+            return int(row.attempts)
 
     async def queued_statements(self, notebook_id: str) -> list[str]:
         """Every statement the notebook's queued captures hold."""
@@ -738,6 +750,10 @@ class NotebookStore:
             )
             if not ids:
                 return 0
+            # Locked first, FOR UPDATE: a capture queued meanwhile (its foreign key takes a key
+            # share lock on the notebook) waits for this erasure, then finds no notebook,
+            # never committing a row between this delete of the queue and of the notebook.
+            await db.execute(select(NotebookRow.id).where(NotebookRow.id.in_(ids)).with_for_update())
             items = list(
                 await db.scalars(select(FactItemRow.item_id).where(FactItemRow.notebook_id.in_(ids)))
             )

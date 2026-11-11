@@ -377,14 +377,14 @@ async def test_a_batch_that_fails_to_write_is_landed_one_capture_at_a_time(
         return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
 
     monkeypatch.setattr(FactTx, "insert", picky)
-    for _ in range(PROMOTE_ATTEMPTS):
+    with pytest.raises(RuntimeError):
+        await memory.notebooks.promote(nb.id)
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Third"], "none held up behind it"
+
+    for _ in range(PROMOTE_ATTEMPTS - 1):
         with pytest.raises(RuntimeError):
             await memory.notebooks.promote(nb.id)
-
-    assert [f.text for f in await client.facts(nb.id)] == ["First"], "what came before it landed"
-    await memory.notebooks.promote(nb.id)
-    assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Third"], "set aside: the queue moves"
-    assert await memory.notebooks.store.pending() == 0
+    assert await memory.notebooks.store.pending() == 0, "set aside at its last try"
 
 
 async def test_a_replacement_lands_in_a_full_notebook_and_the_fact_it_replaces_goes(
@@ -692,3 +692,59 @@ async def test_a_retirement_finds_a_fact_that_shares_its_text_with_another(svc: 
     await memory.inbox.drain()
 
     assert sorted(f.id for f in await client.facts(nb.id) if f.id in (tabs.id, spaces.id)) == [tabs.id]
+
+
+def test_postgres_contention_reported_as_a_plain_dbapi_error_is_transient() -> None:
+    """asyncpg's deadlocks and timeouts reach SQLAlchemy as a plain DBAPIError: told by
+    their SQLSTATE, never counted against a capture."""
+    from sqlalchemy.exc import DataError, DBAPIError
+
+    from supervisor.memory_service.notebooks.ops import is_transient
+
+    class Orig(Exception):
+        def __init__(self, sqlstate: str) -> None:
+            super().__init__(sqlstate)
+            self.sqlstate = sqlstate
+
+    for state in ("40P01", "40001", "57014", "55P03", "08006"):
+        assert is_transient(DBAPIError("x", {}, Orig(state))), state
+    assert not is_transient(DBAPIError("x", {}, Orig("23505"))), "a unique violation is the capture's"
+    assert not is_transient(DataError("x", {}, Orig("22001")))
+    assert not is_transient(ValueError("bad"))
+
+
+async def test_keywords_sent_as_a_string_are_refused_not_split(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.wire import observation_out
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    body = observation_out(draft("Deploys on Fridays")) | {"keywords": "deploy"}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=svc.app), base_url="http://memory.test") as raw:
+        from supervisor.seams.services.memory_service_client import memory_service_credential
+
+        r = await raw.post(f"/v1/notebooks/{nb.id}/observations", json={"observations": [body]},
+                           headers={"Authorization": f"Bearer {memory_service_credential('t1')}"})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "InvalidObservation"
+
+
+async def test_the_limit_counts_facts_two_of_one_text_both(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+    from supervisor.memory_service.notebooks.store import FactTx
+    from supervisor.memory_service.notebooks.types import Edit, Provenance
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Uses tabs", "Uses spaces"], context=OWN)
+    spaces = next(f for f in await client.facts(nb.id) if f.text == "Uses spaces")
+    await client.edit(nb.id, [Edit(spaces.id, "uses tabs")], context=OWN)  # two live facts, one text
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 2)
+
+    async def run(tx: FactTx) -> tuple[int, bool]:
+        return await ops.land(tx, [("A third", None)], Provenance(Sensitivity.ORDINARY, (), False), None,
+                              over_limit="drop")
+
+    added, whole = await svc.app.state.memory.notebooks.store.transact(nb.id, run)
+    assert (added, whole) == (0, False), "full at two facts, though they share one text"

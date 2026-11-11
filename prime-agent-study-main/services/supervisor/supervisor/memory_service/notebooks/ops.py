@@ -17,7 +17,7 @@ from datetime import date
 from typing import Final, Literal
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from supervisor.memory_service.limits import (
@@ -41,7 +41,7 @@ from supervisor.memory_service.notebooks.render import (
     normalize,
     parse_fact_id,
 )
-from supervisor.memory_service.notebooks.store import FactTx, NotebookStore
+from supervisor.memory_service.notebooks.store import FactTx, NotebookStore, row_provenance
 from supervisor.memory_service.notebooks.types import (
     CaptureMetadata,
     Edit,
@@ -49,7 +49,6 @@ from supervisor.memory_service.notebooks.types import (
     Notebook,
     Provenance,
     Revision,
-    Sensitivity,
     Typed,
     capture_provenance,
     merge_provenance,
@@ -68,8 +67,22 @@ logger = logging.getLogger(__name__)
 PROMOTE_BATCH = 100
 """Queued captures one promotion lands, under one lock."""
 _TRANSIENT: Final = (OperationalError, InterfaceError, PoolTimeout, DisconnectionError, OSError, TimeoutError)
-"""Failures of the database's connection or the network, which pass: never a capture's own.
-A constraint or data error (``IntegrityError``, ``DataError``) is the capture's, and counted."""
+_TRANSIENT_STATES: Final = frozenset({"40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03"})
+"""Postgres SQLSTATEs that pass: a serialization failure, a deadlock, a lock not to be had,
+a statement timeout or cancel, the server shutting down (class 08, the connection, too)."""
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether a failure is the database's or the network's, which passes, never a
+    capture's own: the connection, the pool, contention. asyncpg's deadlocks and timeouts
+    arrive as a plain ``DBAPIError``, told by their SQLSTATE. A constraint or data error
+    (``IntegrityError``, ``DataError``) is the capture's, and counted."""
+    if isinstance(exc, _TRANSIENT):
+        return True
+    if isinstance(exc, DBAPIError):
+        state = str(getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None) or "")
+        return state in _TRANSIENT_STATES or state.startswith("08")
+    return False
 PROMOTE_ATTEMPTS = 5
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
@@ -237,42 +250,43 @@ class NotebookOps:
             dropped = await self.store.drop_inbox(notebook_id)
             logger.info("notebook %s was archived with %d captures queued: not kept", notebook_id, dropped)
             return dropped, 0
-        except _TRANSIENT:
-            raise  # the database's connection or the network, not the capture: nothing counted against it
-        except Exception:
-            if batch == 1:
-                await self._count_failure(notebook_id)
-                raise
+        except Exception as exc:
+            if is_transient(exc):
+                raise  # the database's contention or connection, not a capture: nothing counted
             logger.warning("notebook %s: a batch of queued captures failed: landing them one at a time",
                            notebook_id, exc_info=True)
+        # Each on its own, in its own transaction: the good ones land, one that fails is counted
+        # against itself alone, and none holds up the captures queued behind it.
         captures = added = 0
-        for _ in range(batch):
-            one, facts = await self.promote(notebook_id, batch=1)  # raises at the one that fails alone
-            if not one:
-                break
+        failure: BaseException | None = None
+        for row_id in await self.store.queued_ids(notebook_id, limit=batch):
+            try:
+                one, facts = await self._promote_batch(notebook_id, 1, only=row_id)
+            except Exception as exc:
+                if is_transient(exc):
+                    raise
+                attempts = await self.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+                logger.warning(
+                    "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
+                    notebook_id, row_id, attempts, PROMOTE_ATTEMPTS,
+                    ": set aside" if attempts >= PROMOTE_ATTEMPTS else "", exc_info=True,
+                )
+                failure = exc
+                continue
             captures, added = captures + one, added + facts
+        if failure is not None:
+            raise failure  # for the drainer to back off before the failed ones' next try
         return captures, added
 
-    async def _count_failure(self, notebook_id: str) -> None:
-        attempts, row_id = await self.store.count_failure(notebook_id, give_up_at=PROMOTE_ATTEMPTS)
-        if row_id is not None:
-            logger.warning(
-                "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
-                notebook_id, row_id, attempts, PROMOTE_ATTEMPTS, ": set aside" if attempts >= PROMOTE_ATTEMPTS else "",
-            )
-
-    async def _promote_batch(self, notebook_id: str, batch: int) -> tuple[int, int]:
-        """One transaction: up to ``batch`` of the queued captures, landed and marked."""
+    async def _promote_batch(self, notebook_id: str, batch: int, *, only: int | None = None) -> tuple[int, int]:
+        """One transaction: up to ``batch`` of the queued captures (or the one ``only``
+        names), landed and marked."""
 
         async def run(tx: FactTx) -> tuple[int, int]:
-            rows = list(
-                await tx.db.scalars(
-                    select(InboxRow)
-                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-                    .order_by(InboxRow.id)
-                    .limit(batch)
-                )
-            )
+            query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+            if only is not None:
+                query = query.where(InboxRow.id == only)
+            rows = list(await tx.db.scalars(query.order_by(InboxRow.id).limit(batch)))
             added = 0
             current = await tx.current() if rows else []
             existing = {normalize(f.text): f for f in current}  # once a batch, kept current
@@ -433,7 +447,11 @@ async def land(
     (``"drop"``), the rest logged. ``existing`` (normalized text to live fact) is read here
     when not given, and kept current: a batch reads the notebook once."""
     if existing is None:
-        existing = await live_facts(tx)
+        current = await tx.current()
+        existing = {normalize(f.text): f for f in current}
+        by_id = {f.id: f for f in current} if by_id is None else by_id
+    # The limit counts live facts, two of one text both (``existing`` holds one per text).
+    live = len(by_id) if by_id is not None else len(existing)
     added = 0
     for n, (text, typed) in enumerate(entries):
         key = normalize(text)
@@ -451,7 +469,7 @@ async def land(
             if by_id is not None:
                 by_id[duplicate.id] = duplicate
             continue
-        if len(existing) + 1 > MAX_FACTS_PER_NOTEBOOK + room:
+        if live + 1 > MAX_FACTS_PER_NOTEBOOK + room:
             if over_limit == "drop":
                 logger.warning(
                     "notebook %s is full (%d facts): %d queued facts not kept",
@@ -463,13 +481,9 @@ async def land(
         existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, tx.author, expires_on, typed)
         if by_id is not None:  # the caller's id index, kept current
             by_id[fact_id] = existing[key]
+        live += 1
         added += 1
     return added, True
-
-
-async def live_facts(tx: FactTx) -> dict[str, Fact]:
-    """The notebook's live facts by the key a repeat is found by."""
-    return {normalize(f.text): f for f in await tx.current()}
 
 
 def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
@@ -516,7 +530,7 @@ async def _promote_row(
     kept, only facts that still say what resolution judged, and never one the capture
     itself just restated); the facts added."""
     tx.author = row.author
-    provenance = Provenance(Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown))
+    provenance = row_provenance(row)
     entries = [(d.statement, typed_of(d)) for d in drafts]
     restated = {normalize(text) for text, _ in entries}
     gone = [

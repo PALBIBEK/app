@@ -509,8 +509,11 @@ def create_app(
         if existing is None:
             svc = MemoryService(database_url=database_url)
             await svc.startup()
+            if ":memory:" not in database_url:
+                # Whatever Tier 1 extraction's setting: without a drainer a capture lands only as
+                # it is queued, and one that fails then is never retried.
+                svc.start_inbox_drainer()
             if interval > 0:
-                svc.start_inbox_drainer()  # without it, an automatic capture lands as it is queued
                 svc.start_extraction_worker(interval_s=interval)
                 svc.start_buffer_sweeper()
                 svc.start_archiver()

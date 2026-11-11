@@ -125,3 +125,29 @@ async def test_a_capture_into_a_notebook_erased_under_it_is_not_found_not_a_dupl
             "t1~gone", [], Provenance(Sensitivity.ORDINARY, (), False), author=None, expires_on=None,
             idempotency_key="burst-1",
         )
+
+
+async def test_erasing_an_owner_while_their_captures_queue_never_fails_on_the_queue(replicas: Replicas) -> None:
+    """Erasure locks the owner's notebooks first: a capture racing it waits, then finds no
+    notebook, and never commits a queued row between the erasure's deletes (which made the
+    erasure fail on the inbox's foreign key and leave the owner's data in place)."""
+    from supervisor.memory_service.notebooks.errors import NotebookNotFound
+
+    started = await replicas.start(2)
+    for round_ in range(5):
+        nb = await started[0].client().ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name=f"r{round_}")
+        store = started[1].app.state.memory.notebooks.store
+
+        async def capture(i: int, notebook_id: str = nb.id) -> str:
+            try:
+                await started[i % 2].client().observe(notebook_id, [observation(f"Racing {i}")], context=OWN)
+            except NotebookNotFound:
+                return "gone"
+            return "queued"
+
+        erased, *captures = await asyncio.gather(
+            store.erase_owner(tenant_id="t1", owner="alice"), *(capture(i) for i in range(20))
+        )
+        assert erased >= 1, "the erasure went through"
+        assert set(captures) <= {"queued", "gone"}
+        assert await started[0].app.state.memory.notebooks.store.pending() == 0, "nothing of the owner left queued"

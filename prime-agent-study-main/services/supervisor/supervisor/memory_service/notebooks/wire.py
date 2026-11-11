@@ -144,8 +144,8 @@ def observation_in(d: dict[str, Any]) -> ObservationDraft:
             observation_type=ObservationType.parse(str(d["type"])),
             topic_hint=_optional_str(d.get("topic_hint")),
             statement=str(d["statement"]),
-            keywords=tuple(str(k) for k in d.get("keywords") or ()),
-            aliases=tuple(str(a) for a in d.get("aliases") or ()),
+            keywords=_terms(d.get("keywords")),
+            aliases=_terms(d.get("aliases")),
             extraction_model=str(d["extraction_model"]),
             prompt_version=str(d["prompt_version"]),
             created_at=int(d["created_at"]),
@@ -168,6 +168,16 @@ def typed_of(o: ObservationDraft) -> Typed:
         extraction_model=o.extraction_model,
         prompt_version=o.prompt_version,
     )
+
+
+def _terms(value: object) -> tuple[str, ...]:
+    """A list of strings, as sent; anything else (a string, which would be split into its
+    characters) is malformed."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ObservationInvalid(f"terms must be a list of strings, not {type(value).__name__}")
+    return tuple(value)
 
 
 def _optional_str(value: object) -> str | None:
