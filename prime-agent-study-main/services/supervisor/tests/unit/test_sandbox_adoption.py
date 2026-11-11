@@ -49,3 +49,22 @@ async def test_the_labels_are_outside_the_workspace(tmp_path: Path) -> None:
     sandbox = await LocalProcessProvider(base_dir=tmp_path).create(labels=SESSION)
     assert await sandbox.exists("/workspace/../.labels") is False
     assert list(Path(sandbox.info.labels["host_root"]).iterdir()) == []
+
+
+async def test_another_process_finds_the_sandbox_serving_a_session_and_leaves_it_to_its_worker(tmp_path: Path) -> None:
+    """The API shows a person the browser in the worker's sandbox: it finds the sandbox, acts in
+    it, and owns nothing, so closing the API leaves the worker's sandbox as it was."""
+    worker = LocalProcessProvider(base_dir=tmp_path)
+    sandbox = await worker.create(labels=SESSION)
+    await sandbox.write_file("/workspace/page.txt", b"the agent's page")
+
+    api = LocalProcessProvider(base_dir=tmp_path)
+    found = await api.serving("s1")
+    await api.close()
+
+    assert found is not None and found.info.id == sandbox.info.id
+    assert await found.read_file("/workspace/page.txt") == b"the agent's page"
+    assert await sandbox.read_file("/workspace/page.txt") == b"the agent's page", "closing the API destroyed it"
+    assert await api.serving("someone-else") is None
+    await sandbox.destroy()
+    assert await api.serving("s1") is None
