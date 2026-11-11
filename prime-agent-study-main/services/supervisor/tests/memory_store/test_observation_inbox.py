@@ -1396,6 +1396,22 @@ def test_the_drainer_takes_a_third_of_the_connection_pool_at_most() -> None:
     assert drainer_concurrency({"pool_size": 50, "max_overflow": 50}) == CONCURRENCY
 
 
+async def test_a_retried_burst_is_never_refused_for_its_own_queued_facts(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    assert await client.observe(nb.id, [draft("Queued once")], context=OWN, idempotency_key="k") == 1
+    await client.capture(nb.id, ["Since then the notebook filled"], context=OWN)
+
+    assert await client.observe(nb.id, [draft("Queued once")], context=OWN, idempotency_key="k") == 0
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 

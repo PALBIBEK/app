@@ -204,13 +204,13 @@ def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
     # Cleaned as the store cleans a captured fact (``render.clean_captured``: a bullet or a
     # leading date made prose, a "(said in X)" marked a claim), so the bounds checked here
     # are the ones the store will check, and an answer it would refuse is malformed now.
-    cleaned = clean_captured([scrub_control_characters(_string(observation, "statement", required=True) or "")])
+    raw = scrub_control_characters(_string(observation, "statement", required=True) or "")
+    cleaned = clean_captured([raw])
     statement = cleaned[0] if cleaned else ""
     if not statement:
         # The store would refuse it, and the whole capture with it: malformed, so the
         # extractor is asked again instead.
         raise MalformedOutcome("malformed extraction output: statement is empty")
-    raw = _string(observation, "statement", required=True) or ""
     if _bytes(raw) > MAX_STATEMENT_BYTES:  # Grok's rule: the model's own words over the bound
         raise MalformedOutcome("malformed extraction output: statement exceeds byte limit")
     statement = fit_cleaned_statement(raw, statement)  # lengthened by the cleaning only: cut, as the store cuts

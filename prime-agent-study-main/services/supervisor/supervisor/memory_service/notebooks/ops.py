@@ -221,6 +221,8 @@ class NotebookOps:
         # One read: the notebook's size, and each fact to retire with its text now (it is
         # retired when the capture lands only if it still says that: a fact edited meanwhile
         # is not the one resolution judged false).
+        if idempotency_key is not None and await self.store.has_key(notebook_id, idempotency_key):
+            return 0  # a retried burst, queued already: never refused for its own queued facts
         live, queued, texts = await self.store.capacity(notebook_id, retire_ids)
         # A fact a draft restates is never retired (``_promote_row``): it frees no room.
         restated = {normalize(d.statement) for d in drafts}
@@ -490,13 +492,13 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
     gone = {normalize(t) for t in before} - {normalize(t) for t in after}
     if not gone:
         return
-    rows = await tx.db.execute(
-        select(InboxRow.id, InboxRow.observations, InboxRow.retire, InboxRow.promoted_at).where(
-            InboxRow.notebook_id == tx.notebook.id,
-            InboxRow.promoted_at.is_(None) | (InboxRow.attempts >= PROMOTE_ATTEMPTS),  # queued, or set aside
-        )
+    columns = select(InboxRow.id, InboxRow.observations, InboxRow.retire, InboxRow.promoted_at)
+    # Two reads, each on its partial index: the queue, and the few set aside.
+    queued = await tx.db.execute(columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.promoted_at.is_(None)))
+    set_aside = await tx.db.execute(
+        columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts >= PROMOTE_ATTEMPTS)
     )
-    for row_id, observations, retire, promoted_at in rows.all():
+    for row_id, observations, retire, promoted_at in [*queued.all(), *set_aside.all()]:
         kept = [o for o in observations if not (isinstance(o, dict) and normalize(str(o.get("statement", ""))) in gone)]
         if len(kept) == len(observations):
             continue

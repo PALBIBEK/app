@@ -662,7 +662,9 @@ class NotebookStore:
     async def embed_queued(self, notebook_id: str, *, limit: int) -> None:
         """Embed the facts of the notebook's oldest queued captures now, outside its lock:
         the embedder keeps them (``cost.CachingEmbedder``), so landing them under the lock
-        embeds nothing."""
+        embeds nothing. An embedder that keeps nothing would embed each twice: none then."""
+        if not isinstance(self._embedder, CachingEmbedder):
+            return
         async with self._db() as db:
             notebook = await db.get(NotebookRow, notebook_id)
             if notebook is None:
@@ -685,6 +687,18 @@ class NotebookStore:
         if texts:
             # On a thread: an embedder may be slow, and the loop serves every other request.
             await asyncio.to_thread(lambda: [self._embedder.embed(t) for t in texts])
+
+    async def has_key(self, notebook_id: str, idempotency_key: str) -> bool:
+        """Whether a capture with ``idempotency_key`` is in the notebook's inbox (queued, or
+        handled within ``KEEP_PROMOTED_MS``)."""
+        async with self._db() as db:
+            return (
+                await db.scalar(
+                    select(InboxRow.id).where(
+                        InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key == idempotency_key
+                    )
+                )
+            ) is not None
 
     async def queued_ids(self, notebook_id: str, *, limit: int) -> list[int]:
         """The notebook's oldest queued captures' ids."""

@@ -67,6 +67,7 @@ from supervisor.memory_service.notebooks.errors import (
     MemoryFactsMissing,
     NotebookArchived,
 )
+from supervisor.memory_service.notebooks.render import parse_fact_id
 from supervisor.memory_service.notebooks.types import (
     UNTRACKED,
     Provenance,
@@ -444,7 +445,7 @@ class SessionMemory:
                 # Some already gone (a retried capture) or hidden from this audience: those are
                 # kept, every other one it makes false is still retired.
                 missing = set(exc.ids)
-                if rest := [i for i in ids if i.strip().removeprefix("#") not in missing]:
+                if rest := [i for i in ids if parse_fact_id(i) not in missing]:
                     await scope.view.delete(notebook, rest, author=scope.audience.actor)
                 logger.info("session %s: %d contradicted facts not retired: %s", session_id, len(ids) - len(rest), exc)
         except (MemoryFactsMissing, MemoryDisclosureDenied, NotebookArchived) as exc:
