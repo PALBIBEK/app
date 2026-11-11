@@ -45,10 +45,11 @@ from supervisor.memory_service.notebooks.render import (
     parse_fact_id,
 )
 from supervisor.memory_service.notebooks.store import (
-    HANDLED_PAYLOAD,
     FactTx,
     NotebookStore,
+    empty_set_aside,
     mark_handled,
+    now_ms,
     row_provenance,
 )
 from supervisor.memory_service.notebooks.types import (
@@ -95,6 +96,8 @@ def is_transient(exc: BaseException) -> bool:
     return False
 PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
+STUCK_AFTER_MS = 24 * 3600 * 1000
+"""A queued capture failing this long is counted against it even while nothing lands."""
 LANDING_EVIDENCE_S = 300.0
 """A lone queued capture failing is counted against it only when another landed on this
 replica this recently: the service lands captures, so the fault is that capture's own."""
@@ -277,6 +280,8 @@ class NotebookOps:
             await self.store.embed_queued(notebook_id, limit=batch)
         except Exception:  # an aid only: landing embeds again, where a capture's own failure is handled
             logger.warning("notebook %s: embedding queued facts ahead failed", notebook_id, exc_info=True)
+        if not await self.store.queued_ids(notebook_id, limit=1):
+            return 0, 0  # landed already (another replica's turn): never the notebook's lock for nothing
         try:
             return await self._promote_batch(notebook_id, batch)
         except (NotebookArchived, NotebookNotFound) as exc:
@@ -308,9 +313,16 @@ class NotebookOps:
         if len(failed) == len(queued) and not self._landing_lately():
             # Every one of them fails, each on its own, while nothing lands here: the fault is
             # not theirs (a bug, a bank or an embedder down for all). Nothing is counted, so
-            # none is lost to it. While captures land elsewhere, each failure is its own.
-            logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
-            raise failed[0][1]
+            # none is lost to it. While captures land elsewhere, each failure is its own; and
+            # one failing for a day (an outage that long is seen) is counted all the same,
+            # never retried for good: set aside, it is kept and can be queued again.
+            exc_of_all = failed[0][1]
+            stale = await self.store.received_before([r for r, _ in failed], before=now_ms() - STUCK_AFTER_MS)
+            failed = [(r, e) for r, e in failed if r in stale]
+            if not failed:
+                logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
+                raise exc_of_all
+
         for row_id, error in failed:
             attempts = await self.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
             logger.warning(
@@ -429,11 +441,7 @@ class NotebookOps:
             # nothing); pruned with the rest in time.
             await tx.db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=tx.at))
             # Set-aside ones too, emptied: none queued again later brings back what was cleared.
-            await tx.db.execute(
-                update(InboxRow)
-                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0)
-                .values(**HANDLED_PAYLOAD)
-            )
+            await tx.db.execute(empty_set_aside(InboxRow.notebook_id == notebook_id))
             return len(facts)
 
         return await self.store.transact(notebook_id, run, author=author)
@@ -512,7 +520,7 @@ async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]
         elif promoted_at is None:
             await tx.db.execute(mark_handled(InboxRow.id == row_id, at=tx.at))
         else:  # set aside, now with nothing to land: never queued again
-            await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(**HANDLED_PAYLOAD))
+            await tx.db.execute(empty_set_aside(InboxRow.id == row_id))
 
 
 def _within(what: str, limit: int, got: int) -> None:

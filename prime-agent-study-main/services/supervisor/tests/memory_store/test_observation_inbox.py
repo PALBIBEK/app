@@ -1437,6 +1437,53 @@ async def test_an_operator_queues_set_aside_captures_again(tmp_path: Path, monke
         assert [f.text for f in await client.facts(nb.id)] == ["Set aside by an outage"]
 
 
+async def test_a_capture_failing_for_a_day_is_counted_though_nothing_lands(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never retried for good: a day of failing on a quiet replica is counted all the same,
+    set aside in time, kept and able to be queued again."""
+    from sqlalchemy import select, update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import STUCK_AFTER_MS
+    from supervisor.memory_service.notebooks.store import FactTx, now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Stuck a day")], context=OWN)
+    async with store._db() as db:
+        await db.execute(update(InboxRow).values(received_at=now_ms() - STUCK_AFTER_MS - 1))
+        await db.commit()
+
+    async def poison(self: FactTx, *args: object, **kw: object) -> str:
+        raise ValueError("its own data")
+
+    monkeypatch.setattr(FactTx, "insert", poison)
+    with pytest.raises(ValueError):
+        await memory.notebooks.promote(nb.id)
+
+    async with store._db() as db:
+        (row,) = list(await db.scalars(select(InboxRow)))
+    assert row.attempts == 1, "counted, though nothing landed on this replica"
+
+
+async def test_promoting_a_notebook_with_nothing_queued_takes_no_lock(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = svc.app.state.memory
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+
+    async def locked(*args: object, **kw: object) -> object:
+        raise AssertionError("the notebook's lock taken for nothing")
+
+    monkeypatch.setattr(memory.notebooks.store, "transact", locked)
+    assert await memory.notebooks.promote(nb.id) == (0, 0)
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 

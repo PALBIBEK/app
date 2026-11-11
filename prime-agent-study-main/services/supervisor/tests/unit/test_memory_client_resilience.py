@@ -121,3 +121,19 @@ async def test_a_recall_reads_each_notebook_once_and_its_home_once_per_process(
     await recall_across(platform.view(Audience.private("alice")), [work.id, home.id], RecallContext())
     assert sorted(calls) == sorted(f"GET /v1/notebooks/{n}/facts" for n in (work.id, home.id))
     await client.aclose()
+
+
+async def test_a_session_s_tenant_keys_its_capture_lane_when_its_notebook_names_none(
+    supervisor_db: async_sessionmaker[AsyncSession],
+) -> None:
+    """A provider's own memory's notebook id may name no tenant: the session's tenant then
+    keys the capture's slots, so every user of one tenant shares its cap."""
+    from supervisor.db.models import SessionRow
+
+    async with supervisor_db() as db:
+        db.add(SessionRow(id="s-1", tenant_id="acme"))
+        await db.commit()
+    platform = MemoryPlatform(supervisor_db, notebooks=None, one_shot=None)  # type: ignore[arg-type]
+
+    assert await platform.session_tenant("s-1") == "acme"
+    assert await platform.session_tenant("s-unknown") is None

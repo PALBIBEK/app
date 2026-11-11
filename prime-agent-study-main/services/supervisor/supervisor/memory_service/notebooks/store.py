@@ -64,6 +64,14 @@ HANDLED_PAYLOAD: Final[dict[str, object]] = {
 never queued again)."""
 
 
+def empty_set_aside(*where: ColumnElement[bool]) -> Update:
+    """The update emptying set-aside rows of their captured words, as handled rows are
+    (``mark_handled``): never queued again, nothing of the capture kept."""
+    return update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0, *where).values(
+        **HANDLED_PAYLOAD
+    )
+
+
 def mark_handled(*where: ColumnElement[bool], at: int) -> Update:
     """The update marking queued rows handled (promoted, archived away or cleared): kept,
     for a retried burst to find its key, and emptied of the captured words."""
@@ -280,11 +288,10 @@ class FactTx:
     async def revive(self, fact_id: str, text: str, provenance: Provenance) -> None:
         """Bring a deleted fact back under its own id (restore keeps identity). Brought back
         with other words than it last had, it loses the type that described those."""
-        last = await self.db.scalar(select(FactRow.text).where(FactRow.id == int(fact_id)))
+        mine = (FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact_id))
+        last = await self.db.scalar(select(FactRow.text).where(*mine))
         if last is not None and last != text:
-            await self.db.execute(
-                update(FactRow).where(FactRow.id == int(fact_id)).values(**dict.fromkeys(_TYPED_COLUMNS))
-            )
+            await self.db.execute(update(FactRow).where(*mine).values(**dict.fromkeys(_TYPED_COLUMNS)))
         await self.db.execute(
             update(FactRow)
             .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact_id))
@@ -688,6 +695,14 @@ class NotebookStore:
         if texts:
             # On a thread: an embedder may be slow, and the loop serves every other request.
             await asyncio.to_thread(lambda: [self._embedder.embed(t) for t in texts])
+
+    async def received_before(self, row_ids: Sequence[int], *, before: int) -> set[int]:
+        """Those of ``row_ids`` queued before ``before`` (epoch ms)."""
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(InboxRow.id).where(InboxRow.id.in_(list(row_ids)), InboxRow.received_at < before)
+            )
+            return set(rows)
 
     async def has_key(self, notebook_id: str, idempotency_key: str) -> bool:
         """Whether a capture with ``idempotency_key`` is in the notebook's inbox (queued, or

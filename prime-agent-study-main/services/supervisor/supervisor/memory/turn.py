@@ -410,13 +410,10 @@ class SessionMemory:
             return 0
         # Each model call in one of its tenant's slots (supervisor.memory.fairness): one
         # tenant's burst of captures never holds up another tenant's. A notebook id names its
-        # tenant; a provider's own memory's may not: then the owner's lane, never one shared
-        # by every such tenant.
-        one_shot = GatedOneShot(
-            await self._one_shot_for(session_id),
-            tenant_of(binding.writable) or f"owner:{binding.owner}",
-            capture_gate(),
-        )
+        # tenant; a provider's own memory's may not: then the session's (its every user in
+        # one lane, as with the platform's notebooks), never one shared by every such tenant.
+        tenant = tenant_of(binding.writable) or await self._platform.session_tenant(session_id)
+        one_shot = GatedOneShot(await self._one_shot_for(session_id), tenant or f"owner:{binding.owner}", capture_gate())
         extracted = await _extract(one_shot, session_id, items)
         if not isinstance(extracted, Observations):
             return 0  # failed for good, or nothing worth retaining

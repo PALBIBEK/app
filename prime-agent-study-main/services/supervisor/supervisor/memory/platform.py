@@ -126,6 +126,11 @@ class MemoryPlatform:
     def private(self, principal_id: str, *, one_shot: OneShot | None = None) -> MemoryService:
         return self.view(Audience.private(principal_id), one_shot=one_shot)
 
+    async def session_tenant(self, session_id: str) -> str | None:
+        """The tenant a session belongs to; None for one not found."""
+        async with self._db() as db:
+            return await db.scalar(select(SessionRow.tenant_id).where(SessionRow.id == session_id))
+
     async def session_audience(self, session_id: str) -> tuple[Audience, MemoryBinding] | None:
         """The audience a session speaks to (its owner, or its scope's members)."""
         async with self._db() as db:
