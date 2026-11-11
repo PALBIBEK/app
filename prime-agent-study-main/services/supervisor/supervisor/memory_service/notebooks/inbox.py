@@ -55,15 +55,17 @@ class InboxDrainer:
         promotion keeps failing is tried again later, backing off, so it never holds up
         the others' (nor fills a pass with failures)."""
         landed = 0
+        passed: set[str] = set()  # this drain's notebooks that landed nothing (failed, or taken elsewhere)
         while True:
             await self._prune()  # here too: under steady load a drain may never end
-            notebooks = await self._ops.store.pending_notebooks(limit=NOTEBOOKS_PER_PASS, skip=self._backing_off())
+            skip = [*self._backing_off(), *passed]
+            notebooks = await self._ops.store.pending_notebooks(limit=NOTEBOOKS_PER_PASS, skip=skip)
             if not notebooks:
                 break
             done = await asyncio.gather(*(self._promote(n) for n in notebooks))
             landed += sum(c for c in done if c)
-            if not any(done):
-                break  # promoting elsewhere (another replica took its turn): the next pass sees
+            # Past those that landed nothing to the next ones: they never hold up the rest.
+            passed.update(n for n, c in zip(notebooks, done, strict=True) if not c)
         return landed
 
     def _backing_off(self) -> list[str]:

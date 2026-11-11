@@ -748,3 +748,89 @@ async def test_the_limit_counts_facts_two_of_one_text_both(
 
     added, whole = await svc.app.state.memory.notebooks.store.transact(nb.id, run)
     assert (added, whole) == (0, False), "full at two facts, though they share one text"
+
+
+async def test_a_fault_every_capture_meets_is_not_counted_against_them(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every capture failing on its own means the fault is not theirs (a bug, the bank down
+    for all): none is counted, so none is set aside and lost to it."""
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+    from supervisor.memory_service.notebooks.store import FactTx
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    for text in ("One", "Two"):
+        await client.observe(nb.id, [draft(text)], context=OWN)
+    insert, broken = FactTx.insert, [True]
+
+    async def bug(self: FactTx, *args: object, **kw: object) -> str:
+        if broken[0]:
+            raise ValueError("a bug in the bank's index")
+        return await insert(self, *args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FactTx, "insert", bug)
+    for _ in range(PROMOTE_ATTEMPTS + 1):
+        with pytest.raises(ValueError):
+            await memory.notebooks.promote(nb.id)
+    broken[0] = False
+
+    await memory.notebooks.promote(nb.id)
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["One", "Two"]
+
+
+async def test_a_failing_ahead_embedding_never_stops_the_landing(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Lands anyway")], context=OWN)
+
+    async def refused(*args: object, **kw: object) -> None:
+        raise RuntimeError("the embedder refuses the batch")
+
+    monkeypatch.setattr(memory.notebooks.store, "embed_queued", refused)
+    await memory.notebooks.promote(nb.id)
+
+    assert [f.text for f in await client.facts(nb.id)] == ["Lands anyway"]
+
+
+async def test_a_drain_goes_past_notebooks_that_land_nothing_to_the_next(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import inbox
+
+    monkeypatch.setattr(inbox, "NOTEBOOKS_PER_PASS", 1)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    first = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="first")
+    second = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="second")
+    await client.observe(first.id, [draft("Stuck")], context=OWN)
+    await client.observe(second.id, [draft("Next in line")], context=OWN)
+    promote = memory.notebooks.promote
+
+    async def first_taken_elsewhere(notebook_id: str, **kw: object) -> tuple[int, int]:
+        if notebook_id == first.id:
+            return 0, 0  # another replica took its turn
+        return await promote(notebook_id, **kw)
+
+    monkeypatch.setattr(memory.notebooks, "promote", first_taken_elsewhere)
+    assert await memory.inbox.drain() == 1
+    assert [f.text for f in await client.facts(second.id)] == ["Next in line"]
+
+
+def test_the_app_wrapper_copies_without_recursing() -> None:
+    import copy
+
+    from fastapi import FastAPI
+
+    from supervisor.main import WithRequestThreads
+
+    wrapped = WithRequestThreads(FastAPI())
+
+    assert copy.copy(wrapped).app is wrapped.app

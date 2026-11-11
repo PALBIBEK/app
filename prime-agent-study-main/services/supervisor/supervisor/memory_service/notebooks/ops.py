@@ -243,7 +243,10 @@ class NotebookOps:
         captures landed one at a time instead: the good ones land, and one that fails on its
         own again is counted against it and set aside at ``PROMOTE_ATTEMPTS`` (the drainer
         spaces the tries); the failure is raised, for the drainer to back off."""
-        await self.store.embed_queued(notebook_id, limit=batch)
+        try:
+            await self.store.embed_queued(notebook_id, limit=batch)
+        except Exception:  # an aid only: landing embeds again, where a capture's own failure is handled
+            logger.warning("notebook %s: embedding queued facts ahead failed", notebook_id, exc_info=True)
         try:
             return await self._promote_batch(notebook_id, batch)
         except NotebookArchived:
@@ -258,25 +261,32 @@ class NotebookOps:
         # Each on its own, in its own transaction: the good ones land, one that fails is counted
         # against itself alone, and none holds up the captures queued behind it.
         captures = added = 0
-        failure: BaseException | None = None
-        for row_id in await self.store.queued_ids(notebook_id, limit=batch):
+        failed: list[tuple[int, BaseException]] = []
+        queued = await self.store.queued_ids(notebook_id, limit=batch)
+        for row_id in queued:
             try:
                 one, facts = await self._promote_batch(notebook_id, 1, only=row_id)
             except Exception as exc:
                 if is_transient(exc):
                     raise
-                attempts = await self.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
-                logger.warning(
-                    "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
-                    notebook_id, row_id, attempts, PROMOTE_ATTEMPTS,
-                    ": set aside" if attempts >= PROMOTE_ATTEMPTS else "", exc_info=True,
-                )
-                failure = exc
+                failed.append((row_id, exc))
                 continue
             captures, added = captures + one, added + facts
-        if failure is not None:
-            raise failure  # for the drainer to back off before the failed ones' next try
-        return captures, added
+        if not failed:
+            return captures, added
+        if len(failed) == len(queued) > 1:
+            # Every one of them fails, each on its own: the fault is not theirs (a bug, a bank
+            # or an embedder down for all). Nothing is counted, so none is lost to it.
+            logger.warning("notebook %s: every queued capture failed to land: none counted", notebook_id)
+            raise failed[0][1]
+        for row_id, error in failed:
+            attempts = await self.store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+            logger.warning(
+                "notebook %s: queued capture %s failed to land on its own (%d of %d)%s",
+                notebook_id, row_id, attempts, PROMOTE_ATTEMPTS,
+                ": set aside" if attempts >= PROMOTE_ATTEMPTS else "", exc_info=error,
+            )
+        raise failed[0][1]  # for the drainer to back off before the failed ones' next try
 
     async def _promote_batch(self, notebook_id: str, batch: int, *, only: int | None = None) -> tuple[int, int]:
         """One transaction: up to ``batch`` of the queued captures (or the one ``only``
@@ -476,7 +486,7 @@ async def land(
                     tx.notebook.id, MAX_FACTS_PER_NOTEBOOK, len(entries) - n,
                 )
                 return added, False
-            _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, len(existing) + 1)
+            _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + 1)
         fact_id = await tx.insert(text, provenance, expires_on=expires_on, typed=typed)
         existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, tx.author, expires_on, typed)
         if by_id is not None:  # the caller's id index, kept current
@@ -542,7 +552,7 @@ async def _promote_row(
     # takes the replacement, then loses the fact it replaces. Only when all of it fits:
     # otherwise it lands what fits within the limit and retires nothing (never left over it).
     new = len({key for key in restated if key not in existing})
-    room = len(gone) if len(existing) + new <= MAX_FACTS_PER_NOTEBOOK + len(gone) else 0
+    room = len(gone) if len(by_id) + new <= MAX_FACTS_PER_NOTEBOOK + len(gone) else 0  # live facts, as land counts
     landed, whole = await land(
         tx, entries, provenance, row.expires_on, existing=existing, over_limit="drop", room=room, by_id=by_id
     )

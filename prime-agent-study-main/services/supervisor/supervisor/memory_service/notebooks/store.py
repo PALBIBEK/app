@@ -572,7 +572,9 @@ class NotebookStore:
                     )
                 ):
                     return False  # queued already: a retried burst
-                raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued
+                if await db.get(NotebookRow, notebook_id) is None:
+                    raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued
+                raise  # another constraint: a fault to say as it is, never a missing notebook
             return True
 
     async def pending_notebooks(self, *, limit: int, skip: Sequence[str] = ()) -> list[str]:
