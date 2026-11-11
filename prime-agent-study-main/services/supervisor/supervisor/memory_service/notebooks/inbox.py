@@ -20,7 +20,12 @@ import logging
 import time
 from typing import Final
 
-from supervisor.memory_service.notebooks.ops import KEEP_PROMOTED_MS, NotebookOps
+from supervisor.memory_service.notebooks.ops import (
+    KEEP_PROMOTED_MS,
+    KEEP_SET_ASIDE_MS,
+    PROMOTE_ATTEMPTS,
+    NotebookOps,
+)
 from supervisor.memory_service.notebooks.store import now_ms
 
 __all__ = ["InboxDrainer"]
@@ -35,6 +40,9 @@ BACKOFF_S: Final = 5.0
 MAX_BACKOFF_S: Final = 300.0
 """A notebook whose promotion failed is tried again after 5 s, doubling to 5 minutes."""
 PRUNE_EVERY_S: Final = 60.0
+PASSES_PER_DRAIN: Final = 16
+"""Passes one drain makes at most: under steady load the queue is never empty, and a
+notebook one drain passed over is tried again in the next, never left skipped."""
 
 
 class InboxDrainer:
@@ -56,7 +64,7 @@ class InboxDrainer:
         the others' (nor fills a pass with failures)."""
         landed = 0
         passed: set[str] = set()  # this drain's notebooks that landed nothing (failed, or taken elsewhere)
-        while True:
+        for _ in range(PASSES_PER_DRAIN):  # bounded: the next drain starts with nothing skipped
             await self._prune()  # here too: under steady load a drain may never end
             skip = [*self._backing_off(), *passed]
             notebooks = await self._ops.store.pending_notebooks(limit=NOTEBOOKS_PER_PASS, skip=skip)
@@ -100,7 +108,10 @@ class InboxDrainer:
             return
         self._pruned_at = time.monotonic()
         try:
-            await self._ops.store.prune_inbox(before=now_ms() - KEEP_PROMOTED_MS)
+            now = now_ms()
+            await self._ops.store.prune_inbox(
+                before=now - KEEP_PROMOTED_MS, set_aside_before=now - KEEP_SET_ASIDE_MS, give_up_at=PROMOTE_ATTEMPTS
+            )
         except Exception:
             logger.warning("pruning promoted captures failed", exc_info=True)
 

@@ -83,8 +83,10 @@ def is_transient(exc: BaseException) -> bool:
         state = str(getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None) or "")
         return state in _TRANSIENT_STATES or state.startswith("08")
     return False
-PROMOTE_ATTEMPTS = 5
+PROMOTE_ATTEMPTS = 8
 """Tries a queued capture that fails to land on its own gets before it is set aside."""
+KEEP_SET_ASIDE_MS = 7 * 24 * 3600 * 1000
+"""How long a set-aside capture is kept (to look into, and queue again) before it is pruned."""
 KEEP_PROMOTED_MS = 24 * 3600 * 1000
 """How long a promoted capture's row is kept, so a retried burst (its idempotency key)
 is still recognised: well past capture's own retries and Temporal's."""
@@ -198,6 +200,9 @@ class NotebookOps:
         # retired when the capture lands only if it still says that: a fact edited meanwhile
         # is not the one resolution judged false).
         live, queued, texts = await self.store.capacity(notebook_id, retire_ids)
+        # A fact a draft restates is never retired (``_promote_row``): it frees no room.
+        restated = {normalize(d.statement) for d in drafts}
+        texts = {i: t for i, t in texts.items() if normalize(t) not in restated}
         if live + queued + len(drafts) - len(texts) > MAX_FACTS_PER_NOTEBOOK:
             # Past the limit, counting what is queued (so concurrent captures cannot all pass on
             # one count) and the room its retirements free: refused now, as ``capture``
@@ -286,6 +291,8 @@ class NotebookOps:
                 notebook_id, row_id, attempts, PROMOTE_ATTEMPTS,
                 ": set aside" if attempts >= PROMOTE_ATTEMPTS else "", exc_info=error,
             )
+        if captures:
+            return captures, added  # others landed: the notebook is not backed off for the failed one
         raise failed[0][1]  # for the drainer to back off before the failed ones' next try
 
     async def _promote_batch(self, notebook_id: str, batch: int, *, only: int | None = None) -> tuple[int, int]:
@@ -462,8 +469,8 @@ async def land(
         by_id = {f.id: f for f in current} if by_id is None else by_id
     # The limit counts live facts, two of one text both (``existing`` holds one per text).
     live = len(by_id) if by_id is not None else len(existing)
-    added = 0
-    for n, (text, typed) in enumerate(entries):
+    added = dropped = 0
+    for text, typed in entries:
         key = normalize(text)
         if (duplicate := existing.get(key)) is not None:
             merged = merge_provenance([duplicate.provenance, provenance], duplicate.provenance.sensitivity)
@@ -481,11 +488,8 @@ async def land(
             continue
         if live + 1 > MAX_FACTS_PER_NOTEBOOK + room:
             if over_limit == "drop":
-                logger.warning(
-                    "notebook %s is full (%d facts): %d queued facts not kept",
-                    tx.notebook.id, MAX_FACTS_PER_NOTEBOOK, len(entries) - n,
-                )
-                return added, False
+                dropped += 1  # not kept; the entries after it are still read (a repeat merges)
+                continue
             _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + 1)
         fact_id = await tx.insert(text, provenance, expires_on=expires_on, typed=typed)
         existing[key] = Fact(fact_id, text, provenance, tx.at, tx.at, tx.author, expires_on, typed)
@@ -493,7 +497,11 @@ async def land(
             by_id[fact_id] = existing[key]
         live += 1
         added += 1
-    return added, True
+    if dropped:
+        logger.warning(
+            "notebook %s is full (%d facts): %d queued facts not kept", tx.notebook.id, MAX_FACTS_PER_NOTEBOOK, dropped
+        )
+    return added, not dropped
 
 
 def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
@@ -508,10 +516,10 @@ def _cleaned(draft: ObservationDraft) -> ObservationDraft | None:
     if utf8_bytes(draft.statement) <= MAX_STATEMENT_BYTES < utf8_bytes(statement):  # lengthened by the cleaning only
         # Cut the words, never the "[claimed source: ...]" label the cleaning added.
         head, marker, claim = statement.rpartition(" [claimed source: ")
-        if marker:
-            tail = marker + claim
-            statement = truncate_utf8(head, MAX_STATEMENT_BYTES - utf8_bytes(tail)).rstrip() + tail
-        else:
+        room = MAX_STATEMENT_BYTES - utf8_bytes(marker + claim)
+        if marker and room > 0:
+            statement = truncate_utf8(head, room).rstrip() + marker + claim
+        else:  # no label, or one longer than the bound itself: cut plainly
             statement = truncate_utf8(statement, MAX_STATEMENT_BYTES).rstrip()
     return replace(draft, statement=statement)
 

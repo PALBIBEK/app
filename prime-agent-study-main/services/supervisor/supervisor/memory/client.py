@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from supervisor.http_cookies import no_cookies
+from supervisor.http_cookies import SHARED_LIMITS, no_cookies
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
@@ -158,6 +158,7 @@ class NotebookClient:
             transport=transport,
             timeout=httpx.Timeout(timeout_s, connect=min(_CONNECT_TIMEOUT_S, timeout_s)),
             cookies=no_cookies(),  # one client for every session and tenant (supervisor.http_cookies)
+            limits=SHARED_LIMITS,
         )
         self._credential = credential
         self._breaker = breaker or _Breaker()

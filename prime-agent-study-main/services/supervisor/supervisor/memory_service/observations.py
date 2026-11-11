@@ -216,7 +216,7 @@ def _draft(raw: Any, model: str, created_at: int) -> ObservationDraft:
     body = _string(observation, "body")
     return ObservationDraft(
         observation_type=kind,
-        topic_hint=_normalize_term(topic, MAX_TOPIC_BYTES) if topic is not None else None,
+        topic_hint=normalize_term(topic, MAX_TOPIC_BYTES) if topic is not None else None,
         statement=statement,
         keywords=_normalize_terms(_strings(observation, "keywords"), MAX_KEYWORDS),
         aliases=_normalize_terms(_strings(observation, "aliases"), MAX_ALIASES),
@@ -251,11 +251,13 @@ def _strings(observation: dict[str, Any], name: str) -> list[str]:
 
 
 def _normalize_terms(terms: list[str], max_terms: int) -> tuple[str, ...]:
-    kept = (t for t in (_normalize_term(term, MAX_TERM_BYTES) for term in terms) if t is not None)
+    kept = (t for t in (normalize_term(term, MAX_TERM_BYTES) for term in terms) if t is not None)
     return tuple(t for _, t in zip(range(max_terms), kept, strict=False))
 
 
-def _normalize_term(term: str, max_bytes: int) -> str | None:
+def normalize_term(term: str, max_bytes: int) -> str | None:
+    """``term`` as the store bounds a term: no control character, at most ``max_bytes`` of
+    UTF-8 cut on a character, trimmed; None when nothing is left."""
     cut = truncate_utf8(scrub_control_characters(term), max_bytes).rstrip()
     return cut or None
 

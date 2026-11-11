@@ -290,7 +290,8 @@ async def test_promoted_captures_are_pruned_in_every_notebook(svc: MemoryService
     await client.observe(nb.id, [draft("Captured once")], context=OWN, idempotency_key="k")
     await memory.inbox.drain()
 
-    assert await memory.notebooks.store.prune_inbox(before=now_ms() + KEEP_PROMOTED_MS) == 1
+    later = now_ms() + KEEP_PROMOTED_MS
+    assert await memory.notebooks.store.prune_inbox(before=later, set_aside_before=later, give_up_at=8) == 1
 
 
 async def test_a_fact_edited_after_its_retirement_was_queued_is_kept(svc: MemoryServiceHandle) -> None:
@@ -377,8 +378,7 @@ async def test_a_batch_that_fails_to_write_is_landed_one_capture_at_a_time(
         return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
 
     monkeypatch.setattr(FactTx, "insert", picky)
-    with pytest.raises(RuntimeError):
-        await memory.notebooks.promote(nb.id)
+    assert await memory.notebooks.promote(nb.id) == (2, 2), "the others landed: no failure for the notebook"
     assert sorted(f.text for f in await client.facts(nb.id)) == ["First", "Third"], "none held up behind it"
 
     for _ in range(PROMOTE_ATTEMPTS - 1):
@@ -630,7 +630,8 @@ async def test_a_constraint_error_landing_a_capture_is_its_own_and_sets_it_aside
         return await insert(self, text, *args, **kw)  # type: ignore[arg-type]
 
     monkeypatch.setattr(FactTx, "insert", strict)
-    for _ in range(PROMOTE_ATTEMPTS):
+    await memory.notebooks.promote(nb.id)  # the one behind it lands; the failing one is counted
+    for _ in range(PROMOTE_ATTEMPTS - 1):
         with pytest.raises(IntegrityError):
             await memory.notebooks.promote(nb.id)
     await memory.notebooks.promote(nb.id)
@@ -822,6 +823,129 @@ async def test_a_drain_goes_past_notebooks_that_land_nothing_to_the_next(
     monkeypatch.setattr(memory.notebooks, "promote", first_taken_elsewhere)
     assert await memory.inbox.drain() == 1
     assert [f.text for f in await client.facts(second.id)] == ["Next in line"]
+
+
+async def test_a_drain_under_steady_load_ends_and_the_next_tries_what_it_passed(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Captures keep queueing while a drain runs, so the queue is never empty: the drain
+    still ends, and a notebook it passed over is tried again by the next."""
+    from supervisor.memory_service.notebooks import inbox
+
+    monkeypatch.setattr(inbox, "NOTEBOOKS_PER_PASS", 1)
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    skipped = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="skipped")
+    busy = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="busy")
+    await client.observe(skipped.id, [draft("Waits a drain")], context=OWN)
+    await client.observe(busy.id, [draft("Busy 0")], context=OWN)
+    promote, taken, n = memory.notebooks.promote, [True], [0]
+
+    async def steady(notebook_id: str, **kw: object) -> tuple[int, int]:
+        if notebook_id == skipped.id and taken[0]:
+            return 0, 0  # another replica had it this time
+        landed = await promote(notebook_id, **kw)
+        if notebook_id == busy.id:
+            n[0] += 1
+            await client.observe(busy.id, [draft(f"Busy {n[0]}")], context=OWN)  # more keep coming
+        return landed
+
+    monkeypatch.setattr(memory.notebooks, "promote", steady)
+    await asyncio.wait_for(memory.inbox.drain(), 10)
+    taken[0] = False
+    await asyncio.wait_for(memory.inbox.drain(), 10)
+
+    assert [f.text for f in await client.facts(skipped.id)] == ["Waits a drain"]
+
+
+async def test_a_set_aside_capture_is_kept_past_the_day_promoted_ones_are(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.notebooks.ops import (
+        KEEP_PROMOTED_MS,
+        KEEP_SET_ASIDE_MS,
+        PROMOTE_ATTEMPTS,
+    )
+    from supervisor.memory_service.notebooks.store import now_ms
+
+    memory = svc.app.state.memory
+    await hold(memory)
+    store = memory.notebooks.store
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.observe(nb.id, [draft("Never lands")], context=OWN)
+    (row_id,) = await store.queued_ids(nb.id, limit=10)
+    for _ in range(PROMOTE_ATTEMPTS):
+        await store.count_failure(row_id, give_up_at=PROMOTE_ATTEMPTS)
+    assert await store.pending() == 0 and (await memory.metrics_snapshot())["inbox_set_aside"] == 1
+
+    day = now_ms() + KEEP_PROMOTED_MS
+    assert await store.prune_inbox(before=day, set_aside_before=day - KEEP_SET_ASIDE_MS, give_up_at=PROMOTE_ATTEMPTS) == 0
+    week = now_ms() + KEEP_SET_ASIDE_MS
+    assert await store.prune_inbox(before=week, set_aside_before=week, give_up_at=PROMOTE_ATTEMPTS) == 1
+
+
+async def test_a_claim_label_longer_than_the_bound_is_cut_with_the_rest(svc: MemoryServiceHandle) -> None:
+    from supervisor.memory_service.observations import MAX_STATEMENT_BYTES
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    raw = "ab (said in " + "s" * (MAX_STATEMENT_BYTES - 13) + ")"
+    assert len(raw.encode()) <= MAX_STATEMENT_BYTES
+
+    assert await client.observe(nb.id, [draft(raw, ObservationType.USER)], context=OWN) == 1
+    (fact,) = await landed(client, nb.id, 1)
+    assert len(fact.text.encode()) <= MAX_STATEMENT_BYTES
+
+
+async def test_a_retirement_of_a_fact_it_restates_frees_no_room(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The restated fact is kept when it lands, so counting it as room would accept a
+    capture landing cuts."""
+    from supervisor.memory_service.notebooks import ops
+    from supervisor.memory_service.notebooks.errors import MemoryLimitExceeded
+
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["User prefers tabs"], context=OWN)
+    (old,) = await client.facts(nb.id)
+
+    with pytest.raises(MemoryLimitExceeded):
+        await client.observe(nb.id, [draft("user prefers tabs"), draft("Uses vim")], context=OWN, retire=[old.id])
+
+
+async def test_a_full_notebook_still_merges_a_repeat_after_one_that_does_not_fit(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from supervisor.memory_service.notebooks import ops
+    from supervisor.memory_service.notebooks.store import FactTx
+    from supervisor.memory_service.notebooks.types import Provenance
+
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys use flag A"], context=OWN)
+    monkeypatch.setattr(ops, "MAX_FACTS_PER_NOTEBOOK", 1)
+
+    async def run(tx: FactTx) -> tuple[int, bool]:
+        entries = [("Something new", None), ("deploys use flag a", None)]
+        return await ops.land(tx, entries, Provenance(Sensitivity.SENSITIVE, (), False), None, over_limit="drop")
+
+    assert await svc.app.state.memory.notebooks.store.transact(nb.id, run) == (0, False)
+    (fact,) = await client.facts(nb.id)
+    assert fact.provenance.sensitivity == Sensitivity.SENSITIVE, "the repeat behind it still tightened it"
+
+
+async def test_the_notebook_client_shares_the_unbounded_connection_pool() -> None:
+    """Not httpx's 100 connections: a burst of sessions never waits in the client's pool."""
+    import sys
+
+    from supervisor.http_cookies import SHARED_LIMITS
+
+    client = NotebookClient("http://memory.test")
+    pool = client._http._transport._pool  # type: ignore[attr-defined]
+    assert SHARED_LIMITS.max_connections is None and pool._max_connections == sys.maxsize
+    assert pool._max_keepalive_connections == SHARED_LIMITS.max_keepalive_connections
 
 
 def test_the_app_wrapper_copies_without_recursing() -> None:

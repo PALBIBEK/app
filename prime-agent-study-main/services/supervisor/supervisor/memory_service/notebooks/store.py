@@ -66,11 +66,6 @@ def now_ms() -> int:
 
 
 def row_provenance(row: FactRow | FactRevisionRow | InboxRow) -> Provenance:
-    """The provenance a row's sensitivity, sources and source_unknown columns hold."""
-    return _provenance(row)
-
-
-def _provenance(row: FactRow | FactRevisionRow | InboxRow) -> Provenance:
     return Provenance(
         Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown)
     )
@@ -80,7 +75,7 @@ def _fact(row: FactRow) -> Fact:
     return Fact(
         id=str(row.id),
         text=row.text,
-        provenance=_provenance(row),
+        provenance=row_provenance(row),
         created_at=int(row.created_at),
         updated_at=int(row.updated_at),
         author=row.author,
@@ -125,7 +120,7 @@ def _revision(row: FactRevisionRow) -> Revision:
         fact_id=str(row.fact_id),
         op=row.op,
         text=row.text,
-        provenance=_provenance(row),
+        provenance=row_provenance(row),
         at=int(row.at),
         author=row.author,
     )
@@ -592,6 +587,12 @@ class NotebookStore:
             )
             return [str(r[0]) for r in rows]
 
+    async def set_aside(self, *, give_up_at: int) -> int:
+        """Captures set aside after failing to land on their own, and kept."""
+        async with self._db() as db:
+            query = select(func.count()).select_from(InboxRow).where(InboxRow.attempts >= give_up_at)
+            return int(await db.scalar(query) or 0)
+
     async def pending(self) -> int:
         """Captures queued, in every notebook."""
         async with self._db() as db:
@@ -599,11 +600,18 @@ class NotebookStore:
                 await db.scalar(select(func.count()).select_from(InboxRow).where(InboxRow.promoted_at.is_(None))) or 0
             )
 
-    async def prune_inbox(self, *, before: int) -> int:
+    async def prune_inbox(self, *, before: int, set_aside_before: int, give_up_at: int) -> int:
         """Delete promoted rows promoted before ``before`` (epoch ms), in every notebook: past
         the window a retried burst could come in, nothing of a capture is kept there."""
         async with self._db() as db:
-            pruned = await db.execute(delete(InboxRow).where(InboxRow.promoted_at < before))
+            # One set aside (``give_up_at`` failures) is kept until ``set_aside_before``, to be
+            # looked into and queued again (``inbox_set_aside`` counts them).
+            pruned = await db.execute(
+                delete(InboxRow).where(
+                    InboxRow.promoted_at < before,
+                    (InboxRow.attempts < give_up_at) | (InboxRow.promoted_at < set_aside_before),
+                )
+            )
             await db.commit()
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
 
@@ -656,7 +664,7 @@ class NotebookStore:
                 o.get("statement")
                 for row in rows
                 # Only what will be indexed: a fact the bank may not hold is embedded by no one.
-                if bankable(notebook, _provenance(row), row.expires_on)
+                if bankable(notebook, row_provenance(row), row.expires_on)
                 for o in row.observations or ()
                 if isinstance(o, dict)
             ]

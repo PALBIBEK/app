@@ -18,8 +18,7 @@ from supervisor.memory_service.extraction_prompt import SENSITIVITY_PROMPT
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
 from supervisor.memory_service.observations import (
     MAX_MODEL_BYTES,
-    scrub_control_characters,
-    truncate_utf8,
+    normalize_term,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,10 +37,8 @@ def one_shot_model(one_shot: OneShot) -> str:
     model = getattr(one_shot, "model", None)
     if not model:
         return DEFAULT_MODEL
-    # As the store bounds it (``observations``): no control character, at most
-    # MAX_MODEL_BYTES, cut on a character.
-    name = truncate_utf8(scrub_control_characters(str(model)), MAX_MODEL_BYTES).rstrip()
-    return name or DEFAULT_MODEL
+    # As the store bounds it (``observations``).
+    return normalize_term(str(model), MAX_MODEL_BYTES) or DEFAULT_MODEL
 
 
 

@@ -22,7 +22,7 @@ from supervisor.memory_service.leases import LeaseManager
 from supervisor.memory_service.limits import BUFFER_IDLE_MS
 from supervisor.memory_service.metrics import METRICS
 from supervisor.memory_service.notebooks.inbox import InboxDrainer
-from supervisor.memory_service.notebooks.ops import NotebookOps
+from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps
 from supervisor.memory_service.notebooks.store import NotebookStore
 from supervisor.memory_service.outbox import Outbox
 from supervisor.memory_service.recall import HybridRecall
@@ -467,6 +467,8 @@ class MemoryService:
             # Automatic captures queued, not yet facts (G2): a backlog that grows means the
             # drainers fall behind.
             "inbox_backlog": await self.notebooks.store.pending(),
+            # Set aside after failing to land on their own: kept a week, to look into.
+            "inbox_set_aside": await self.notebooks.store.set_aside(give_up_at=PROMOTE_ATTEMPTS),
         }
 
     async def report_recall_used(self, n: int = 1) -> None:
