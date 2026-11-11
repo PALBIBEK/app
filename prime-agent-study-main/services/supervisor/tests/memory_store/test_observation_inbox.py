@@ -1679,6 +1679,23 @@ async def test_a_prune_keeps_a_capture_queued_again_meanwhile(
     assert await store.pending() == 1, "queued again: never deleted"
 
 
+async def test_a_capture_that_only_retires_lands_in_its_place_and_strips_no_one_else_s(svc: MemoryServiceHandle) -> None:
+    """Every statement a repeat, one fact made false: queued too, retired when it lands,
+    never a delete taking another session's queued capture apart."""
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Uses python 3.10", "Uses tabs"], context=OWN)
+    facts = {f.text: f for f in await client.facts(nb.id)}
+    await client.observe(nb.id, [draft("Uses spaces")], context=OWN, retire=[facts["Uses tabs"].id])  # another session's
+    await client.observe(nb.id, [], context=OWN, retire=[facts["Uses python 3.10"].id])  # only retires
+
+    await memory.inbox.drain()
+
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["Uses spaces"], "both retirements made"
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 

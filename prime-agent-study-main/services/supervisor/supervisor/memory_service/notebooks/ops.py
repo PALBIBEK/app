@@ -208,13 +208,16 @@ class NotebookOps:
         every bound is checked here, so a capture is refused whole, never half kept. The
         number queued: 0 for a capture already queued under ``idempotency_key`` (a retried
         burst). ``notebook``: the notebook as the caller read it already (one read fewer)."""
-        if not drafts:
+        if not drafts and not retire:
             return 0
+        # One that only retires (every statement a repeat, some fact made false) is queued
+        # too: it lands in its place in the queue, as every capture's retirements do.
+        given = bool(drafts)
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(drafts))
         _within("facts retired in one capture", MAX_FACTS_PER_CAPTURE, len(retire))
         retire_ids = [_fact_id(i) for i in retire]
         drafts = [c for c in (_cleaned(d) for d in drafts) if c is not None]
-        if not drafts:
+        if given and not drafts:
             raise InvalidObservation("every statement is empty")  # said, not a capture that quietly did nothing
         for draft in drafts:
             try:

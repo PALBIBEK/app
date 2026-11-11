@@ -144,7 +144,7 @@ class NotebookMemory:
         idempotency_key: str | None = None,
     ) -> int | None:
         """Queue typed observations (G2), or None from a service that takes only plain captures."""
-        if not drafts:
+        if not drafts and not retire:
             return 0
         return await self._store.observe(
             notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key

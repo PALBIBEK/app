@@ -74,7 +74,6 @@ from supervisor.memory_service.notebooks.types import (
     RecallContext,
     Sensitivity,
     personal_source,
-    tenant_of,
 )
 from supervisor.memory_service.observations import ObservationDraft
 
@@ -412,7 +411,8 @@ class SessionMemory:
         # tenant's burst of captures never holds up another tenant's. A notebook id names its
         # tenant; a provider's own memory's may not: then the session's (its every user in
         # one lane, as with the platform's notebooks), never one shared by every such tenant.
-        tenant = tenant_of(binding.writable) or await self._platform.session_tenant(session_id)
+        # The session's own tenant: a provider's notebook ids may hold a "~" of their own.
+        tenant = await self._platform.session_tenant(session_id)
         one_shot = GatedOneShot(await self._one_shot_for(session_id), tenant or f"owner:{binding.owner}", capture_gate())
         extracted = await _extract(one_shot, session_id, items)
         if not isinstance(extracted, Observations):
@@ -423,9 +423,10 @@ class SessionMemory:
         resolution = await resolve(one_shot, statements, await scope.view.facts(binding.writable))
         drafts = [extracted.drafts[i] for i in resolution.add]
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
-        if not drafts:
-            await self._retire(scope, binding.writable, session_id, resolution.retire)
+        if not drafts and not resolution.retire:
             return 0
+        # Only retirements (every statement a repeat) go through the inbox too: in their
+        # place in the queue, never a delete that would strip other sessions' queued captures.
         return await self._capture_observations(
             scope, binding.writable, session_id, drafts, resolution.retire, extracted.sensitivity, runs, exchanges, key
         )
@@ -473,8 +474,10 @@ class SessionMemory:
         )
         if queued is not None:
             return queued
-        added = await scope.view.capture(
-            notebook, [d.statement for d in drafts], author=scope.audience.actor, context=context
+        added = (
+            await scope.view.capture(notebook, [d.statement for d in drafts], author=scope.audience.actor, context=context)
+            if drafts
+            else 0
         )
         await self._retire(scope, notebook, session_id, retire)
         return added
