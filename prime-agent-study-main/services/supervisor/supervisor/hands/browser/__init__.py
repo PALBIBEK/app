@@ -89,11 +89,12 @@ files and the agent's own helpers survive a lost sandbox (the open tabs do not).
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
 RUNTIME_FILES: Final = (
-    "runner.py", "daemon.py", "snapshot.py", "vault_forms.py",
+    "runner.py", "daemon.py", "snapshot.py", "vault_forms.py", "shots.py",
     "cdp_supervisor.py", "cdp_dialogs.py", "cdp_frames.py", "cdp_socket.py",
 )
 """What the sandbox runs: the call's runner, the daemon it starts, its snapshots, the vault's
-form finder, and the daemon's CDP supervisor (its dialog and frame halves, and its WebSocket)."""
+form finder, its screenshots, and the daemon's CDP supervisor (its dialog and frame halves,
+and its WebSocket)."""
 
 
 @functools.cache
