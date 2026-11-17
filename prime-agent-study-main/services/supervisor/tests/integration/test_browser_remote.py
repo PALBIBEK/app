@@ -6,6 +6,7 @@ the hosted one."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -19,7 +20,7 @@ import pytest
 from supervisor.tools import default_registry
 from supervisor.tools.context import ToolContext
 from supervisor.tools.workspace import HostWorkspace
-from tests.support.browser import BROWSERS_ENV, needs_browser, stop_browsers
+from tests.support.browser import BROWSERS_ENV, Site, needs_browser, stop_browsers
 
 pytestmark = [pytest.mark.asyncio, needs_browser]
 
@@ -92,3 +93,62 @@ async def test_a_provider_that_could_not_serve_the_call_is_reported(tmp_path: Pa
     assert refused["exit_code"] == 2
     assert "did not open a browser: 402" in refused["error"]
     assert "hint" not in refused, "a provider's refusal is not a missing runtime"
+
+
+# Hermes's URL policy, hybrid routing, fallback and inactivity -------------------------------
+
+
+def _remote_urls(ws_url: str) -> list[str]:
+    """What the stand-in remote browser's tabs show."""
+    port = ws_url.split(":", 2)[2].split("/", 1)[0]
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as reply:
+        return [t["url"] for t in json.loads(reply.read())]
+
+
+async def test_on_a_hosted_browser_a_private_address_is_opened_by_the_sandboxs_own(tmp_path: Path, remotes: list[str], site: Site) -> None:
+    """Hermes's hybrid routing: a provider cannot reach this network, and is not pointed into it."""
+    site.pages["/dash"] = ("<title>dashboard</title>", 0.0)
+    try:
+        local = await _call(tmp_path, f"page.goto({site.url('/dash')!r})\nprint(page.title())", GITHI_BROWSER_CDP=remotes[0])
+    finally:
+        stop_browsers(tmp_path / "home")
+
+    assert local["output"] == "dashboard" and "default-local" in local["local_browser"], local
+    assert not any("/dash" in url for url in _remote_urls(remotes[0])), "the hosted browser was pointed at a private address"
+
+
+async def test_cloud_metadata_is_refused_before_anything_runs(tmp_path: Path) -> None:
+    refused = await _call(tmp_path, "page.goto('http://169.254.169.254/latest/meta-data/')")
+
+    assert refused["blocked_by_policy"] is True and "cloud metadata" in refused["error"]
+    assert not (tmp_path / "home").exists(), "a browser was started for a refused call"
+
+
+async def test_when_the_hosted_browser_fails_the_sandboxs_own_serves_and_the_result_says_why(tmp_path: Path) -> None:
+    try:
+        served = await _call(tmp_path, "page.set_content('<title>here</title>')\nprint(page.title())", GITHI_BROWSER_FALLBACK="browserbase: did not open a browser: 401")
+    finally:
+        stop_browsers(tmp_path / "home")
+
+    assert served["output"] == "here" and served["fallback_from_cloud"] == "browserbase: did not open a browser: 401"
+
+
+async def test_a_hosted_browser_is_let_go_after_its_idle_time(tmp_path: Path, remotes: list[str]) -> None:
+    """A provider bills by the minute: with no call for GITHI_BROWSER_IDLE_S, the daemon goes."""
+    try:
+        await _call(tmp_path, "print(1)", GITHI_BROWSER_CDP=remotes[0], GITHI_BROWSER_IDLE_S="1")
+        pid = int((tmp_path / "home" / "default" / "daemon.pid").read_text())
+        deadline = time.monotonic() + 40
+        while Path(f"/proc/{pid}").exists() and time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+        gone = not Path(f"/proc/{pid}").exists() or "zombie" in Path(f"/proc/{pid}/status").read_text().lower()
+    finally:
+        stop_browsers(tmp_path / "home")
+
+    assert gone, "the daemon kept the hosted browser past its idle time"
+
+
+async def test_lightpanda_without_its_binary_says_how_to_get_it(tmp_path: Path) -> None:
+    missing = await _call(tmp_path, "print(1)", GITHI_BROWSER_ENGINE="lightpanda", LIGHTPANDA_PATH="")
+
+    assert missing["exit_code"] == 2 and "Lightpanda" in missing["error"], missing

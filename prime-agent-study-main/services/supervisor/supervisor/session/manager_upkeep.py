@@ -38,6 +38,14 @@ class UpkeepOps(ChildOps):
 
     # --- sandbox lifecycle (supervisor.hands.lifecycle) ---------------------------------
 
+    async def release_browsers(self, session_id: str) -> None:
+        """Release what hosted browsers the session opened (a provider bills by the minute)."""
+        for provider in self._browsers.values():
+            try:
+                await provider.release(session_id)
+            except Exception:
+                logger.warning("releasing the %s browser failed session=%s", provider.name, session_id, exc_info=True)
+
     def prewarm(self, session_id: str) -> None:
         """A run is beginning: start building the session's sandbox (each hand set to start
         ``with_run``) so the build overlaps the first model call. Never waits, never raises."""
@@ -86,6 +94,7 @@ class UpkeepOps(ChildOps):
             except Exception:
                 logger.warning("destroying an idle sandbox failed hand=%s", key, exc_info=True)
             session_id, hand = split_key(key)
+            await self.release_browsers(session_id)  # its daemon held them
             await self._record(
                 session_id,
                 HandStopped(
@@ -320,6 +329,7 @@ class UpkeepOps(ChildOps):
                 await self._session_keys.forget(session_id)
             except Exception:
                 logger.exception("vault cleanup failed session=%s", session_id)
+        await self.release_browsers(session_id)
         runtime = self._registry.remove(session_id)
         task = self._fanout.pop(session_id, None)
         if task is not None:

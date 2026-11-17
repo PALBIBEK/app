@@ -29,7 +29,7 @@ export const IDLE_STOPS: { value: number | ''; label: string }[] = [
 ];
 
 /** The tools that drive the session's browser (the supervisor's BROWSER_TOOLS). */
-export const BROWSER_TOOLS = ['browser_exec', 'browser_vault'];
+export const BROWSER_TOOLS = ['browser_exec', 'browser_vault', 'browser_dialog', 'browser_cdp'];
 
 /** Providers that enforce a network setting; elsewhere a profile names none. */
 export const NETWORKED: SandboxSpec['provider'][] = ['local_docker', 'e2b'];
@@ -43,8 +43,15 @@ export const NETWORKS: { value: NetworkSpec['mode'] | ''; label: string }[] = [
 
 export const BROWSERS: { value: NonNullable<SandboxSpec['browser']>; label: string; hint: string }[] = [
   { value: 'sandbox-chromium', label: 'Chromium in the sandbox', hint: 'Runs next to the code; the sandbox needs the web, or the sites’ hosts.' },
+  { value: 'sandbox-lightpanda', label: 'Lightpanda in the sandbox', hint: 'A lightweight engine for text-first browsing; the sandbox’s image must carry it.' },
+  { value: 'browserbase', label: 'Browserbase', hint: 'Hosted, with stealth and residential proxies; the sandbox needs only its host (connect.browserbase.com).' },
+  { value: 'browser-use', label: 'Browser Use cloud', hint: 'Hosted, with stealth and residential proxies; the sandbox needs only its host.' },
+  { value: 'firecrawl', label: 'Firecrawl', hint: 'Hosted browser sessions; the sandbox needs only their host.' },
   { value: 'remote-cdp', label: 'A remote browser (CDP)', hint: 'A hosted browser the platform is set up with; the sandbox needs only its host.' },
 ];
+
+/** The browsers that run in the sandbox (the rest are hosted: a private address goes to the sandbox’s own). */
+export const IN_SANDBOX_BROWSERS: readonly string[] = ['sandbox-chromium', 'sandbox-lightpanda'];
 
 /** Host names typed as a list ("a.com, b.com" or one per line). */
 export function parseHosts(text: string): string[] {
@@ -60,7 +67,7 @@ export function networkLabel(network: NetworkSpec | null | undefined): string | 
 
 /** Why browser tools would not reach any site, or null: a Chromium in the sandbox with no network. */
 export function browserCannotBrowse(s: SandboxSpec, tools: string[]): string | null {
-  const inSandbox = (s.browser ?? 'sandbox-chromium') === 'sandbox-chromium';
+  const inSandbox = IN_SANDBOX_BROWSERS.includes(s.browser ?? 'sandbox-chromium');
   if (!tools.some((t) => BROWSER_TOOLS.includes(t)) || !inSandbox || !NETWORKED.includes(s.provider)) return null;
   if (s.network?.mode === 'open' || s.network?.mode === 'allow') return null;
   return 'The browser runs in the sandbox, and the sandbox reaches nothing: choose the open web, or the sites’ hosts.';

@@ -37,6 +37,8 @@ describe('browser settings', () => {
     expect(browserCannotBrowse(docker, ['browser_exec'])).toMatch(/reaches nothing/);
     expect(browserCannotBrowse({ ...docker, network: { mode: 'open' } }, ['browser_exec'])).toBeNull();
     expect(browserCannotBrowse({ ...docker, browser: 'remote-cdp' }, ['browser_exec'])).toBeNull();
+    expect(browserCannotBrowse({ ...docker, browser: 'browserbase' }, ['browser_exec'])).toBeNull();
+    expect(browserCannotBrowse({ ...docker, browser: 'sandbox-lightpanda' }, ['browser_exec'])).not.toBeNull();
     expect(browserCannotBrowse(docker, ['bash'])).toBeNull();
   });
 });
