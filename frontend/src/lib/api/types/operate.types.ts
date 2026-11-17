@@ -124,3 +124,42 @@ export interface RolloutStatus {
   ramping_percentage?: number;
   versions?: { build_id: string; status: string; drainage?: string }[];
 }
+
+/** A saved login, card or address the agent's browser fills; its values are never read back. */
+export interface VaultItem {
+  /** `login:<origin>`, `card:<label>` or `address:<label>`: the name the agent fills it by. */
+  handle: string;
+  kind: 'login' | 'card' | 'address';
+  /** The site (a login's) or the label (a card's, an address's). */
+  name: string;
+}
+
+export interface VaultLoginIn {
+  origin: string;
+  username: string;
+  password: string;
+  /** The authenticator key (a base32 secret or an otpauth://totp link), for the second factor. */
+  otp?: string;
+}
+
+export interface VaultCardIn {
+  label: string;
+  origins: string[];
+  card_number: string;
+  cardholder_name?: string;
+  exp_month: string;
+  exp_year: string;
+  cvc: string;
+  billing_postal_code?: string;
+}
+
+export interface VaultAddressIn {
+  label: string;
+  origins: string[];
+  address_line1: string;
+  address_line2?: string;
+  city: string;
+  state?: string;
+  postal_code: string;
+  country: string;
+}

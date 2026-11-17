@@ -4,6 +4,7 @@
 - ``GET /sandboxes``: their sessions' sandboxes and what state each is in;
 - ``GET /usage``: tokens and cost, by day, agent or session;
 - ``/runners`` and ``/secrets``: the user's runners and tenant secrets;
+- ``/browser-vault``: the logins, cards and addresses the agent's browser fills;
 - ``GET /ops/workers`` and ``GET /ops/rollout``: the worker fleet (owners and admins);
 - ``/model-providers``: the model vendors, their keys and a local server's address (owners
   and admins). A key goes to
@@ -16,8 +17,10 @@ agent's name), and a supervisor session the user has no link to is left out.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -335,6 +338,122 @@ async def put_secret(name: str, body: SecretIn, current_user: CurrentUser) -> Re
 @router.delete("/secrets/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_secret(name: str, current_user: CurrentUser) -> Response:
     await _call(_client().delete_secret(TenantPrincipal.from_user(current_user), _secret_name(name)))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- the browser vault: what the agent's browser fills, never shows ----------------------------
+#
+# A saved login, card or address is a tenant secret the supervisor checks and reads
+# (``supervisor.vault.logins``): ``login:<origin>``, ``card:<label>``, ``address:<label>``, the
+# value its fields as JSON. Names with an origin in them are no secret name a person types, so
+# each kind has a form of its own here; its values are written, never read back.
+
+_VAULT_PREFIXES = ("login:", "card:", "address:")
+_VAULT_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,59}")
+
+
+class VaultItem(BaseModel):
+    handle: str
+    kind: str
+    name: str
+
+
+class VaultItems(BaseModel):
+    items: list[VaultItem]
+
+
+class VaultLoginIn(BaseModel):
+    origin: str = Field(min_length=1, max_length=300)
+    username: str = Field(min_length=1, max_length=300)
+    password: str = Field(min_length=1, max_length=1000)
+    otp: str = Field(default="", max_length=1000)
+    """The authenticator key (a base32 secret or an otpauth://totp link), for the second factor."""
+
+
+class VaultCardIn(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    origins: list[str] = Field(min_length=1, max_length=10)
+    card_number: str = Field(min_length=12, max_length=23)
+    cardholder_name: str = Field(default="", max_length=120)
+    exp_month: str = Field(min_length=1, max_length=2)
+    exp_year: str = Field(min_length=2, max_length=4)
+    cvc: str = Field(min_length=3, max_length=4)
+    billing_postal_code: str = Field(default="", max_length=20)
+
+
+class VaultAddressIn(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    origins: list[str] = Field(min_length=1, max_length=10)
+    address_line1: str = Field(min_length=1, max_length=200)
+    address_line2: str = Field(default="", max_length=200)
+    city: str = Field(min_length=1, max_length=120)
+    state: str = Field(default="", max_length=120)
+    postal_code: str = Field(min_length=1, max_length=20)
+    country: str = Field(min_length=1, max_length=120)
+
+
+def _vault_origin(url: str) -> str:
+    """``scheme://host[:port]`` of a site's address, as the vault names a login by it."""
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host, _, port = parts.netloc.lower().rsplit("@", 1)[-1].partition(":")
+    if scheme not in ("http", "https") or not host:
+        raise HTTPException(status_code=422, detail=f"{url!r} is not a site's address such as https://shop.example.com")
+    default = {"http": "80", "https": "443"}[scheme]
+    return f"{scheme}://{host}" + (f":{port}" if port and port != default else "")
+
+
+def _vault_label(label: str) -> str:
+    if not _VAULT_LABEL.fullmatch(label):
+        raise HTTPException(status_code=422, detail="a label is letters, digits, '.', '_' or '-' (Visa-4242, Home)")
+    return label
+
+
+@router.get("/browser-vault", response_model=VaultItems)
+async def list_vault(current_user: CurrentUser) -> VaultItems:
+    """The saved logins, cards and addresses, by name only."""
+    names = await _call(_client().list_secrets(TenantPrincipal.from_user(current_user)))
+    items = [
+        VaultItem(handle=n, kind=n.split(":", 1)[0], name=n.split(":", 1)[1])
+        for n in sorted(names)
+        if n.startswith(_VAULT_PREFIXES)
+    ]
+    return VaultItems(items=items)
+
+
+@router.put("/browser-vault/logins", status_code=status.HTTP_204_NO_CONTENT)
+async def save_vault_login(body: VaultLoginIn, current_user: CurrentUser) -> Response:
+    """A site's login (and its authenticator key): the agent's browser fills it on that site."""
+    value = {"username": body.username, "password": body.password, **({"otp": body.otp} if body.otp.strip() else {})}
+    name = f"login:{_vault_origin(body.origin)}"
+    await _call(_client().put_secret(TenantPrincipal.from_user(current_user), name, json.dumps(value)))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/browser-vault/cards", status_code=status.HTTP_204_NO_CONTENT)
+async def save_vault_card(body: VaultCardIn, current_user: CurrentUser) -> Response:
+    """A card, filled only on its sites and only once the person allows each fill."""
+    fields = body.model_dump(exclude={"label", "origins"})
+    value = {"origins": [_vault_origin(o) for o in body.origins], **{k: v for k, v in fields.items() if v}}
+    name = f"card:{_vault_label(body.label)}"
+    await _call(_client().put_secret(TenantPrincipal.from_user(current_user), name, json.dumps(value)))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/browser-vault/addresses", status_code=status.HTTP_204_NO_CONTENT)
+async def save_vault_address(body: VaultAddressIn, current_user: CurrentUser) -> Response:
+    fields = body.model_dump(exclude={"label", "origins"})
+    value = {"origins": [_vault_origin(o) for o in body.origins], **{k: v for k, v in fields.items() if v}}
+    name = f"address:{_vault_label(body.label)}"
+    await _call(_client().put_secret(TenantPrincipal.from_user(current_user), name, json.dumps(value)))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/browser-vault/{handle:path}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_vault_item(handle: str, current_user: CurrentUser) -> Response:
+    if not handle.startswith(_VAULT_PREFIXES) or ".." in handle or len(handle) > 320:
+        raise HTTPException(status_code=422, detail="not a saved login, card or address")
+    await _call(_client().delete_secret(TenantPrincipal.from_user(current_user), handle))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

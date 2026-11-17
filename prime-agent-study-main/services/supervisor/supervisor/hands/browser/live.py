@@ -19,7 +19,7 @@ from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from supervisor.hands.browser import runner_env, runtime_command
+from supervisor.hands.browser import run_runtime, runner_env
 from supervisor.tools.workspace import Workspace
 
 __all__ = ["LIVE_TIMEOUT_S", "Input", "LiveRefused", "Screen", "act", "screen"]
@@ -90,8 +90,9 @@ async def act(workspace: Workspace, env: Mapping[str, str], action: Input) -> Sc
 
 
 async def _live(workspace: Workspace, env: Mapping[str, str], request: dict[str, Any]) -> Screen:
-    result = await workspace.run(
-        runtime_command('exec python3 "$d/runner.py" live'),
+    result = await run_runtime(
+        workspace,
+        'exec python3 "$d/runner.py" live',
         timeout_s=LIVE_TIMEOUT_S,
         env={**env, **runner_env(None), _LIVE_ENV: json.dumps(request)},
     )

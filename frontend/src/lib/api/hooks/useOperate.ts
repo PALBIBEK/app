@@ -1,12 +1,12 @@
 /**
- * Hooks for the approvals inbox, sandboxes, usage, runners, secrets and the fleet.
+ * Hooks for the approvals inbox, sandboxes, usage, runners, secrets, the browser vault and the fleet.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { operateAPI } from '../endpoints/operate';
 import { modelKeys } from './useModels';
-import type { ArtifactKind, UsageBy } from '../types/operate.types';
+import type { ArtifactKind, UsageBy, VaultAddressIn, VaultCardIn, VaultLoginIn } from '../types/operate.types';
 import type { ModelProvider } from '../types/provider.types';
 import { useAuthStore } from '../../store/authStore';
 
@@ -19,6 +19,7 @@ export const operateKeys = {
     [...operateKeys.all, 'usage', by, sinceMs ?? null, untilMs ?? null] as const,
   runners: () => [...operateKeys.all, 'runners'] as const,
   secrets: () => [...operateKeys.all, 'secrets'] as const,
+  vault: () => [...operateKeys.all, 'browser-vault'] as const,
   providers: () => [...operateKeys.all, 'model-providers'] as const,
   workers: () => [...operateKeys.all, 'workers'] as const,
   rollout: () => [...operateKeys.all, 'rollout'] as const,
@@ -98,6 +99,35 @@ export function useDeleteSecret() {
   return useMutation({
     mutationFn: (name: string) => operateAPI.deleteSecret(name),
     onSuccess: () => qc.invalidateQueries({ queryKey: operateKeys.secrets() }),
+  });
+}
+
+export function useVaultItems() {
+  const enabled = useAuthed();
+  return useQuery({ queryKey: operateKeys.vault(), queryFn: () => operateAPI.vaultItems(), enabled });
+}
+
+/** Save a login, card or address (by kind), then list them again. */
+export function useSaveVaultItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (item: { kind: 'login'; value: VaultLoginIn } | { kind: 'card'; value: VaultCardIn } | { kind: 'address'; value: VaultAddressIn }) =>
+      item.kind === 'login' ? operateAPI.saveVaultLogin(item.value) : item.kind === 'card' ? operateAPI.saveVaultCard(item.value) : operateAPI.saveVaultAddress(item.value),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: operateKeys.vault() });
+      void qc.invalidateQueries({ queryKey: operateKeys.secrets() });
+    },
+  });
+}
+
+export function useDeleteVaultItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (handle: string) => operateAPI.deleteVaultItem(handle),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: operateKeys.vault() });
+      void qc.invalidateQueries({ queryKey: operateKeys.secrets() });
+    },
   });
 }
 

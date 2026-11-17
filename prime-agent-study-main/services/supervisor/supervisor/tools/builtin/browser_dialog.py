@@ -5,7 +5,7 @@ from typing import Any, Final, Literal
 
 from pydantic import Field
 
-from supervisor.hands.browser import DIALOG_ENV, runner_env, runtime_command
+from supervisor.hands.browser import DIALOG_ENV, run_runtime, runner_env
 from supervisor.tools.args import ToolArgs
 from supervisor.tools.context import ToolContext
 from supervisor.tools.registry import tool
@@ -38,8 +38,9 @@ async def browser_dialog(args: BrowserDialogArgs, ctx: ToolContext) -> dict[str,
     dialogs itself). The runtime's ``dialog`` answers it and starts no browser.
     """
     request = {"action": args.action, "text": args.prompt_text, "dialog_id": args.dialog_id}
-    result = await ctx.workspace.run(
-        runtime_command('exec python3 "$d/runner.py" dialog'),
+    result = await run_runtime(
+        ctx.workspace,
+        'exec python3 "$d/runner.py" dialog',
         timeout_s=min(DIALOG_TIMEOUT_S, ctx.timeout_s),
         env={
             **ctx.env,

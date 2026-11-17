@@ -1,7 +1,8 @@
 /**
  * Policies & secrets: what each agent may do without asking, what it must ask for, its
- * limits; the model providers sessions run on (owners and admins); and the secrets its tools
- * can use (names only: a value is never shown again).
+ * limits; the model providers sessions run on (owners and admins); the logins, cards and
+ * addresses the agent's browser fills; and the secrets its tools can use (names only: a value
+ * is never shown again).
  */
 
 'use client';
@@ -13,6 +14,7 @@ import { Key, Trash } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 
 import { AppShell, PageBody } from '@/components/layout/AppShell';
+import { BrowserVault, VAULT_PREFIXES } from '@/components/settings/BrowserVault';
 import { ModelProviders } from '@/components/settings/ModelProviders';
 import { Button, Card, CardHeader, EmptyState, ErrorNote, LinkButton, Mono, PageHeader, SkeletonRows, Table, Td, Th, Tr } from '@/components/ui';
 import { harnessesAPI } from '@/lib/api/endpoints/harnesses';
@@ -117,7 +119,7 @@ function Secrets(): JSX.Element {
   const del = useDeleteSecret();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
-  const names = data ?? [];
+  const names = (data ?? []).filter((n) => !VAULT_PREFIXES.some((p) => n.startsWith(p))); // those are below
   const valid = SECRET.test(name) && !name.includes('..') && value.length > 0;
 
   async function save(e: React.FormEvent): Promise<void> {
@@ -217,6 +219,7 @@ export default function PoliciesPage(): JSX.Element {
         />
         <AgentPolicies />
         <ModelProviders />
+        <BrowserVault />
         <Secrets />
       </PageBody>
     </AppShell>

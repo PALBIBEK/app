@@ -302,3 +302,46 @@ async def test_model_choices_carry_each_models_vendor_and_which_vendors_are_read
     async with _api(db_session, member, settings, monkeypatch, handler, seen) as api:
         assert (await api.get("/api/v1/catalog/model-choices")).json() == listing
         assert (await api.get("/api/v1/catalog/models")).json() == listing["models"]
+
+
+@pytest.mark.asyncio
+async def test_the_browser_vault_saves_each_kind_under_its_name_and_lists_names_only(db_session, owner, settings, monkeypatch):
+    stored: dict[str, dict] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        if path == "/v1/secrets" and method == "GET":
+            return httpx.Response(200, json={"names": ["GITHUB_TOKEN", *stored]})
+        if path.startswith("/v1/secrets/") and method == "PUT":
+            name = path.removeprefix("/v1/secrets/")
+            stored[name] = json.loads(json.loads(request.content)["value"])
+            return httpx.Response(200, json={"name": name})
+        if path.startswith("/v1/secrets/") and method == "DELETE":
+            stored.pop(path.removeprefix("/v1/secrets/"), None)
+            return httpx.Response(204)
+        return httpx.Response(500)
+
+    seen: list[httpx.Request] = []
+    async with _api(db_session, owner, settings, monkeypatch, handler, seen) as api:
+        login = await api.put("/api/v1/browser-vault/logins", json={"origin": "https://Shop.example.com/login", "username": "ada", "password": "pw", "otp": "JBSWY3DPEHPK3PXP"})
+        card = await api.put("/api/v1/browser-vault/cards", json={"label": "Visa-4242", "origins": ["https://shop.example.com/pay"], "card_number": "4242424242424242", "exp_month": "4", "exp_year": "2031", "cvc": "731"})
+        address = await api.put("/api/v1/browser-vault/addresses", json={"label": "Home", "origins": ["https://shop.example.com"], "address_line1": "12 St", "city": "London", "postal_code": "N1", "country": "UK"})
+        listed = (await api.get("/api/v1/browser-vault")).json()
+        before = len(seen)
+        bad_origin = await api.put("/api/v1/browser-vault/logins", json={"origin": "shop.example.com", "username": "a", "password": "p"})
+        bad_label = await api.put("/api/v1/browser-vault/cards", json={"label": "My card", "origins": ["https://x.com"], "card_number": "4242424242424242", "exp_month": "4", "exp_year": "31", "cvc": "731"})
+        refused = len(seen) - before
+        deleted = await api.delete("/api/v1/browser-vault/" + "login:https://shop.example.com".replace("/", "%2F"))
+        not_vault = await api.delete("/api/v1/browser-vault/GITHUB_TOKEN")
+
+    assert (login.status_code, card.status_code, address.status_code) == (204, 204, 204)
+    assert stored["card:Visa-4242"] == {"origins": ["https://shop.example.com"], "card_number": "4242424242424242", "exp_month": "4", "exp_year": "2031", "cvc": "731"}
+    assert stored["address:Home"]["origins"] == ["https://shop.example.com"]
+    assert listed == {"items": [
+        {"handle": "address:Home", "kind": "address", "name": "Home"},
+        {"handle": "card:Visa-4242", "kind": "card", "name": "Visa-4242"},
+        {"handle": "login:https://shop.example.com", "kind": "login", "name": "https://shop.example.com"},
+    ]}
+    assert (bad_origin.status_code, bad_label.status_code, refused) == (422, 422, 0), "refused here, never sent upstream"
+    assert deleted.status_code == 204 and "login:https://shop.example.com" not in stored
+    assert not_vault.status_code == 422
