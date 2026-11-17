@@ -804,6 +804,14 @@ class SandboxProvider(ABC):
         """
         return None
 
+    async def serving(self, session_id: str) -> Sandbox | None:
+        """The sandbox serving ``session_id`` now, found from another process than the worker
+        holding it (the API, showing a person the session's browser), to act in beside that
+        worker. Never built, started or woken, and not taken over: the worker still owns it.
+        Default: none can be found from here.
+        """
+        return None
+
     async def close(self) -> None:
         """Release provider-level resources.
 

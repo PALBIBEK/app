@@ -806,6 +806,32 @@ class LocalDockerProvider(SandboxProvider):
         )
         return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
 
+    async def serving(self, session_id: str) -> Sandbox | None:
+        """The session's container while it runs (a stopped one is not woken for this)."""
+        client = self._ensure_client()
+        loop = asyncio.get_running_loop()
+
+        def _find() -> Any | None:
+            found = client.containers.list(
+                filters={"label": [f"{LABEL_MANAGED}=1", f"{LABEL_SESSION}={session_id}"], "status": "running"}
+            )
+            return found[0] if found else None  # the newest
+
+        try:
+            container = await loop.run_in_executor(None, _find)
+        except Exception:
+            logger.warning("finding the sandbox of session=%s failed", session_id, exc_info=True)
+            return None
+        if container is None:
+            return None
+        info = SandboxInfo(
+            id=container.id,
+            provider=self.name,
+            supports_snapshot=True,
+            labels=dict(getattr(container, "labels", None) or {}),
+        )
+        return LocalDockerSandbox(container, client=client, info=info, hydrator=self._hydrator)
+
     async def list_managed(self) -> list[Sandbox]:
         """Containers labelled by this supervisor (for orphan reaping)."""
         client = self._ensure_client()
