@@ -109,6 +109,19 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (5, "memory_item.embedding: re-embedded at 1024 buckets, stopwords left out", _reembed),
     (6, "memory_facts.expires_on: a time-bound fact stops being recalled after it", add_column("memory_facts", "expires_on", "TEXT")),
     (7, "memory_item: a partial index on the scope of live items (exact nearest-neighbour search)", _scope_index),
+    (
+        8,
+        "memory_facts: what a typed observation said of itself (G2: kind, topic, keywords, aliases, body, provenance)",
+        _all(
+            add_column("memory_facts", "kind", "TEXT"),
+            add_column("memory_facts", "topic", "TEXT"),
+            add_column("memory_facts", "keywords", "JSON"),
+            add_column("memory_facts", "aliases", "JSON"),
+            add_column("memory_facts", "body", "TEXT"),
+            add_column("memory_facts", "extraction_model", "TEXT"),
+            add_column("memory_facts", "prompt_version", "TEXT"),
+        ),
+    ),
 ]
 """(version, what it does, apply). Append only; never renumber or edit a shipped one."""
 

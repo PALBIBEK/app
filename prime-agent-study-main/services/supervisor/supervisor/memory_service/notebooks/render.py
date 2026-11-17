@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from supervisor.memory_service.notebooks.types import Candidate, Fact
 
 _SPACE = re.compile(r"\s+")
-_BULLET = re.compile(r"^[-*](?:\s+|$)")  # a bullet, or a bare one
+_BULLET = re.compile(r"^(?:[-*](?:\s+|$))+")  # bullets, or a bare one: every one, so cleaning twice changes nothing
 _DATED = re.compile(r"^\((\d{4}-\d\d-\d\d)\)\s*")
 _SAID_IN = re.compile(r"\s+\(said in ([^)]+)\)\s*$", re.IGNORECASE)
 

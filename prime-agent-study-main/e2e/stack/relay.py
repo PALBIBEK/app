@@ -22,8 +22,8 @@ GATEWAY = os.environ.get("RELAY_GATEWAY", "http://127.0.0.1:8090")
 TOKEN = os.environ.get("RELAY_GATEWAY_TOKEN", "dev-local-gateway-token")
 LOG = os.environ.get("RELAY_LOG", "relay.jsonl")
 
-EXTRACTION = "You extract durable facts"
-"""How memory's extraction prompt starts (supervisor.memory_service.extraction_prompt)."""
+EXTRACTION = "You extract durable observations"
+"""How automatic capture's extraction prompt starts (supervisor.memory.extraction)."""
 FACT = re.compile(r"zq[0-9a-f]+-[A-Za-z0-9.-]+?qz")
 """A load test's fact token (e2e/bench_memory.py)."""
 
@@ -49,18 +49,49 @@ def _extraction_answer(body: dict) -> str | None:
     if "CAPTUREMODEL" not in text or not str(system).startswith(EXTRACTION):
         return None
     tokens = list(dict.fromkeys(FACT.findall(text)))
-    return "SENSITIVITY: ordinary\n" + "\n".join(f"- The locker word is {t}." for t in tokens) if tokens else "NONE"
+    observations = [
+        {"type": "user", "topic_hint": "locker", "statement": f"The locker word is {t}.", "keywords": [t],
+         "aliases": [], "body": None}
+        for t in tokens
+    ]
+    return json.dumps({
+        "outcome": "observations" if observations else "noop",
+        "observations": observations,
+        "sensitivity": "ordinary",
+    })
+
+
+def _completion(body: dict, answer: str) -> object:
+    """``answer`` as the model's reply, in the chat wire's shape (a stream when asked). Not
+    through echo, whose reply begins "echo:": a strict outcome parser rightly refuses that."""
+    model = str(body.get("model") or "relay")
+    usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    if not body.get("stream"):
+        return JSONResponse({
+            "id": "relay-extraction", "object": "chat.completion", "created": int(time.time()), "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}],
+            "usage": usage,
+        })
+
+    def chunk(delta: dict, finish: str | None, **extra: object) -> bytes:
+        payload = {"id": "relay-extraction", "object": "chat.completion.chunk", "created": int(time.time()),
+                   "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}], **extra}
+        return f"data: {json.dumps(payload)}\n\n".encode()
+
+    def events():
+        yield chunk({"role": "assistant", "content": answer}, None)
+        yield chunk({}, "stop", usage=usage)
+        yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 async def _relay(path: str, request: Request) -> object:
     body = await request.json()
     _record(path, request, body)
     if (answer := _extraction_answer(body)) is not None:
-        # Through echo, so the reply keeps the wire's shape and streaming: echo answers the
-        # last user turn (prefixed "echo:", which the extraction parser reads past: its
-        # bullets are what it keeps).
-        body = dict(body, messages=[{"role": "user", "content": answer}])
-    elif "SLOWMODEL" in json.dumps(body):  # test switch: a model call that takes a while
+        return _completion(body, answer)
+    if "SLOWMODEL" in json.dumps(body):  # test switch: a model call that takes a while
         import asyncio
 
         await asyncio.sleep(float(os.environ.get("RELAY_SLOW_S", "20")))

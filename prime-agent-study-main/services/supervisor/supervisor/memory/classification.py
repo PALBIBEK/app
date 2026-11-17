@@ -16,11 +16,30 @@ from supervisor.memory.service import CaptureContext, MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.extraction_prompt import SENSITIVITY_PROMPT
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
+from supervisor.memory_service.observations import (
+    MAX_MODEL_BYTES,
+    ObservationDraft,
+    normalize_term,
+)
 
 logger = logging.getLogger(__name__)
 
 # (system prompt, user content) -> model text. Blocking callers wrap this in a thread.
 type OneShot = Callable[[str, str], Awaitable[str]]
+
+DEFAULT_MODEL = "platform-default"
+"""What a one-shot that does not name its model is recorded as (the platform gateway's
+default route)."""
+
+
+def one_shot_model(one_shot: OneShot) -> str:
+    """The model ``one_shot`` calls, for provenance (a one-shot may say, as
+    ``platform.gateway_one_shot``'s do, with ``model``); ``DEFAULT_MODEL`` when it does not."""
+    model = getattr(one_shot, "model", None)
+    if not model:
+        return DEFAULT_MODEL
+    # As the store bounds it (``observations``).
+    return normalize_term(str(model), MAX_MODEL_BYTES) or DEFAULT_MODEL
 
 
 
@@ -60,6 +79,27 @@ class ClassifiedMemory(MemoryView):
             facts,
             author=author,
             context=_with_sensitivity(context, sensitivity),
+        )
+
+    async def observe(
+        self,
+        notebook_id: str,
+        drafts: Sequence[ObservationDraft],
+        *,
+        author: str | None = None,
+        context: CaptureContext | None = None,
+        retire: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> int | None:
+        """Labelled as ``capture`` labels: an automatic capture arrives labelled (the
+        extraction's own), anything else is classified."""
+        context = context or CaptureContext()
+        sensitivity = context.sensitivity
+        if drafts and (context.mode != "automatic" or sensitivity is None):
+            sensitivity = stricter(sensitivity, await classify(self._one_shot, [d.statement for d in drafts]))
+            context = _with_sensitivity(context, sensitivity)
+        return await super().observe(
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
         )
 
     async def edit(

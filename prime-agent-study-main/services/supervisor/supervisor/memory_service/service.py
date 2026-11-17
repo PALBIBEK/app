@@ -14,14 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from supervisor.memory_service.bank import MemoryBank
 from supervisor.memory_service.buffer import WriteBehindBuffer
 from supervisor.memory_service.cost import CachingEmbedder, flush_batch_is_barren
-from supervisor.memory_service.db import init_db, make_engine, make_session_factory
+from supervisor.memory_service.db import init_db, make_engine, make_session_factory, pool_settings
 from supervisor.memory_service.embed import Embedder
 from supervisor.memory_service.erase import EraseService
 from supervisor.memory_service.extract import ExtractionQueue, Extractor
 from supervisor.memory_service.leases import LeaseManager
 from supervisor.memory_service.limits import BUFFER_IDLE_MS
 from supervisor.memory_service.metrics import METRICS
-from supervisor.memory_service.notebooks.ops import NotebookOps
+from supervisor.memory_service.notebooks.inbox import InboxDrainer, drainer_concurrency
+from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps
 from supervisor.memory_service.notebooks.store import NotebookStore
 from supervisor.memory_service.outbox import Outbox
 from supervisor.memory_service.recall import HybridRecall
@@ -94,6 +95,8 @@ class MemoryService:
         self._erase = EraseService(self._factory)
         # The one long-term store: notebooks of facts, indexed into the same bank.
         self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
+        self.inbox = InboxDrainer(self.notebooks, concurrency=drainer_concurrency(pool_settings(), self._engine.url.drivername))
+        """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(
             self._factory, ObjectArchive(arch_root), hot_days=hot_days
@@ -137,6 +140,11 @@ class MemoryService:
                 await step()
             except Exception:
                 logger.warning("%s failed", what, exc_info=True)
+
+    def start_inbox_drainer(self, *, interval_s: float = 1.0) -> None:
+        """Land queued captures as facts: at once when one is queued here, and every
+        ``interval_s`` for those queued on other replicas (until ``aclose``)."""
+        self._start("inbox", lambda: self.inbox.run(interval_s))
 
     def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
         """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""
@@ -453,7 +461,15 @@ class MemoryService:
         return await self._retention.archive_cold(limit=limit)
 
     async def metrics_snapshot(self) -> dict:
-        return {**METRICS.snapshot(), **await self._extraction.backlog()}
+        return {
+            **METRICS.snapshot(),
+            **await self._extraction.backlog(),
+            # Automatic captures queued, not yet facts (G2): a backlog that grows means the
+            # drainers fall behind.
+            "inbox_backlog": await self.notebooks.store.pending(),
+            # Set aside after failing to land on their own: kept a week, to look into.
+            "inbox_set_aside": await self.notebooks.store.set_aside(give_up_at=PROMOTE_ATTEMPTS),
+        }
 
     async def report_recall_used(self, n: int = 1) -> None:
         METRICS.inc("recall_items_marked_used", n)

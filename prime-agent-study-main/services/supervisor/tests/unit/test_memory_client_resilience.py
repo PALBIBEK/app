@@ -121,3 +121,43 @@ async def test_a_recall_reads_each_notebook_once_and_its_home_once_per_process(
     await recall_across(platform.view(Audience.private("alice")), [work.id, home.id], RecallContext())
     assert sorted(calls) == sorted(f"GET /v1/notebooks/{n}/facts" for n in (work.id, home.id))
     await client.aclose()
+
+
+async def test_a_session_s_tenant_keys_its_capture_lane_when_its_notebook_names_none(
+    supervisor_db: async_sessionmaker[AsyncSession],
+) -> None:
+    """A provider's own memory's notebook id may name no tenant: the session's tenant then
+    keys the capture's slots, so every user of one tenant shares its cap."""
+    from supervisor.db.models import SessionRow
+
+    async with supervisor_db() as db:
+        db.add(SessionRow(id="s-1", tenant_id="acme"))
+        await db.commit()
+    platform = MemoryPlatform(supervisor_db, notebooks=None, one_shot=None)  # type: ignore[arg-type]
+
+    assert await platform.session_tenant("s-1") == "acme"
+    assert await platform.session_tenant("s-unknown") is None
+
+
+async def test_the_client_s_own_pool_being_busy_never_opens_the_breaker() -> None:
+    """A burst past the client's connections waits in its pool, and one that waits too long
+    times out there: the service never heard of it, so it is no failure of the service."""
+    calls = [0]
+
+    class Busy(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            calls[0] += 1
+            if calls[0] <= 5:
+                raise httpx.PoolTimeout("all connections busy")
+            return httpx.Response(200, json=[])
+
+    client = NotebookClient(
+        "http://mem", transport=Busy(), credential=lambda t: None,
+        breaker=_Breaker(threshold=3, cooldown_s=30, clock=_Clock()),
+    )
+    for _ in range(5):
+        with pytest.raises(MemoryUnavailable, match="busy"):
+            await client.facts("t1~a")
+
+    assert await client.facts("t1~a") == [], "the breaker stayed closed"
+    await client.aclose()

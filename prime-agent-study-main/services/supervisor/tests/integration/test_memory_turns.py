@@ -23,6 +23,7 @@ from supervisor.memory.binding import MemoryBinding
 from supervisor.memory.service import CaptureContext
 from supervisor.memory.transcript import STOPPED_MARKER
 from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source
+from supervisor.memory_service.observations import PROMPT_VERSION
 from supervisor.seams.core.types import ChatMessage
 from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
@@ -142,6 +143,29 @@ async def test_what_a_turns_tools_found_reaches_extraction(
     assert [i["type"] for i in items][:3] == ["user", "assistant", "tool_result"]
     assert items[1]["tool_calls"][0]["name"] == "ls" and items[2]["name"] == "ls"
     assert items[-1]["type"] == "assistant" and items[-1]["content"], "and the answer after it"
+
+
+async def test_a_project_fact_the_work_found_is_typed_and_recalled_in_the_next_session(
+    env: Env, model: Callable[..., ScriptedGateway]
+) -> None:
+    """G2's acceptance: what the work established (here, a tool's result) is a ``project``
+    observation, kept with its type and provenance, and the next session recalls it."""
+    gateway = model(LS, extract="SENSITIVITY: ordinary\n- project: The repository builds with make check")
+    state = await env.state()
+    async with session_worker(env.client, state, task_queue=env.queue):
+        first = await env.create(state, memory=QUICK)
+        await env.sessions.submit(first, Message("c1", "how is this repository built?"))
+        await env.wait_for(state, first, run_ended())
+        (fact,) = await _wait_facts(state, first, 1)
+        second = await env.create(state, memory=QUICK)
+        await env.sessions.submit(second, Message("c2", "build it"))
+        await env.wait_for(state, second, run_ended())
+    assert fact.text == "The repository builds with make check"
+    assert fact.typed is not None and fact.typed.kind == "project"
+    assert fact.typed.prompt_version == PROMPT_VERSION and fact.typed.extraction_model
+    (system, _), = [(k, c) for k, c in gateway.one_shots if k.startswith("You extract")]
+    assert system.startswith("You extract durable observations")
+    assert "The repository builds with make check" in _memory_blocks(gateway.seen[-1])[0], "recalled next session"
 
 
 async def test_a_turn_the_user_stopped_is_captured_as_unfinished(

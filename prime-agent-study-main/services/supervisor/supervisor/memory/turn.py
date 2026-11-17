@@ -42,7 +42,14 @@ from supervisor.memory.client import MemoryRefused, MemoryRequestInvalid, Memory
 from supervisor.memory.cross import recall_across
 from supervisor.memory.delta import Shown, held_hashes, recall_delta
 from supervisor.memory.disclosure import Audience
-from supervisor.memory.extraction import Exchange, Extracted, extract_transcript
+from supervisor.memory.extraction import (
+    Exchange,
+    MalformedOutcome,
+    Noop,
+    Observations,
+    extract_observations,
+)
+from supervisor.memory.fairness import GatedOneShot, capture_gate
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
 from supervisor.memory.resolution import resolve
@@ -54,11 +61,13 @@ from supervisor.memory.transcript import (
     condense,
     run_items,
 )
+from supervisor.memory.view import observe
 from supervisor.memory_service.notebooks.errors import (
     MemoryDisclosureDenied,
     MemoryFactsMissing,
     NotebookArchived,
 )
+from supervisor.memory_service.notebooks.render import parse_fact_id
 from supervisor.memory_service.notebooks.types import (
     UNTRACKED,
     Provenance,
@@ -66,6 +75,7 @@ from supervisor.memory_service.notebooks.types import (
     Sensitivity,
     personal_source,
 )
+from supervisor.memory_service.observations import ObservationDraft
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +209,7 @@ class SessionMemory:
         self._reader = reader
         self._one_shot_for = one_shot_for
         self._sessions_for = sessions_for
+        capture_gate()  # its setting checked as the worker starts, not at its first capture
 
     async def scope(self, session_id: str) -> Scope | None:
         resolved = await self._platform.session_audience(session_id)
@@ -396,22 +407,29 @@ class SessionMemory:
             runs.extend(run)
         if not items:
             return 0
-        one_shot = await self._one_shot_for(session_id)
+        # Each model call in one of its tenant's slots (supervisor.memory.fairness): one
+        # tenant's burst of captures never holds up another tenant's. A notebook id names its
+        # tenant; a provider's own memory's may not: then the session's (its every user in
+        # one lane, as with the platform's notebooks), never one shared by every such tenant.
+        # The session's own tenant: a provider's notebook ids may hold a "~" of their own.
+        tenant = await self._platform.session_tenant(session_id)
+        one_shot = GatedOneShot(await self._one_shot_for(session_id), tenant or f"owner:{binding.owner}", capture_gate())
         extracted = await _extract(one_shot, session_id, items)
-        if extracted is None or not extracted.facts:
-            return 0
+        if not isinstance(extracted, Observations):
+            return 0  # failed for good, or nothing worth retaining
         # Resolve against what the notebook holds (supervisor.memory.resolution): a
         # duplicate is not added; a fact the new ones make false is retired after them.
-        resolution = await resolve(one_shot, extracted.facts, await scope.view.facts(binding.writable))
-        facts = [extracted.facts[i] for i in resolution.add]
+        statements = [d.statement for d in extracted.drafts]
+        resolution = await resolve(one_shot, statements, await scope.view.facts(binding.writable))
+        drafts = [extracted.drafts[i] for i in resolution.add]
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
-        added = 0
-        if facts:
-            added = await self._capture_facts(
-                scope, binding.writable, session_id, facts, extracted.sensitivity, runs, exchanges, key
-            )
-        await self._retire(scope, binding.writable, session_id, resolution.retire)
-        return added
+        if not drafts and not resolution.retire:
+            return 0
+        # Only retirements (every statement a repeat) go through the inbox too: in their
+        # place in the queue, never a delete that would strip other sessions' queued captures.
+        return await self._capture_observations(
+            scope, binding.writable, session_id, drafts, resolution.retire, extracted.sensitivity, runs, exchanges, key
+        )
 
     async def _retire(self, scope: Scope, notebook: str, session_id: str, ids: Sequence[str]) -> None:
         """Delete facts a capture made false (history keeps them); best effort, after the
@@ -419,39 +437,72 @@ class SessionMemory:
         if not ids:
             return
         try:
-            await scope.view.delete(notebook, list(ids), author=scope.audience.actor)
+            try:
+                await scope.view.delete(notebook, list(ids), author=scope.audience.actor)
+            except MemoryFactsMissing as exc:
+                # Some already gone (a retried capture) or hidden from this audience: those are
+                # kept, every other one it makes false is still retired.
+                missing = set(exc.ids)
+                if rest := [i for i in ids if parse_fact_id(i) not in missing]:
+                    await scope.view.delete(notebook, rest, author=scope.audience.actor)
+                logger.info("session %s: %d contradicted facts not retired: %s", session_id, len(ids) - len(rest), exc)
         except (MemoryFactsMissing, MemoryDisclosureDenied, NotebookArchived) as exc:
-            # Already gone (a retried capture), not this audience's to change, or archived.
+            # Gone meanwhile, not this audience's to change, or archived.
             logger.info("session %s: contradicted facts not retired: %s", session_id, exc)
 
-    async def _capture_facts(
+    async def _capture_observations(
         self,
         scope: Scope,
         notebook: str,
         session_id: str,
-        facts: Sequence[str],
+        drafts: Sequence[ObservationDraft],
+        retire: Sequence[str],
         sensitivity: Sensitivity,
         runs: Sequence[Envelope],
         exchanges: Sequence[Exchange],
         key: str,
     ) -> int:
-        return await scope.view.capture(
-            notebook,
-            list(facts),
-            author=scope.audience.actor,
-            context=CaptureContext(
-                mode="automatic",
-                actor=scope.audience.actor,
-                source=scope.audience.target,
-                session_id=session_id,
-                sensitivity=sensitivity,
-                # Everything these turns could have drawn on (QM captureDependencies).
-                inherited=dependencies(runs),
-                # None, not "", when there is none (a run stopped before its answer).
-                input="\n\n".join(x.input for x in exchanges if x.input) or None,
-                reply="\n\n".join(x.reply for x in exchanges if x.reply) or None,
-                idempotency_key=key,
-            ),
+        """Queue the observations into the notebook's inbox (G2: no lock on the notebook,
+        typed facts once it is drained), the facts they make false retired after them in
+        the same transaction; the number of facts queued (a repeat among them adds none
+        when it lands). A memory that takes plain captures only (a provider's own, or a
+        service older than G2) gets their statements, then the retirement, as before G2."""
+        context = self._automatic(scope, session_id, sensitivity, runs, exchanges, key)
+        queued = await observe(
+            scope.view, notebook, drafts, author=scope.audience.actor, context=context, retire=retire,
+            idempotency_key=key,
+        )
+        if queued is not None:
+            return queued
+        added = (
+            await scope.view.capture(notebook, [d.statement for d in drafts], author=scope.audience.actor, context=context)
+            if drafts
+            else 0
+        )
+        await self._retire(scope, notebook, session_id, retire)
+        return added
+
+    @staticmethod
+    def _automatic(
+        scope: Scope,
+        session_id: str,
+        sensitivity: Sensitivity,
+        runs: Sequence[Envelope],
+        exchanges: Sequence[Exchange],
+        key: str,
+    ) -> CaptureContext:
+        return CaptureContext(
+            mode="automatic",
+            actor=scope.audience.actor,
+            source=scope.audience.target,
+            session_id=session_id,
+            sensitivity=sensitivity,
+            # Everything these turns could have drawn on (QM captureDependencies).
+            inherited=dependencies(runs),
+            # None, not "", when there is none (a run stopped before its answer).
+            input="\n\n".join(x.input for x in exchanges if x.input) or None,
+            reply="\n\n".join(x.reply for x in exchanges if x.reply) or None,
+            idempotency_key=key,
         )
 
 
@@ -481,6 +532,8 @@ of calls (and of the session's spend)."""
 RETRY_PAUSE_S: Final = 1.0
 """The pause before retrying a failure that may pass, doubled before each later one and
 jittered, so every capture failing at once does not retry at once."""
+MALFORMED_RETRIES: Final = 1
+"""Retries an extraction makes for answers that are not a valid outcome."""
 RETRY_WINDOW_S: Final = 240.0
 """No retry starts past this long into a capture's extraction, its pause included: the
 capture activity has ten minutes (``temporal.policies``) for extraction, resolution and
@@ -488,20 +541,23 @@ the save, and one that ran out would be retried whole, its calls made and charge
 The window bounds when attempts start; each call is bounded by its own timeout."""
 
 
-async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Extracted | None:
-    """The burst's facts, from its transcript condensed to fit; None when extraction failed
-    for good. What is tried again depends on why the call failed (the agent loop's own rules,
-    ``supervisor.agent.runtimes.githi.classify``):
+async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noop | Observations | None:
+    """The burst's typed observations, from its transcript condensed to fit; None when
+    extraction failed for good. What is tried again depends on why the call failed (the
+    agent loop's own rules, ``supervisor.agent.runtimes.githi.classify``):
 
     * the transcript did not fit the model's window: the next, halved budget (Grok Build's
       per-attempt budget), while one is shorter;
     * a failure that may pass (a rate limit, an overloaded or unreachable provider): the
       same transcript, after a pause, so nothing is condensed away for a failure that has
       nothing to do with length;
+    * an answer that is not a valid outcome (``MalformedOutcome``: not JSON, an unknown
+      field, an observation past its bounds): the same transcript, at once, once (Grok
+      Build retries malformed output; a model's next answer often parses, a third rarely);
     * anything else (a refused key, a spent budget, an unknown model): not at all, since
       it would fail the same way, and each call may be charged.
     """
-    budget, began = 1, time.monotonic()
+    budget, began, malformed = 1, time.monotonic(), 0
     # Condensing is CPU work that grows with the burst (megabytes of tool output are
     # re-encoded at each stage): off the loop, which carries every other session's steps.
     condensed = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget))
@@ -513,7 +569,7 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
                 condensed.stats.final_bytes,
             )
         try:
-            return await extract_transcript(one_shot, condensed)
+            return await extract_observations(one_shot, condensed)
         except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
             pause: float | None = None
             again_on = condensed
@@ -523,6 +579,11 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Ext
                 # request and stop marker, so condensing can reach a floor).
                 if shorter.stats.final_bytes < condensed.stats.final_bytes:
                     budget, again_on, pause = budget + 1, shorter, 0.0
+            elif isinstance(exc, MalformedOutcome):
+                # Once: a model whose answer missed the outcome's shape twice will miss it
+                # again, and each call is charged (the load test found four a capture).
+                malformed += 1
+                pause = 0.0 if malformed <= MALFORMED_RETRIES else None
             elif is_retryable(exc):
                 backoff = RETRY_PAUSE_S * 2 ** (attempt - 1) * (0.5 + random.random())
                 asked = getattr(exc, "retry_after", None)  # seconds: Retry-After's unit

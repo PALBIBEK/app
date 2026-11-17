@@ -17,7 +17,7 @@ import pytest
 from supervisor.agent.events import MessageEnd, RunStart, ToolEnd, TurnEnd
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.writer import JournalWriter
-from supervisor.memory.transcript import TranscriptBudget, condense, run_items
+from supervisor.memory.transcript import STOPPED_MARKER, TranscriptBudget, condense, run_items
 from tests.support.journal_db import Factory
 from tests.support.memory_pg import run_workers
 
@@ -83,4 +83,4 @@ async def test_concurrent_captures_each_read_exactly_their_own_runs(factory: Fac
         others = [f"s{j:02d} " for j in range(SESSIONS) if j != i]
         assert not any(o in text for o in others), f"{sid}'s transcript holds another session's events"
         assert text.count(f"{sid} asks") == 1, "its burst's run only, not the run written meanwhile"
-        assert (items[-1]["content"] == "[... the user stopped this turn here, before it finished ...]") == (i % 5 == 0)
+        assert (items[-1]["content"] == STOPPED_MARKER) == (i % 5 == 0)

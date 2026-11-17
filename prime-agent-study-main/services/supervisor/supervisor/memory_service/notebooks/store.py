@@ -16,12 +16,15 @@ narrower stays reachable only through notebook recall, which does.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Final
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import ColumnElement, Update, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -38,6 +41,7 @@ from supervisor.memory_service.notebooks.models import (
     FactItemRow,
     FactRevisionRow,
     FactRow,
+    InboxRow,
     NotebookRow,
 )
 from supervisor.memory_service.notebooks.types import (
@@ -47,10 +51,41 @@ from supervisor.memory_service.notebooks.types import (
     Provenance,
     Revision,
     Sensitivity,
+    Typed,
     notebook_id,
     personal_source,
     subject_of,
 )
+from supervisor.memory_service.notebooks.wire import typed_in, typed_out
+
+PRUNE_BATCH: Final = 1_000
+"""Handled inbox rows one prune deletes per transaction."""
+PRUNE_BATCHES_PER_PASS: Final = 10
+"""Transactions one prune makes at most (a drain runs it first): the rest the next one."""
+
+_EMBED_AHEAD: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memory-embed-ahead")
+"""Threads embedding queued captures ahead of landing (``embed_queued``), never the loop's
+default executor."""
+
+HANDLED_PAYLOAD: Final[dict[str, object]] = {
+    "observations": [], "size": 0, "retire": [], "sources": [], "author": None, "attempts": 0, "failed_at": None,
+}
+"""What a handled queued row keeps of its capture: nothing but its key (never set aside,
+never queued again)."""
+
+
+def empty_set_aside(*where: ColumnElement[bool]) -> Update:
+    """The update emptying set-aside rows of their captured words, as handled rows are
+    (``mark_handled``): never queued again, nothing of the capture kept."""
+    return update(InboxRow).where(InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0, *where).values(
+        **HANDLED_PAYLOAD
+    )
+
+
+def mark_handled(*where: ColumnElement[bool], at: int) -> Update:
+    """The update marking queued rows handled (promoted, archived away or cleared): kept,
+    for a retried burst to find its key, and emptied of the captured words."""
+    return update(InboxRow).where(InboxRow.promoted_at.is_(None), *where).values(promoted_at=at, **HANDLED_PAYLOAD)
 
 BANK_CONFIDENCE = 0.9
 """A fact a user or agent wrote down is surer than one extracted from a transcript."""
@@ -60,7 +95,7 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _provenance(row: FactRow | FactRevisionRow) -> Provenance:
+def row_provenance(row: FactRow | FactRevisionRow | InboxRow) -> Provenance:
     return Provenance(
         Sensitivity.parse(row.sensitivity), tuple(row.sources or ()), bool(row.source_unknown)
     )
@@ -70,12 +105,27 @@ def _fact(row: FactRow) -> Fact:
     return Fact(
         id=str(row.id),
         text=row.text,
-        provenance=_provenance(row),
+        provenance=row_provenance(row),
         created_at=int(row.created_at),
         updated_at=int(row.updated_at),
         author=row.author,
         expires_on=row.expires_on,
+        typed=_typed(row),
     )
+
+
+def _typed(row: FactRow) -> Typed | None:
+    if row.kind is None:
+        return None
+    return typed_in({column: getattr(row, column) for column in _TYPED_COLUMNS})
+
+
+def _typed_columns(typed: Typed | None) -> dict[str, object]:
+    """The columns a fact's type is kept in: its wire form (``wire.typed_out``), one name for one field."""
+    return {} if typed is None else dict(typed_out(typed) or {})
+
+
+_TYPED_COLUMNS: Final = ("kind", "topic", "keywords", "aliases", "body", "extraction_model", "prompt_version")
 
 
 def _notebook(row: NotebookRow) -> Notebook:
@@ -100,7 +150,7 @@ def _revision(row: FactRevisionRow) -> Revision:
         fact_id=str(row.fact_id),
         op=row.op,
         text=row.text,
-        provenance=_provenance(row),
+        provenance=row_provenance(row),
         at=int(row.at),
         author=row.author,
     )
@@ -192,6 +242,7 @@ class FactTx:
         *,
         created_at: int | None = None,
         expires_on: str | None = None,
+        typed: Typed | None = None,
     ) -> str:
         row = FactRow(
             notebook_id=self.notebook.id,
@@ -201,6 +252,7 @@ class FactTx:
             updated_at=self.at,
             expires_on=expires_on,
             **_columns(provenance),
+            **_typed_columns(typed),
         )
         self.db.add(row)
         await self.db.flush()
@@ -216,6 +268,16 @@ class FactTx:
         )
         self._log(int(fact_id), "update", text, provenance)
         await self._index(int(fact_id), text, provenance)
+
+    async def set_typed(self, fact: Fact, typed: Typed | None) -> None:
+        """Give a plain-text fact the type an observation repeating it carried, or (None)
+        take a fact's type away. Not a change to what the fact says, so no revision."""
+        values = _typed_columns(typed) if typed is not None else dict.fromkeys(_TYPED_COLUMNS)
+        await self.db.execute(
+            update(FactRow)
+            .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact.id))
+            .values(**values)
+        )
 
     async def remove(self, facts: Sequence[Fact]) -> None:
         if not facts:
@@ -234,7 +296,12 @@ class FactTx:
             await self._unindex(int(fact.id))
 
     async def revive(self, fact_id: str, text: str, provenance: Provenance) -> None:
-        """Bring a deleted fact back under its own id (restore keeps identity)."""
+        """Bring a deleted fact back under its own id (restore keeps identity). Brought back
+        with other words than it last had, it loses the type that described those."""
+        mine = (FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact_id))
+        last = await self.db.scalar(select(FactRow.text).where(*mine))
+        if last is not None and last != text:
+            await self.db.execute(update(FactRow).where(*mine).values(**dict.fromkeys(_TYPED_COLUMNS)))
         await self.db.execute(
             update(FactRow)
             .where(FactRow.notebook_id == self.notebook.id, FactRow.id == int(fact_id))
@@ -489,6 +556,290 @@ class NotebookStore:
 
     # --- erasure ---------------------------------------------------------------------
 
+    # --- the inbox (G2: automatic captures, appended without the notebook's lock) -------
+
+    async def append_inbox(
+        self,
+        notebook_id: str,
+        observations: Sequence[dict[str, object]],
+        provenance: Provenance,
+        *,
+        author: str | None,
+        expires_on: str | None,
+        retire: Sequence[dict[str, str]] = (),
+        idempotency_key: str | None,
+    ) -> bool:
+        """Queue one capture's observations; False when ``idempotency_key`` is queued
+        already (a retried burst). One insert, no lock on the notebook: captures into one
+        notebook never wait on each other, nor on its edits."""
+        async with self._db() as db:
+            db.add(
+                InboxRow(
+                    notebook_id=notebook_id,
+                    idempotency_key=idempotency_key,
+                    observations=list(observations),
+                    size=len(observations),
+                    retire=list(retire),
+                    author=author,
+                    expires_on=expires_on,
+                    received_at=now_ms(),
+                    **_columns(provenance),
+                )
+            )
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                if idempotency_key is not None and await self.has_key(notebook_id, idempotency_key):
+                    return False  # queued already: a retried burst
+                if await db.get(NotebookRow, notebook_id) is None:
+                    raise NotebookNotFound(notebook_id) from None  # erased under it: nothing queued
+                raise  # another constraint: a fault to say as it is, never a missing notebook
+            return True
+
+    async def pending_notebooks(self, *, limit: int, skip: Sequence[str] = ()) -> list[str]:
+        """Notebooks with queued captures, the longest waiting first, but those in ``skip``
+        (the drainer's, backing off a notebook whose promotion keeps failing)."""
+        async with self._db() as db:
+            query = select(InboxRow.notebook_id).where(InboxRow.promoted_at.is_(None))
+            if skip:
+                query = query.where(InboxRow.notebook_id.not_in(list(skip)))
+            rows = await db.execute(
+                query
+                .group_by(InboxRow.notebook_id)
+                .order_by(func.min(InboxRow.id))
+                .limit(limit)
+            )
+            return [str(r[0]) for r in rows]
+
+    async def set_aside(self, *, give_up_at: int) -> int:
+        """Captures set aside (failing to land on their own, or unreadable), and kept: the
+        few rows ``ix_memory_inbox_attempts`` holds."""
+        async with self._db() as db:
+            # ``attempts > 0`` as written: the partial index's own predicate, which a prepared
+            # statement's generic plan cannot derive from the bound one.
+            query = select(func.count()).select_from(InboxRow).where(InboxRow.attempts > 0, InboxRow.attempts >= give_up_at)
+            return int(await db.scalar(query) or 0)
+
+    async def pending(self) -> int:
+        """Captures queued, in every notebook."""
+        async with self._db() as db:
+            return int(
+                await db.scalar(select(func.count()).select_from(InboxRow).where(InboxRow.promoted_at.is_(None))) or 0
+            )
+
+    async def prune_inbox(self, *, before: int, set_aside_before: int, give_up_at: int) -> int:
+        """Delete promoted rows promoted before ``before`` (epoch ms), in every notebook: past
+        the window a retried burst could come in, nothing of a capture is kept there."""
+        # One set aside (``give_up_at`` failures) is kept until ``set_aside_before``, to be
+        # looked into and queued again (``inbox_set_aside`` counts them). In batches, each its
+        # own short transaction: never one long delete holding the table under appends.
+        conditions = (
+            InboxRow.promoted_at < before,
+            (InboxRow.attempts < give_up_at) | (InboxRow.promoted_at < set_aside_before),
+        )
+        due = select(InboxRow.id).where(*conditions)
+        pruned = 0
+        for _ in range(PRUNE_BATCHES_PER_PASS):  # the rest next time: a drain never waits long on it
+            async with self._db() as db:
+                ids = list(await db.scalars(due.limit(PRUNE_BATCH)))
+                if ids:
+                    # Due still: one queued again meanwhile (``requeue_set_aside``) is kept.
+                    deleted = await db.execute(delete(InboxRow).where(InboxRow.id.in_(ids), *conditions))
+                    await db.commit()
+                    pruned += int(deleted.rowcount or 0)  # type: ignore[attr-defined]
+            if len(ids) < PRUNE_BATCH:
+                break
+        return pruned
+
+    async def capacity(self, notebook_id: str, retire: Sequence[str]) -> tuple[int, int, dict[str, str]]:
+        """In one read: the notebook's live facts, the facts its captures queued hold, and
+        the live text of each of ``retire``."""
+        async with self._db() as db:
+            live = int(
+                await db.scalar(
+                    select(func.count())
+                    .select_from(FactRow)
+                    .where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
+                )
+                or 0
+            )
+            texts: dict[str, str] = {}
+            if retire:
+                rows = await db.execute(
+                    select(FactRow.id, FactRow.text).where(
+                        FactRow.notebook_id == notebook_id,
+                        FactRow.id.in_([int(i) for i in retire]),
+                        FactRow.deleted_at.is_(None),
+                    )
+                )
+                texts = {str(i): str(t) for i, t in rows}
+            queued = int(
+                await db.scalar(
+                    select(func.coalesce(func.sum(InboxRow.size), 0))
+                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                )
+                or 0
+            )
+            return live, queued, texts
+
+    async def embed_queued(self, notebook_id: str, *, limit: int) -> None:
+        """Embed the facts of the notebook's oldest queued captures now, outside its lock:
+        the embedder keeps them (``cost.CachingEmbedder``), so landing them under the lock
+        embeds nothing. An embedder that keeps nothing (no ``caches``) would embed each
+        twice: none then."""
+        if not getattr(self._embedder, "caches", False):
+            return
+        async with self._db() as db:
+            notebook = await db.get(NotebookRow, notebook_id)
+            if notebook is None:
+                return
+            rows = await db.scalars(
+                select(InboxRow)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .order_by(InboxRow.id)
+                .limit(limit)
+            )
+            statements = [
+                o.get("statement")
+                for row in rows
+                # Only what will be indexed: a fact the bank may not hold is embedded by no one.
+                if bankable(notebook, row_provenance(row), row.expires_on)
+                for o in row.observations or ()
+                if isinstance(o, dict)
+            ]
+        texts = [s for s in statements if isinstance(s, str) and s]
+        if texts:
+            # On a thread of its own: an embedder may be slow, and the loop's default executor
+            # does its address lookups (a new database connection waits on it).
+            await asyncio.get_running_loop().run_in_executor(
+                _EMBED_AHEAD, lambda: [self._embedder.embed(t) for t in texts]
+            )
+
+    async def received_before(self, row_ids: Sequence[int], *, before: int) -> set[int]:
+        """Those of ``row_ids`` queued before ``before`` (epoch ms)."""
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(InboxRow.id).where(InboxRow.id.in_(list(row_ids)), InboxRow.received_at < before)
+            )
+            return set(rows)
+
+    async def has_key(self, notebook_id: str, idempotency_key: str) -> bool:
+        """Whether a capture with ``idempotency_key`` is in the notebook's inbox (queued, or
+        handled within ``KEEP_PROMOTED_MS``)."""
+        async with self._db() as db:
+            return (
+                await db.scalar(
+                    select(InboxRow.id).where(
+                        InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key == idempotency_key
+                    )
+                )
+            ) is not None
+
+    async def queued_ids(self, notebook_id: str, *, limit: int) -> list[int]:
+        """The notebook's oldest queued captures' ids."""
+        async with self._db() as db:
+            return [
+                int(i)
+                for i in await db.scalars(
+                    select(InboxRow.id)
+                    .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                    .order_by(InboxRow.id)
+                    .limit(limit)
+                )
+            ]
+
+    async def count_failure(self, row_id: int, *, give_up_at: int, spacing_ms: int = 0) -> int:
+        """Count a failure against one queued capture, setting it aside (marked promoted, so
+        it is pruned in time) at ``give_up_at``: its failures. One within ``spacing_ms`` of
+        the last counted is not counted: the tries are spaced in the database, whichever
+        replica makes them and however often its passes come."""
+        now = now_ms()
+        async with self._db() as db:
+            # Only while it is queued: landed or cleared meanwhile (another replica, a clear),
+            # it is handled, and nothing is counted against it.
+            attempts = await db.scalar(
+                update(InboxRow)
+                .where(
+                    InboxRow.id == row_id,
+                    InboxRow.promoted_at.is_(None),
+                    InboxRow.failed_at.is_(None) | (InboxRow.failed_at <= now - spacing_ms),
+                )
+                .values(attempts=InboxRow.attempts + 1, failed_at=now)
+                .returning(InboxRow.attempts)
+            )
+            if attempts is None:  # handled meanwhile, or counted too lately: as it stands
+                await db.rollback()
+                return int(await db.scalar(select(InboxRow.attempts).where(InboxRow.id == row_id)) or 0)
+            if attempts >= give_up_at:
+                await db.execute(update(InboxRow).where(InboxRow.id == row_id).values(promoted_at=now_ms()))
+            await db.commit()
+            return int(attempts or 0)
+
+    async def queued_statements(self, notebook_id: str) -> list[str]:
+        """Every statement the notebook's queued captures hold."""
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(InboxRow.observations).where(
+                    InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None)
+                )
+            )
+            return [
+                str(o["statement"]) for observations in rows for o in observations or ()
+                if isinstance(o, dict) and isinstance(o.get("statement"), str)
+            ]
+
+    async def all_texts(self, notebook_id: str) -> list[str]:
+        """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""
+        async with self._db() as db:
+            return list(
+                await db.scalars(
+                    select(FactRow.text).where(FactRow.notebook_id == notebook_id, FactRow.deleted_at.is_(None))
+                )
+            )
+
+    async def typed_of(self, notebook_id: str, ids: Sequence[str]) -> dict[str, tuple[str, Typed]]:
+        """The words each of ``ids`` has now and the type describing them, live or deleted
+        (a fact's type is not in its history)."""
+        if not ids:
+            return {}
+        async with self._db() as db:
+            rows = await db.scalars(
+                select(FactRow).where(FactRow.notebook_id == notebook_id, FactRow.id.in_([int(i) for i in ids]))
+            )
+            return {str(r.id): (r.text, t) for r in rows if (t := _typed(r)) is not None}
+
+    async def drop_inbox(self, notebook_id: str) -> int:
+        """Discard a notebook's queued captures (it was archived after they were queued):
+        marked handled, not deleted, so a retried burst still finds its key."""
+        async with self._db() as db:
+            dropped = await db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=now_ms()))
+            await db.commit()
+            return int(dropped.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def delete_inbox(self, notebook_id: str) -> int:
+        """Delete every queued row of a notebook that is gone (erased under its captures):
+        nothing of an erased owner is kept, not even set aside."""
+        async with self._db() as db:
+            deleted = await db.execute(delete(InboxRow).where(InboxRow.notebook_id == notebook_id))
+            await db.commit()
+            return int(deleted.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def requeue_set_aside(self, notebook_id: str | None = None, *, give_up_at: int) -> int:
+        """Queue again the captures set aside (``give_up_at`` failures; in one notebook, or
+        every one): an operator's step once the fault that set them aside is fixed. Each
+        gets its tries afresh; one handled (landed, cleared) never comes back."""
+        query = update(InboxRow).where(
+            InboxRow.promoted_at.is_not(None), InboxRow.attempts > 0, InboxRow.attempts >= give_up_at
+        )
+        if notebook_id is not None:
+            query = query.where(InboxRow.notebook_id == notebook_id)
+        async with self._db() as db:
+            # Its time afresh too: a day of failing counts from now (``ops.STUCK_AFTER_MS``).
+            requeued = await db.execute(query.values(promoted_at=None, attempts=0, failed_at=None, received_at=now_ms()))
+            await db.commit()
+            return int(requeued.rowcount or 0)  # type: ignore[attr-defined]
+
     async def erase_owner(self, *, tenant_id: str, owner: str) -> int:
         """Delete every notebook of ``owner`` with its facts, history and bank items.
 
@@ -505,6 +856,10 @@ class NotebookStore:
             )
             if not ids:
                 return 0
+            # Locked first, FOR UPDATE: a capture queued meanwhile (its foreign key takes a key
+            # share lock on the notebook) waits for this erasure, then finds no notebook,
+            # never committing a row between this delete of the queue and of the notebook.
+            await db.execute(select(NotebookRow.id).where(NotebookRow.id.in_(ids)).with_for_update())
             items = list(
                 await db.scalars(select(FactItemRow.item_id).where(FactItemRow.notebook_id.in_(ids)))
             )
@@ -512,6 +867,7 @@ class NotebookStore:
             if items:
                 await db.execute(delete(MemoryItemRow).where(MemoryItemRow.id.in_(items)))
             await db.execute(delete(FactRevisionRow).where(FactRevisionRow.notebook_id.in_(ids)))
+            await db.execute(delete(InboxRow).where(InboxRow.notebook_id.in_(ids)))  # not yet facts, theirs all the same
             await db.execute(delete(FactRow).where(FactRow.notebook_id.in_(ids)))
             await db.execute(delete(NotebookRow).where(NotebookRow.id.in_(ids)))
             await db.commit()
