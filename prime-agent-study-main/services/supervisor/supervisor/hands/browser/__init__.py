@@ -30,12 +30,14 @@ from supervisor.hands.browser.providers import (
     SandboxChromium,
     browser_providers_from_env,
 )
-from supervisor.hands.browser.runner import FILL_ENV, META_MARK
+from supervisor.hands.browser.runner import CDP_ENV, DIALOG_ENV, FILL_ENV, META_MARK
 
 __all__ = [
     "BROWSER_ERROR_ENV",
     "BROWSER_PROVIDERS",
     "BROWSER_TOOLS",
+    "CDP_ENV",
+    "DIALOG_ENV",
     "FILL_ENV",
     "META_MARK",
     "RUNNER_DIR",
@@ -52,7 +54,7 @@ __all__ = [
     "runtime_payload",
 ]
 
-BROWSER_TOOLS: Final = frozenset({"browser_exec", "browser_vault"})
+BROWSER_TOOLS: Final = frozenset({"browser_exec", "browser_vault", "browser_dialog", "browser_cdp"})
 """The tools that need the session's browser provider: only their calls ask it."""
 BROWSER_ERROR_ENV: Final = "GITHI_BROWSER_ERROR"
 """Why the session's browser provider could not serve this call, for the runner to report."""
@@ -61,8 +63,11 @@ WORKSPACE_DIR: Final = ".githi/browser"
 files and the agent's own helpers survive a lost sandbox (the open tabs do not)."""
 RUNNER_DIR: Final = "/tmp/githi-browser/runner"
 """Where the runtime is kept in the sandbox, one folder per version of its files."""
-RUNTIME_FILES: Final = ("runner.py", "daemon.py", "snapshot.py")
-"""What the sandbox runs: the call's runner, the daemon it starts, and its snapshots."""
+RUNTIME_FILES: Final = (
+    "runner.py", "daemon.py", "snapshot.py", "cdp_supervisor.py", "cdp_dialogs.py", "cdp_frames.py", "cdp_socket.py",
+)
+"""What the sandbox runs: the call's runner, the daemon it starts, its snapshots, and the
+daemon's CDP supervisor (its dialog and frame halves, and its WebSocket)."""
 
 
 @functools.cache

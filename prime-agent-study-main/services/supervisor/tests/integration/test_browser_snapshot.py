@@ -181,14 +181,28 @@ async def test_a_long_fixed_wait_ends_once_the_page_is_quiet(call: Call) -> None
     assert 1.4 <= float(busy["output"]) < 4, "the wait ended while the page was still changing"
 
 
-async def test_another_sites_frame_is_named_and_reachable_through_playwright(call: Call, site: Site) -> None:
-    """A frame of another site runs in its own process, out of the snapshot's reach: it is
-    named, not dropped, and Playwright's frame locator still acts in it."""
+async def test_another_sites_frame_is_read_and_acted_in_by_its_ids(call: Call, site: Site) -> None:
+    """A frame of another site (a payment form, a login widget) runs in a process of its own:
+    the snapshot reads it through its own session, names the iframe by its frame, and an ID
+    in it acts there, in that process (an element id is only unique within one)."""
+    site.pages["/pay"] = ("<button onclick=\"document.body.append('paid')\">Pay</button>", 0)
+    site.pages["/shop"] = (f"<title>shop</title><button>Pay</button><iframe src={site.url('/pay', host='localhost')!r}></iframe>", 0)
+
+    shown = await call(f"page.goto({site.url('/shop')!r})\npage.wait_for_timeout(500)\nprint(snapshot())")
+    lines = shown["output"].splitlines()
+    inner = next(line for line in lines[lines.index("frame 1:"):] if "button: Pay" in line)
+    paid = await call(f"act(('click', {inner[inner.index('[') + 1 : inner.index(']')]!r}))\nprint(page.frame_locator('iframe').locator('body').inner_text())")
+
+    assert "Iframe: frame 1" in shown["output"] and "frame 1:" in lines, shown["output"]
+    assert inner.strip().startswith("[1-"), "the frame's button is numbered by its frame"
+    assert paid["output"].endswith("paid"), paid
+
+
+async def test_another_sites_frame_is_still_reachable_through_playwright(call: Call, site: Site) -> None:
     site.pages["/pay"] = ("<button onclick=\"document.body.append('paid')\">Pay</button>", 0)
     site.pages["/shop"] = (f"<title>shop</title><iframe src={site.url('/pay', host='localhost')!r}></iframe>", 0)
 
-    shown = await call(f"page.goto({site.url('/shop')!r})\npage.wait_for_timeout(500)\nprint(snapshot())")
+    await call(f"page.goto({site.url('/shop')!r})")
     paid = await call("frame = page.frame_locator('iframe')\nframe.get_by_role('button', name='Pay').click()\nprint(frame.locator('body').inner_text())")
 
-    assert "another site's frame" in shown["output"], shown["output"]
     assert paid["output"].endswith("paid")

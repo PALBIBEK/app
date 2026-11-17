@@ -1,7 +1,7 @@
 """The browser daemon: what outlives a ``browser_exec`` call, against a real Chromium.
 
 One daemon per browser name holds the browser, a CDP connection with an event buffer,
-and the dialog answers; each call is a fresh process that asks it. So a call sees what
+the CDP supervisor that holds dialogs; each call is a fresh process that asks it. So a call sees what
 the tabs did while no call was running, a network-idle wait counts requests begun before
 it, and a daemon or browser that died is noticed and replaced."""
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.browser import Call, Site, kill, needs_browser
+from tests.support.browser import Call, Site, Tool, kill, needs_browser
 
 pytestmark = [pytest.mark.asyncio, needs_browser]
 
@@ -26,9 +26,11 @@ def _alive(pid: int) -> bool:
     return Path(f"/proc/{pid}").exists()
 
 
-async def test_what_a_tab_did_between_calls_reaches_the_next_result(call: Call) -> None:
+async def test_what_a_tab_did_between_calls_reaches_the_next_result(call: Call, tool: Tool) -> None:
     """A page keeps running after the call that opened it ends: its late errors and its
-    dialog (answered, never left blocking the page) are in the next call's result."""
+    dialog are in the next call's result. The dialog is held for the agent (Hermes's
+    must_respond): the next call that touches the page ends at once to say so, rather than
+    waiting out its timeout, and once the agent answers it the page goes on."""
     await call(
         "page.set_content('<title>late</title><script>"
         "setTimeout(() => { console.error(\"late failure\"); alert(\"Saved!\"); }, 600)"
@@ -36,12 +38,18 @@ async def test_what_a_tab_did_between_calls_reaches_the_next_result(call: Call) 
     )
     await asyncio.sleep(1.2)  # no call is running when the page reports
 
+    blocked = await call("print(page.title())")
+    answered = await tool("browser_dialog", action="dismiss")
     later = await call("print(page.title())")
 
-    kinds = {e["kind"]: e for e in later["events"]}
-    assert later["output"] == "late", "the dialog was left blocking the page"
+    kinds = {e["kind"]: e for e in blocked["events"]}
+    assert blocked["blocked_by_dialog"] is True and "browser_dialog" in blocked["error"], blocked
+    assert [(d["type"], d["message"]) for d in blocked["pending_dialogs"]] == [("alert", "Saved!")]
     assert kinds["console"]["text"] == "late failure"
-    assert {kinds["dialog"][k] for k in ("type", "message", "answer")} == {"alert", "Saved!", "dismiss"}
+    assert answered["success"] is True and answered["dialog"]["message"] == "Saved!", answered
+    assert later["output"] == "late", "the page did not go on once the dialog was answered"
+    (closed,) = [e for e in later["events"] if e["kind"] == "dialog"]
+    assert {k: closed[k] for k in ("type", "message", "answer", "by")} == {"type": "alert", "message": "Saved!", "answer": "dismiss", "by": "agent"}
 
 
 async def test_each_event_is_reported_once(call: Call) -> None:
