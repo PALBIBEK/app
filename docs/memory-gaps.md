@@ -258,7 +258,11 @@ proceed.
   limits, test for test.
   - `noop` and `observations` are exclusive; an unknown field anywhere fails the outcome.
   - Each observation is normalized to the store's limits rather than failing on them, and
-    the store checks every bound again before it keeps one.
+    the store checks every bound again before it keeps one. Grok's one exception stands: a
+    statement the model itself made too long fails the outcome. One the cleaning lengthened
+    (a "(said in X)" made a claim label) is cut, never the label.
+  - A lone UTF-16 surrogate (half of a cut emoji) becomes U+FFFD in the answer, the wire and
+    the transcript, so no bound, store or model call fails on it.
   - The host sets the provenance: extraction model, `PROMPT_VERSION` and time.
   - Ours: QM's sensitivity label rides on the outcome (`unknown` when missing), and a JSON
     answer in a code fence is unwrapped.
@@ -285,19 +289,36 @@ proceed.
   change is retired (the disclosure layer's rule for deletes). Statements are cleaned as
   any captured fact is (a model's "(said in X)" is marked as a claim). The inbox backlog is
   reported in the service's metrics (`inbox_backlog`).
-- **A failing capture is set aside:** a batch that fails is rolled back and its captures
-  landed one at a time, so the good ones land. One that fails on its own is counted and
-  set aside at its fifth failure, spaced by the drainer's backoff. One that cannot be read
-  is set aside at once. Facts are embedded before the notebook's lock is taken, so the
-  lock covers the writes only. A replacement in a full notebook counts the room its
-  retirement frees, and editing a typed fact's words takes its type away.
+- **A failing capture is set aside, never the queue behind it:** a batch that fails, for
+  any reason, is rolled back and its captures landed one at a time, oldest first, so the
+  good ones land.
+  - A capture that fails on its own is counted (at most every 30 s, recorded on its row,
+    so every replica's tries share one count) and set aside at its eighth failure.
+  - A fault every capture meets is not theirs: while nothing lands on the replica, nothing
+    is counted, unless a capture has waited a day. A passing (transient) fault counts
+    against no one, and two in a row stop the pass. Postgres's class 08, 40, 53 and 57
+    faults are passing.
+  - One that cannot be read is set aside at once. Set-aside captures are kept a week,
+    counted in `inbox_set_aside`, and queued again with
+    `python -m supervisor.memory_service.notebooks.requeue [--notebook ID]` once their fault
+    is fixed.
+  - Facts are embedded before the notebook's lock is taken (on the service's own threads),
+    so the lock covers the writes only. A replacement in a full notebook counts the room its
+    retirement frees, and editing a typed fact's words takes its type away.
+- **A person's change wins over what is queued:** a delete, edit or restore takes out of the
+  queue (set-aside captures too) every statement of words no fact has afterwards, in its own
+  transaction, so a capture queued before it never brings them back. A capture that loses a
+  statement this way retires nothing (both facts are kept, as when a capture does not land).
+  A capture whose every statement is a repeat but which makes a fact false is queued too, so
+  its retirement lands in its place rather than as a delete. A handled row keeps only its
+  idempotency key: its words live in the notebook alone, under its history and erasure.
 - **Known limit:** resolution compares a burst with the facts that have landed, not those
   still queued. Promotion wakes at once on the replica that queued the capture, and within
   a second elsewhere, while a session's next burst is a quiet window away. A contradiction
   that slips through that gap is for consolidation (G5).
 - **Robust draining:** a notebook whose promotion keeps failing is backed off (5 s doubling
   to 5 minutes), so it never holds up the others. Promoted rows are pruned in every
-  notebook once a minute. A full notebook refuses a capture up front, as `capture` does. A
+  notebook once a minute, in bounded batches. A full notebook refuses a capture up front, as `capture` does. A
   fact is retired only if it still says what resolution judged (one edited meanwhile is
   kept). A client that finds an older service probes it again after a minute, not on
   every capture. A fact's type is on its row, so the facts as they were at a revision
@@ -305,7 +326,9 @@ proceed.
 - **Back-compat:** an opaque provider, or a memory service older than G2 (FastAPI's own 404
   on `/observations`), gets the statements as a plain capture.
 - **Per-tenant fairness:** capture's model calls (extraction, resolution) take one of their
-  tenant's slots on the worker (`memory/fairness.py`, `MEMORY_CAPTURE_PER_TENANT`, 8).
+  session's tenant's slots on the worker (`memory/fairness.py`, `MEMORY_CAPTURE_PER_TENANT`,
+  8). The memory service's drainer takes at most a third of its connection pool (one on
+  SQLite), and the supervisor's memory client has its own bounded pool (256).
   One tenant's burst waits its turn and other tenants' captures go straight through. A
   rate-limited `observe` (the service's per-tenant change limit) is retried briefly,
   honouring `Retry-After`, rather than losing the burst.
@@ -314,13 +337,16 @@ proceed.
 hour:* G1's numbers recorded earlier were taken when this shared machine was quieter, so
 `main` (G1) was run again beside G2.
 
-| Measure | G1 (`main`) | G2 |
-|---|---|---|
-| Session errors | 1 (create 500, overloaded Temporal) | 0 |
-| Captured | 199/200 | 200/200 (p95 5.6 s) |
-| Lost, duplicated, crossed, unrecalled | 0 | 0 |
-| Recall p50 / p95 | 2,245 / 3,304 ms | 1,959 / 2,965 ms |
-| First step p95 | 10,974 ms | 9,310 ms |
+| Measure | G1 (`main`) | G2 | G2 final (merged `main`, fresh machine) |
+|---|---|---|---|
+| Session errors | 1 (create 500, overloaded Temporal) | 0 | 0 |
+| Captured | 199/200 | 200/200 (p95 5.6 s) | 200/200 (p50 2.6 s, p95 6.6 s) |
+| Lost, duplicated, crossed, unrecalled | 0 | 0 | 0 |
+| Recall p50 / p95 | 2,245 / 3,304 ms | 1,959 / 2,965 ms | 2,169 / 3,656 ms |
+| First step p95 | 10,974 ms | 9,310 ms | 10,921 ms |
+
+The last column ran after the review rounds, on another machine, so its latencies compare
+with the first two only loosely; its correctness measures are the ones that must hold.
 
 Found by G2's first load run, and fixed in G2:
 - **Malformed answers:** a model answering capture in prose (the stack's stand-in) made
@@ -739,7 +765,7 @@ requires before any gap is ported.
 |---|---|---|---|---|---|---|---|---|
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
 | G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [~] eight review rounds; merged on request | [~] correctness and capture met; recall latency needs a sized environment | [x] | #197 |
-| G2 typed observations, strict schema | P0 | [x] | [x] | [ ] | [ ] | [ ] | [ ] | |
+| G2 typed observations, strict schema | P0 | [x] | [x] | [x] | [~] 28 review rounds and a verifying one; what was left is answered on #198 | [~] correctness and capture met; recall latency needs a sized environment | [x] | #198 |
 | G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G5 consolidation (Dream) | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |

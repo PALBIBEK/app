@@ -636,3 +636,32 @@ def test_a_lone_surrogate_in_the_journal_never_fails_the_capture() -> None:
     condensed = condense(items, TranscriptBudget(max_bytes=2_000, max_items=10))
 
     assert "\ufffd" in condensed.json and condensed.json.encode("utf-8")
+
+
+def test_a_malformed_answer_reading_like_an_overflow_buys_no_shorter_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its message holds the model's own words: one saying "token limit" is still a
+    malformed answer, retried once on the same transcript."""
+    assert turn.is_context_overflow(MalformedOutcome("unknown observation type 'token limit'"))
+    extracted, sent = _attempts(
+        [MalformedOutcome("unknown observation type 'token limit'")], monkeypatch, tool_loop(60, 20 * 1024)
+    )
+
+    assert isinstance(extracted, Observations)
+    assert len(sent) == 2 and sent[0] == sent[1], "the same transcript: never condensed for it"
+
+
+def test_the_exchange_skips_a_content_part_of_another_shape() -> None:
+    from supervisor.agent.events import MessageEnd
+
+    class Env:
+        def __init__(self, payload: object) -> None:
+            self.payload = payload
+
+    said = turn._said([
+        Env(MessageEnd(role="user", content=[{"type": "text", "text": "Hi"}])),
+        Env(MessageEnd(role="assistant", content=["a bare string", {"type": "text", "text": "Done"}])),  # type: ignore[list-item]
+    ])  # type: ignore[arg-type]
+
+    assert (said.input, said.reply) == ("Hi", "Done")

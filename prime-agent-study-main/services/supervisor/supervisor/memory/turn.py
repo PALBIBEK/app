@@ -427,9 +427,17 @@ class SessionMemory:
             return 0
         # Only retirements (every statement a repeat) go through the inbox too: in their
         # place in the queue, never a delete that would strip other sessions' queued captures.
-        return await self._capture_observations(
-            scope, binding.writable, session_id, drafts, resolution.retire, extracted.sensitivity, runs, exchanges, key
-        )
+        try:
+            return await self._capture_observations(
+                scope, binding.writable, session_id, drafts, resolution.retire, extracted.sensitivity, runs, exchanges, key
+            )
+        except NotebookArchived:
+            if drafts:
+                raise  # as a capture into an archived notebook always has
+            # Nothing to keep, only facts to retire in a notebook that takes no change: as the
+            # delete it replaced did, the burst ends quietly.
+            logger.info("session %s: contradicted facts not retired: notebook archived", session_id)
+            return 0
 
     async def _retire(self, scope: Scope, notebook: str, session_id: str, ids: Sequence[str]) -> None:
         """Delete facts a capture made false (history keeps them); best effort, after the
@@ -573,7 +581,9 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
         except Exception as exc:  # noqa: BLE001 — a failed extraction remembers nothing, never crashes the capture
             pause: float | None = None
             again_on = condensed
-            if is_context_overflow(exc) and attempt < CAPTURE_ATTEMPTS:  # a last attempt condenses nothing more
+            # A malformed answer first: its message holds the model's own words, which may read
+            # as an overflow ("token limit") and must not buy a shorter transcript.
+            if not isinstance(exc, MalformedOutcome) and is_context_overflow(exc) and attempt < CAPTURE_ATTEMPTS:
                 shorter = await run_blocking(condense, items, TranscriptBudget.for_attempt(budget + 1))
                 # Only a transcript that really is shorter (a burst of many runs keeps every
                 # request and stop marker, so condensing can reach a floor).
@@ -631,7 +641,7 @@ def _said(run: Sequence[Envelope]) -> Exchange:
         if isinstance(e.payload, MessageEnd) and e.payload.role == "assistant" and message_text(e.payload).strip()
     ]
     reply = next(
-        (r for r in replies if not any(part.get("type") == "tool_call" for part in r.content)),
+        (r for r in replies if not any(isinstance(part, dict) and part.get("type") == "tool_call" for part in r.content)),
         replies[0] if replies else None,
     )
     return Exchange(
