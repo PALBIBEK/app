@@ -248,16 +248,16 @@ async def flush(session_id: str, body: FlushIn, request: Request) -> dict[str, A
 
 @router.get("/notebooks/{notebook_id}")
 async def notebook_view(notebook_id: str, request: Request) -> dict[str, Any]:
-    """What resolution compares a burst with, beyond the facts: the statements still queued
-    in the notebook's inbox, and the revision both were read at (S3)."""
+    """What resolution compares a burst with, beyond the facts: the statements committed
+    and not landed yet (``CaptureQueue.view``), and the revision read first (S3)."""
     store = request.app.state.memory.notebooks.store
     try:
         notebook = await store.get(notebook_id)
     except NotebookNotFound as exc:
         raise HTTPException(404, {"code": "NotebookNotFound", "message": str(exc)}) from exc
     enforce_item_tenant(request, notebook.tenant_id)
-    revision = await _queue(request).revision(notebook_id)
-    return {"revision": revision, "queued": await store.queued_statements(notebook_id)}
+    revision, statements = await _queue(request).view(notebook_id)
+    return {"revision": revision, "queued": statements}
 
 
 def _checked(job_id: str, request: Request, body: LeaseIn) -> CaptureLease:

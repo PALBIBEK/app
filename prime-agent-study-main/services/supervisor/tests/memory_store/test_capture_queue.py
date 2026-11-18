@@ -341,6 +341,8 @@ async def test_a_commit_changes_the_revision_before_its_facts_are_queued(
     monkeypatch.setattr(svc.app.state.memory.notebooks, "observe", down)
     await q.commit(a, observations("Deploys on Fridays"), resolved_at=seen)
     assert await svc.app.state.memory.notebooks.store.pending() == 0, "committed, not queued"
+    revision, statements = await q.view(notebook)
+    assert revision != seen and statements == ["Deploys on Fridays"], "resolution sees it all the same"
     with pytest.raises(StaleResolution):
         await q.commit(b, observations("Deploys on Friday"), resolved_at=seen)
     await q.commit(b, NOOP, resolved_at=seen)  # nothing to change: never stale

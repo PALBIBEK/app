@@ -646,6 +646,27 @@ class CaptureQueue:
             await db.commit()
         return len(rows)
 
+    async def view(self, notebook_id: str) -> tuple[str, list[str]]:
+        """What a capture's resolution compares a burst with beyond the landed facts (S3):
+        the revision, then every statement committed into the notebook and not landed yet,
+        whether queued in its inbox or committed and not yet queued (the window between a
+        commit and its queuing, which the revision already counts). Read in that order, a
+        statement moving on between the reads is seen twice, never missed: one still to be
+        queued is read before the inbox, and the facts are read after this."""
+        revision = await self.revision(notebook_id)
+        async with self._db() as db:
+            outcomes = list(
+                await db.scalars(
+                    select(CaptureJobRow.outcome).where(
+                        CaptureJobRow.notebook_id == notebook_id,
+                        CaptureJobRow.status == "completed",
+                        ~CaptureJobRow.queued,
+                    )
+                )
+            )
+        committed = [str(o.get("statement", "")) for outcome in outcomes for o in (outcome or {}).get("observations", ())]
+        return revision, committed + await self._notebooks.store.queued_statements(notebook_id)
+
     async def prune(self, *, before: int | None = None) -> int:
         """Delete resolved jobs last changed before ``before`` (a week ago by default)."""
         before = self._clock() - KEEP_JOBS_MS if before is None else before
