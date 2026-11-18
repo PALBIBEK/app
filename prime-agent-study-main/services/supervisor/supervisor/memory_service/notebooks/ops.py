@@ -249,6 +249,8 @@ class NotebookOps:
             new = {normalize(d.statement) for d in drafts} - known - pending
             _within("facts in a notebook", MAX_FACTS_PER_NOTEBOOK, live + len(pending) + len(new) - len(texts))
         retired = [{"id": fact_id, "text": text} for fact_id, text in texts.items()]
+        if not drafts and not retired:
+            return 0  # only retirements, every one gone or changed since: nothing to queue
         provenance = capture_provenance(notebook.home, context)
         queued = await self.store.append_inbox(
             notebook_id,
@@ -497,6 +499,11 @@ class NotebookOps:
             removed = [f for i, f in current.items() if i not in target]
             await tx.remove(removed)
             await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
+            # A fact the restore brings back (or gives its old words again) was judged by no
+            # capture queued before it: none of them retires it.
+            await _spare_from_queued(
+                tx, [i for i, f in target.items() if i not in current or current[i].text != f.text]
+            )
             for fact_id, fact in target.items():
                 live = current.get(fact_id)
                 if live is None:
@@ -511,6 +518,25 @@ class NotebookOps:
                         await tx.set_typed(live, None)  # its type described the words it no longer has
 
         await self.store.transact(notebook_id, run, author=author)
+
+
+async def _spare_from_queued(tx: FactTx, fact_ids: Sequence[str]) -> None:
+    """Take ``fact_ids`` out of the retirements the notebook's queued (and set-aside)
+    captures carry: facts a person just brought back."""
+    spared = set(fact_ids)
+    if not spared:
+        return
+    columns = select(InboxRow.id, InboxRow.retire)
+    queued = await tx.db.execute(columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.promoted_at.is_(None)))
+    set_aside = await tx.db.execute(
+        columns.where(InboxRow.notebook_id == tx.notebook.id, InboxRow.attempts > 0, InboxRow.attempts >= PROMOTE_ATTEMPTS)
+    )
+    for row_id, retire in [*queued.all(), *set_aside.all()]:
+        if not isinstance(retire, list):
+            continue  # another version's: unreadable, set aside as such (``_readable``)
+        kept = [r for r in retire if not (isinstance(r, dict) and r.get("id") in spared)]
+        if len(kept) != len(retire):
+            await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(retire=kept))
 
 
 async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]) -> None:

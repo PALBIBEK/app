@@ -1816,6 +1816,37 @@ async def test_a_capture_meeting_a_passing_fault_holds_up_none_behind_it_but_two
         assert behind not in tried, "two in a row: the database's fault, the pass stops"
 
 
+async def test_a_capture_queued_before_a_restore_never_retires_what_the_restore_brought_back(
+    svc: MemoryServiceHandle,
+) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deploys on Fridays"], context=OWN)  # revision 1
+    (fact,) = await client.facts(nb.id)
+    await client.observe(nb.id, [draft("Deploys on Mondays")], context=OWN, retire=[fact.id])
+    await client.delete(nb.id, [fact.id])  # revision 2
+    await client.restore(nb.id, 1)  # the person brings it back
+
+    await memory.inbox.drain()
+
+    assert sorted(f.text for f in await client.facts(nb.id)) == ["Deploys on Fridays", "Deploys on Mondays"]
+
+
+async def test_a_capture_that_only_retires_facts_already_gone_queues_nothing(svc: MemoryServiceHandle) -> None:
+    memory = svc.app.state.memory
+    await hold(memory)
+    client = svc.client()
+    nb = await client.ensure(tenant_id="t1", owner="alice", agent_pin=PIN, name="default")
+    await client.capture(nb.id, ["Deleted since"], context=OWN)
+    (fact,) = await client.facts(nb.id)
+    await client.delete(nb.id, [fact.id])
+
+    assert await client.observe(nb.id, [], context=OWN, retire=[fact.id]) == 0
+    assert await memory.notebooks.store.pending() == 0
+
+
 def test_the_app_wrapper_copies_without_recursing() -> None:
     import copy
 
