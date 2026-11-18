@@ -664,12 +664,16 @@ def _canonical(outcome: dict[str, Any]) -> dict[str, Any]:
     retire = outcome.get("retire") or []
     if not isinstance(observations, list) or not isinstance(retire, list):
         raise CaptureInvalid("an outcome's observations and retirements are lists")
-    return {
-        "observations": observations,
-        "retire": [str(r) for r in retire],
-        "context": outcome.get("context"),
-        "author": outcome.get("author"),
-    }
+    context, author = outcome.get("context"), outcome.get("author")
+    if context is not None and not isinstance(context, dict) or author is not None and not isinstance(author, str):
+        raise CaptureInvalid("an outcome's context is an object and its author a string")
+    try:  # refused now, not committed and then never kept
+        for wire in observations:
+            observation_in(wire).validate()
+        context_in(context)
+    except (ObservationInvalid, KeyError, TypeError, ValueError) as exc:
+        raise CaptureInvalid(f"an outcome that cannot be kept: {exc}") from exc
+    return {"observations": observations, "retire": [str(r) for r in retire], "context": context, "author": author}
 
 
 def _job(row: CaptureJobRow) -> CaptureJob:

@@ -523,7 +523,7 @@ def _capture_error(code: object, detail: dict[str, Any]) -> Exception | None:
     if code == "StaleResolution":
         return StaleResolution(str(detail.get("expected", "")), str(detail.get("actual", "")))
     if code == "UnknownCaptureSession":
-        return UnknownCaptureSession(message)
+        return UnknownCaptureSession(str(detail.get("session_id", "")))
     if code == "CaptureInvalid":
         return CaptureInvalid(message)
     if code == "CaptureConflict":

@@ -72,6 +72,7 @@ from supervisor.memory.transcript import (
 )
 from supervisor.memory.view import observe
 from supervisor.memory_service.capture.errors import (
+    CaptureInvalid,
     StaleLease,
     StaleResolution,
     UnknownCaptureSession,
@@ -250,7 +251,9 @@ def _writable(scope: Scope | None) -> str | None:
 def _terminal(exc: BaseException) -> bool:
     """Whether a capture job's failure would recur on every attempt: its outcome refused as
     it is, or its notebook gone. Anything else may pass (the service, the model)."""
-    return isinstance(exc, (InvalidObservation, MemoryRequestInvalid, NotebookNotFound, UnknownCaptureSession))
+    return isinstance(
+        exc, (CaptureInvalid, InvalidObservation, MemoryRequestInvalid, NotebookNotFound, UnknownCaptureSession)
+    )
 
 
 def _as_facts(statements: Sequence[str]) -> list[Fact]:

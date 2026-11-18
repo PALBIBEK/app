@@ -16,10 +16,8 @@ from pydantic import BaseModel, Field
 
 from supervisor.memory_service.auth import enforce_item_tenant, enforce_scope_tenant
 from supervisor.memory_service.capture.errors import (
-    CaptureConflict,
     CaptureError,
     CaptureInvalid,
-    StaleLease,
     StaleResolution,
     UnknownCaptureSession,
 )
@@ -106,10 +104,9 @@ def _error(exc: CaptureError) -> HTTPException:
         status = 422
     elif isinstance(exc, UnknownCaptureSession):
         status = 404
+        detail["session_id"] = exc.session_id
     elif isinstance(exc, StaleResolution):
         detail["expected"], detail["actual"] = exc.expected, exc.actual
-    elif isinstance(exc, (CaptureConflict, StaleLease)):
-        pass
     return HTTPException(status_code=status, detail=detail)
 
 
