@@ -1,0 +1,85 @@
+"""The durable capture queue's tables (G3), in the memory service's database.
+
+Grok keeps one queue per scope in a SQLite file (``xai-grok-memory/src/v2_capture.rs::
+V2CaptureStore``). Ours holds every tenant's sessions in these two tables, shared by every
+replica and worker: a session's cursors, and its jobs, one per burst of turns.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import BigInteger, Boolean, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import JSON
+
+from supervisor.memory_service.models import Base
+
+
+class CaptureSessionRow(Base):
+    """A session's cursors, in turns: every turn through ``requested`` is queued, through
+    ``captured`` its outcome is committed (or failed for good), and through ``indexed`` its
+    facts have landed in the notebook (G2's inbox), so recall finds them. Each only grows."""
+
+    __tablename__ = "memory_capture_sessions"
+
+    session_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    requested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    captured: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    indexed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class CaptureJobRow(Base):
+    """One burst of a session's turns to capture.
+
+    ``status`` is ``pending`` (never claimed), ``running`` (leased), ``completed`` (its
+    outcome committed) or ``failed`` (``terminal``: for good; otherwise retried once
+    ``available_at`` passes). ``attempt`` counts claims and is the lease's generation: every
+    write a lease holder makes names it, so a worker whose lease was taken over is fenced
+    out. ``outcome`` is kept once committed, so landing it again after a crash (``queued``
+    not yet set) never extracts again.
+    """
+
+    __tablename__ = "memory_capture_jobs"
+    __table_args__ = (
+        UniqueConstraint("session_id", "from_turn", "through_turn", name="uq_memory_capture_range"),
+        # Claims read only work that may be claimed: never the week of completed jobs kept.
+        Index(
+            "ix_memory_capture_claimable",
+            "tenant_id",
+            "available_at",
+            postgresql_where=text("status <> 'completed' AND NOT terminal"),
+            sqlite_where=text("status <> 'completed' AND NOT terminal"),
+        ),
+        # Reconciliation reads only committed jobs whose facts have not landed yet.
+        Index(
+            "ix_memory_capture_unindexed",
+            "completed_at",
+            postgresql_where=text("status = 'completed' AND NOT indexed"),
+            sqlite_where=text("status = 'completed' AND NOT indexed"),
+        ),
+        Index("ix_memory_capture_session", "session_id", "from_turn"),
+        Index("ix_memory_capture_updated", "updated_at"),  # pruning
+    )
+
+    job_id: Mapped[str] = mapped_column(Text, primary_key=True)  # from (session, its run ids)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    notebook_id: Mapped[str] = mapped_column(Text, nullable=False)  # where its facts go
+    run_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    from_turn: Mapped[int] = mapped_column(Integer, nullable=False)
+    through_turn: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    terminal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    available_at: Mapped[int] = mapped_column(BigInteger, nullable=False)  # a retry's backoff
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # sanitized, bounded
+    outcome_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    queued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # in the inbox
+    indexed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # landed
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    completed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

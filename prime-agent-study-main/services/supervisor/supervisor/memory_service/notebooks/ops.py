@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import replace
 from datetime import date
 from typing import Final, Literal
@@ -154,6 +154,9 @@ class NotebookOps:
         self.on_queued: Callable[[], None] | None = None
         """Told when a capture is queued: the inbox's drainer, once it runs
         (``notebooks.inbox``). Without one, ``observe`` lands its capture itself."""
+        self.on_landed: Callable[[list[str]], Awaitable[object]] | None = None
+        """Told the idempotency keys of the captures a promotion landed: the capture queue
+        (G3), which advances their sessions' ``indexed`` cursors."""
         self._landed_at: float | None = None  # when a promotion here last landed a capture (monotonic)
 
     def _landed(self, captures: int) -> None:
@@ -376,7 +379,7 @@ class NotebookOps:
         """One transaction: up to ``batch`` of the queued captures (or the one ``only``
         names), landed and marked."""
 
-        async def run(tx: FactTx) -> tuple[int, int, int]:
+        async def run(tx: FactTx) -> tuple[int, int, int, list[str]]:
             query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
             if only is not None:
                 query = query.where(InboxRow.id == only)
@@ -401,10 +404,16 @@ class NotebookOps:
             landed = [r.id for r in rows if r.id not in unreadable]
             if landed:
                 await tx.db.execute(mark_handled(InboxRow.id.in_(landed), at=tx.at))
-            return len(rows), added, len(landed)
+            keys = [r.idempotency_key for r in rows if r.id not in unreadable and r.idempotency_key]
+            return len(rows), added, len(landed), keys
 
-        captures, added, landed = await self.store.transact(notebook_id, run)
+        captures, added, landed, keys = await self.store.transact(notebook_id, run)
         self._landed(landed)  # evidence the service lands captures: never one only set aside
+        if keys and self.on_landed is not None:
+            try:
+                await self.on_landed(keys)
+            except Exception:  # told late, by reconciliation, then: never the landing undone
+                logger.warning("notebook %s: telling what landed failed", notebook_id, exc_info=True)
         return captures, added
 
     async def edit(

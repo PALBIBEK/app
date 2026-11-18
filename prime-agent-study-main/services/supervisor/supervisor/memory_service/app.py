@@ -18,6 +18,7 @@ from supervisor.memory_service.auth import (
     enforce_scope_tenant,
     resolve_http_auth,
 )
+from supervisor.memory_service.capture.routes import router as capture_router
 from supervisor.memory_service.limits import MAX_ITEM_CHARS, MAX_RECALL_TOKENS, has_nul
 from supervisor.memory_service.notebooks.routes import router as notebook_router
 from supervisor.memory_service.rate_limit import (
@@ -535,6 +536,7 @@ def create_app(
 
     app.include_router(router)
     app.include_router(notebook_router)
+    app.include_router(capture_router)
     return app
 
 

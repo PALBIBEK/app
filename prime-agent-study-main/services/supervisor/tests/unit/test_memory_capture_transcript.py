@@ -344,7 +344,7 @@ def test_a_transcript_too_long_for_the_model_is_retried_on_the_shorter_budget(
 def test_an_overflow_that_no_shorter_budget_would_help_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     extracted, sent = _attempts([TOO_LONG], monkeypatch, tool_loop(2, 100))
 
-    assert extracted is None and len(sent) == 1, "the same transcript would overflow the same way"
+    assert extracted == turn.Failed(extracted.reason, retryable=False) and len(sent) == 1, "the same transcript would overflow the same way: for good"
 
 
 def test_a_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,13 +352,13 @@ def test_a_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     may be charged."""
     extracted, sent = _attempts([REFUSED], monkeypatch, tool_loop(2, 100))
 
-    assert extracted is None and len(sent) == 1
+    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1, "not now; the job is retried later"
 
 
 def test_a_capture_that_keeps_failing_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     extracted, sent = _attempts([OVERLOADED] * 99, monkeypatch, tool_loop(2, 100))
 
-    assert extracted is None
+    assert isinstance(extracted, turn.Failed) and extracted.retryable
     assert len(sent) == turn.CAPTURE_ATTEMPTS, "a bounded number of calls"
 
 
@@ -427,7 +427,7 @@ def test_a_burst_of_many_stopped_runs_condenses_and_an_overflow_at_its_floor_is_
 
     always_too_long = [TOO_LONG] * 9
     extracted, sent = _attempts(always_too_long, monkeypatch, burst)
-    assert extracted is None
+    assert isinstance(extracted, turn.Failed) and not extracted.retryable, "an overflow at its floor fails the same way every time"
     assert len(sent) == len(set(sent)), "never the same transcript twice"
 
 
@@ -482,7 +482,7 @@ def test_a_provider_asking_for_longer_than_the_cap_is_not_retried_early(monkeypa
     """Retrying before the provider's Retry-After only meets the same limit, and is charged."""
     extracted, sent = _attempts([ModelGatewayError(429, "rate limit", retry_after=3600.0)], monkeypatch, tool_loop(1, 10))
 
-    assert extracted is None and len(sent) == 1
+    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1
 
 
 def test_a_transcript_whose_only_change_is_its_images_is_not_called_condensed() -> None:
@@ -591,7 +591,7 @@ def test_a_malformed_answer_is_asked_again_once(monkeypatch: pytest.MonkeyPatch)
     not four charged calls (the load test's echo model answered every capture so)."""
     extracted, sent = _attempts([MalformedOutcome("not JSON")] * 9, monkeypatch, tool_loop(1, 10))
 
-    assert extracted is None and len(sent) == 1 + turn.MALFORMED_RETRIES
+    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1 + turn.MALFORMED_RETRIES
 
 
 def test_a_transcript_over_on_items_alone_keeps_its_words_whole() -> None:

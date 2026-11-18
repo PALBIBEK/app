@@ -128,6 +128,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
 
 async def migrate(engine: AsyncEngine) -> None:
     """Bring the memory database to the models' schema, or refuse (``SchemaOutOfDate``)."""
+    import supervisor.memory_service.capture.models
     import supervisor.memory_service.notebooks.models  # noqa: F401 — their tables join Base
 
     async with engine.connect() as conn:

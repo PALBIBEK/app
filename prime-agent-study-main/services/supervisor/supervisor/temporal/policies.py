@@ -204,7 +204,7 @@ POLICIES: Final[Mapping[Activity, StepPolicy]] = MappingProxyType({
     ),
     Activity.CAPTURE_MEMORY: StepPolicy(
         Where.ANY_WORKER, Limit.MODEL_CALL, Retry.STANDARD, True,
-        "retried elsewhere; a burst that keeps failing is dropped (best effort)",
+        "retried elsewhere; a queued burst that keeps failing is retried by the capture queue (G3)",
         "Save durable facts from a burst of turns",
     ),
     Activity.RUN_JOB: StepPolicy(

@@ -18,7 +18,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from supervisor.memory.service import CaptureContext, MemoryService
+from supervisor.memory.service import CaptureCommit, CaptureContext, MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.notebooks.errors import MemoryDisclosureDenied, MemoryFactsMissing
 from supervisor.memory_service.notebooks.render import (
@@ -234,6 +234,7 @@ class DisclosedMemory(MemoryView):
         context: CaptureContext | None = None,
         retire: Sequence[str] = (),
         idempotency_key: str | None = None,
+        commit: CaptureCommit | None = None,
     ) -> int | None:
         """Queue observations as capture writes, unfiltered; but retire only what this
         audience may change (``delete``'s rule): otherwise the observations alone, so both
@@ -252,7 +253,8 @@ class DisclosedMemory(MemoryView):
                                 notebook_id, len(retire) - len(kept))
                 retire = kept
         return await super().observe(
-            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key,
+            commit=commit,
         )
 
     async def clear(self, notebook_id: str, *, author: str | None = None) -> int:
