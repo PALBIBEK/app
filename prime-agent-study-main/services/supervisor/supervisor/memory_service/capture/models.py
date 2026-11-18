@@ -1,8 +1,9 @@
 """The durable capture queue's tables (G3), in the memory service's database.
 
 Grok keeps one queue per scope in a SQLite file (``xai-grok-memory/src/v2_capture.rs::
-V2CaptureStore``). Ours holds every tenant's sessions in these two tables, shared by every
-replica and worker: a session's cursors, and its jobs, one per burst of turns.
+V2CaptureStore``). Ours holds every tenant's sessions in these tables, shared by every
+replica and worker: a session's cursors, its jobs (one per burst of turns), and each
+notebook's count of committed captures.
 """
 
 from __future__ import annotations
@@ -82,4 +83,17 @@ class CaptureJobRow(Base):
     indexed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # landed
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     completed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class CaptureNotebookRow(Base):
+    """A notebook's committed captures, counted: part of the revision a capture's resolution
+    reads (S3). Every commit that changes the notebook takes this row's lock and counts
+    itself, so of two captures resolved against one revision, the second to commit finds it
+    changed, even before the first's facts are queued."""
+
+    __tablename__ = "memory_capture_notebooks"
+
+    notebook_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    commits: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

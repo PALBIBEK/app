@@ -26,7 +26,7 @@ from supervisor.memory_service.notebooks.types import Sensitivity
 from supervisor.memory_service.notebooks.wire import observation_out
 from supervisor.memory_service.observations import PROMPT_VERSION, ObservationDraft, ObservationType
 from supervisor.seams.services.memory_service_client import memory_service_credential
-from tests.support.notebooks import MemoryServiceHandle, memory_service
+from tests.support.notebooks import BACKENDS, MemoryServiceHandle, _database, memory_service
 
 pytestmark = pytest.mark.asyncio
 
@@ -35,12 +35,14 @@ PIN = "composition:githi@sha256:capture-routes"
 NOOP = {"observations": [], "retire": []}
 
 
-@pytest_asyncio.fixture
-async def svc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[MemoryServiceHandle]:
+@pytest_asyncio.fixture(params=BACKENDS)
+async def svc(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[MemoryServiceHandle]:
     monkeypatch.setenv("SERVICE_JWT_SECRET", SECRET)
     monkeypatch.delenv("MEMORY_SERVICE_JWT_SECRET", raising=False)
     monkeypatch.delenv("MEMORY_SERVICE_TOKEN", raising=False)
-    async with memory_service(f"sqlite+aiosqlite:///{tmp_path / 'memory.db'}") as handle:
+    async with _database(request.param, tmp_path, "memory") as url, memory_service(url) as handle:
         yield handle
 
 

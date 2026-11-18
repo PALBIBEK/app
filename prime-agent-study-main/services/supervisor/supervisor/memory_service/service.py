@@ -458,6 +458,8 @@ class MemoryService:
         )
         if notebooks is not None:
             erased["notebooks_erased"] = notebooks
+            # What their sessions' captures would have kept, committed but not yet landed.
+            erased["captures_scrubbed"] = await self.capture.forget_erased(tenant_id=tenant)
         return erased
 
     async def archive_session(self, session_id: str) -> dict:

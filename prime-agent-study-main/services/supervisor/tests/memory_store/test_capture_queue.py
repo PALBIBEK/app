@@ -26,7 +26,7 @@ from supervisor.memory_service.capture.queue import (
 from supervisor.memory_service.notebooks.types import Sensitivity
 from supervisor.memory_service.notebooks.wire import observation_out
 from supervisor.memory_service.observations import PROMPT_VERSION, ObservationDraft, ObservationType
-from tests.support.notebooks import MemoryServiceHandle, memory_service
+from tests.support.notebooks import BACKENDS, MemoryServiceHandle, _database, memory_service
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,9 +42,10 @@ class Clock:
         return self.at
 
 
-@pytest_asyncio.fixture
-async def svc(tmp_path: Path) -> AsyncIterator[MemoryServiceHandle]:
-    async with memory_service(f"sqlite+aiosqlite:///{tmp_path / 'memory.db'}") as handle:
+@pytest_asyncio.fixture(params=BACKENDS)
+async def svc(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[MemoryServiceHandle]:
+    """On SQLite, and on Postgres (its own SQL: locks, grouping, partial indexes)."""
+    async with _database(request.param, tmp_path, "memory") as url, memory_service(url) as handle:
         await handle.app.state.memory.stop_background()  # the tests drain and reconcile
         handle.app.state.memory.notebooks.on_queued = lambda: None
         yield handle
@@ -323,6 +324,53 @@ async def test_a_resolution_against_a_changed_notebook_is_refused_and_resolved_a
     await q.commit(b, observations("Deploys on Friday"), resolved_at=await q.revision(notebook))
 
 
+async def test_a_commit_changes_the_revision_before_its_facts_are_queued(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S3, between commit and queuing (the queue down, or a crash): the commit itself counts,
+    so a second capture resolved against the earlier revision is still refused."""
+    q = queue(svc)
+    await enqueue(svc, notebook, "a", 1, 1)
+    await enqueue(svc, notebook, "b", 1, 1)
+    a, b = await claim(svc, "wa", session_id="a"), await claim(svc, "wb", session_id="b")
+    seen = await q.revision(notebook)
+
+    async def down(*args: object, **kwargs: object) -> int:
+        raise ConnectionError("the inbox is unreachable")
+
+    monkeypatch.setattr(svc.app.state.memory.notebooks, "observe", down)
+    await q.commit(a, observations("Deploys on Fridays"), resolved_at=seen)
+    assert await svc.app.state.memory.notebooks.store.pending() == 0, "committed, not queued"
+    with pytest.raises(StaleResolution):
+        await q.commit(b, observations("Deploys on Friday"), resolved_at=seen)
+    await q.commit(b, NOOP, resolved_at=seen)  # nothing to change: never stale
+
+
+async def test_an_erased_owners_captures_are_scrubbed_and_their_sessions_resolved(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    from sqlalchemy import select
+
+    from supervisor.memory_service.capture.models import CaptureJobRow
+
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    await enqueue(svc, notebook, "session", 2, 2)
+    committed = await claim(svc, "worker")
+    await q.commit(committed, observations("Lives at an address"))  # queued, not landed (no drainer)
+    held = await claim(svc, "worker")  # turn 2, running
+
+    erased = await memory.erase_subject(tenant=T, subject="user:alice", actor="ops", reason="request")
+
+    assert erased["notebooks_erased"] == 1 and erased["captures_scrubbed"] == 2
+    async with memory._factory() as db:
+        assert [r.outcome for r in await db.scalars(select(CaptureJobRow))] == [None, None], "nothing of it kept"
+    assert await cursors(svc) == CaptureCursors(requested=2, captured=2, indexed=2), "no cursor stalls on them"
+    with pytest.raises(StaleLease):
+        await q.commit(held, observations("Late"))
+
+
 async def test_the_barrier_waits_for_the_session_to_be_indexed(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
     import asyncio
 
@@ -392,6 +440,7 @@ async def test_a_job_whose_notebook_was_archived_resolves_and_never_stalls_the_c
     await q.commit(lease, observations("Into an archived notebook"))
 
     assert await cursors(svc) == CaptureCursors(requested=1, captured=1, indexed=1)
+    assert (await q.flush(tenant_id=T, session_id="session", through_turn=1, timeout_s=0))[0] == "failed"
     assert (await q.work_state(tenant_id=T, session_id="session", through_turn=1)).terminal == 1
 
 

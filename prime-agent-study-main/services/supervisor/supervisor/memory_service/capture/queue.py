@@ -23,12 +23,19 @@ the memory service's Postgres instead of a SQLite file per scope:
 Ours, beyond Grok's: claims are fair across tenants (``claimable_tenants``: the tenants
 with the fewest running jobs first), and a commit can name the notebook revision its
 resolution read (S3): if the notebook changed since, it is refused (``StaleResolution``)
-and the worker resolves again.
+and the worker resolves again. Commits that change one notebook take turns on its row in
+``memory_capture_notebooks``, whose count is part of that revision, so two resolved
+against the same revision never both pass.
+
+A committed outcome holds the statements a session would keep: it is cleared once its
+facts have landed (or will never land), and an erased owner's are scrubbed with their
+notebooks (``forget_erased``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import json
 import logging
@@ -38,7 +45,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -49,7 +56,11 @@ from supervisor.memory_service.capture.errors import (
     StaleResolution,
     UnknownCaptureSession,
 )
-from supervisor.memory_service.capture.models import CaptureJobRow, CaptureSessionRow
+from supervisor.memory_service.capture.models import (
+    CaptureJobRow,
+    CaptureNotebookRow,
+    CaptureSessionRow,
+)
 from supervisor.memory_service.notebooks.errors import (
     InvalidObservation,
     MemoryLimitExceeded,
@@ -231,6 +242,19 @@ class CaptureQueue:
             await db.commit()
             return _job(row)
 
+    @staticmethod
+    async def _notebook_for_update(db: AsyncSession, notebook_id: str, now: int) -> CaptureNotebookRow:
+        query = select(CaptureNotebookRow).where(CaptureNotebookRow.notebook_id == notebook_id).with_for_update()
+        if (row := await db.scalar(query)) is None:
+            try:
+                async with db.begin_nested():
+                    db.add(CaptureNotebookRow(notebook_id=notebook_id, commits=0, updated_at=now))
+            except IntegrityError:
+                pass  # created by a racing commit: it is read, locked, below
+            row = await db.scalar(query)
+        assert row is not None
+        return row
+
     async def _session_for_update(
         self, db: AsyncSession, tenant_id: str, session_id: str, now: int
     ) -> CaptureSessionRow:
@@ -335,12 +359,20 @@ class CaptureQueue:
                 raise StaleLease()
             if row.outcome_hash is not None:
                 await db.commit()
+                if int(row.attempt) != lease.job.attempt or row.tenant_id != lease.job.tenant_id:
+                    raise StaleLease()  # committed under a later claim: a paused holder is fenced
                 if row.outcome_hash != digest:
                     raise CaptureConflict("job was already committed with a different outcome")
                 return CommitResult(digest, True)
             _fenced(row, lease, now)
-            if resolved_at is not None and not noop and (actual := await _revision(db, row.notebook_id)) != resolved_at:
-                raise StaleResolution(resolved_at, actual)
+            if not noop:
+                # After the job's lock (one order, every commit): commits into one notebook
+                # take turns here, each counted, so a resolution read before one is stale after.
+                counter = await self._notebook_for_update(db, row.notebook_id, now)
+                if resolved_at is not None and (actual := await _revision(db, row.notebook_id)) != resolved_at:
+                    raise StaleResolution(resolved_at, actual)
+                counter.commits = int(counter.commits) + 1
+                counter.updated_at = now
             row.status = "completed"
             row.outcome = outcome
             row.outcome_hash = digest
@@ -433,6 +465,7 @@ class CaptureQueue:
                 return
             row.status, row.terminal, row.last_error = "failed", True, error
             row.queued = row.indexed = True
+            row.outcome = None  # never kept: nothing of it stays
             row.updated_at = now
             await _advance(db, row.session_id, now)
             await db.commit()
@@ -466,7 +499,7 @@ class CaptureQueue:
             await db.execute(
                 update(CaptureJobRow)
                 .where(CaptureJobRow.job_id.in_(ids), CaptureJobRow.status == "completed")
-                .values(queued=True, indexed=True, updated_at=now)
+                .values(queued=True, indexed=True, outcome=None, updated_at=now)  # its facts hold it now
             )
             for session_id in sorted(set(sessions)):  # one order: two drainers never deadlock
                 await _advance(db, session_id, now)
@@ -537,11 +570,10 @@ class CaptureQueue:
             CaptureJobRow.from_turn <= through_turn,
         )
         async with self._db() as db:
-            counts: dict[str, int] = dict(
-                (await db.execute(
-                    select(_state_of(), func.count()).where(*in_range).group_by(_state_of())
-                )).all()
-            )
+            counts: collections.Counter[str] = collections.Counter()
+            grouped = select(CaptureJobRow.status, CaptureJobRow.terminal, func.count()).where(*in_range)
+            for status, terminal, n in (await db.execute(grouped.group_by(CaptureJobRow.status, CaptureJobRow.terminal))).all():
+                counts["terminal" if terminal else str(status)] += int(n)
             last_error = await db.scalar(
                 select(CaptureJobRow.last_error)
                 .where(*in_range, CaptureJobRow.status == "failed")
@@ -574,10 +606,45 @@ class CaptureQueue:
         return ("retry" if state.failed else "timeout"), cursors, state
 
     async def revision(self, notebook_id: str) -> str:
-        """The notebook's revision as resolution sees it (S3): its facts' revision and its
-        queue's newest capture, so either landing or queuing changes it."""
+        """The notebook's revision as resolution sees it (S3): its facts' revision, its
+        queue's newest capture and its committed captures, so landing, queuing or committing
+        changes it."""
         async with self._db() as db:
             return await _revision(db, notebook_id)
+
+    async def forget_erased(self, *, tenant_id: str) -> int:
+        """Scrub the tenant's jobs whose notebook is gone (its owner erased): their outcomes
+        deleted, every one resolved (failed for good, if it was not), so no session's cursor
+        stalls on them. Run after ``erase_owner``; a job queued into a notebook erased
+        meanwhile is resolved when it lands (``_land``: not found). The jobs scrubbed."""
+        now = self._clock()
+        gone = ~select(NotebookRow.id).where(NotebookRow.id == CaptureJobRow.notebook_id).exists()
+        async with self._db() as db:
+            rows = list(
+                await db.scalars(
+                    select(CaptureJobRow)
+                    .where(CaptureJobRow.tenant_id == tenant_id, gone)
+                    .order_by(CaptureJobRow.job_id)
+                    .with_for_update()
+                )
+            )
+            for row in rows:
+                if row.status != "completed" and not row.terminal:
+                    row.status, row.terminal = "failed", True
+                    row.lease_owner = row.lease_expires_at = None
+                    row.last_error = "notebook erased"
+                row.outcome = None
+                row.queued = row.indexed = True
+                row.updated_at = now
+            for session_id in sorted({r.session_id for r in rows}):  # after the jobs, as every write
+                await _advance(db, session_id, now)
+            await db.execute(
+                delete(CaptureNotebookRow).where(
+                    CaptureNotebookRow.notebook_id.in_({r.notebook_id for r in rows})
+                )
+            )
+            await db.commit()
+        return len(rows)
 
     async def prune(self, *, before: int | None = None) -> int:
         """Delete resolved jobs last changed before ``before`` (a week ago by default)."""
@@ -600,13 +667,6 @@ def _claimable(now: int, pending_grace_ms: int = 0) -> Any:
         (CaptureJobRow.status == "pending") & (CaptureJobRow.available_at <= now - pending_grace_ms),
         (CaptureJobRow.status == "failed") & ~CaptureJobRow.terminal & (CaptureJobRow.available_at <= now),
         (CaptureJobRow.status == "running") & (CaptureJobRow.lease_expires_at <= now),
-    )
-
-
-def _state_of() -> Any:
-    return case(
-        (CaptureJobRow.terminal, "terminal"),
-        else_=CaptureJobRow.status,
     )
 
 
@@ -656,7 +716,8 @@ async def _revision(db: AsyncSession, notebook_id: str) -> str:
     queued = await db.scalar(
         select(func.max(InboxRow.id)).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
     )
-    return f"{int(facts or 0)}.{int(queued or 0)}"
+    commits = await db.scalar(select(CaptureNotebookRow.commits).where(CaptureNotebookRow.notebook_id == notebook_id))
+    return f"{int(facts or 0)}.{int(queued or 0)}.{int(commits or 0)}"
 
 
 def _canonical(outcome: dict[str, Any]) -> dict[str, Any]:
