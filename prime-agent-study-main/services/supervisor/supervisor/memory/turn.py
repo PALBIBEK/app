@@ -61,7 +61,7 @@ from supervisor.memory.extraction import (
 from supervisor.memory.fairness import GatedOneShot, capture_gate
 from supervisor.memory.history import message_text
 from supervisor.memory.platform import MemoryPlatform
-from supervisor.memory.resolution import resolve
+from supervisor.memory.resolution import Resolution, related, resolve
 from supervisor.memory.service import CaptureCommit, CaptureContext, MemoryService
 from supervisor.memory.tools import PLATFORM_TOOLS, SessionsTool, TurnMemory
 from supervisor.memory.transcript import (
@@ -266,6 +266,12 @@ def _as_facts(statements: Sequence[str]) -> list[Fact]:
 
 def _queued_id(fact_id: str) -> bool:
     return fact_id.startswith("-")
+
+
+def _compared(candidates: Sequence[Fact]) -> tuple[tuple[str, str], ...]:
+    """What a resolution was made against: each related fact by id and words (a queued
+    statement by its words alone: its id is only its place in this read)."""
+    return tuple(sorted(("" if _queued_id(f.id) else f.id, f.text) for f in candidates))
 
 
 class SessionMemory:
@@ -563,6 +569,7 @@ class SessionMemory:
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
         statements = [d.statement for d in extracted.drafts]
         drafts: list[ObservationDraft] = []
+        verdict: tuple[tuple[tuple[str, str], ...], Resolution] | None = None
         try:
             for attempt in range(1, RESOLVE_ATTEMPTS + 1):
                 # Resolve against what the notebook holds (supervisor.memory.resolution): a
@@ -570,7 +577,15 @@ class SessionMemory:
                 # Under a lease, against what it has queued too, at a revision (S3).
                 revision, queued = await self._capture_view(writable, lease)
                 held = await scope.view.facts(writable)
-                resolution = await resolve(one_shot, statements, [*held, *_as_facts(queued)])
+                existing = [*held, *_as_facts(queued)]
+                # A verdict depends only on the facts related to the burst: when another
+                # session's change left those as they were, it holds, with no model call again.
+                compared = _compared(related(existing, statements))
+                if verdict is not None and verdict[0] == compared:
+                    resolution = verdict[1]
+                else:
+                    resolution = await resolve(one_shot, statements, existing)
+                    verdict = (compared, resolution)
                 drafts = [extracted.drafts[i] for i in resolution.add]
                 retire = [i for i in resolution.retire if not _queued_id(i)]
                 if lease is None and not drafts and not retire:

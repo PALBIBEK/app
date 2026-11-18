@@ -24,7 +24,7 @@ from supervisor.memory.client import NotebookClient
 from supervisor.memory.service import CaptureContext
 from supervisor.memory.sweeper import capture_sweeper
 from supervisor.memory.transcript import STOPPED_MARKER
-from supervisor.memory_service.capture.errors import UnknownCaptureSession
+from supervisor.memory_service.capture.errors import StaleResolution, UnknownCaptureSession
 from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source, tenant_of
 from supervisor.memory_service.observations import PROMPT_VERSION
 from supervisor.seams.core.types import ChatMessage, ModelGatewayError
@@ -240,6 +240,47 @@ async def test_a_captured_fact_that_contradicts_one_held_retires_it(
         ("insert", "Prefers tea in the morning"),
         ("delete", "Prefers tea in the morning"),
     ], "retired, not erased: its history keeps it"
+
+
+@pytest.mark.parametrize("related_change", [False, True], ids=["unrelated", "related"])
+async def test_a_resolution_made_stale_is_redone_only_when_its_facts_changed(
+    env: Env, model: Callable[..., ScriptedGateway], related_change: bool
+) -> None:
+    """S3: a commit refused because the notebook changed since resolution resolves again;
+    when the facts related to the burst are as they were (another session's unrelated
+    change), the verdict holds and the model is not asked again."""
+    gateway = model(extract="SENSITIVITY: ordinary\n- Prefers tea in the morning")
+    state = await env.state()
+    store = state.manager.memory.store
+    assert isinstance(store, NotebookClient)
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, memory=QUICK)
+        await env.sessions.submit(sid, Message("c1", "I drink tea every morning"))
+        await env.wait_for(state, sid, run_ended())
+        await _wait_facts(state, sid, 1)
+        notebook = (await _binding(state, sid)).write
+        assert notebook is not None
+        real_commit, refused = store.capture_commit, []
+
+        async def changed_first(lease, outcome, *, resolved_at=None):  # type: ignore[no-untyped-def]
+            if resolved_at is not None and not refused:
+                refused.append(resolved_at)  # another session's capture lands meanwhile
+                said = "Drinks coffee in the morning" if related_change else "Owns a bicycle"
+                await store.capture(notebook, [said], context=TRACKED)
+                raise StaleResolution(resolved_at, "changed")
+            return await real_commit(lease, outcome, resolved_at=resolved_at)
+
+        store.capture_commit = changed_first  # type: ignore[method-assign]
+        gateway.extract = "SENSITIVITY: ordinary\n- Prefers coffee in the morning"
+        gateway.resolution = '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}]}'
+        await env.sessions.submit(sid, Message("c2", "I switched to coffee in the mornings"))
+        await env.wait_for(state, sid, run_ended(2))
+        async with asyncio.timeout(30):
+            while "Prefers coffee in the morning" not in {f.text for f in await _facts(state, sid)}:
+                await asyncio.sleep(0.2)
+    assert refused, "the first commit was refused as stale"
+    resolutions = [c for k, c in gateway.one_shots if k.startswith("You compare NEW FACTS")]
+    assert len(resolutions) == (2 if related_change else 1)
 
 
 async def test_a_turn_that_used_tools_captures_unknown_provenance(
