@@ -357,14 +357,15 @@ async def _capture_state(
 async def test_a_capture_whose_extraction_failed_stays_queued_and_a_sweep_lands_it(
     env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """G3: a burst whose extraction is refused is not dropped. Its job backs off in the
+    """G3: a burst whose extraction failed in a way that may pass is not dropped. Its job backs off in the
     capture queue, a worker's sweeper claims it again, and its fact lands; the barrier
     then reports the session indexed through its last turn."""
     import supervisor.memory_service.capture.queue as capture_queue
 
     monkeypatch.setattr(capture_queue, "RETRY_BACKOFF_MS", 200)  # the service runs in this process
     gateway = model(extract="SENSITIVITY: ordinary\n- Deploys on Fridays")
-    gateway.extract_errors.append(ModelGatewayError(401, '{"detail": {"error": {"code": "AUTH_INVALID"}}}'))
+    # Rate limited for an hour: past the attempt's retry window, so it is retried later, by the queue.
+    gateway.extract_errors.append(ModelGatewayError(429, "rate limited", retry_after=3600.0))
     state = await env.state()
     store = state.manager.memory.store
     assert isinstance(store, NotebookClient)

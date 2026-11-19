@@ -204,10 +204,10 @@ async def test_sessions_resolving_against_one_notebook_keep_one_fact_and_retire_
 
     async def resolve(i: int) -> str:
         client = clients[i]
-        revision, queued = seen, list[str]()  # all read the notebook at once, before any commit
+        revision, queued = seen, []  # all read the notebook at once, before any commit
         while True:
             facts = {f.text for f in await client.facts(nb)}  # after the revision, as resolution reads
-            knows = "Deploys on Fridays" in facts | set(queued)
+            knows = "Deploys on Fridays" in facts | {text for text, _ in queued}
             outcome = NOOP if knows else _outcome("Deploys on Fridays", retire=(old.id,))
             try:
                 await client.capture_commit(leases[i], outcome, resolved_at=revision)

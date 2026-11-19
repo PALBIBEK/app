@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from supervisor.memory import sweeper, turn
+from supervisor.memory.client import RouteMissing
 from supervisor.memory_service.capture.errors import CaptureInvalid, StaleLease
 from supervisor.memory_service.capture.queue import CaptureJob, CaptureLease
 from supervisor.memory_service.notebooks.errors import NotebookNotFound
@@ -51,6 +52,10 @@ class FakeQueue:
 
     async def capture_release(self, lease: CaptureLease, error: str) -> None:
         self.ended.append(("release", lease.job.job_id, error))
+
+    async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+        self.ended.append(("renew", lease.job.job_id, lease_s))
+        return lease
 
 
 class FakeMemory:
@@ -113,6 +118,37 @@ async def test_a_sweeper_set_to_zero_never_claims() -> None:
     assert queue.listed == []
 
 
+async def test_a_claim_failing_mid_round_still_runs_the_leases_taken() -> None:
+    class Flaky(FakeQueue):
+        async def capture_claim(self, *, tenant_id: str, **kw: Any) -> CaptureLease | None:
+            if tenant_id == "b":
+                raise OSError("rate limited")
+            return await super().capture_claim(tenant_id=tenant_id, **kw)
+
+    queue = Flaky({"a": [_lease("a")], "b": [_lease("b")]})
+    memory = FakeMemory()
+    rounds = iter([False, True])
+    await sweeper.capture_sweeper(memory, queue, should_stop=lambda: next(rounds), concurrency=2, interval_s=0)  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    assert memory.ran == ["cap-a-1"], "taken, so run: never held until its lease runs out"
+
+
+async def test_a_lease_is_renewed_while_its_job_runs(monkeypatch: pytest.MonkeyPatch, writable: None) -> None:
+    monkeypatch.setattr(turn, "RENEW_EVERY_S", 0.01)
+    queue = FakeQueue({})
+
+    async def slow(*a: Any, **k: Any) -> int:
+        await asyncio.sleep(0.1)
+        return 0
+
+    await _session_memory(queue, slow).run_capture(_job_lease())
+    renewals = [e for e in queue.ended if e[0] == "renew"]
+    assert len(renewals) >= 3 and renewals[0][2] == turn.CAPTURE_LEASE_S
+    queue.ended.clear()
+    await asyncio.sleep(0.05)
+    assert queue.ended == [], "never renewed once its job ended"
+
+
 async def test_an_unreachable_service_is_tried_again_next_round() -> None:
     class Down(FakeQueue):
         calls = 0
@@ -170,6 +206,7 @@ async def test_a_job_whose_session_no_longer_captures_there_is_committed_as_noth
         (NotebookNotFound("t~nb"), ("fail", "cap-1", True)),
         (CaptureInvalid("an outcome that cannot be kept"), ("fail", "cap-1", True)),
         (OSError("the service is unreachable"), ("fail", "cap-1", False)),
+        (RouteMissing("t~nb"), ("fail", "cap-1", False)),  # a replica older than G3, mid-upgrade
     ],
 )
 async def test_a_failed_job_is_recorded_retryable_or_for_good(raised: Exception, ended: tuple[str, str, bool]) -> None:

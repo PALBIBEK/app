@@ -208,6 +208,9 @@ class DisclosedMemory(MemoryView):
     async def facts(self, notebook_id: str) -> list[Fact]:
         return await self._visible(notebook_id)
 
+    async def visible(self, notebook_id: str, facts: Sequence[Fact]) -> list[Fact]:
+        return await super().visible(notebook_id, await self._visible(notebook_id, facts))
+
     async def edit(
         self,
         notebook_id: str,

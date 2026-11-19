@@ -8,6 +8,7 @@ have landed. Grok's tests pass ``now`` to each call; ours set the queue's clock.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -342,7 +343,7 @@ async def test_a_commit_changes_the_revision_before_its_facts_are_queued(
     await q.commit(a, observations("Deploys on Fridays"), resolved_at=seen)
     assert await svc.app.state.memory.notebooks.store.pending() == 0, "committed, not queued"
     revision, statements = await q.view(notebook)
-    assert revision != seen and statements == ["Deploys on Fridays"], "resolution sees it all the same"
+    assert revision != seen and [s for s, _ in statements] == ["Deploys on Fridays"], "resolution sees it all the same"
     with pytest.raises(StaleResolution):
         await q.commit(b, observations("Deploys on Friday"), resolved_at=seen)
     await q.commit(b, NOOP, resolved_at=seen)  # nothing to change: never stale
@@ -463,3 +464,99 @@ async def test_resolved_jobs_are_pruned_and_pending_ones_kept(svc: MemoryService
 
     assert await q.prune(before=clock.at + 1) == 1
     assert (await q.work_state(tenant_id=T, session_id="session", through_turn=2)).pending == 1
+
+
+# --- from review: what holds at the edges ----------------------------------------------------
+
+
+async def test_a_job_whose_lease_keeps_running_out_is_terminal_at_its_last_claim(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    """A burst that kills or hangs every worker holding it is never claimed again after its
+    attempts: it takes no more workers down, and its range resolves."""
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    for _ in range(MAX_CAPTURE_ATTEMPTS):
+        await claim(svc, "doomed", lease_s=5)
+        clock.at += 5_000  # the holder died: its lease runs out
+    assert await q.claim(tenant_id=T, owner="next", lease_s=5) is None
+    assert await cursors(svc) == CaptureCursors(requested=1, captured=1, indexed=1)
+    state = await q.work_state(tenant_id=T, session_id="session", through_turn=1)
+    assert state.terminal == 1 and "lease ran out" in (state.last_error or "")
+
+
+async def test_a_renewed_lease_outlives_its_first_deadline(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    lease = await claim(svc, "worker", lease_s=5)
+    clock.at += 4_000
+    renewed = await q.renew(lease, 5)
+    clock.at += 4_000  # past the first deadline, inside the renewed one
+    assert await q.claim(tenant_id=T, owner="other", lease_s=5) is None, "still the holder's"
+    await q.commit(renewed, NOOP)
+    with pytest.raises(StaleLease):
+        await q.renew(lease, 5)  # resolved: nothing to renew
+
+
+async def test_a_lease_naming_another_tenant_releases_nothing(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
+    import dataclasses
+
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    lease = await claim(svc, "worker")
+    forged = dataclasses.replace(lease, job=dataclasses.replace(lease.job, tenant_id="t2"))
+    with pytest.raises(StaleLease):
+        await q.release_retryable(forged, "not yours")
+    await q.commit(lease, NOOP)
+
+
+async def test_a_landed_key_naming_another_notebooks_job_indexes_nothing(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    lease = await claim(svc, "worker")
+    await q.commit(lease, observations("Landed in its own notebook"))
+    assert await q.mark_indexed([lease.job.job_id], notebook_id="t1~elsewhere") == 0
+    assert (await cursors(svc)).indexed == 0
+    assert await q.mark_indexed([lease.job.job_id], notebook_id=notebook) == 1
+
+
+async def test_an_old_range_failed_for_good_does_not_fail_a_later_barrier(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    await q.fail_terminal(await claim(svc, "worker"), "refused for good")
+    assert (await q.flush(tenant_id=T, session_id="session", through_turn=1, timeout_s=0))[0] == "failed"
+    await enqueue(svc, notebook, "session", 2, 2)
+    waiting = asyncio.create_task(q.flush(tenant_id=T, session_id="session", through_turn=2, timeout_s=10, poll_s=0.01))
+    await asyncio.sleep(0.02)
+    await q.commit(await claim(svc, "worker"), NOOP)
+    assert (await waiting)[0] == "success", "turn 2 was captured: the failure was turn 1's"
+
+
+async def test_a_job_above_a_stalled_cursor_is_not_pruned(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
+    """Pruning a resolved job past the cursor would leave a gap the cursor never crosses."""
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    await enqueue(svc, notebook, "session", 2, 2)
+    first = await claim(svc, "worker")
+    await q.commit(await claim(svc, "worker"), NOOP)  # turn 2 resolved, turn 1 still running
+    assert await q.prune(before=clock.at + 1) == 0, "turn 2 is the cursor's next step"
+    await q.commit(first, NOOP)
+    assert await cursors(svc) == CaptureCursors(requested=2, captured=2, indexed=2)
+    assert await q.prune(before=clock.at + 1) == 2
+
+
+async def test_an_outcome_with_an_expiry_it_could_never_keep_is_refused_at_commit(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    from supervisor.memory_service.capture.errors import CaptureInvalid
+
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    lease = await claim(svc, "worker")
+    with pytest.raises(CaptureInvalid):
+        await q.commit(lease, {**observations("Expires someday"), "context": {**OWN, "expires_on": "tomorrow"}})
+    await q.commit(lease, {**observations("Expires on a day"), "context": {**OWN, "expires_on": "2030-01-01"}})

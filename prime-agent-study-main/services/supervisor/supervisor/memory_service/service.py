@@ -103,7 +103,7 @@ class MemoryService:
         """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
         self.capture = CaptureQueue(self._factory, self.notebooks)
         """The durable capture queue (G3): jobs, leases and each session's cursors."""
-        self.notebooks.on_landed = self.capture.mark_indexed
+        self.notebooks.on_landed = lambda notebook_id, keys: self.capture.mark_indexed(keys, notebook_id=notebook_id)
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(
             self._factory, ObjectArchive(arch_root), hot_days=hot_days

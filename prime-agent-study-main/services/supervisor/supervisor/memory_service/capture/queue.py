@@ -45,7 +45,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -62,13 +62,15 @@ from supervisor.memory_service.capture.models import (
     CaptureSessionRow,
 )
 from supervisor.memory_service.notebooks.errors import (
+    InvalidExpiry,
     InvalidObservation,
     MemoryLimitExceeded,
     NotebookArchived,
     NotebookNotFound,
 )
 from supervisor.memory_service.notebooks.models import InboxRow, NotebookRow
-from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps
+from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps, expiry_day
+from supervisor.memory_service.notebooks.types import Provenance, capture_provenance
 from supervisor.memory_service.notebooks.wire import context_in, observation_in
 from supervisor.memory_service.observations import ObservationInvalid
 
@@ -289,7 +291,9 @@ class CaptureQueue:
             running = dict(
                 (await db.execute(
                     select(CaptureJobRow.tenant_id, func.count())
-                    .where(CaptureJobRow.status == "running", CaptureJobRow.lease_expires_at > now)
+                    .where(
+                        CaptureJobRow.status == "running", ~CaptureJobRow.terminal, CaptureJobRow.lease_expires_at > now
+                    )
                     .group_by(CaptureJobRow.tenant_id)
                 )).all()
             )
@@ -328,9 +332,22 @@ class CaptureQueue:
             .with_for_update(skip_locked=True)
         )
         async with self._db() as db:
-            if (row := await db.scalar(query)) is None:
-                await db.commit()
-                return None
+            while True:
+                if (row := await db.scalar(query)) is None:
+                    await db.commit()
+                    return None
+                if row.status != "running" or int(row.attempt) < MAX_CAPTURE_ATTEMPTS:
+                    break
+                # Its every holder's lease ran out (a worker it kills or hangs): never claimed
+                # again, so it takes no more workers down, and its range is resolved.
+                row.status, row.terminal = "failed", True
+                row.lease_owner = row.lease_expires_at = None
+                row.last_error = f"its lease ran out on each of its {row.attempt} claims"
+                row.outcome = None
+                row.queued = row.indexed = True
+                row.updated_at = now
+                await _advance(db, row.session_id, now)
+                await db.flush()
             row.status = "running"
             row.lease_owner = owner
             row.lease_expires_at = expires
@@ -339,6 +356,22 @@ class CaptureQueue:
             row.updated_at = now
             await db.commit()
             return CaptureLease(_job(row), owner, expires)
+
+    async def renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+        """Extend a valid lease while its holder still works on it (a long wait for its
+        tenant's slot, a slow model): it runs out only when the holder stops renewing."""
+        if not 1 <= lease_s <= MAX_LEASE_S:
+            raise CaptureInvalid(f"a lease lasts 1..={MAX_LEASE_S} seconds")
+        now = self._clock()
+        async with self._db() as db:
+            row = await db.get(CaptureJobRow, lease.job.job_id, with_for_update=True)
+            if row is None:
+                raise StaleLease()
+            _fenced(row, lease, now)
+            row.lease_expires_at = now + int(lease_s * 1000)
+            row.updated_at = now
+            await db.commit()
+            return CaptureLease(lease.job, lease.owner, int(row.lease_expires_at))
 
     # --- outcomes --------------------------------------------------------------------------
 
@@ -422,6 +455,7 @@ class CaptureQueue:
                 update(CaptureJobRow)
                 .where(
                     CaptureJobRow.job_id == lease.job.job_id,
+                    CaptureJobRow.tenant_id == lease.job.tenant_id,
                     CaptureJobRow.session_id == lease.job.session_id,
                     CaptureJobRow.status == "running",
                     CaptureJobRow.lease_owner == lease.owner,
@@ -448,7 +482,9 @@ class CaptureQueue:
                 retire=list(outcome.get("retire") or ()),
                 idempotency_key=job.job_id,
             )
-        except (ObservationInvalid, InvalidObservation, MemoryLimitExceeded, NotebookArchived, NotebookNotFound) as exc:
+        except (
+            ObservationInvalid, InvalidObservation, InvalidExpiry, MemoryLimitExceeded, NotebookArchived, NotebookNotFound,
+        ) as exc:
             logger.warning("capture job %s: its outcome cannot be kept: %s", job.job_id, exc)
             await self._resolve_unkept(job.job_id, sanitize_failure(f"{type(exc).__name__}: {exc}"))
             return
@@ -479,26 +515,24 @@ class CaptureQueue:
 
     # --- landing (G2's inbox) ----------------------------------------------------------------
 
-    async def mark_indexed(self, job_ids: Sequence[str]) -> int:
+    async def mark_indexed(self, job_ids: Sequence[str], *, notebook_id: str | None = None) -> int:
         """These jobs' facts have landed (the inbox drainer promoted their rows): advance their
-        sessions' ``indexed`` cursors."""
+        sessions' ``indexed`` cursors. ``notebook_id``: where they landed; a key naming a job
+        of another notebook (any caller may choose an inbox key) is not that job."""
         ids = [j for j in job_ids if j.startswith("cap-")]
         if not ids:
             return 0
         now = self._clock()
+        these = [CaptureJobRow.job_id.in_(ids), CaptureJobRow.status == "completed"]
+        if notebook_id is not None:
+            these.append(CaptureJobRow.notebook_id == notebook_id)
         async with self._db() as db:
-            sessions = list(
-                await db.scalars(
-                    select(CaptureJobRow.session_id).where(
-                        CaptureJobRow.job_id.in_(ids), CaptureJobRow.status == "completed", ~CaptureJobRow.indexed
-                    )
-                )
-            )
+            sessions = list(await db.scalars(select(CaptureJobRow.session_id).where(*these, ~CaptureJobRow.indexed)))
             if not sessions:
                 return 0
             await db.execute(
                 update(CaptureJobRow)
-                .where(CaptureJobRow.job_id.in_(ids), CaptureJobRow.status == "completed")
+                .where(*these)
                 .values(queued=True, indexed=True, outcome=None, updated_at=now)  # its facts hold it now
             )
             for session_id in sorted(set(sessions)):  # one order: two drainers never deadlock
@@ -562,12 +596,16 @@ class CaptureQueue:
                 raise UnknownCaptureSession(session_id)
             return CaptureCursors(int(row.requested), int(row.captured), int(row.indexed))
 
-    async def work_state(self, *, tenant_id: str, session_id: str, through_turn: int) -> CaptureWorkState:
-        """Content-free job state through ``through_turn`` (Grok's ``work_state``)."""
+    async def work_state(
+        self, *, tenant_id: str, session_id: str, through_turn: int, after_turn: int = 0
+    ) -> CaptureWorkState:
+        """Content-free job state of the turns after ``after_turn`` through ``through_turn``
+        (Grok's ``work_state``)."""
         in_range = (
             CaptureJobRow.tenant_id == tenant_id,
             CaptureJobRow.session_id == session_id,
             CaptureJobRow.from_turn <= through_turn,
+            CaptureJobRow.through_turn > after_turn,
         )
         async with self._db() as db:
             counts: collections.Counter[str] = collections.Counter()
@@ -597,10 +635,13 @@ class CaptureQueue:
         deadline = time.monotonic() + max(0.0, timeout_s)
         cursors = await self.cursors(tenant_id=tenant_id, session_id=session_id)
         target = cursors.requested if through_turn is None else through_turn
+        # The turns this barrier waits on (or, all indexed already, the last of them): an old
+        # range that failed for good says nothing of the turns captured since.
+        after = min(cursors.indexed, target - 1)
         while cursors.indexed < target and time.monotonic() < deadline:
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             cursors = await self.cursors(tenant_id=tenant_id, session_id=session_id)
-        state = await self.work_state(tenant_id=tenant_id, session_id=session_id, through_turn=target)
+        state = await self.work_state(tenant_id=tenant_id, session_id=session_id, through_turn=target, after_turn=after)
         if cursors.indexed >= target:
             return ("failed" if state.terminal else "success"), cursors, state
         return ("retry" if state.failed else "timeout"), cursors, state
@@ -632,21 +673,22 @@ class CaptureQueue:
                 if row.status != "completed" and not row.terminal:
                     row.status, row.terminal = "failed", True
                     row.lease_owner = row.lease_expires_at = None
-                    row.last_error = "notebook erased"
+                row.last_error = "notebook erased"  # a diagnostic may quote the model's words
                 row.outcome = None
                 row.queued = row.indexed = True
                 row.updated_at = now
-            for session_id in sorted({r.session_id for r in rows}):  # after the jobs, as every write
-                await _advance(db, session_id, now)
+            # Every write's order: jobs, then the notebook's counter, then sessions (``commit``).
             await db.execute(
                 delete(CaptureNotebookRow).where(
-                    CaptureNotebookRow.notebook_id.in_({r.notebook_id for r in rows})
+                    CaptureNotebookRow.notebook_id.in_(sorted({r.notebook_id for r in rows}))
                 )
             )
+            for session_id in sorted({r.session_id for r in rows}):
+                await _advance(db, session_id, now)
             await db.commit()
         return len(rows)
 
-    async def view(self, notebook_id: str) -> tuple[str, list[str]]:
+    async def view(self, notebook_id: str) -> tuple[str, list[tuple[str, Provenance]]]:
         """What a capture's resolution compares a burst with beyond the landed facts (S3):
         the revision, then every statement committed into the notebook and not landed yet,
         whether queued in its inbox or committed and not yet queued (the window between a
@@ -664,17 +706,32 @@ class CaptureQueue:
                     )
                 )
             )
-        committed = [str(o.get("statement", "")) for outcome in outcomes for o in (outcome or {}).get("observations", ())]
-        return revision, committed + await self._notebooks.store.queued_statements(notebook_id)
+        store = self._notebooks.store
+        committed: list[tuple[str, Provenance]] = []
+        if outcomes:
+            home = (await store.get(notebook_id)).home
+            for outcome in outcomes:
+                # The provenance it will land with (``NotebookOps.observe``).
+                provenance = capture_provenance(home, context_in((outcome or {}).get("context")))
+                committed += [(str(o.get("statement", "")), provenance) for o in (outcome or {}).get("observations", ())]
+        return revision, committed + await store.queued_with_provenance(notebook_id)
 
     async def prune(self, *, before: int | None = None) -> int:
-        """Delete resolved jobs last changed before ``before`` (a week ago by default)."""
+        """Delete resolved jobs last changed before ``before`` (a week ago by default), each
+        only once its session's ``indexed`` cursor has passed it: one above a turn still
+        unresolved is the step that cursor takes when that turn resolves."""
         before = self._clock() - KEEP_JOBS_MS if before is None else before
+        passed = (
+            select(CaptureSessionRow.indexed)
+            .where(CaptureSessionRow.session_id == CaptureJobRow.session_id)
+            .scalar_subquery()
+        )
         async with self._db() as db:
             pruned = await db.execute(
                 delete(CaptureJobRow).where(
                     CaptureJobRow.updated_at < before,
                     or_(CaptureJobRow.terminal, (CaptureJobRow.status == "completed") & CaptureJobRow.indexed),
+                    CaptureJobRow.through_turn <= passed,
                 )
             )
             await db.commit()
@@ -684,10 +741,16 @@ class CaptureQueue:
 def _claimable(now: int, pending_grace_ms: int = 0) -> Any:
     """Work to claim: pending (``pending_grace_ms`` old at least), a retry whose backoff has
     passed, or a running job whose lease has run out."""
-    return or_(
-        (CaptureJobRow.status == "pending") & (CaptureJobRow.available_at <= now - pending_grace_ms),
-        (CaptureJobRow.status == "failed") & ~CaptureJobRow.terminal & (CaptureJobRow.available_at <= now),
-        (CaptureJobRow.status == "running") & (CaptureJobRow.lease_expires_at <= now),
+    return and_(
+        # The partial index's own predicate, said outright: the planner reads only the work
+        # still open (``ix_memory_capture_claimable``), never the week of resolved jobs kept.
+        CaptureJobRow.status != "completed",
+        ~CaptureJobRow.terminal,
+        or_(
+            (CaptureJobRow.status == "pending") & (CaptureJobRow.available_at <= now - pending_grace_ms),
+            (CaptureJobRow.status == "failed") & (CaptureJobRow.available_at <= now),
+            (CaptureJobRow.status == "running") & (CaptureJobRow.lease_expires_at <= now),
+        ),
     )
 
 
@@ -752,8 +815,9 @@ def _canonical(outcome: dict[str, Any]) -> dict[str, Any]:
     try:  # refused now, not committed and then never kept
         for wire in observations:
             observation_in(wire).validate()
-        context_in(context)
-    except (ObservationInvalid, KeyError, TypeError, ValueError) as exc:
+        if (kept := context_in(context)) is not None:
+            expiry_day(kept.expires_on)
+    except (ObservationInvalid, InvalidExpiry, KeyError, TypeError, ValueError) as exc:
         raise CaptureInvalid(f"an outcome that cannot be kept: {exc}") from exc
     return {"observations": observations, "retire": [str(r) for r in retire], "context": context, "author": author}
 

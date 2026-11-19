@@ -13,6 +13,7 @@ reuses it (a replayed model step sees exactly the memory the first attempt saw).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
@@ -70,7 +71,7 @@ from supervisor.memory.transcript import (
     condense,
     run_items,
 )
-from supervisor.memory.view import observe
+from supervisor.memory.view import observe, visible
 from supervisor.memory_service.capture.errors import (
     CaptureInvalid,
     StaleLease,
@@ -215,10 +216,11 @@ RECALL_UNAVAILABLE = (
 )
 
 
-CAPTURE_LEASE_S: Final = 600.0
-"""How long a capture job's lease lasts: the capture activity's own ten minutes
-(``temporal.policies``), so a worker that dies holding one frees it as its activity would
-be retried, and the sweeper claims it then."""
+CAPTURE_LEASE_S: Final = 120.0
+"""How long a capture job's lease lasts unless renewed. Its holder renews it every
+``RENEW_EVERY_S`` while it works (a long wait for its tenant's slot, a slow model), so a
+worker that dies holding one frees it within two minutes, for the sweeper to claim."""
+RENEW_EVERY_S: Final = CAPTURE_LEASE_S / 3
 RESOLVE_ATTEMPTS: Final = 3
 """Resolutions one capture makes when the notebook keeps changing under it (S3); the last
 commits whatever it resolved."""
@@ -248,20 +250,36 @@ def _writable(scope: Scope | None) -> str | None:
     return binding.writable
 
 
+async def _renew(queue: NotebookClient, lease: CaptureLease) -> None:
+    """Keep a lease while its holder works under it; stopped when the work ends. One taken
+    over is not renewed again (its commit is fenced), and one renewal failing is retried."""
+    while True:
+        await asyncio.sleep(RENEW_EVERY_S)
+        try:
+            await queue.capture_renew(lease, CAPTURE_LEASE_S)
+        except StaleLease:
+            return
+        except Exception:  # the service unreachable for a moment: the lease has two more tries in it
+            logger.warning("capture job %s: renewing its lease failed", lease.job.job_id, exc_info=True)
+
+
 def _terminal(exc: BaseException) -> bool:
     """Whether a capture job's failure would recur on every attempt: its outcome refused as
-    it is, or its notebook gone. Anything else may pass (the service, the model)."""
+    it is, or its notebook gone. Anything else may pass (the service, the model), and so may
+    a route missing (a replica older than this one, met during a rolling upgrade)."""
+    if isinstance(exc, RouteMissing):
+        return False
     return isinstance(
         exc, (CaptureInvalid, InvalidObservation, MemoryRequestInvalid, NotebookNotFound, UnknownCaptureSession)
     )
 
 
-def _as_facts(statements: Sequence[str]) -> list[Fact]:
-    """Statements still queued in the notebook's inbox, as facts resolution can compare a
-    burst with (S3): never retired (``_queued_id``), only found to be repeated."""
+def _as_facts(statements: Sequence[tuple[str, Provenance]]) -> list[Fact]:
+    """Statements committed to the notebook and not landed yet, as facts resolution can
+    compare a burst with (S3), with the provenance each will land with: never retired
+    (``_queued_id``), only found to be repeated."""
     now = int(time.time() * 1000)
-    unknown = Provenance(Sensitivity.UNKNOWN, (), True)
-    return [Fact(str(-n), text, unknown, now, now) for n, text in enumerate(statements, start=1)]
+    return [Fact(str(-n), text, provenance, now, now) for n, (text, provenance) in enumerate(statements, start=1)]
 
 
 def _queued_id(fact_id: str) -> bool:
@@ -488,6 +506,7 @@ class SessionMemory:
         queue = self._queue_for(lease.job.notebook_id)
         assert queue is not None
         session_id = lease.job.session_id
+        renewing = asyncio.create_task(_renew(queue, lease), name=f"renew-{lease.job.job_id}")
         try:
             scope = scope or await self.scope(session_id)
             if _writable(scope) != lease.job.notebook_id:
@@ -511,6 +530,10 @@ class SessionMemory:
             logger.warning("session %s: capture job %s failed", session_id, lease.job.job_id, exc_info=True)
             await self._settle(queue, lease, f"{type(exc).__name__}: {exc}", terminal=_terminal(exc))
             return 0
+        finally:
+            renewing.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewing
 
     @staticmethod
     async def _settle(
@@ -577,7 +600,10 @@ class SessionMemory:
                 # Under a lease, against what it has queued too, at a revision (S3).
                 revision, queued = await self._capture_view(writable, lease)
                 held = await scope.view.facts(writable)
-                existing = [*held, *_as_facts(queued)]
+                # What is still to land, as this audience may see it (as ``held`` is): another
+                # audience's statement is never put to this session's model, nor judged by it.
+                pending = await visible(scope.view, writable, _as_facts(queued))
+                existing = [*held, *pending]
                 # A verdict depends only on the facts related to the burst: when another
                 # session's change left those as they were, it holds, with no model call again.
                 compared = _compared(related(existing, statements))
@@ -638,7 +664,9 @@ class SessionMemory:
             await queue.capture_commit(lease, NOOP_OUTCOME)
         return 0
 
-    async def _capture_view(self, writable: str, lease: CaptureLease | None) -> tuple[str | None, list[str]]:
+    async def _capture_view(
+        self, writable: str, lease: CaptureLease | None
+    ) -> tuple[str | None, list[tuple[str, Provenance]]]:
         """Under a lease, the notebook's revision and its queued statements, read before its
         facts so that any change after either is seen at the commit (S3)."""
         if lease is None or (queue := self._queue_for(writable)) is None:
@@ -762,7 +790,11 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
       field, an observation past its bounds): the same transcript, at once, once (Grok
       Build retries malformed output; a model's next answer often parses, a third rarely);
     * anything else (a refused key, a spent budget, an unknown model): not at all, since
-      it would fail the same way, and each call may be charged.
+      it would fail the same way, and each call may be charged; nor later (``Failed``
+      for good: the capture queue would fail it the same way at each claim).
+
+    What is not retried here is retried by the capture queue later (``retryable``),
+    unless it would fail the same way: a refusal, or an overflow at the shortest budget.
     """
     budget, began, malformed = 1, time.monotonic(), 0
     # Condensing is CPU work that grows with the burst (megabytes of tool output are
@@ -810,8 +842,10 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
                 ", retrying" if again else ", not retried", exc,
             )
             if not again:
-                at_floor = not isinstance(exc, MalformedOutcome) and is_context_overflow(exc) and again_on is condensed
-                return Failed(f"{type(exc).__name__}: {exc}", retryable=not at_floor)
+                overflow = not isinstance(exc, MalformedOutcome) and is_context_overflow(exc)
+                at_floor = overflow and again_on is condensed
+                refused = not overflow and not isinstance(exc, MalformedOutcome) and not is_retryable(exc)
+                return Failed(f"{type(exc).__name__}: {exc}", retryable=not (at_floor or refused))
             condensed = again_on
             await asyncio.sleep(pause or 0.0)
     return Failed("extraction attempts exhausted", retryable=True)

@@ -154,9 +154,9 @@ class NotebookOps:
         self.on_queued: Callable[[], None] | None = None
         """Told when a capture is queued: the inbox's drainer, once it runs
         (``notebooks.inbox``). Without one, ``observe`` lands its capture itself."""
-        self.on_landed: Callable[[list[str]], Awaitable[object]] | None = None
-        """Told the idempotency keys of the captures a promotion landed: the capture queue
-        (G3), which advances their sessions' ``indexed`` cursors."""
+        self.on_landed: Callable[[str, list[str]], Awaitable[object]] | None = None
+        """Told the notebook and the idempotency keys of the captures a promotion landed
+        there: the capture queue (G3), which advances their sessions' ``indexed`` cursors."""
         self._landed_at: float | None = None  # when a promotion here last landed a capture (monotonic)
 
     def _landed(self, captures: int) -> None:
@@ -182,7 +182,7 @@ class NotebookOps:
             return 0
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(lines))
         _within_length(lines)
-        expires_on = _expiry(context.expires_on if context else None) or None
+        expires_on = expiry_day(context.expires_on if context else None) or None
         notebook = await self.store.get(notebook_id)
         provenance = capture_provenance(notebook.home, context)
 
@@ -228,7 +228,7 @@ class NotebookOps:
             except ObservationInvalid as exc:
                 raise InvalidObservation(str(exc)) from None
         _within_length([d.statement for d in drafts])
-        expires_on = _expiry(context.expires_on if context else None) or None
+        expires_on = expiry_day(context.expires_on if context else None) or None
         notebook = notebook or await self.store.get(notebook_id)
         if notebook.archived_at is not None:
             raise NotebookArchived(notebook_id)
@@ -411,7 +411,7 @@ class NotebookOps:
         self._landed(landed)  # evidence the service lands captures: never one only set aside
         if keys and self.on_landed is not None:
             try:
-                await self.on_landed(keys)
+                await self.on_landed(notebook_id, keys)
             except Exception:  # told late, by reconciliation, then: never the landing undone
                 logger.warning("notebook %s: telling what landed failed", notebook_id, exc_info=True)
         return captures, added
@@ -428,7 +428,7 @@ class NotebookOps:
         _within_length([e.text for e in edits])
         if blank := [e.id for e in edits if not edited_text(e.text)]:
             raise EmptyFact(blank)
-        expiry = _expiry(context.expires_on if context else None)  # None: keep; "": clear
+        expiry = expiry_day(context.expires_on if context else None)  # None: keep; "": clear
         notebook = await self.store.get(notebook_id)
         # Editing from a conversation exposes the fact to that conversation's sources.
         exposure = capture_provenance(notebook.home, context) if context else None
@@ -599,7 +599,7 @@ def _within_length(texts: Sequence[str]) -> None:
     _within("characters in a fact", MAX_FACT_CHARS, longest)
 
 
-def _expiry(value: str | None) -> str | None:
+def expiry_day(value: str | None) -> str | None:
     """A day as YYYY-MM-DD (mem0's _normalize_expiration_date); "" (clear) and None pass."""
     if value is None or value == "":
         return value

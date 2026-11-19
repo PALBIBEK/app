@@ -212,4 +212,7 @@ async def test_the_notebook_view_holds_the_statements_still_queued(svc: MemorySe
                "context": {"sensitivity": Sensitivity.ORDINARY.value, "inherited": []}}
     await client.capture_commit(lease, outcome, resolved_at=before)
     after, queued = await client.capture_view(nb)
-    assert queued == ["Queued, not landed yet"] and after != before, "a queued statement changes the revision"
+    assert after != before, "a queued statement changes the revision"
+    ((text, provenance),) = queued
+    assert text == "Queued, not landed yet"
+    assert provenance.sensitivity is Sensitivity.ORDINARY, "with the provenance its fact will land with"

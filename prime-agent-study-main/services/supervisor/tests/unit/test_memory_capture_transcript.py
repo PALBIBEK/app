@@ -352,7 +352,7 @@ def test_a_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     may be charged."""
     extracted, sent = _attempts([REFUSED], monkeypatch, tool_loop(2, 100))
 
-    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1, "not now; the job is retried later"
+    assert isinstance(extracted, turn.Failed) and not extracted.retryable and len(sent) == 1, "not now, nor later"
 
 
 def test_a_capture_that_keeps_failing_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:

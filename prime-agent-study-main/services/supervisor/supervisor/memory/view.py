@@ -75,6 +75,12 @@ class MemoryView:
     async def facts(self, notebook_id: str) -> list[Fact]:
         return await self._base.facts(notebook_id)
 
+    async def visible(self, notebook_id: str, facts: Sequence[Fact]) -> list[Fact]:
+        """Of ``facts`` (not read from the notebook: statements still queued for it), those
+        this view's audience may see, by each layer's rules (``DisclosedMemory``)."""
+        below = getattr(self._base, "visible", None)
+        return list(facts) if below is None else await below(notebook_id, facts)
+
     async def edit(
         self,
         notebook_id: str,
@@ -101,6 +107,13 @@ class MemoryView:
 
     async def restore(self, notebook_id: str, revision: int, *, author: str | None = None) -> None:
         await self._base.restore(notebook_id, revision, author=author)
+
+
+async def visible(memory: MemoryService, notebook_id: str, facts: Sequence[Fact]) -> list[Fact]:
+    """Of ``facts`` (not read from the notebook: statements still to land in it), those
+    ``memory``'s audience may see; all of them where no layer has an audience's rules."""
+    filtered = getattr(memory, "visible", None)
+    return list(facts) if filtered is None else await filtered(notebook_id, facts)
 
 
 async def observe(

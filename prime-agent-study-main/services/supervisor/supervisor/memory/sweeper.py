@@ -68,13 +68,10 @@ async def capture_sweeper(
         while not should_stop():
             free = limit - len(running)
             if free > 0:
-                try:
-                    for lease in await _claim(queue, free):
-                        task = asyncio.create_task(memory.run_capture(lease), name=f"capture-{lease.job.job_id}")
-                        running.add(task)
-                        task.add_done_callback(running.discard)
-                except Exception:  # the service unreachable: the next round tries again
-                    logger.warning("capture sweep failed", exc_info=True)
+                for lease in await _claim(queue, free):
+                    task = asyncio.create_task(memory.run_capture(lease), name=f"capture-{lease.job.job_id}")
+                    running.add(task)
+                    task.add_done_callback(running.discard)
             await asyncio.sleep(interval_s)
     finally:
         for task in list(running):
@@ -84,14 +81,19 @@ async def capture_sweeper(
 
 
 async def _claim(queue: NotebookClient, free: int) -> list[CaptureLease]:
-    """At most one job per tenant, in the service's fair order, up to ``free``."""
+    """At most one job per tenant, in the service's fair order, up to ``free``. A call that
+    fails ends the round with the leases taken so far, every one of them run: none is left
+    held for nothing until it runs out. The next round tries again."""
     leases: list[CaptureLease] = []
-    for tenant in await queue.capture_tenants(limit=free, pending_grace_s=PENDING_GRACE_S):
-        lease = await queue.capture_claim(
-            tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
-        )
-        if lease is not None:
-            leases.append(lease)
-        if len(leases) >= free:
-            break
+    try:
+        for tenant in await queue.capture_tenants(limit=free, pending_grace_s=PENDING_GRACE_S):
+            lease = await queue.capture_claim(
+                tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
+            )
+            if lease is not None:
+                leases.append(lease)
+            if len(leases) >= free:
+                break
+    except Exception:  # the service unreachable, a tenant's rate limit
+        logger.warning("capture sweep failed", exc_info=True)
     return leases

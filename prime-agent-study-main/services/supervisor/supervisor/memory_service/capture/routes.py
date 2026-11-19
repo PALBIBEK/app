@@ -30,6 +30,7 @@ from supervisor.memory_service.capture.queue import (
     CaptureWorkState,
 )
 from supervisor.memory_service.notebooks.errors import NotebookNotFound
+from supervisor.memory_service.notebooks.wire import provenance_out
 
 router = APIRouter(prefix="/v1/capture", tags=["capture"])
 
@@ -85,6 +86,11 @@ class FailIn(BaseModel):
 class ReleaseIn(BaseModel):
     lease: LeaseIn
     error: str = Field(max_length=16_384)
+
+
+class RenewIn(BaseModel):
+    lease: LeaseIn
+    lease_s: float = Field(ge=1, le=MAX_LEASE_S)
 
 
 class FlushIn(BaseModel):
@@ -201,6 +207,16 @@ async def commit(job_id: str, body: CommitIn, request: Request) -> dict[str, Any
     return {"outcome_hash": result.outcome_hash, "was_already_committed": result.was_already_committed}
 
 
+@router.post("/jobs/{job_id}:renew")
+async def renew(job_id: str, body: RenewIn, request: Request) -> dict[str, Any]:
+    lease = _checked(job_id, request, body.lease)
+    try:
+        renewed = await _queue(request).renew(lease, body.lease_s)
+    except CaptureError as exc:
+        raise _error(exc) from exc
+    return {"lease": lease_out(renewed)}
+
+
 @router.post("/jobs/{job_id}:fail", status_code=204)
 async def fail(job_id: str, body: FailIn, request: Request) -> None:
     lease = _checked(job_id, request, body.lease)
@@ -257,7 +273,10 @@ async def notebook_view(notebook_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(404, {"code": "NotebookNotFound", "message": str(exc)}) from exc
     enforce_item_tenant(request, notebook.tenant_id)
     revision, statements = await _queue(request).view(notebook_id)
-    return {"revision": revision, "queued": statements}
+    return {
+        "revision": revision,
+        "queued": [{"statement": text, "provenance": provenance_out(p)} for text, p in statements],
+    }
 
 
 def _checked(job_id: str, request: Request, body: LeaseIn) -> CaptureLease:

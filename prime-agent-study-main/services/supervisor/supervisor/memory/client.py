@@ -60,6 +60,7 @@ from supervisor.memory_service.notebooks.types import (
     Fact,
     Notebook,
     NotebookStats,
+    Provenance,
     Revision,
     subject_of,
     tenant_of,
@@ -345,6 +346,12 @@ class NotebookClient:
         answer = await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:commit", json=body)
         return bool(answer["was_already_committed"])
 
+    async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+        """Extend a lease its holder is still working under."""
+        body = {"lease": _lease_out(lease), "lease_s": lease_s}
+        answer = await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:renew", json=body)
+        return _lease_in(answer["lease"])
+
     async def capture_fail(self, lease: CaptureLease, error: str, *, terminal: bool) -> None:
         body = {"lease": _lease_out(lease), "error": error[:16_384], "terminal": terminal}
         await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:fail", json=body)
@@ -359,11 +366,14 @@ class NotebookClient:
         answer = await self._call(SWEEPER_TENANT, "GET", "/v1/capture/tenants", params=params)
         return [str(t) for t in answer["tenants"]]
 
-    async def capture_view(self, notebook_id: str) -> tuple[str, list[str]]:
-        """The notebook's revision as a capture's resolution reads it, and the statements its
-        inbox still holds (S3)."""
+    async def capture_view(self, notebook_id: str) -> tuple[str, list[tuple[str, Provenance]]]:
+        """The notebook's revision as a capture's resolution reads it, and the statements
+        committed into it and not landed yet, each with the provenance its fact will have
+        (S3): what an audience may see of them is its disclosure's to say."""
         answer = await self._call(tenant_of(notebook_id), "GET", f"/v1/capture/notebooks/{notebook_id}")
-        return str(answer["revision"]), [str(s) for s in answer["queued"]]
+        return str(answer["revision"]), [
+            (str(q["statement"]), wire.provenance_in(q["provenance"])) for q in answer["queued"]
+        ]
 
     async def capture_flush(
         self, *, tenant_id: str, session_id: str, through_turn: int | None = None, timeout_s: float = 240.0

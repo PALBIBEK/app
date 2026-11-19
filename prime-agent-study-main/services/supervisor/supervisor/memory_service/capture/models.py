@@ -59,6 +59,13 @@ class CaptureJobRow(Base):
             postgresql_where=text("status = 'completed' AND NOT indexed"),
             sqlite_where=text("status = 'completed' AND NOT indexed"),
         ),
+        # A notebook's committed outcomes not queued yet: what every resolution reads (S3).
+        Index(
+            "ix_memory_capture_unqueued",
+            "notebook_id",
+            postgresql_where=text("status = 'completed' AND NOT queued"),
+            sqlite_where=text("status = 'completed' AND NOT queued"),
+        ),
         Index("ix_memory_capture_session", "session_id", "from_turn"),
         Index("ix_memory_capture_updated", "updated_at"),  # pruning
     )
