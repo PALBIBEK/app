@@ -427,10 +427,10 @@ sessions).
   expiry) is refused at commit. The outcome is then queued into G2's inbox under the job's
   id; a crash between the two is repaired by `reconcile` from the kept outcome, never by
   extracting again. A person's change to the notebook (an edit, a delete, a clear, a
-  restore) drops, in its own transaction, the outcomes committed whose rows are not in the
-  inbox yet (their queuing failed), and puts a handled row under each one's key, so its
-  queuing later lands nothing; one already in the inbox is stripped as G2 strips what is
-  queued. Outcomes are content: cleared once their facts land or cannot
+  restore), in its own transaction and before it strips the queue, drops the committed
+  outcomes it concerns (restating words it removed; any, for a clear) whose rows are not in
+  the inbox yet, and puts a handled row under each one's key, so their queuing lands
+  nothing. One whose row took the key first is in the queue before the strip reads it. Outcomes are content: cleared once their facts land or cannot
   land, and scrubbed with an erased owner's notebooks; diagnostics of a model's or a
   burst's words keep only the error's class.
 - **Cursors:** per session, `requested`, `captured` (committed or failed for good) and
@@ -474,7 +474,9 @@ sessions).
   consolidation's (G5), which sees every fact's source turn. An operator's requeue of
   set-aside captures can return the revision to an earlier value (a resolution then
   passes with one statement it compared gone), and reconciliation's scan of queued jobs
-  grows with the inbox's backlog.
+  grows with the inbox's backlog. A burst cannot retire a statement still to land (only
+  landed facts), so a contradiction between two captures in flight at once lands both,
+  for consolidation (G5).
 
 *Tests:* Grok's ten (`tests/memory_store/test_capture_queue.py`, on SQLite and Postgres) and
 ours beside them: the routes and their tenant isolation, the sweeper and how a leased job

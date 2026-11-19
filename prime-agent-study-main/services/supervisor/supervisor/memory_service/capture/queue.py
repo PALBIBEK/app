@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal
 
 from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -71,6 +73,7 @@ from supervisor.memory_service.notebooks.errors import (
 )
 from supervisor.memory_service.notebooks.models import InboxRow, NotebookRow
 from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps, expiry_day
+from supervisor.memory_service.notebooks.render import normalize
 from supervisor.memory_service.notebooks.store import HANDLED_PAYLOAD
 from supervisor.memory_service.notebooks.types import Provenance, capture_provenance
 from supervisor.memory_service.notebooks.wire import context_in, observation_in
@@ -420,13 +423,17 @@ class CaptureQueue:
                     raise CaptureConflict("job was already committed with a different outcome")
                 return CommitResult(digest, True)
             _fenced(row, lease, now)
+            # Past its stale releases, what it resolved is kept as resolved: a rare
+            # near-duplicate is consolidation's (G5), never a capture lost to contention.
+            held_to_revision = resolved_at is not None and int(row.stale) < MAX_STALE_RELEASES
+            if noop and held_to_revision and (actual := await _revision(db, row.notebook_id)) != resolved_at:
+                # A burst found to repeat what was still to land: that may have gone since.
+                assert resolved_at is not None
+                raise StaleResolution(resolved_at, actual)
             if not noop:
                 # After the job's lock (one order, every commit): commits into one notebook
                 # take turns here, each counted, so a resolution read before one is stale after.
                 counter = await self._notebook_for_update(db, row.notebook_id, now)
-                # Past its stale releases, what it resolved is kept as resolved: a rare
-                # near-duplicate is consolidation's (G5), never a capture lost to contention.
-                held_to_revision = resolved_at is not None and int(row.stale) < MAX_STALE_RELEASES
                 if held_to_revision and (actual := await _revision(db, row.notebook_id)) != resolved_at:
                     assert resolved_at is not None
                     raise StaleResolution(resolved_at, actual)
@@ -540,18 +547,29 @@ class CaptureQueue:
                 row.queued, row.updated_at = True, self._clock()
             await db.commit()
 
-    async def drop_unqueued(self, notebook_id: str, *, db: AsyncSession | None = None) -> int:
-        """A person changed the notebook (an edit, a delete, a clear, a restore), in this
-        transaction (``db``, its notebook locked): the outcomes committed into it whose rows
-        are not in the inbox yet (their queuing failed, for reconciliation to retry) were
-        judged against what it held before, and the protections this transaction gives what
-        is queued never reach them. Each is dropped, and a handled row is put under its key,
-        so its queuing, whenever it comes, finds it queued and lands nothing (the inbox's
-        unique key). One whose row is in already is queued, and this transaction strips it as
-        it strips every queued capture. The jobs dropped."""
+    async def drop_unqueued(
+        self,
+        notebook_id: str,
+        *,
+        db: AsyncSession | None = None,
+        gone: set[str] | None = None,
+        revived: bool = False,
+    ) -> int:
+        """A person changed the notebook, in this transaction (``db``, its notebook locked),
+        before it reads the queue to strip it: ``gone``, the words (normalized) no fact has
+        any more (None: a clear, all of them); ``revived``, facts brought back (a restore).
+
+        An outcome committed into it whose row is not in the inbox yet (its queuing still on
+        the way, or failed, for reconciliation to retry) never meets that strip. One the
+        change concerns (it restates a word gone, or retires facts, judged before facts came
+        back) is dropped, and a handled row is put under its key: its queuing, whenever it
+        comes, finds the key taken and lands nothing. One whose row went in first (the key
+        is taken: this insert waits for it, if its insert is still open) is in the inbox
+        before the strip reads it, and stripped as every queued capture is. An outcome the
+        change does not concern is left to land. The jobs dropped."""
         if db is None:
             async with self._db() as own:
-                count = await self.drop_unqueued(notebook_id, db=own)
+                count = await self.drop_unqueued(notebook_id, db=own, gone=gone, revived=revived)
                 await own.commit()
                 return count
         now = self._clock()
@@ -563,29 +581,19 @@ class CaptureQueue:
                 .with_for_update()
             )
         )
-        if not rows:
-            return 0
-        inbox = set(
-            await db.scalars(
-                select(InboxRow.idempotency_key).where(
-                    InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key.in_([r.job_id for r in rows])
-                )
-            )
-        )
-        dropped = [r for r in rows if r.job_id not in inbox]
+        dropped = []
         for row in rows:
-            row.queued, row.updated_at = True, now
-        for row in dropped:
+            if not _concerns(row.outcome or {}, gone, revived):
+                continue
+            taken = await db.execute(_handled_row(db, notebook_id, row.job_id, now))
+            if taken.rowcount != 1:  # type: ignore[attr-defined]
+                continue  # its own row went in first: the strip that follows reaches it
             row.status, row.terminal = "failed", True
             row.last_error = "a person changed the notebook before its facts were queued"
             row.outcome = None
-            row.indexed = True
-            db.add(
-                InboxRow(
-                    notebook_id=notebook_id, idempotency_key=row.job_id, sensitivity="unknown", source_unknown=True,
-                    received_at=now, promoted_at=now, **HANDLED_PAYLOAD,
-                )
-            )
+            row.queued = row.indexed = True
+            row.updated_at = now
+            dropped.append(row)
         if dropped:
             await self._count_change(db, notebook_id, now)
         for session_id in sorted({r.session_id for r in dropped}):
@@ -900,6 +908,29 @@ class CaptureQueue:
             await db.execute(delete(CaptureNotebookRow).where(~live))
             await db.commit()
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
+
+
+def _concerns(outcome: dict[str, Any], gone: set[str] | None, revived: bool) -> bool:
+    """Whether a person's change concerns a committed outcome: a clear concerns them all;
+    otherwise one restating words the change left no fact with, or (facts brought back,
+    which its resolution never saw) one retiring facts."""
+    if gone is None:
+        return True
+    if revived and outcome.get("retire"):
+        return True
+    return any(normalize(str(o.get("statement", ""))) in gone for o in outcome.get("observations") or ())
+
+
+def _handled_row(db: AsyncSession, notebook_id: str, job_id: str, now: int) -> Any:
+    """A handled inbox row under a job's key, unless the key is taken (``uq_memory_inbox_key``):
+    one statement, on Postgres and SQLite alike, that never fails on the key."""
+    values = {
+        "notebook_id": notebook_id, "idempotency_key": job_id, "sensitivity": "unknown", "source_unknown": True,
+        "received_at": now, "promoted_at": now, **HANDLED_PAYLOAD,
+    }
+    dialect = db.get_bind().dialect.name
+    insert = postgres_insert if dialect == "postgresql" else sqlite_insert
+    return insert(InboxRow).values(values).on_conflict_do_nothing(index_elements=["notebook_id", "idempotency_key"])
 
 
 def _claimable(now: int, pending_grace_ms: int = 0) -> Any:

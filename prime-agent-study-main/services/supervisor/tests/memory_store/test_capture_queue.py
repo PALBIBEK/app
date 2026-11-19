@@ -347,7 +347,9 @@ async def test_a_commit_changes_the_revision_before_its_facts_are_queued(
     assert revision != seen and [s for s, _ in statements] == ["Deploys on Fridays"], "resolution sees it all the same"
     with pytest.raises(StaleResolution):
         await q.commit(b, observations("Deploys on Friday"), resolved_at=seen)
-    await q.commit(b, NOOP, resolved_at=seen)  # nothing to change: never stale
+    with pytest.raises(StaleResolution):  # a repeat of what was still to land: that may be gone
+        await q.commit(b, NOOP, resolved_at=seen)
+    await q.commit(b, NOOP, resolved_at=await q.revision(notebook))
 
 
 async def test_an_erased_owners_captures_are_scrubbed_and_their_sessions_resolved(
@@ -742,3 +744,50 @@ async def test_a_persons_change_keeps_a_capture_already_in_the_inbox(
     await memory.notebooks.delete(notebook, [dog.id])
     await memory.inbox.drain()
     assert [f.text for f in await svc.client().facts(notebook)] == ["Prefers window seats"]
+
+
+async def test_a_persons_change_leaves_an_unrelated_unqueued_capture_to_land(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the outcomes the change concerns (restating a word it removed) are dropped."""
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await memory.notebooks.capture(notebook, ["Has a dog"])
+    (dog,) = await svc.client().facts(notebook)
+    await enqueue(svc, notebook, "session", 1, 1)
+    real = memory.notebooks.observe
+
+    async def down(*args: object, **kwargs: object) -> int:
+        raise ConnectionError("the inbox is unreachable")
+
+    monkeypatch.setattr(memory.notebooks, "observe", down)
+    await q.commit(await claim(svc, "worker"), observations("Prefers window seats"))
+    monkeypatch.setattr(memory.notebooks, "observe", real)
+    await memory.notebooks.delete(notebook, [dog.id])
+
+    clock.at += 60_000
+    await q.reconcile()
+    await memory.inbox.drain()
+    assert [f.text for f in await svc.client().facts(notebook)] == ["Prefers window seats"]
+    assert (await q.flush(tenant_id=T, session_id="session", through_turn=1, timeout_s=0))[0] == "success"
+
+
+async def test_a_persons_change_finding_the_captures_row_already_in_never_fails(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handled row goes in only where the key is free: one the capture's own row took
+    first is left to the strip, and the change commits (no key error)."""
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await memory.notebooks.capture(notebook, ["Keeps a vault key"])
+    (held,) = await svc.client().facts(notebook)
+    await enqueue(svc, notebook, "session", 1, 1)
+
+    async def unmarked(job: object) -> None:  # its row is in; marking the job so has not run
+        return None
+
+    monkeypatch.setattr(q, "_queued", unmarked)
+    await q.commit(await claim(svc, "worker"), observations("Keeps a vault key"))
+    await memory.notebooks.delete(notebook, [held.id])  # concerns it, finds its key taken
+    await memory.inbox.drain()
+    assert await svc.client().facts(notebook) == [], "stripped from the inbox, as any queued capture"

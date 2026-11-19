@@ -308,7 +308,8 @@ async def test_a_job_past_its_deadline_fails_retryably(monkeypatch: pytest.Monke
     assert queue.ended == [("fail", "cap-1", False)], "a hang counts against the job: never held for good"
 
 
-async def test_a_sweeper_stopped_mid_claim_gives_back_what_it_took() -> None:
+async def test_a_sweeper_stopped_mid_claim_gives_back_what_it_took(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sweeper, "CLAIM_ANSWER_S", 0.05)  # the claim on the wire never answers
     gate = asyncio.Event()
 
     class Slow(FakeQueue):
@@ -321,6 +322,26 @@ async def test_a_sweeper_stopped_mid_claim_gives_back_what_it_took() -> None:
     claiming = asyncio.create_task(sweeper._claim(queue, 2))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     claiming.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await claiming
+    assert queue.ended == [("release", "cap-a-1", "the sweeper stopped")]
+
+
+async def test_a_claim_on_the_wire_when_the_sweeper_stops_is_given_back() -> None:
+    answered = asyncio.Event()
+
+    class Slow(FakeQueue):
+        async def capture_claim(self, *, tenant_id: str, **kw: Any) -> CaptureLease | None:
+            lease = await super().capture_claim(tenant_id=tenant_id, **kw)  # granted on the service
+            await answered.wait()  # its answer still on the way
+            return lease
+
+    queue = Slow({"a": [_lease("a")]})
+    claiming = asyncio.create_task(sweeper._claim(queue, 1))  # type: ignore[arg-type]
+    await asyncio.sleep(0.02)
+    claiming.cancel()
+    await asyncio.sleep(0)
+    answered.set()
     with pytest.raises(asyncio.CancelledError):
         await claiming
     assert queue.ended == [("release", "cap-a-1", "the sweeper stopped")]

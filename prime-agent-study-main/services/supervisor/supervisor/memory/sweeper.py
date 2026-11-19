@@ -33,6 +33,8 @@ PENDING_GRACE_S: Final = 60.0
 """A pending job younger than this is its session's activity's to run (it claims it at once)."""
 CONCURRENCY_ENV: Final = "MEMORY_CAPTURE_SWEEP_CONCURRENCY"
 DEFAULT_CONCURRENCY: Final = 2
+CLAIM_ANSWER_S: Final = 10.0
+"""How long a sweeper stopping mid-claim waits for its answer, to give back what it got."""
 LIST_PER_SLOT: Final = 4
 """Tenants listed per free slot: room to move on past the ones other workers emptied."""
 
@@ -99,9 +101,20 @@ async def _claim(
             for tenant in tenants:
                 if should_stop():  # stopping: no claim starts that its answer could outlive
                     return leases
-                lease = await queue.capture_claim(
-                    tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
+                asking = asyncio.ensure_future(
+                    queue.capture_claim(
+                        tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
+                    )
                 )
+                try:
+                    lease = await asyncio.shield(asking)
+                except asyncio.CancelledError:
+                    # Stopped mid-claim: its answer is awaited, so a lease the service granted
+                    # is given back below, never held by no one until it runs out.
+                    with contextlib.suppress(Exception):  # an answer that never comes: its lease runs out
+                        if (granted := await asyncio.wait_for(asking, CLAIM_ANSWER_S)) is not None:
+                            leases.append(granted)
+                    raise
                 if lease is not None:
                     leases.append(lease)
                     served.append(tenant)
