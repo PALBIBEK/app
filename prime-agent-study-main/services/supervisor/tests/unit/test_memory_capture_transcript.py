@@ -348,11 +348,15 @@ def test_an_overflow_that_no_shorter_budget_would_help_is_not_retried(monkeypatc
 
 
 def test_a_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A bad key, a spent budget, an unknown model fail the same way again, and each call
-    may be charged."""
-    extracted, sent = _attempts([REFUSED], monkeypatch, tool_loop(2, 100))
-
+    """A spent budget, an unknown model fail the same way again, and each call may be
+    charged: not now, nor later. A refused key is not retried now either, but later: the
+    session's next step renews it (``classify.is_refused_key``)."""
+    unknown = ModelGatewayError(404, '{"detail": {"error": {"code": "UNKNOWN_MODEL", "message": "no such model"}}}')
+    extracted, sent = _attempts([unknown], monkeypatch, tool_loop(2, 100))
     assert isinstance(extracted, turn.Failed) and not extracted.retryable and len(sent) == 1, "not now, nor later"
+
+    extracted, sent = _attempts([REFUSED], monkeypatch, tool_loop(2, 100))
+    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1, "not now; later"
 
 
 def test_a_capture_that_keeps_failing_stops_after_its_attempts(monkeypatch: pytest.MonkeyPatch) -> None:

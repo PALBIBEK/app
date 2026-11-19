@@ -33,6 +33,8 @@ PENDING_GRACE_S: Final = 60.0
 """A pending job younger than this is its session's activity's to run (it claims it at once)."""
 CONCURRENCY_ENV: Final = "MEMORY_CAPTURE_SWEEP_CONCURRENCY"
 DEFAULT_CONCURRENCY: Final = 2
+LIST_PER_SLOT: Final = 4
+"""Tenants listed per free slot: room to move on past the ones other workers emptied."""
 
 
 def sweep_concurrency(environ: dict[str, str] | None = None) -> int:
@@ -81,19 +83,27 @@ async def capture_sweeper(
 
 
 async def _claim(queue: NotebookClient, free: int) -> list[CaptureLease]:
-    """At most one job per tenant, in the service's fair order, up to ``free``. A call that
-    fails ends the round with the leases taken so far, every one of them run: none is left
-    held for nothing until it runs out. The next round tries again."""
+    """Up to ``free`` jobs, one per tenant a pass, in the service's fair order: a tenant
+    gets a second only when every tenant listed has had its turn (a lone backlog uses every
+    free slot). More tenants are listed than slots, so a worker that loses one tenant's last
+    job to another worker takes the next tenant's. A call that fails ends the round with the
+    leases taken so far, every one of them run: none is left held for nothing until it runs
+    out. The next round tries again."""
     leases: list[CaptureLease] = []
     try:
-        for tenant in await queue.capture_tenants(limit=free, pending_grace_s=PENDING_GRACE_S):
-            lease = await queue.capture_claim(
-                tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
-            )
-            if lease is not None:
-                leases.append(lease)
-            if len(leases) >= free:
-                break
+        tenants = await queue.capture_tenants(limit=free * LIST_PER_SLOT, pending_grace_s=PENDING_GRACE_S)
+        while tenants and len(leases) < free:
+            served = []
+            for tenant in tenants:
+                lease = await queue.capture_claim(
+                    tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
+                )
+                if lease is not None:
+                    leases.append(lease)
+                    served.append(tenant)
+                if len(leases) >= free:
+                    break
+            tenants = served  # only those that had work, again
     except Exception:  # the service unreachable, a tenant's rate limit
         logger.warning("capture sweep failed", exc_info=True)
     return leases

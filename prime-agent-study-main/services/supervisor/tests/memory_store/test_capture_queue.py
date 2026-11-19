@@ -560,3 +560,63 @@ async def test_an_outcome_with_an_expiry_it_could_never_keep_is_refused_at_commi
     with pytest.raises(CaptureInvalid):
         await q.commit(lease, {**observations("Expires someday"), "context": {**OWN, "expires_on": "tomorrow"}})
     await q.commit(lease, {**observations("Expires on a day"), "context": {**OWN, "expires_on": "2030-01-01"}})
+
+
+async def test_a_capture_the_inbox_set_aside_fails_its_range_and_the_barrier_says_so(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    from sqlalchemy import update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    await q.commit(await claim(svc, "worker"), observations("Never lands"))
+    async with memory._factory() as db:  # the drainer gave up on it
+        await db.execute(update(InboxRow).values(promoted_at=clock.at, attempts=PROMOTE_ATTEMPTS))
+        await db.commit()
+
+    await q.reconcile()
+
+    assert await cursors(svc) == CaptureCursors(requested=1, captured=1, indexed=1), "never a cursor stalled a week"
+    result, _, state = await q.flush(tenant_id=T, session_id="session", through_turn=1, timeout_s=0)
+    assert result == "failed" and "set aside" in (state.last_error or "")
+
+
+async def test_a_second_erasure_touches_none_of_the_first_ones_jobs(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    memory = svc.app.state.memory
+    await enqueue(svc, notebook, "session", 1, 1)
+    await queue(svc).commit(await claim(svc, "worker"), observations("Erased with its owner"))
+    await memory.erase_subject(tenant=T, subject="user:alice", actor="ops", reason="request")
+    assert await queue(svc).forget_erased(tenant_id=T) == 0, "scrubbed once, never again"
+
+
+async def test_pruning_drops_idle_sessions_and_the_counters_of_notebooks_gone(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    from sqlalchemy import func, select
+
+    from supervisor.memory_service.capture.models import CaptureNotebookRow, CaptureSessionRow
+
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    await q.commit(await claim(svc, "worker"), observations("Kept a while"))
+    await memory.inbox.drain()
+    other = (await svc.client().ensure(tenant_id=T, owner="bob", agent_pin=PIN, name="default")).id
+    await q.enqueue(tenant_id=T, session_id="bobs", notebook_id=other, run_ids=["r"])
+    await q.commit(await claim(svc, "worker", session_id="bobs"), observations("Bob's"))
+    await memory.erase_subject(tenant=T, subject="user:bob", actor="ops", reason="request")
+
+    clock.at += 1
+    await q.prune(before=clock.at)
+
+    async with memory._factory() as db:
+        sessions = await db.scalar(select(func.count()).select_from(CaptureSessionRow))
+        counters = list(await db.scalars(select(CaptureNotebookRow.notebook_id)))
+    assert sessions == 0, "no job left, and idle"
+    assert counters == [notebook], "a live notebook keeps its count: it is part of its revision"

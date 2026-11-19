@@ -789,14 +789,16 @@ class NotebookStore:
                 if isinstance(o, dict) and isinstance(o.get("statement"), str)
             ]
 
-    async def queued_with_provenance(self, notebook_id: str) -> list[tuple[str, Provenance]]:
-        """Every statement the notebook's queued captures hold, with the provenance its fact
-        will have (what an audience may see of it is its disclosure's to say)."""
+    async def queued_with_provenance(self, notebook_id: str, *, limit: int) -> list[tuple[str, Provenance]]:
+        """The statements the notebook's newest queued captures hold, about ``limit`` at most,
+        each with the provenance its fact will have (what an audience may see of it is its
+        disclosure's to say)."""
         async with self._db() as db:
             rows = await db.execute(
-                select(InboxRow.observations, InboxRow.sensitivity, InboxRow.sources, InboxRow.source_unknown).where(
-                    InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None)
-                )
+                select(InboxRow.observations, InboxRow.sensitivity, InboxRow.sources, InboxRow.source_unknown)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .order_by(InboxRow.id.desc())
+                .limit(max(1, limit // 4))  # a capture holds a few statements: rows, not statements
             )
             out: list[tuple[str, Provenance]] = []
             for observations, sensitivity, sources, unknown in rows.all():
@@ -806,7 +808,9 @@ class NotebookStore:
                     for o in observations or ()
                     if isinstance(o, dict) and isinstance(o.get("statement"), str)
                 ]
-            return out
+                if len(out) >= limit:
+                    break
+            return out[:limit]
 
     async def all_texts(self, notebook_id: str) -> list[str]:
         """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""

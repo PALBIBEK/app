@@ -85,7 +85,7 @@ class CaptureJobRow(Base):
     available_at: Mapped[int] = mapped_column(BigInteger, nullable=False)  # a retry's backoff
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # sanitized, bounded
     outcome_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
-    outcome: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)  # None is SQL NULL
     queued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # in the inbox
     indexed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # landed
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

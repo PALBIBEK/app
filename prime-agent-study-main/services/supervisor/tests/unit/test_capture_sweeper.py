@@ -84,7 +84,7 @@ def test_sweep_concurrency_is_read_from_the_environment() -> None:
             sweeper.sweep_concurrency({sweeper.CONCURRENCY_ENV: bad})
 
 
-async def test_a_round_takes_at_most_one_job_per_tenant_in_the_services_order() -> None:
+async def test_a_round_serves_every_tenant_once_before_any_tenant_twice() -> None:
     queue = FakeQueue({"busy": [_lease("busy", n) for n in range(1, 4)], "quiet": [_lease("quiet")]})
     memory = FakeMemory()
     rounds = iter([False, True])
@@ -92,8 +92,9 @@ async def test_a_round_takes_at_most_one_job_per_tenant_in_the_services_order() 
     await sweeper.capture_sweeper(memory, queue, should_stop=lambda: next(rounds), concurrency=4, interval_s=0)  # type: ignore[arg-type]
     await asyncio.sleep(0)
 
-    assert sorted(memory.ran) == ["cap-busy-1", "cap-quiet-1"], "one each, though one tenant has three"
-    assert queue.listed == [(4, sweeper.PENDING_GRACE_S)], "pending jobs are their own activity's first"
+    assert memory.ran[:2] == ["cap-busy-1", "cap-quiet-1"], "one each first, in the service's order"
+    assert sorted(memory.ran[2:]) == ["cap-busy-2", "cap-busy-3"], "then free slots go to the tenant left with work"
+    assert queue.listed == [(4 * sweeper.LIST_PER_SLOT, sweeper.PENDING_GRACE_S)], "pending jobs are their activity's first"
 
 
 async def test_the_sweeper_runs_no_more_than_its_concurrency_and_releases_on_stop() -> None:

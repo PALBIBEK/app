@@ -103,6 +103,12 @@ LAND_GRACE_MS: Final = 2_000
 """How long after its commit a job's outcome is left to the committing call to queue, before
 ``reconcile`` queues it (a crash between the two)."""
 KEEP_JOBS_MS: Final = 7 * 24 * 3600 * 1000
+ERASED: Final = "notebook erased"
+"""An erased owner's job's diagnostic: whatever it said before may quote the model's words."""
+VIEW_JOBS: Final = 200
+VIEW_STATEMENTS: Final = 1_000
+"""At most what one resolution reads of what is still to land: the newest committed outcomes
+and queued statements (a notebook whose drainer lags never makes every capture read it all)."""
 """Resolved jobs are kept a week (a retried enqueue still finds its job), then pruned."""
 RECONCILE_BATCH: Final = 200
 
@@ -332,8 +338,11 @@ class CaptureQueue:
             .with_for_update(skip_locked=True)
         )
         async with self._db() as db:
+            exhausted: set[str] = set()  # sessions of the jobs failed for good here
             while True:
                 if (row := await db.scalar(query)) is None:
+                    for gone in sorted(exhausted):  # after the jobs, in one order, as every write
+                        await _advance(db, gone, now)
                     await db.commit()
                     return None
                 if row.status != "running" or int(row.attempt) < MAX_CAPTURE_ATTEMPTS:
@@ -346,8 +355,10 @@ class CaptureQueue:
                 row.outcome = None
                 row.queued = row.indexed = True
                 row.updated_at = now
-                await _advance(db, row.session_id, now)
+                exhausted.add(row.session_id)
                 await db.flush()
+            for gone in sorted(exhausted):
+                await _advance(db, gone, now)
             row.status = "running"
             row.lease_owner = owner
             row.lease_expires_at = expires
@@ -570,7 +581,15 @@ class CaptureQueue:
                         (InboxRow.notebook_id == CaptureJobRow.notebook_id)
                         & (InboxRow.idempotency_key == CaptureJobRow.job_id),
                     )
-                    .where(CaptureJobRow.status == "completed", ~CaptureJobRow.indexed, CaptureJobRow.queued)
+                    .where(
+                        CaptureJobRow.status == "completed",
+                        ~CaptureJobRow.indexed,
+                        CaptureJobRow.queued,
+                        # Only those whose row is no longer waiting: one still queued is the
+                        # drainer's, and a backlog of them never starves this pass.
+                        or_(InboxRow.id.is_(None), InboxRow.promoted_at.is_not(None)),
+                    )
+                    .order_by(CaptureJobRow.completed_at)
                     .limit(RECONCILE_BATCH)
                 )).all()
             )
@@ -578,14 +597,38 @@ class CaptureQueue:
         for row in unqueued:
             await self._land(_job(row), row.outcome or {})
             repaired += 1
-        landed = [
-            job_id
-            for job_id, _notebook, promoted_at, attempts in queued
+        landed: list[str] = []
+        set_aside: list[str] = []
+        for job_id, _notebook, promoted_at, attempts in queued:
             # Handled (landed or dropped), or gone (pruned, erased): never coming back. One set
-            # aside (attempts at the limit) is not landed: requeued, it lands then.
-            if promoted_at is None and attempts is None or (promoted_at is not None and int(attempts or 0) < PROMOTE_ATTEMPTS)
-        ]
-        return repaired + await self.mark_indexed(landed)
+            # aside (attempts at the limit) did not land: its range fails, and the barrier says
+            # so; requeued (``notebooks.requeue``), its facts land all the same.
+            (set_aside if promoted_at is not None and int(attempts or 0) >= PROMOTE_ATTEMPTS else landed).append(job_id)
+        return repaired + await self.mark_indexed(landed) + await self._set_aside(set_aside)
+
+    async def _set_aside(self, job_ids: Sequence[str]) -> int:
+        if not job_ids:
+            return 0
+        now = self._clock()
+        async with self._db() as db:
+            rows = list(
+                await db.scalars(
+                    select(CaptureJobRow)
+                    .where(CaptureJobRow.job_id.in_(job_ids), CaptureJobRow.status == "completed", ~CaptureJobRow.indexed)
+                    .order_by(CaptureJobRow.job_id)
+                    .with_for_update()
+                )
+            )
+            for row in rows:
+                row.status, row.terminal = "failed", True
+                row.last_error = "its facts were set aside by the inbox: they land if requeued"
+                row.queued = row.indexed = True
+                row.outcome = None
+                row.updated_at = now
+            for session_id in sorted({r.session_id for r in rows}):
+                await _advance(db, session_id, now)
+            await db.commit()
+        return len(rows)
 
     # --- reads -----------------------------------------------------------------------------
 
@@ -664,7 +707,17 @@ class CaptureQueue:
             rows = list(
                 await db.scalars(
                     select(CaptureJobRow)
-                    .where(CaptureJobRow.tenant_id == tenant_id, gone)
+                    .where(
+                        CaptureJobRow.tenant_id == tenant_id,
+                        gone,
+                        # Not scrubbed already (an earlier erasure's): never the same rows again.
+                        or_(
+                            CaptureJobRow.outcome.is_not(None),
+                            ~CaptureJobRow.indexed,
+                            (CaptureJobRow.status != "completed") & ~CaptureJobRow.terminal,
+                            CaptureJobRow.last_error.is_not(None) & (CaptureJobRow.last_error != ERASED),
+                        ),
+                    )
                     .order_by(CaptureJobRow.job_id)
                     .with_for_update()
                 )
@@ -673,7 +726,7 @@ class CaptureQueue:
                 if row.status != "completed" and not row.terminal:
                     row.status, row.terminal = "failed", True
                     row.lease_owner = row.lease_expires_at = None
-                row.last_error = "notebook erased"  # a diagnostic may quote the model's words
+                row.last_error = ERASED if row.last_error is not None or row.terminal else None
                 row.outcome = None
                 row.queued = row.indexed = True
                 row.updated_at = now
@@ -699,11 +752,14 @@ class CaptureQueue:
         async with self._db() as db:
             outcomes = list(
                 await db.scalars(
-                    select(CaptureJobRow.outcome).where(
+                    select(CaptureJobRow.outcome)
+                    .where(
                         CaptureJobRow.notebook_id == notebook_id,
                         CaptureJobRow.status == "completed",
                         ~CaptureJobRow.queued,
                     )
+                    .order_by(CaptureJobRow.completed_at.desc())
+                    .limit(VIEW_JOBS)
                 )
             )
         store = self._notebooks.store
@@ -714,12 +770,15 @@ class CaptureQueue:
                 # The provenance it will land with (``NotebookOps.observe``).
                 provenance = capture_provenance(home, context_in((outcome or {}).get("context")))
                 committed += [(str(o.get("statement", "")), provenance) for o in (outcome or {}).get("observations", ())]
-        return revision, committed + await store.queued_with_provenance(notebook_id)
+        return revision, committed + await store.queued_with_provenance(notebook_id, limit=VIEW_STATEMENTS)
 
     async def prune(self, *, before: int | None = None) -> int:
         """Delete resolved jobs last changed before ``before`` (a week ago by default), each
         only once its session's ``indexed`` cursor has passed it: one above a turn still
-        unresolved is the step that cursor takes when that turn resolves."""
+        unresolved is the step that cursor takes when that turn resolves. Then the sessions
+        left with no job and unchanged as long (an enqueue meanwhile changes its session, so
+        Postgres's recheck of the locked row keeps it), and the counters of notebooks gone:
+        never a live notebook's, whose count is part of its revision."""
         before = self._clock() - KEEP_JOBS_MS if before is None else before
         passed = (
             select(CaptureSessionRow.indexed)
@@ -734,6 +793,10 @@ class CaptureQueue:
                     CaptureJobRow.through_turn <= passed,
                 )
             )
+            has_jobs = select(CaptureJobRow.job_id).where(CaptureJobRow.session_id == CaptureSessionRow.session_id).exists()
+            await db.execute(delete(CaptureSessionRow).where(CaptureSessionRow.updated_at < before, ~has_jobs))
+            live = select(NotebookRow.id).where(NotebookRow.id == CaptureNotebookRow.notebook_id).exists()
+            await db.execute(delete(CaptureNotebookRow).where(~live))
             await db.commit()
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
 

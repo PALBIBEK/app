@@ -33,7 +33,11 @@ from supervisor.agent.events import (
     RunEnd,
     ToolStart,
 )
-from supervisor.agent.runtimes.githi.classify import is_context_overflow, is_retryable
+from supervisor.agent.runtimes.githi.classify import (
+    is_context_overflow,
+    is_refused_key,
+    is_retryable,
+)
 from supervisor.blocking import run_blocking
 from supervisor.journal.reader import JournalReader
 from supervisor.journal.serde import type_name_of
@@ -221,9 +225,10 @@ CAPTURE_LEASE_S: Final = 120.0
 ``RENEW_EVERY_S`` while it works (a long wait for its tenant's slot, a slow model), so a
 worker that dies holding one frees it within two minutes, for the sweeper to claim."""
 RENEW_EVERY_S: Final = CAPTURE_LEASE_S / 3
-RESOLVE_ATTEMPTS: Final = 3
-"""Resolutions one capture makes when the notebook keeps changing under it (S3); the last
-commits whatever it resolved."""
+RESOLVE_ATTEMPTS: Final = 4
+"""Resolutions one capture makes when the notebook keeps changing under it (S3), each
+checked at its commit. One still stale after the last is given back to the queue, to run
+again after a pause, never committed unchecked."""
 NOOP_OUTCOME: Final[dict[str, Any]] = {"observations": [], "retire": []}
 
 
@@ -591,6 +596,7 @@ class SessionMemory:
             return await self._nothing(lease)  # nothing worth retaining
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
         statements = [d.statement for d in extracted.drafts]
+        said_at = max((e.ts_ms for e in runs), default=int(time.time() * 1000))
         drafts: list[ObservationDraft] = []
         verdict: tuple[tuple[tuple[str, str], ...], Resolution] | None = None
         try:
@@ -613,12 +619,13 @@ class SessionMemory:
                     resolution = await resolve(one_shot, statements, existing)
                     verdict = (compared, resolution)
                 drafts = [extracted.drafts[i] for i in resolution.add]
-                retire = [i for i in resolution.retire if not _queued_id(i)]
+                # A burst run late (a retry, a backlog) is older than what was learned since:
+                # never does it retire a fact written after its own turns (G3).
+                newer = {f.id for f in held if f.updated_at > said_at}
+                retire = [i for i in resolution.retire if not _queued_id(i) and i not in newer]
                 if lease is None and not drafts and not retire:
                     return 0
-                # The last attempt commits what it resolved, whatever the notebook holds then:
-                # resolution is an aid, and a retirement is checked again as it lands (G2).
-                commit = None if lease is None else CaptureCommit(lease, revision if attempt < RESOLVE_ATTEMPTS else None)
+                commit = None if lease is None else CaptureCommit(lease, revision)
                 try:
                     # Only retirements (every statement a repeat) go through the inbox too: in
                     # their place in the queue, never a delete stripping others' queued captures.
@@ -628,7 +635,7 @@ class SessionMemory:
                     )
                 except StaleResolution:
                     logger.info("session %s: the notebook changed since resolution: resolving again", session_id)
-            raise AssertionError("unreachable: the last attempt commits unconditionally")
+            raise CaptureFailed(f"the notebook changed under each of {RESOLVE_ATTEMPTS} resolutions", retryable=True)
         except NotebookArchived:
             if drafts:
                 raise  # as a capture into an archived notebook always has
@@ -791,7 +798,7 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
       Build retries malformed output; a model's next answer often parses, a third rarely);
     * anything else (a refused key, a spent budget, an unknown model): not at all, since
       it would fail the same way, and each call may be charged; nor later (``Failed``
-      for good: the capture queue would fail it the same way at each claim).
+      for good), except a refused key, which the session's next step renews.
 
     What is not retried here is retried by the capture queue later (``retryable``),
     unless it would fail the same way: a refusal, an answer malformed again, or an
@@ -847,7 +854,10 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
                 at_floor = overflow and again_on is condensed
                 # A model that misread the outcome's shape twice on this transcript does again
                 # (the load test: every retry of such a burst malformed, sixteen charged calls).
-                refused = isinstance(exc, MalformedOutcome) or (not overflow and not is_retryable(exc))
+                # A refused key is not refused for good: the session's next step renews it.
+                refused = isinstance(exc, MalformedOutcome) or (
+                    not overflow and not is_retryable(exc) and not is_refused_key(exc)
+                )
                 return Failed(f"{type(exc).__name__}: {exc}", retryable=not (at_floor or refused))
             condensed = again_on
             await asyncio.sleep(pause or 0.0)
