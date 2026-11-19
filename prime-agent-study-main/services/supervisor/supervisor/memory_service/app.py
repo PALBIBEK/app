@@ -148,6 +148,15 @@ PUBLIC_PATHS = frozenset({"/v1/healthz", "/v1/readyz"})
 """Process and readiness probes: answered without credentials (compose and k8s health checks)."""
 
 
+def _queue_bookkeeping(path: str) -> bool:
+    """The capture queue's own steps (G3: enqueue, claim, renew, fail, release, the barrier):
+    they change no tenant's memory, and each is bounded by the queue itself, one or two a
+    burst. Only a commit, which queues facts, counts against the tenant's change limit, as
+    the capture it replaces did; the others counted too would make every burst four
+    changes, and one tenant's busy hour a stream of 429s mid-capture."""
+    return path.startswith("/v1/capture/") and not path.endswith(":commit")
+
+
 async def _guard(request: Request) -> None:
     """Every other route: a verified caller (``auth.resolve_http_auth``), and mutations rate-limited.
 
@@ -157,7 +166,7 @@ async def _guard(request: Request) -> None:
     if request.url.path in PUBLIC_PATHS:
         return
     resolve_http_auth(request)
-    if not is_mutating_method(request.method):
+    if not is_mutating_method(request.method) or _queue_bookkeeping(request.url.path):
         return
     if has_nul(await request.body()):  # Postgres keeps no NUL in text: say so, not a 500
         raise HTTPException(

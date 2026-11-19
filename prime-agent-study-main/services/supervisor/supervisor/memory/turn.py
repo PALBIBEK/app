@@ -794,7 +794,8 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
       for good: the capture queue would fail it the same way at each claim).
 
     What is not retried here is retried by the capture queue later (``retryable``),
-    unless it would fail the same way: a refusal, or an overflow at the shortest budget.
+    unless it would fail the same way: a refusal, an answer malformed again, or an
+    overflow at the shortest budget.
     """
     budget, began, malformed = 1, time.monotonic(), 0
     # Condensing is CPU work that grows with the burst (megabytes of tool output are
@@ -844,7 +845,9 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
             if not again:
                 overflow = not isinstance(exc, MalformedOutcome) and is_context_overflow(exc)
                 at_floor = overflow and again_on is condensed
-                refused = not overflow and not isinstance(exc, MalformedOutcome) and not is_retryable(exc)
+                # A model that misread the outcome's shape twice on this transcript does again
+                # (the load test: every retry of such a burst malformed, sixteen charged calls).
+                refused = isinstance(exc, MalformedOutcome) or (not overflow and not is_retryable(exc))
                 return Failed(f"{type(exc).__name__}: {exc}", retryable=not (at_floor or refused))
             condensed = again_on
             await asyncio.sleep(pause or 0.0)

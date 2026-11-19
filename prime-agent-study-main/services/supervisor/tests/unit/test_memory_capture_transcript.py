@@ -591,7 +591,7 @@ def test_a_malformed_answer_is_asked_again_once(monkeypatch: pytest.MonkeyPatch)
     not four charged calls (the load test's echo model answered every capture so)."""
     extracted, sent = _attempts([MalformedOutcome("not JSON")] * 9, monkeypatch, tool_loop(1, 10))
 
-    assert isinstance(extracted, turn.Failed) and extracted.retryable and len(sent) == 1 + turn.MALFORMED_RETRIES
+    assert isinstance(extracted, turn.Failed) and not extracted.retryable and len(sent) == 1 + turn.MALFORMED_RETRIES
 
 
 def test_a_transcript_over_on_items_alone_keeps_its_words_whole() -> None:

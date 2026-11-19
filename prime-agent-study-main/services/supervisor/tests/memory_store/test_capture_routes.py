@@ -216,3 +216,28 @@ async def test_the_notebook_view_holds_the_statements_still_queued(svc: MemorySe
     ((text, provenance),) = queued
     assert text == "Queued, not landed yet"
     assert provenance.sensitivity is Sensitivity.ORDINARY, "with the provenance its fact will land with"
+
+
+async def test_only_a_commit_counts_against_the_tenants_change_limit(
+    svc: MemoryServiceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The queue's own steps change no memory: a busy tenant's bursts are never refused
+    mid-capture for claiming, renewing or failing them."""
+    from supervisor.memory_service.rate_limit import TokenBucketLimiter
+
+    client = svc.client()
+    nb = await _notebook(client)
+    svc.app.state.rate_limiter = TokenBucketLimiter(rate_per_second=0.001, burst=1)
+    for n in range(5):  # enqueue, claim, fail, five times over: never limited
+        await client.capture_enqueue(tenant_id="t1", session_id=f"s{n}", notebook_id=nb, run_ids=["r1"])
+        lease = await client.capture_claim(tenant_id="t1", owner="w", lease_s=60, session_id=f"s{n}")
+        assert lease is not None
+        await client.capture_renew(lease, 60)
+        await client.capture_fail(lease, "down", terminal=True)
+    await client.capture_enqueue(tenant_id="t1", session_id="last", notebook_id=nb, run_ids=["r1"])
+    lease = await client.capture_claim(tenant_id="t1", owner="w", lease_s=60, session_id="last")
+    assert lease is not None
+    await client.capture_commit(lease, NOOP)  # the bucket's one change
+    async with _raw(svc, "t1") as raw:
+        again = await raw.post(f"/v1/capture/jobs/{lease.job.job_id}:commit", json={"lease": {"job": {}}, "outcome": NOOP})
+    assert again.status_code == 429, "a commit is a change, and counted"
