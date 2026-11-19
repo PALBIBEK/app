@@ -158,11 +158,12 @@ class NotebookOps:
         self.on_landed: Callable[[str, list[str]], Awaitable[object]] | None = None
         """Told the notebook and the idempotency keys of the captures a promotion landed
         there: the capture queue (G3), which advances their sessions' ``indexed`` cursors."""
-        self.on_changed: Callable[[AsyncSession, str, set[str] | None, bool], Awaitable[object]] | None = None
+        self.on_changed: Callable[[AsyncSession, str, set[str] | None, set[str]], Awaitable[object]] | None = None
         """Told, inside its transaction and before it strips what is queued, that a person
         changed the notebook: the words no fact has any more (normalized; None for a clear:
-        all of them), and whether facts came back (a restore). The capture queue (G3) drops
-        the outcomes committed into it and not yet queued that the change concerns."""
+        all of them), and the facts no capture judged as they are now (reworded by an edit,
+        brought back by a restore). The capture queue (G3) drops the outcomes committed
+        into it and not yet queued that the change concerns."""
         self._landed_at: float | None = None  # when a promotion here last landed a capture (monotonic)
 
     def _landed(self, captures: int) -> None:
@@ -443,7 +444,10 @@ class NotebookOps:
             current = await tx.current()
             targets = resolve_ids(current, [e.id for e in edits])
             rewritten = {f.id: edited_text(e.text) for e, f in zip(edits, targets, strict=True)}
-            await self._changed(tx, notebook_id, _gone(current, [rewritten.get(f.id, f.text) for f in current]))
+            reworded = {i for i, text in rewritten.items() if text != next(f.text for f in targets if f.id == i)}
+            await self._changed(
+                tx, notebook_id, _gone(current, [rewritten.get(f.id, f.text) for f in current]), reworded
+            )
             await _forget_queued(tx, [f.text for f in current], [rewritten.get(f.id, f.text) for f in current])
             for edit, fact in zip(edits, targets, strict=True):
                 provenance = (
@@ -467,7 +471,7 @@ class NotebookOps:
             removed = resolve_ids(current, ids)
             await tx.remove(removed)
             gone = {f.id for f in removed}
-            await self._changed(tx, notebook_id, _gone(current, [f.text for f in current if f.id not in gone]))
+            await self._changed(tx, notebook_id, _gone(current, [f.text for f in current if f.id not in gone]), set())
             await _forget_queued(tx, [f.text for f in current], [f.text for f in current if f.id not in gone])
 
         await self.store.transact(notebook_id, run, author=author)
@@ -480,7 +484,7 @@ class NotebookOps:
         async def run(tx: FactTx) -> int:
             facts = await tx.current()
             await tx.remove(facts)
-            await self._changed(tx, notebook_id, None)  # before the queue is read: see ``_changed``
+            await self._changed(tx, notebook_id, None, set())  # before the queue is read: see ``_changed``
             # Marked as handled, not deleted: a retried burst still finds its key (and lands
             # nothing); pruned with the rest in time.
             await tx.db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=tx.at))
@@ -493,12 +497,12 @@ class NotebookOps:
     async def history(self, notebook_id: str) -> list[Revision]:
         return await self.store.history(notebook_id)
 
-    async def _changed(self, tx: FactTx, notebook_id: str, gone: set[str] | None, *, revived: bool = False) -> None:
+    async def _changed(self, tx: FactTx, notebook_id: str, gone: set[str] | None, judged: set[str]) -> None:
         """Before the change reads the queue (strips it, or marks it handled): a capture whose
         row goes in meanwhile is then either kept out (the queue's handled row under its key)
         or in before that read, and stripped by it."""
-        if self.on_changed is not None and (gone is None or gone or revived):
-            await self.on_changed(tx.db, notebook_id, gone, revived)
+        if self.on_changed is not None and (gone is None or gone or judged):
+            await self.on_changed(tx.db, notebook_id, gone, judged)
 
     async def facts_at(self, notebook_id: str, revision: int) -> list[Fact]:
         """The facts as they were at ``revision`` (0, before any change, to the current one)."""
@@ -523,15 +527,12 @@ class NotebookOps:
             current = {f.id: f for f in await tx.current()}
             removed = [f for i, f in current.items() if i not in target]
             await tx.remove(removed)
-            await self._changed(
-                tx, notebook_id, _gone(current.values(), [f.text for f in target.values()]), revived=True
-            )
-            await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
             # A fact the restore brings back (or gives its old words again) was judged by no
             # capture queued before it: none of them retires it.
-            await _spare_from_queued(
-                tx, [i for i, f in target.items() if i not in current or current[i].text != f.text]
-            )
+            revived = [i for i, f in target.items() if i not in current or current[i].text != f.text]
+            await self._changed(tx, notebook_id, _gone(current.values(), [f.text for f in target.values()]), set(revived))
+            await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
+            await _spare_from_queued(tx, revived)
             for fact_id, fact in target.items():
                 live = current.get(fact_id)
                 if live is None:

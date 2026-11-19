@@ -226,6 +226,8 @@ CAPTURE_LEASE_S: Final = 120.0
 ``RENEW_EVERY_S`` while it works (a long wait for its tenant's slot, a slow model), so a
 worker that dies holding one frees it within two minutes, for the sweeper to claim."""
 RENEW_EVERY_S: Final = CAPTURE_LEASE_S / 3
+CLAIM_ANSWER_S: Final = 10.0
+"""How long a claim cut off by cancellation is waited for, to give back what it granted."""
 RUN_DEADLINE_S: Final = 540.0
 """The longest one capture job runs under its lease (a wait for its tenant's slot, model
 calls, resolution): past it the job fails, retryably, so a hang never holds a job and a
@@ -521,7 +523,17 @@ class SessionMemory:
             job = await queue.capture_enqueue(tenant_id=tenant, session_id=session_id, notebook_id=writable, run_ids=run_ids)
         except RouteMissing:
             return await self._capture(scope, session_id, run_ids)  # a service older than G3
-        lease = await queue.capture_claim(tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, job_id=job.job_id)
+        asking = asyncio.ensure_future(
+            queue.capture_claim(tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, job_id=job.job_id)
+        )
+        try:
+            lease = await asyncio.shield(asking)
+        except asyncio.CancelledError:
+            # The activity cancelled mid-claim: a lease the service granted goes back at once.
+            with contextlib.suppress(Exception):
+                if (granted := await asyncio.wait_for(asking, CLAIM_ANSWER_S)) is not None:
+                    await queue.capture_release(granted, "interrupted")
+            raise
         if lease is None:
             return 0  # resolved already (a retried activity), or running under another lease
         return await self.run_capture(lease, scope=scope)

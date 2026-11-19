@@ -73,7 +73,7 @@ from supervisor.memory_service.notebooks.errors import (
 )
 from supervisor.memory_service.notebooks.models import InboxRow, NotebookRow
 from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps, expiry_day
-from supervisor.memory_service.notebooks.render import normalize
+from supervisor.memory_service.notebooks.render import clean_captured, normalize
 from supervisor.memory_service.notebooks.store import HANDLED_PAYLOAD
 from supervisor.memory_service.notebooks.types import Provenance, capture_provenance
 from supervisor.memory_service.notebooks.wire import context_in, observation_in
@@ -426,6 +426,9 @@ class CaptureQueue:
             # Past its stale releases, what it resolved is kept as resolved: a rare
             # near-duplicate is consolidation's (G5), never a capture lost to contention.
             held_to_revision = resolved_at is not None and int(row.stale) < MAX_STALE_RELEASES
+            if noop and held_to_revision:
+                # Behind any person's change still open (it holds the counter's lock).
+                await self._notebook_for_update(db, row.notebook_id, now)
             if noop and held_to_revision and (actual := await _revision(db, row.notebook_id)) != resolved_at:
                 # A burst found to repeat what was still to land: that may have gone since.
                 assert resolved_at is not None
@@ -553,23 +556,24 @@ class CaptureQueue:
         *,
         db: AsyncSession | None = None,
         gone: set[str] | None = None,
-        revived: bool = False,
+        judged: frozenset[str] | set[str] = frozenset(),
     ) -> int:
         """A person changed the notebook, in this transaction (``db``, its notebook locked),
         before it reads the queue to strip it: ``gone``, the words (normalized) no fact has
-        any more (None: a clear, all of them); ``revived``, facts brought back (a restore).
+        any more (None: a clear, all of them); ``judged``, the facts no capture judged as they
+        are now (reworded by an edit, brought back by a restore).
 
         An outcome committed into it whose row is not in the inbox yet (its queuing still on
         the way, or failed, for reconciliation to retry) never meets that strip. One the
         change concerns (it restates a word gone, or retires facts, judged before facts came
-        back) is dropped, and a handled row is put under its key: its queuing, whenever it
+        back or reworded) is dropped, and a handled row is put under its key: its queuing, whenever it
         comes, finds the key taken and lands nothing. One whose row went in first (the key
         is taken: this insert waits for it, if its insert is still open) is in the inbox
         before the strip reads it, and stripped as every queued capture is. An outcome the
         change does not concern is left to land. The jobs dropped."""
         if db is None:
             async with self._db() as own:
-                count = await self.drop_unqueued(notebook_id, db=own, gone=gone, revived=revived)
+                count = await self.drop_unqueued(notebook_id, db=own, gone=gone, judged=judged)
                 await own.commit()
                 return count
         now = self._clock()
@@ -583,7 +587,7 @@ class CaptureQueue:
         )
         dropped = []
         for row in rows:
-            if not _concerns(row.outcome or {}, gone, revived):
+            if not _concerns(row.outcome or {}, gone, judged):
                 continue
             taken = await db.execute(_handled_row(db, notebook_id, row.job_id, now))
             if taken.rowcount != 1:  # type: ignore[attr-defined]
@@ -594,8 +598,9 @@ class CaptureQueue:
             row.queued = row.indexed = True
             row.updated_at = now
             dropped.append(row)
-        if dropped:
-            await self._count_change(db, notebook_id, now)
+        # The counter's lock, taken by every person's change (after the jobs, as every write):
+        # a commit resolved before it waits for it, then finds the revision changed.
+        await self._count_change(db, notebook_id, now)
         for session_id in sorted({r.session_id for r in dropped}):
             await _advance(db, session_id, now)
         return len(dropped)
@@ -910,15 +915,16 @@ class CaptureQueue:
             return int(pruned.rowcount or 0)  # type: ignore[attr-defined]
 
 
-def _concerns(outcome: dict[str, Any], gone: set[str] | None, revived: bool) -> bool:
+def _concerns(outcome: dict[str, Any], gone: set[str] | None, judged: frozenset[str] | set[str]) -> bool:
     """Whether a person's change concerns a committed outcome: a clear concerns them all;
-    otherwise one restating words the change left no fact with, or (facts brought back,
-    which its resolution never saw) one retiring facts."""
+    otherwise one restating words the change left no fact with (cleaned as they would
+    land), or retiring a fact its resolution never saw as it is now."""
     if gone is None:
         return True
-    if revived and outcome.get("retire"):
+    if any(str(fact_id) in judged for fact_id in outcome.get("retire") or ()):
         return True
-    return any(normalize(str(o.get("statement", ""))) in gone for o in outcome.get("observations") or ())
+    statements = [str(o.get("statement", "")) for o in outcome.get("observations") or ()]
+    return any(normalize(text) in gone for text in clean_captured(statements))
 
 
 def _handled_row(db: AsyncSession, notebook_id: str, job_id: str, now: int) -> Any:

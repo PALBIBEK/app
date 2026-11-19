@@ -430,7 +430,11 @@ sessions).
   restore), in its own transaction and before it strips the queue, drops the committed
   outcomes it concerns (restating words it removed; any, for a clear) whose rows are not in
   the inbox yet, and puts a handled row under each one's key, so their queuing lands
-  nothing. One whose row took the key first is in the queue before the strip reads it. Outcomes are content: cleared once their facts land or cannot
+  nothing. It also concerns an outcome retiring a fact the change reworded or brought back
+  (judged against words the fact no longer has). One whose row took the key first is in
+  the queue before the strip reads it. Such a change takes the notebook's counter lock, so
+  a commit resolved before it waits, then finds the revision changed. A dropped outcome
+  loses its other statements too (in the inbox, only the concerned ones would go). Outcomes are content: cleared once their facts land or cannot
   land, and scrubbed with an erased owner's notebooks; diagnostics of a model's or a
   burst's words keep only the error's class.
 - **Cursors:** per session, `requested`, `captured` (committed or failed for good) and
@@ -488,20 +492,22 @@ committed outcomes were part of the view, 3 runs in 20 added it twice); a 10,000
 backlog leaves another tenant served within a round; two replicas commit two sessions
 independently.
 
-*Load (4 tenants × 50 sessions, capture on), `main` (G2) then G3, one machine, one hour,
-fresh capture tables:*
+*Load (4 tenants × 50 sessions, capture on), the final G3 and `main` (G2) one after the
+other on one machine, fresh capture tables:*
 
 | Measure | G2 (`main`) | G3 |
 |---|---|---|
 | Session errors | 0 | 0 |
 | Captured | 200/200 | 200/200 |
 | Lost, duplicated, crossed, unrecalled | 0 | 0 |
-| Capture p50 / p95 | 1.8 / 4.5 s | 1.7 / 6.6 s |
-| Recall p50 / p95 | 1,392 / 2,614 ms | 1,697 / 3,003 ms |
-| First step p95 | 7,834 ms | 9,480 ms |
+| Capture p50 / p95 | 3.2 / 6.9 s | 2.7 / 8.3 s |
+| Recall p50 / p95 | 1,858 / 3,024 ms | 1,855 / 3,309 ms |
+| First step p95 | 9,952 ms | 9,929 ms |
 
-Capture's p95 pays for S3: each tenant's 50 sessions share one notebook, and 73 commits
-found it changed and resolved again. Found by G3's load runs, and fixed in G3: an answer
+Capture's p95 pays for S3: each tenant's 50 sessions share one notebook, and 111 commits
+found it changed and resolved again (a verdict whose related facts held was reused, with
+no model call). The 216 to 228 jobs failed for good each run are the stand-in model's
+prose answers, malformed twice, which G2 dropped the same way. Found by G3's load runs, and fixed in G3: an answer
 malformed twice was retried by the queue (16 charged calls a burst), and the queue's own
 steps were refused by the tenant's change limit. The recall target still needs a sized
 environment.

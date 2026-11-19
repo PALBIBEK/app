@@ -791,3 +791,31 @@ async def test_a_persons_change_finding_the_captures_row_already_in_never_fails(
     await memory.notebooks.delete(notebook, [held.id])  # concerns it, finds its key taken
     await memory.inbox.drain()
     assert await svc.client().facts(notebook) == [], "stripped from the inbox, as any queued capture"
+
+
+async def test_an_edit_keeps_its_fact_from_a_capture_judged_against_the_old_words(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A committed, unqueued outcome retiring a fact a person then reworded was judged
+    against words the fact no longer has: dropped, so the edit is never deleted for it."""
+    from supervisor.memory_service.notebooks.types import Edit
+
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await memory.notebooks.capture(notebook, ["Lives in Berlin"])
+    (berlin,) = await svc.client().facts(notebook)
+    await enqueue(svc, notebook, "session", 1, 1)
+    real = memory.notebooks.observe
+
+    async def down(*args: object, **kwargs: object) -> int:
+        raise ConnectionError("the inbox is unreachable")
+
+    monkeypatch.setattr(memory.notebooks, "observe", down)
+    await q.commit(await claim(svc, "worker"), {**observations("Lives in Paris"), "retire": [berlin.id]})
+    monkeypatch.setattr(memory.notebooks, "observe", real)
+    await memory.notebooks.edit(notebook, [Edit(berlin.id, "Lived in Berlin until 2025")])
+
+    clock.at += 60_000
+    await q.reconcile()
+    await memory.inbox.drain()
+    assert [f.text for f in await svc.client().facts(notebook)] == ["Lived in Berlin until 2025"]
