@@ -288,18 +288,21 @@ class CaptureQueue:
     # --- claims ----------------------------------------------------------------------------
 
     async def claimable_tenants(self, *, limit: int = 32, pending_grace_ms: int = 0) -> list[str]:
-        """The tenants with work to claim, the fewest running jobs first, then the longest
-        waiting: a worker takes its next job from the first, so one tenant's backlog never
-        holds up another's (rule 6). Content-free."""
+        """The tenants with work to claim, the fewest running jobs first, then the fewest
+        waiting, then the longest waiting: a worker takes its next job from the first, so one
+        tenant's backlog never holds up another's (rule 6), even when nothing is running to
+        tell them apart (a backlog's oldest job is older than anything queued after it).
+        Content-free."""
         now = self._clock()
         async with self._db() as db:
-            waiting = dict(
-                (await db.execute(
-                    select(CaptureJobRow.tenant_id, func.min(CaptureJobRow.available_at))
+            rows = (
+                await db.execute(
+                    select(CaptureJobRow.tenant_id, func.count(), func.min(CaptureJobRow.available_at))
                     .where(_claimable(now, pending_grace_ms))
                     .group_by(CaptureJobRow.tenant_id)
-                )).all()
-            )
+                )
+            ).all()
+            waiting = {tenant: (int(n), int(oldest)) for tenant, n, oldest in rows}
             running = dict(
                 (await db.execute(
                     select(CaptureJobRow.tenant_id, func.count())

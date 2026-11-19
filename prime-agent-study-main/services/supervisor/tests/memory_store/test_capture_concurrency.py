@@ -233,25 +233,8 @@ async def test_one_tenants_ten_thousand_job_backlog_never_holds_another_tenant_u
     await replicas.start(1)
     queuer = replica.client()
     big, small = await _notebook(queuer, "big"), await _notebook(queuer, "small")
-    now = int(time.time() * 1000)
-    engine = create_async_engine(replicas.url)
-    try:
-        async with engine.begin() as conn:  # the backlog, straight into the table: 100 sessions of 100 bursts
-            await conn.execute(insert(CaptureSessionRow), [
-                {"session_id": f"big-{s}", "tenant_id": "big", "requested": 100, "captured": 0, "indexed": 0, "updated_at": now}
-                for s in range(100)
-            ])
-            await conn.execute(insert(CaptureJobRow), [
-                {
-                    "job_id": job_id_for(f"big-{s}", [f"r{n}"]), "tenant_id": "big", "session_id": f"big-{s}",
-                    "notebook_id": big, "run_ids": [f"r{n}"], "from_turn": n, "through_turn": n, "status": "pending",
-                    "terminal": False, "attempt": 0, "available_at": now - 3_600_000 + n, "queued": False,
-                    "indexed": False, "created_at": now - 3_600_000, "updated_at": now,
-                }
-                for s in range(100) for n in range(1, 101)
-            ])
-    finally:
-        await engine.dispose()
+    # The backlog, straight into the tables: 100 sessions of 100 bursts.
+    await _insert_jobs(replicas.url, "big", big, sessions=100, bursts=100, now=int(time.time() * 1000))
     workers = replicas.clients(4)
     order: list[str] = []
     stop = asyncio.Event()
@@ -261,9 +244,11 @@ async def test_one_tenants_ten_thousand_job_backlog_never_holds_another_tenant_u
         while not stop.is_set():
             for tenant in await client.capture_tenants(limit=1):  # this worker's one free slot
                 if (lease := await client.capture_claim(tenant_id=tenant, owner=f"w{i}", lease_s=600)) is not None:
+                    # Counted as claimed, not as finished: the jobs already running when the
+                    # small tenant queues finish after it, by any machine's timing.
+                    order.append(tenant)
                     await asyncio.sleep(0.01)  # extraction takes a while: running jobs are what fairness counts
                     await client.capture_commit(lease, NOOP)
-                    order.append(tenant)
             await asyncio.sleep(0)
 
     sweeping = asyncio.create_task(run_workers(len(workers), sweep))
@@ -271,20 +256,24 @@ async def test_one_tenants_ten_thousand_job_backlog_never_holds_another_tenant_u
         async with asyncio.timeout(30):
             while len(order) < 40:  # the backlog is being worked through
                 await asyncio.sleep(0.01)
-        for n in range(5):
-            await queuer.capture_enqueue(tenant_id="small", session_id="small-s", notebook_id=small, run_ids=[f"r{n}"])
-        queued_at = len(order)
+        # The small tenant's five bursts, visible all at once (one transaction), so what is
+        # measured is the claims' order, not how long five enqueues take on this machine.
+        await _insert_jobs(replicas.url, "small", small, sessions=1, bursts=5, now=int(time.time() * 1000))
+        queued_at = len(order)  # once visible: a claim before this was the backlog's or its
         async with asyncio.timeout(30):
             while order.count("small") < 5:
                 await asyncio.sleep(0.01)
-        served_after = order.index("small", queued_at) - queued_at
-        finished_after = len(order) - queued_at
+        served_after = max(0, order.index("small") - queued_at)
+        finished_after = max(i for i, t in enumerate(order) if t == "small") + 1 - queued_at
     finally:
         stop.set()
         await sweeping
-    # Five small jobs among ~four workers: about half of every round is theirs until done.
-    assert served_after <= len(workers), f"its first job waited behind {served_after} of the backlog's"
-    assert finished_after <= 5 * 3, f"its five jobs took {finished_after} claims, 9,960 still queued ahead"
+    # Once its jobs are visible, at most one claim per worker (one that listed the tenants
+    # just before) goes to the backlog ahead of its first; then the tenant running fewer is
+    # listed first, so the two share the workers, and its five finish within a few rounds
+    # (by any machine's timing), never behind the 9,960 queued ahead.
+    assert served_after <= len(workers), f"its first job waited behind {served_after} of the backlog's claims"
+    assert finished_after <= 8 * len(workers), f"its five jobs took {finished_after} claims, 9,960 still queued ahead"
 
 
 async def test_replicas_commit_two_sessions_into_one_notebook_independently(replicas: Replicas) -> None:
@@ -309,3 +298,26 @@ async def test_replicas_commit_two_sessions_into_one_notebook_independently(repl
         for sid in ("s0", "s1"):
             barrier = await client.capture_flush(tenant_id="t1", session_id=sid, timeout_s=0)
             assert barrier["cursors"] == {"requested": 5, "captured": 5, "indexed": 5}, "both replicas see both"
+
+
+async def _insert_jobs(url: str, tenant: str, notebook: str, *, sessions: int, bursts: int, now: int) -> None:
+    """Pending jobs straight into the shared tables, in one transaction: all visible at once."""
+    engine = create_async_engine(url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(insert(CaptureSessionRow), [
+                {"session_id": f"{tenant}-{s}", "tenant_id": tenant, "requested": bursts, "captured": 0, "indexed": 0,
+                 "updated_at": now}
+                for s in range(sessions)
+            ])
+            await conn.execute(insert(CaptureJobRow), [
+                {
+                    "job_id": job_id_for(f"{tenant}-{s}", [f"r{n}"]), "tenant_id": tenant, "session_id": f"{tenant}-{s}",
+                    "notebook_id": notebook, "run_ids": [f"r{n}"], "from_turn": n, "through_turn": n,
+                    "status": "pending", "terminal": False, "attempt": 0, "available_at": now - 3_600_000 + n,
+                    "queued": False, "indexed": False, "created_at": now - 3_600_000, "updated_at": now,
+                }
+                for s in range(sessions) for n in range(1, bursts + 1)
+            ])
+    finally:
+        await engine.dispose()

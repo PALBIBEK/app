@@ -461,8 +461,8 @@ sessions).
 - **Workers:** the capture activity enqueues its burst and runs it at once under its own
   lease. Each worker's sweeper (`memory/sweeper.py`, `MEMORY_CAPTURE_SWEEP_CONCURRENCY`, 2)
   claims what is left (failed, expired, or pending past a minute), one job per tenant a
-  pass, the tenant with the fewest running first, and a tenant a second job only once every
-  listed tenant has had its turn. The cross-tenant listing is content-free.
+  pass, the tenant with the fewest running first (then the fewest waiting, then the
+  oldest), and a tenant a second job only once every listed tenant has had its turn. The cross-tenant listing is content-free.
 - **Barrier:** `POST /v1/capture/sessions/{id}:flush` waits on that session's `indexed`
   cursor (at most four minutes) and answers success, retry, failed or timeout with
   content-free counts; `GET /v1/capture/sessions/{id}` is the status read (G10 builds on it).
