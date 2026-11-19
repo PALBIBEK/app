@@ -70,7 +70,7 @@ async def capture_sweeper(
         while not should_stop():
             free = limit - len(running)
             if free > 0:
-                for lease in await _claim(queue, free):
+                for lease in await _claim(queue, free, should_stop):
                     task = asyncio.create_task(memory.run_capture(lease), name=f"capture-{lease.job.job_id}")
                     running.add(task)
                     task.add_done_callback(running.discard)
@@ -82,7 +82,9 @@ async def capture_sweeper(
             await asyncio.gather(*running, return_exceptions=True)
 
 
-async def _claim(queue: NotebookClient, free: int) -> list[CaptureLease]:
+async def _claim(
+    queue: NotebookClient, free: int, should_stop: Callable[[], bool] = lambda: False
+) -> list[CaptureLease]:
     """Up to ``free`` jobs, one per tenant a pass, in the service's fair order: a tenant
     gets a second only when every tenant listed has had its turn (a lone backlog uses every
     free slot). More tenants are listed than slots, so a worker that loses one tenant's last
@@ -95,6 +97,8 @@ async def _claim(queue: NotebookClient, free: int) -> list[CaptureLease]:
         while tenants and len(leases) < free:
             served = []
             for tenant in tenants:
+                if should_stop():  # stopping: no claim starts that its answer could outlive
+                    return leases
                 lease = await queue.capture_claim(
                     tenant_id=tenant, owner=worker_identity(), lease_s=CAPTURE_LEASE_S, pending_grace_s=PENDING_GRACE_S
                 )

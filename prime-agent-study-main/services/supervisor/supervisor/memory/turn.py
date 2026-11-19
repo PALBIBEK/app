@@ -77,6 +77,7 @@ from supervisor.memory.transcript import (
 )
 from supervisor.memory.view import observe, visible
 from supervisor.memory_service.capture.errors import (
+    CaptureConflict,
     CaptureInvalid,
     StaleLease,
     StaleResolution,
@@ -229,9 +230,7 @@ RUN_DEADLINE_S: Final = 540.0
 """The longest one capture job runs under its lease (a wait for its tenant's slot, model
 calls, resolution): past it the job fails, retryably, so a hang never holds a job and a
 worker's slot for good. Inside the capture activity's ten minutes (``temporal.policies``)."""
-STALE_PAUSE_S: Final = (5.0, 15.0)
-"""How long a capture whose notebook kept changing under each resolution waits, jittered,
-before it is claimed again (no failure is counted: nothing was wrong with it)."""
+
 RESOLVE_ATTEMPTS: Final = 4
 """Resolutions one capture makes when the notebook keeps changing under it (S3), each
 checked at its commit. One still stale after the last is given back to the queue, to run
@@ -286,7 +285,7 @@ def _reason(exc: BaseException) -> str:
     """A failure as the queue keeps and shows it (``work.last_error``): the class alone for
     one whose words may be the model's or the burst's (a malformed answer, an observation
     refused), else the class and its message."""
-    if isinstance(exc, (MalformedOutcome, InvalidObservation, MemoryRequestInvalid)):
+    if isinstance(exc, (MalformedOutcome, InvalidObservation, MemoryRequestInvalid, CaptureInvalid, CaptureConflict)):
         return type(exc).__name__
     return f"{type(exc).__name__}: {exc}"
 
@@ -559,8 +558,7 @@ class SessionMemory:
             await asyncio.shield(self._settle(queue, lease, "interrupted", release=True))
             raise
         except CaptureStale:
-            pause = random.uniform(*STALE_PAUSE_S)
-            await self._settle(queue, lease, "the notebook kept changing under its resolution", release=True, delay_s=pause)
+            await self._settle(queue, lease, "the notebook kept changing under its resolution", release=True, stale=True)
             return 0
         except CaptureFailed as failed:
             await self._settle(queue, lease, failed.reason, terminal=not failed.retryable)
@@ -593,11 +591,11 @@ class SessionMemory:
         *,
         terminal: bool = False,
         release: bool = False,
-        delay_s: float = 0.0,
+        stale: bool = False,
     ) -> None:
         try:
             if release:
-                await queue.capture_release(lease, reason, delay_s=delay_s)
+                await queue.capture_release(lease, reason, stale=stale)
             else:
                 await queue.capture_fail(lease, reason, terminal=terminal)
         except Exception:  # unreachable: the lease runs out, and the sweeper claims it again
@@ -647,7 +645,6 @@ class SessionMemory:
             return await self._nothing(lease)  # nothing worth retaining
         key = hashlib.sha256("\0".join(run_ids).encode()).hexdigest()[:32]
         statements = [d.statement for d in extracted.drafts]
-        said_at = max((e.ts_ms for e in runs), default=int(time.time() * 1000))
         drafts: list[ObservationDraft] = []
         verdict: tuple[tuple[tuple[str, str], ...], Resolution] | None = None
         try:
@@ -669,13 +666,8 @@ class SessionMemory:
                 else:
                     resolution = await resolve(one_shot, statements, existing)
                     verdict = (compared, resolution)
-                # A burst run late (a retry, a backlog) is older than what was learned since:
-                # a fact written after its own turns is never retired by it, and what of the
-                # burst that fact already corrected is not added (G3).
-                newer = {f.id for f in held if f.updated_at > said_at}
-                outdated = {new for new, fact_id in resolution.contradicts if fact_id in newer}
-                drafts = [extracted.drafts[i] for i in resolution.add if i not in outdated]
-                retire = [i for i in resolution.retire if not _queued_id(i) and i not in newer]
+                drafts = [extracted.drafts[i] for i in resolution.add]
+                retire = [i for i in resolution.retire if not _queued_id(i)]
                 if lease is None and not drafts and not retire:
                     return 0
                 commit = None if lease is None else CaptureCommit(lease, revision)

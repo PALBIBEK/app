@@ -39,6 +39,7 @@ import collections
 import hashlib
 import json
 import logging
+import random
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -70,7 +71,7 @@ from supervisor.memory_service.notebooks.errors import (
 )
 from supervisor.memory_service.notebooks.models import InboxRow, NotebookRow
 from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps, expiry_day
-from supervisor.memory_service.notebooks.store import mark_handled
+from supervisor.memory_service.notebooks.store import HANDLED_PAYLOAD
 from supervisor.memory_service.notebooks.types import Provenance, capture_provenance
 from supervisor.memory_service.notebooks.wire import context_in, observation_in
 from supervisor.memory_service.observations import ObservationInvalid
@@ -95,6 +96,7 @@ MAX_SESSION_BYTES: Final = 256
 MAX_FAILURE_BYTES: Final = 512
 MAX_LEASE_S: Final = 3_600
 MAX_CAPTURE_ATTEMPTS: Final = 8
+MAX_STALE_RELEASES: Final = 6
 """Claims a job gets before a retryable failure is taken as terminal: ours, beyond Grok's
 (whose single-user queue retries for ever)."""
 RETRY_BACKOFF_MS: Final = 5_000
@@ -422,7 +424,11 @@ class CaptureQueue:
                 # After the job's lock (one order, every commit): commits into one notebook
                 # take turns here, each counted, so a resolution read before one is stale after.
                 counter = await self._notebook_for_update(db, row.notebook_id, now)
-                if resolved_at is not None and (actual := await _revision(db, row.notebook_id)) != resolved_at:
+                # Past its stale releases, what it resolved is kept as resolved: a rare
+                # near-duplicate is consolidation's (G5), never a capture lost to contention.
+                held_to_revision = resolved_at is not None and int(row.stale) < MAX_STALE_RELEASES
+                if held_to_revision and (actual := await _revision(db, row.notebook_id)) != resolved_at:
+                    assert resolved_at is not None
                     raise StaleResolution(resolved_at, actual)
                 counter.commits = int(counter.commits) + 1
                 counter.updated_at = now
@@ -467,14 +473,20 @@ class CaptureQueue:
                 await _advance(db, row.session_id, now)
             await db.commit()
 
-    async def release_retryable(self, lease: CaptureLease, error: str, *, delay_ms: int = 0) -> None:
+    async def release_retryable(self, lease: CaptureLease, error: str, *, stale: bool = False) -> None:
         """Give an exact owner and attempt's lease back during cancellation: claimable again at
-        once, without waiting for its deadline (Grok's ``release_retryable``), or after
-        ``delay_ms`` (a resolution the notebook kept making stale). No failure is counted:
-        nothing was wrong with the job."""
-        if not 0 <= delay_ms <= MAX_RETRY_BACKOFF_MS:
-            raise CaptureInvalid(f"a release waits 0..={MAX_RETRY_BACKOFF_MS} ms")
+        once, without waiting for its deadline (Grok's ``release_retryable``). No failure is
+        counted: nothing was wrong with the job. ``stale``: given back because the notebook
+        changed under each of its resolutions (S3): it waits, longer each time, and after
+        ``MAX_STALE_RELEASES`` its next commit is not held to its revision."""
         now = self._clock()
+        delay_ms, stale_bump = 0, 0
+        if stale:
+            async with self._db() as db:
+                before = await db.scalar(select(CaptureJobRow.stale).where(CaptureJobRow.job_id == lease.job.job_id))
+            stale_bump = 1
+            backoff = min(MAX_RETRY_BACKOFF_MS, RETRY_BACKOFF_MS * 2 ** int(before or 0))
+            delay_ms = int(backoff * random.uniform(0.5, 1.5))  # apart from the others it raced
         async with self._db() as db:
             released = await db.execute(
                 update(CaptureJobRow)
@@ -488,7 +500,7 @@ class CaptureQueue:
                 )
                 .values(
                     status="failed", lease_owner=None, lease_expires_at=None, available_at=now + delay_ms,
-                    last_error=sanitize_failure(error), updated_at=now,
+                    last_error=sanitize_failure(error), updated_at=now, stale=CaptureJobRow.stale + stale_bump,
                 )
             )
             if released.rowcount != 1:  # type: ignore[attr-defined]
@@ -520,31 +532,28 @@ class CaptureQueue:
         await self._queued(job)
 
     async def _queued(self, job: CaptureJob) -> None:
-        """Its outcome is in the inbox: marked so, unless a person changed the notebook while
-        it was being queued (``drop_unqueued``): then the row is dropped too, either order."""
+        """Its outcome is in the inbox (or a person's change put a handled row under its key
+        first: ``drop_unqueued``, and the insert found it): marked so."""
         async with self._db() as db:
             row = await db.get(CaptureJobRow, job.job_id, with_for_update=True)
             if row is not None and row.status == "completed" and not row.queued:
                 row.queued, row.updated_at = True, self._clock()
-            elif row is not None and row.terminal:
-                await db.execute(
-                    mark_handled(InboxRow.notebook_id == job.notebook_id, InboxRow.idempotency_key == job.job_id, at=self._clock())
-                )
             await db.commit()
 
     async def drop_unqueued(self, notebook_id: str, *, db: AsyncSession | None = None) -> int:
-        """A person changed the notebook (a clear, a delete, an edit, a restore): the outcomes
-        committed into it and not queued yet (a commit whose queuing failed, for
-        reconciliation to retry) were judged against what it held before, and the inbox's
-        protections for queued captures never reached them. They are dropped, as clearing
-        drops what is queued; one being queued as this runs is dropped by ``_queued``. The
-        jobs dropped. ``db``: the person's change's own transaction (its notebook locked), which
-        commits it; otherwise one of its own."""
+        """A person changed the notebook (an edit, a delete, a clear, a restore), in this
+        transaction (``db``, its notebook locked): the outcomes committed into it whose rows
+        are not in the inbox yet (their queuing failed, for reconciliation to retry) were
+        judged against what it held before, and the protections this transaction gives what
+        is queued never reach them. Each is dropped, and a handled row is put under its key,
+        so its queuing, whenever it comes, finds it queued and lands nothing (the inbox's
+        unique key). One whose row is in already is queued, and this transaction strips it as
+        it strips every queued capture. The jobs dropped."""
         if db is None:
             async with self._db() as own:
-                dropped = await self.drop_unqueued(notebook_id, db=own)
+                count = await self.drop_unqueued(notebook_id, db=own)
                 await own.commit()
-                return dropped
+                return count
         now = self._clock()
         rows = list(
             await db.scalars(
@@ -554,17 +563,34 @@ class CaptureQueue:
                 .with_for_update()
             )
         )
+        if not rows:
+            return 0
+        inbox = set(
+            await db.scalars(
+                select(InboxRow.idempotency_key).where(
+                    InboxRow.notebook_id == notebook_id, InboxRow.idempotency_key.in_([r.job_id for r in rows])
+                )
+            )
+        )
+        dropped = [r for r in rows if r.job_id not in inbox]
         for row in rows:
+            row.queued, row.updated_at = True, now
+        for row in dropped:
             row.status, row.terminal = "failed", True
             row.last_error = "a person changed the notebook before its facts were queued"
             row.outcome = None
-            row.queued = row.indexed = True
-            row.updated_at = now
-        if rows:
+            row.indexed = True
+            db.add(
+                InboxRow(
+                    notebook_id=notebook_id, idempotency_key=row.job_id, sensitivity="unknown", source_unknown=True,
+                    received_at=now, promoted_at=now, **HANDLED_PAYLOAD,
+                )
+            )
+        if dropped:
             await self._count_change(db, notebook_id, now)
-        for session_id in sorted({r.session_id for r in rows}):
+        for session_id in sorted({r.session_id for r in dropped}):
             await _advance(db, session_id, now)
-        return len(rows)
+        return len(dropped)
 
     async def _count_change(self, db: AsyncSession, notebook_id: str, now: int) -> None:
         """What is still to land in the notebook changed without a fact or a queued row

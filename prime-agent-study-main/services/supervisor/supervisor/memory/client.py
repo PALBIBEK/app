@@ -356,9 +356,10 @@ class NotebookClient:
         body = {"lease": _lease_out(lease), "error": error[:16_384], "terminal": terminal}
         await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:fail", json=body)
 
-    async def capture_release(self, lease: CaptureLease, error: str, *, delay_s: float = 0.0) -> None:
-        """Give a lease back with no failure counted: claimable at once, or after ``delay_s``."""
-        body = {"lease": _lease_out(lease), "error": error[:16_384], "delay_s": delay_s}
+    async def capture_release(self, lease: CaptureLease, error: str, *, stale: bool = False) -> None:
+        """Give a lease back with no failure counted: claimable at once, or (``stale``: the
+        notebook kept changing under its resolution) after a pause that grows each time."""
+        body = {"lease": _lease_out(lease), "error": error[:16_384], "stale": stale}
         await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:release", json=body)
 
     async def capture_tenants(self, *, limit: int = 32, pending_grace_s: float = 0) -> list[str]:

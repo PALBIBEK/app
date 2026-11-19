@@ -83,6 +83,9 @@ class CaptureJobRow(Base):
     # Claims that ended badly (failed, or the holder's lease ran out): what gives up on a job
     # at MAX_CAPTURE_ATTEMPTS. A release (a worker stopping, a resolution gone stale) is not one.
     failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Releases because the notebook kept changing under every resolution (S3): each waits
+    # longer, and past MAX_STALE_RELEASES the next commit is not held to its revision.
+    stale: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     available_at: Mapped[int] = mapped_column(BigInteger, nullable=False)  # a retry's backoff

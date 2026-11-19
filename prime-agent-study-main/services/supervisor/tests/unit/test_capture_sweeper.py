@@ -33,7 +33,7 @@ class FakeQueue:
         self.listed: list[tuple[int, float]] = []
         self.claims: list[str] = []
         self.ended: list[tuple[str, str, Any]] = []
-        self.delays: list[float] = []
+        self.stale: list[bool] = []
 
     async def capture_tenants(self, *, limit: int = 32, pending_grace_s: float = 0) -> list[str]:
         self.listed.append((limit, pending_grace_s))
@@ -51,9 +51,9 @@ class FakeQueue:
     async def capture_fail(self, lease: CaptureLease, error: str, *, terminal: bool) -> None:
         self.ended.append(("fail", lease.job.job_id, terminal))
 
-    async def capture_release(self, lease: CaptureLease, error: str, *, delay_s: float = 0.0) -> None:
+    async def capture_release(self, lease: CaptureLease, error: str, *, stale: bool = False) -> None:
         self.ended.append(("release", lease.job.job_id, error))
-        self.delays.append(delay_s)
+        self.stale.append(stale)
 
     async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
         self.ended.append(("renew", lease.job.job_id, lease_s))
@@ -77,6 +77,20 @@ class FakeMemory:
         return 0
 
 
+async def _one_round(memory: FakeMemory, queue: FakeQueue, *, concurrency: int) -> None:
+    """The sweeper for about one round: stopped once it has listed the tenants and claimed."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        sweeper.capture_sweeper(memory, queue, should_stop=stop.is_set, concurrency=concurrency, interval_s=0.05)  # type: ignore[arg-type]
+    )
+    async with asyncio.timeout(5):
+        while len(queue.listed) < 1:
+            await asyncio.sleep(0.001)
+        await asyncio.sleep(0.02)  # the round's claims and runs, inside the interval
+    stop.set()
+    await task
+
+
 def test_sweep_concurrency_is_read_from_the_environment() -> None:
     assert sweeper.sweep_concurrency({}) == sweeper.DEFAULT_CONCURRENCY
     assert sweeper.sweep_concurrency({sweeper.CONCURRENCY_ENV: " 5 "}) == 5
@@ -89,10 +103,8 @@ def test_sweep_concurrency_is_read_from_the_environment() -> None:
 async def test_a_round_serves_every_tenant_once_before_any_tenant_twice() -> None:
     queue = FakeQueue({"busy": [_lease("busy", n) for n in range(1, 4)], "quiet": [_lease("quiet")]})
     memory = FakeMemory()
-    rounds = iter([False, True])
 
-    await sweeper.capture_sweeper(memory, queue, should_stop=lambda: next(rounds), concurrency=4, interval_s=0)  # type: ignore[arg-type]
-    await asyncio.sleep(0)
+    await _one_round(memory, queue, concurrency=4)
 
     assert memory.ran[:2] == ["cap-busy-1", "cap-quiet-1"], "one each first, in the service's order"
     assert sorted(memory.ran[2:]) == ["cap-busy-2", "cap-busy-3"], "then free slots go to the tenant left with work"
@@ -130,9 +142,7 @@ async def test_a_claim_failing_mid_round_still_runs_the_leases_taken() -> None:
 
     queue = Flaky({"a": [_lease("a")], "b": [_lease("b")]})
     memory = FakeMemory()
-    rounds = iter([False, True])
-    await sweeper.capture_sweeper(memory, queue, should_stop=lambda: next(rounds), concurrency=2, interval_s=0)  # type: ignore[arg-type]
-    await asyncio.sleep(0)
+    await _one_round(memory, queue, concurrency=2)
     assert memory.ran == ["cap-a-1"], "taken, so run: never held until its lease runs out"
 
 
@@ -259,7 +269,7 @@ async def test_a_capture_kept_stale_is_given_back_for_a_while_with_no_failure_co
         raise turn.CaptureStale
 
     assert await _session_memory(queue, stale).run_capture(_job_lease()) == 0
-    assert [e[0] for e in queue.ended] == ["release"] and turn.STALE_PAUSE_S[0] <= queue.delays[0] <= turn.STALE_PAUSE_S[1]
+    assert [e[0] for e in queue.ended] == ["release"] and queue.stale == [True], "given back as stale: it waits"
 
 
 @pytest.mark.usefixtures("writable")

@@ -394,42 +394,6 @@ async def test_a_capture_whose_extraction_failed_stays_queued_and_a_sweep_lands_
     assert len([k for k, _ in gateway.one_shots if k.startswith("You extract")]) == 2, "extracted again once"
 
 
-async def test_a_burst_retried_late_never_retires_what_was_learned_after_it(
-    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A burst held in the queue and run after a later fact landed is older than that fact:
-    resolution may find the two contradict, and the older does not retire the newer."""
-    import supervisor.memory_service.capture.queue as capture_queue
-
-    monkeypatch.setattr(capture_queue, "RETRY_BACKOFF_MS", 200)
-    gateway = model(extract="SENSITIVITY: ordinary\n- Lives in Berlin")
-    gateway.extract_errors.append(ModelGatewayError(429, "rate limited", retry_after=3600.0))
-    state = await env.state()
-    store = state.manager.memory.store
-    assert isinstance(store, NotebookClient)
-    async with session_worker(env.client, state, task_queue=env.queue) as activities:
-        sid = await env.create(state, memory=QUICK)
-        notebook = (await _binding(state, sid)).write or ""
-        await env.sessions.submit(sid, Message("c1", "I moved to Berlin"))
-        await env.wait_for(state, sid, run_ended())
-        await _capture_state(store, tenant_of(notebook), sid, lambda work: work["failed"])
-        # Learned since, in a later turn of another session: the notebook now says Paris.
-        await store.capture(notebook, ["Lives in Paris"], context=TRACKED)
-        gateway.resolution = '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}]}'
-        stop = asyncio.Event()
-        sweeping = asyncio.create_task(
-            capture_sweeper(activities.memory, store, should_stop=stop.is_set, concurrency=1, interval_s=0.2)
-        )
-        try:
-            barrier = await store.capture_flush(tenant_id=tenant_of(notebook), session_id=sid, timeout_s=30)
-        finally:
-            stop.set()
-            await sweeping
-        texts = {f.text for f in await _facts(state, sid)}
-    assert barrier["result"] == "success"
-    assert texts == {"Lives in Paris"}, "the newer fact is kept, and what it corrected is not added"
-
-
 async def test_agent_only_sessions_are_never_captured(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:

@@ -698,3 +698,47 @@ async def test_the_job_just_queued_is_claimed_whatever_another_replicas_clock_sa
     job = await q.enqueue(tenant_id=T, session_id="session", notebook_id=notebook, run_ids=["r1"])
     clock.at -= 5  # the claim reached a replica a few ms behind
     assert await q.claim(tenant_id=T, owner="w", lease_s=60, job_id=job.job_id) is not None
+
+
+async def test_a_capture_kept_stale_waits_longer_each_time_then_commits_as_resolved(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    from supervisor.memory_service.capture.queue import MAX_STALE_RELEASES
+
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    waits = []
+    for _ in range(MAX_STALE_RELEASES):
+        lease = await claim(svc, "worker")
+        await q.release_retryable(lease, "stale", stale=True)
+        assert await q.claim(tenant_id=T, owner="w", lease_s=60) is None, "it waits"
+        before = clock.at
+        while (lease := await q.claim(tenant_id=T, owner="w", lease_s=60)) is None:
+            clock.at += 500
+        waits.append(clock.at - before)
+        await q.release_retryable(lease, "interrupted")  # back for the loop's claim
+    assert waits[-1] > waits[0], "longer each time"
+    lease = await claim(svc, "worker")
+    await q.commit(lease, observations("Kept at last"), resolved_at="a revision long gone")
+    assert (await cursors(svc)).captured == 1, "past its stale releases, held to no revision"
+
+
+async def test_a_persons_change_keeps_a_capture_already_in_the_inbox(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Being queued as the change runs: its row is in, the change strips it as any queued
+    capture, and what is unrelated to the change still lands."""
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await memory.notebooks.capture(notebook, ["Has a dog"])
+    (dog,) = await svc.client().facts(notebook)
+    await enqueue(svc, notebook, "session", 1, 1)
+
+    async def unmarked(job: object) -> None:  # the row is in; marking it so has not run yet
+        return None
+
+    monkeypatch.setattr(q, "_queued", unmarked)
+    await q.commit(await claim(svc, "worker"), observations("Prefers window seats"))
+    await memory.notebooks.delete(notebook, [dog.id])
+    await memory.inbox.drain()
+    assert [f.text for f in await svc.client().facts(notebook)] == ["Prefers window seats"]

@@ -427,8 +427,10 @@ sessions).
   expiry) is refused at commit. The outcome is then queued into G2's inbox under the job's
   id; a crash between the two is repaired by `reconcile` from the kept outcome, never by
   extracting again. A person's change to the notebook (an edit, a delete, a clear, a
-  restore) drops, in its own transaction, the outcomes committed and not yet queued, as G2
-  strips what is queued. Outcomes are content: cleared once their facts land or cannot
+  restore) drops, in its own transaction, the outcomes committed whose rows are not in the
+  inbox yet (their queuing failed), and puts a handled row under each one's key, so its
+  queuing later lands nothing; one already in the inbox is stripped as G2 strips what is
+  queued. Outcomes are content: cleared once their facts land or cannot
   land, and scrubbed with an erased owner's notebooks; diagnostics of a model's or a
   burst's words keep only the error's class.
 - **Cursors:** per session, `requested`, `captured` (committed or failed for good) and
@@ -448,10 +450,10 @@ sessions).
   revision, then the statements committed and not yet landed (with their provenance, shown
   only as the session's audience may see them, and the newest 1,000 at most), then the
   facts. A verdict whose related facts did not change is reused, with no model call. Every
-  attempt is checked; a capture still stale after four is given back for 5 to 15 s, with no
-  failure counted. The revision also counts the queued rows, so one set aside changes it.
-  A burst run late never retires a fact written after its own turns, nor adds what such a
-  fact already corrected.
+  attempt is checked; a capture still stale after four is given back, with no failure
+  counted, for a pause that doubles each time; after six such releases it commits as
+  resolved (a rare near-duplicate is consolidation's, G5, never a capture lost). The
+  revision also counts the queued rows, so one set aside changes it.
 - **Workers:** the capture activity enqueues its burst and runs it at once under its own
   lease. Each worker's sweeper (`memory/sweeper.py`, `MEMORY_CAPTURE_SWEEP_CONCURRENCY`, 2)
   claims what is left (failed, expired, or pending past a minute), one job per tenant a
@@ -466,7 +468,13 @@ sessions).
 - **Known limits:** lease expiry and backoff read each replica's clock, so replicas need
   NTP (a skew past a minute would fence a healthy holder). A burst run after its session's
   audience changed reads only its turns since the change, as any capture does, and may
-  find nothing to keep.
+  find nothing to keep. As in Grok, pending bursts are claimed before failed ones are
+  retried, so a burst retried late is resolved after later ones (its session's or
+  another's) and can contradict what they learned; telling which statement is newer is
+  consolidation's (G5), which sees every fact's source turn. An operator's requeue of
+  set-aside captures can return the revision to an earlier value (a resolution then
+  passes with one statement it compared gone), and reconciliation's scan of queued jobs
+  grows with the inbox's backlog.
 
 *Tests:* Grok's ten (`tests/memory_store/test_capture_queue.py`, on SQLite and Postgres) and
 ours beside them: the routes and their tenant isolation, the sweeper and how a leased job
