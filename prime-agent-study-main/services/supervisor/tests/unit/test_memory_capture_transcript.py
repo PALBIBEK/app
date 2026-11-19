@@ -337,7 +337,7 @@ def test_a_transcript_too_long_for_the_model_is_retried_on_the_shorter_budget(
 ) -> None:
     extracted, sent = _attempts([TOO_LONG], monkeypatch, tool_loop(60, 20 * 1024))
 
-    assert extracted is not None
+    assert isinstance(extracted, Observations)
     assert len(sent[0].encode()) > len(sent[1].encode()), "the retry read the half budget"
 
 
@@ -476,7 +476,7 @@ def test_a_providers_retry_after_is_honoured_but_never_shortens_the_pause(monkey
                 raise errors.pop(0)
             return as_outcome("SENSITIVITY: ordinary\n- ok")
 
-        assert await turn._extract(one_shot, "s1", tool_loop(1, 10)) is not None
+        assert isinstance(await turn._extract(one_shot, "s1", tool_loop(1, 10)), Observations)
 
     asyncio.run(run())
     assert waits == [turn.RETRY_PAUSE_S, 12.0], "ours, then theirs when longer"
@@ -578,7 +578,7 @@ def test_a_retry_after_inside_the_window_is_waited_for(monkeypatch: pytest.Monke
     monkeypatch.setattr(turn.asyncio, "sleep", sleep)
     extracted, sent = _attempts([ModelGatewayError(429, "rate limit", retry_after=45.0)], monkeypatch, tool_loop(1, 10))
 
-    assert extracted is not None and len(sent) == 2 and waits == [45.0]
+    assert isinstance(extracted, Observations) and len(sent) == 2 and waits == [45.0]
 
 
 def test_a_failures_error_that_is_not_text_reads_as_its_own_text() -> None:

@@ -60,10 +60,12 @@ Answer with JSON only, one entry per new fact, in this shape:
 
 @dataclass(frozen=True, slots=True)
 class Resolution:
-    """What to add (indexes into the new facts) and which existing fact ids to retire."""
+    """What to add (indexes into the new facts) and which existing fact ids to retire, and
+    which new fact makes which existing one false (``contradicts``: (new, fact id) pairs)."""
 
     add: tuple[int, ...]
     retire: tuple[str, ...]
+    contradicts: tuple[tuple[int, str], ...] = ()
 
 
 def related(existing: Sequence[Fact], new_facts: Sequence[str]) -> list[Fact]:
@@ -97,6 +99,7 @@ def parse(answer: str, new_count: int, candidates: Sequence[Fact]) -> Resolution
         return None
     duplicate: set[int] = set()
     retire: dict[str, None] = {}
+    pairs: dict[tuple[int, str], None] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -108,7 +111,8 @@ def parse(answer: str, new_count: int, candidates: Sequence[Fact]) -> Resolution
         for i in _list(entry.get("contradicts")):
             if (idx := _index(i, len(candidates))) is not None:
                 retire.setdefault(candidates[idx].id)
-    return Resolution(tuple(i for i in range(new_count) if i not in duplicate), tuple(retire))
+                pairs.setdefault((new, candidates[idx].id))
+    return Resolution(tuple(i for i in range(new_count) if i not in duplicate), tuple(retire), tuple(pairs))
 
 
 async def resolve(one_shot: OneShot, new_facts: Sequence[str], existing: Sequence[Fact]) -> Resolution:

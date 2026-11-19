@@ -23,6 +23,7 @@ from supervisor.memory_service.capture.errors import (
 )
 from supervisor.memory_service.capture.queue import (
     MAX_LEASE_S,
+    MAX_RETRY_BACKOFF_MS,
     CaptureCursors,
     CaptureJob,
     CaptureLease,
@@ -86,6 +87,7 @@ class FailIn(BaseModel):
 class ReleaseIn(BaseModel):
     lease: LeaseIn
     error: str = Field(max_length=16_384)
+    delay_s: float = Field(default=0, ge=0, le=MAX_RETRY_BACKOFF_MS / 1000)
 
 
 class RenewIn(BaseModel):
@@ -231,7 +233,7 @@ async def fail(job_id: str, body: FailIn, request: Request) -> None:
 async def release(job_id: str, body: ReleaseIn, request: Request) -> None:
     lease = _checked(job_id, request, body.lease)
     try:
-        await _queue(request).release_retryable(lease, body.error)
+        await _queue(request).release_retryable(lease, body.error, delay_ms=int(body.delay_s * 1000))
     except CaptureError as exc:
         raise _error(exc) from exc
 

@@ -28,7 +28,7 @@ def test_only_facts_sharing_content_words_are_compared() -> None:
 def test_the_answer_establishes_what_changes_and_nothing_else() -> None:
     candidates = [HELD[0], HELD[1]]
     answer = '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}, {"new": 1, "duplicates": [1], "contradicts": []}]}'
-    assert parse(answer, 2, candidates) == Resolution(add=(0,), retire=("1",))
+    assert parse(answer, 2, candidates) == Resolution(add=(0,), retire=("1",), contradicts=((0, "1"),))
     noisy = 'Sure: {"facts": [{"new": 7, "contradicts": [0]}, {"new": 0, "contradicts": [9, true, "0"]}]}'
     assert parse(noisy, 1, candidates) == Resolution(add=(0,), retire=()), "ids outside the lists are ignored"
     assert parse("NONE", 1, candidates) is None
@@ -44,7 +44,7 @@ async def test_resolve_asks_once_with_small_ids_and_dated_facts() -> None:
         return '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}]}'
 
     got = await resolve(one_shot, ["Prefers coffee in the morning"], HELD)
-    assert got == Resolution(add=(0,), retire=("1",))
+    assert got == Resolution(add=(0,), retire=("1",), contradicts=((0, "1"),))
     ((system, body),) = asked
     assert system == RESOLUTION_PROMPT
     assert body == "EXISTING FACTS:\n[0] (2023-11-14) Prefers tea in the morning\n\nNEW FACTS:\n[0] Prefers coffee in the morning"

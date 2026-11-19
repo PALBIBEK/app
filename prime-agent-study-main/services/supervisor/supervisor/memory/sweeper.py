@@ -104,6 +104,17 @@ async def _claim(queue: NotebookClient, free: int) -> list[CaptureLease]:
                 if len(leases) >= free:
                     break
             tenants = served  # only those that had work, again
+    except asyncio.CancelledError:
+        # Stopping mid-round: every lease taken goes back at once, none held until it runs out.
+        await asyncio.shield(asyncio.gather(*(_give_back(queue, lease) for lease in leases)))
+        raise
     except Exception:  # the service unreachable, a tenant's rate limit
         logger.warning("capture sweep failed", exc_info=True)
     return leases
+
+
+async def _give_back(queue: NotebookClient, lease: CaptureLease) -> None:
+    try:
+        await queue.capture_release(lease, "the sweeper stopped")
+    except Exception:  # its lease runs out instead
+        logger.warning("capture job %s: giving it back failed", lease.job.job_id, exc_info=True)

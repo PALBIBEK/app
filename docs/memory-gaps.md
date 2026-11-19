@@ -417,15 +417,20 @@ sessions).
 - **Leases:** each carries its claim's attempt (its generation), and commit, fail, release
   and renew all check owner, attempt, tenant, range and expiry, so a paused holder is fenced,
   even after another claim committed. A lease lasts 2 minutes and its holder renews it every
-  40 s while it works, so a dead worker frees its job fast and a slow one keeps it. A
-  cancelled holder releases at once. A job whose lease runs out at each of its eight claims
-  (a burst that kills its worker) is failed for good.
+  40 s while it works, so a dead worker frees its job fast and a slow one keeps it; one
+  whose renewal is refused (taken over) stops at once, its model calls unspent. A job runs
+  at most nine minutes under its lease, then fails retryably. A cancelled holder releases
+  at once. Releases count no failure; failures and runs-out do, and at eight the job is
+  failed for good (a burst that kills its worker).
 - **Outcomes:** commit keeps the outcome and its hash; the same bytes again are idempotent,
   others are refused. An outcome that could never be kept (bad observation, context or
   expiry) is refused at commit. The outcome is then queued into G2's inbox under the job's
   id; a crash between the two is repaired by `reconcile` from the kept outcome, never by
-  extracting again. Outcomes are content: cleared once their facts land or cannot land, and
-  scrubbed with an erased owner's notebooks.
+  extracting again. A person's change to the notebook (an edit, a delete, a clear, a
+  restore) drops, in its own transaction, the outcomes committed and not yet queued, as G2
+  strips what is queued. Outcomes are content: cleared once their facts land or cannot
+  land, and scrubbed with an erased owner's notebooks; diagnostics of a model's or a
+  burst's words keep only the error's class.
 - **Cursors:** per session, `requested`, `captured` (committed or failed for good) and
   `indexed` (landed: G2's drainer tells the queue the keys it landed, per notebook). Each
   advances over a contiguous run of resolved jobs only. Pruning (a week) never removes a
@@ -443,8 +448,10 @@ sessions).
   revision, then the statements committed and not yet landed (with their provenance, shown
   only as the session's audience may see them, and the newest 1,000 at most), then the
   facts. A verdict whose related facts did not change is reused, with no model call. Every
-  attempt is checked; a capture still stale after four goes back to the queue. A burst run
-  late never retires a fact written after its own turns.
+  attempt is checked; a capture still stale after four is given back for 5 to 15 s, with no
+  failure counted. The revision also counts the queued rows, so one set aside changes it.
+  A burst run late never retires a fact written after its own turns, nor adds what such a
+  fact already corrected.
 - **Workers:** the capture activity enqueues its burst and runs it at once under its own
   lease. Each worker's sweeper (`memory/sweeper.py`, `MEMORY_CAPTURE_SWEEP_CONCURRENCY`, 2)
   claims what is left (failed, expired, or pending past a minute), one job per tenant a

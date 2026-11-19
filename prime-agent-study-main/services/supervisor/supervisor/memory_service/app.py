@@ -166,13 +166,15 @@ async def _guard(request: Request) -> None:
     if request.url.path in PUBLIC_PATHS:
         return
     resolve_http_auth(request)
-    if not is_mutating_method(request.method) or _queue_bookkeeping(request.url.path):
+    if not is_mutating_method(request.method):
         return
     if has_nul(await request.body()):  # Postgres keeps no NUL in text: say so, not a 500
         raise HTTPException(
             status_code=422,
             detail={"code": "NUL_CHARACTER", "message": "text may not contain the NUL character (U+0000)"},
         )
+    if _queue_bookkeeping(request.url.path):
+        return
     key = rate_limit_key(
         tenant_id=caller_tenant(request) or request.headers.get("x-tenant-id"),
         client_ip=request.client.host if request.client else None,

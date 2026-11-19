@@ -798,7 +798,7 @@ class NotebookStore:
                 select(InboxRow.observations, InboxRow.sensitivity, InboxRow.sources, InboxRow.source_unknown)
                 .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
                 .order_by(InboxRow.id.desc())
-                .limit(max(1, limit // 4))  # a capture holds a few statements: rows, not statements
+                .limit(limit)  # every row holds one statement at least
             )
             out: list[tuple[str, Provenance]] = []
             for observations, sensitivity, sources, unknown in rows.all():

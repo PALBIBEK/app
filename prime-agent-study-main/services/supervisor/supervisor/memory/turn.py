@@ -225,6 +225,13 @@ CAPTURE_LEASE_S: Final = 120.0
 ``RENEW_EVERY_S`` while it works (a long wait for its tenant's slot, a slow model), so a
 worker that dies holding one frees it within two minutes, for the sweeper to claim."""
 RENEW_EVERY_S: Final = CAPTURE_LEASE_S / 3
+RUN_DEADLINE_S: Final = 540.0
+"""The longest one capture job runs under its lease (a wait for its tenant's slot, model
+calls, resolution): past it the job fails, retryably, so a hang never holds a job and a
+worker's slot for good. Inside the capture activity's ten minutes (``temporal.policies``)."""
+STALE_PAUSE_S: Final = (5.0, 15.0)
+"""How long a capture whose notebook kept changing under each resolution waits, jittered,
+before it is claimed again (no failure is counted: nothing was wrong with it)."""
 RESOLVE_ATTEMPTS: Final = 4
 """Resolutions one capture makes when the notebook keeps changing under it (S3), each
 checked at its commit. One still stale after the last is given back to the queue, to run
@@ -238,6 +245,11 @@ class CaptureFailed(Exception):
     def __init__(self, reason: str, retryable: bool) -> None:
         super().__init__(reason)
         self.reason, self.retryable = reason, retryable
+
+
+class CaptureStale(Exception):
+    """A capture whose notebook changed under each of its resolutions: given back to the
+    queue for a while, with no failure counted (S3)."""
 
 
 def worker_identity() -> str:
@@ -255,17 +267,28 @@ def _writable(scope: Scope | None) -> str | None:
     return binding.writable
 
 
-async def _renew(queue: NotebookClient, lease: CaptureLease) -> None:
+async def _renew(queue: NotebookClient, lease: CaptureLease, work: asyncio.Future[int]) -> bool:
     """Keep a lease while its holder works under it; stopped when the work ends. One taken
-    over is not renewed again (its commit is fenced), and one renewal failing is retried."""
+    over stops the work (its commit would be fenced, and each model call is charged): True.
+    One renewal failing is retried: the lease has two more tries in it."""
     while True:
         await asyncio.sleep(RENEW_EVERY_S)
         try:
             await queue.capture_renew(lease, CAPTURE_LEASE_S)
         except StaleLease:
-            return
-        except Exception:  # the service unreachable for a moment: the lease has two more tries in it
+            work.cancel()
+            return True
+        except Exception:  # the service unreachable for a moment
             logger.warning("capture job %s: renewing its lease failed", lease.job.job_id, exc_info=True)
+
+
+def _reason(exc: BaseException) -> str:
+    """A failure as the queue keeps and shows it (``work.last_error``): the class alone for
+    one whose words may be the model's or the burst's (a malformed answer, an observation
+    refused), else the class and its message."""
+    if isinstance(exc, (MalformedOutcome, InvalidObservation, MemoryRequestInvalid)):
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _terminal(exc: BaseException) -> bool:
@@ -511,42 +534,70 @@ class SessionMemory:
         queue = self._queue_for(lease.job.notebook_id)
         assert queue is not None
         session_id = lease.job.session_id
-        renewing = asyncio.create_task(_renew(queue, lease), name=f"renew-{lease.job.job_id}")
+        work = asyncio.ensure_future(self._run(queue, lease, scope))
+        renewing = asyncio.create_task(_renew(queue, lease, work), name=f"renew-{lease.job.job_id}")
         try:
-            scope = scope or await self.scope(session_id)
-            if _writable(scope) != lease.job.notebook_id:
-                # The session is gone, or no longer captures into that notebook: nothing to do.
-                await queue.capture_commit(lease, NOOP_OUTCOME)
-                return 0
-            assert scope is not None
-            return await self._capture(scope, session_id, lease.job.run_ids, lease=lease)
+            async with asyncio.timeout(RUN_DEADLINE_S):
+                return await work
         except StaleLease:
             logger.info("session %s: capture job %s was taken over", session_id, lease.job.job_id)
             return 0
+        except TimeoutError:
+            logger.warning("session %s: capture job %s ran past its deadline", session_id, lease.job.job_id)
+            await self._settle(queue, lease, f"ran past its {RUN_DEADLINE_S:.0f} s deadline")
+            return 0
         except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if renewing.done() and not renewing.cancelled() and renewing.result() and not (
+                current is not None and current.cancelling()
+            ):
+                # Its lease was taken over, so the renewer stopped the work: the new holder's.
+                logger.info("session %s: capture job %s was taken over", session_id, lease.job.job_id)
+                return 0
             # Interrupted (a worker shutting down, an activity cancelled): back to the queue at
             # once, not after the lease runs out.
             await asyncio.shield(self._settle(queue, lease, "interrupted", release=True))
             raise
+        except CaptureStale:
+            pause = random.uniform(*STALE_PAUSE_S)
+            await self._settle(queue, lease, "the notebook kept changing under its resolution", release=True, delay_s=pause)
+            return 0
         except CaptureFailed as failed:
             await self._settle(queue, lease, failed.reason, terminal=not failed.retryable)
             return 0
         except Exception as exc:
             logger.warning("session %s: capture job %s failed", session_id, lease.job.job_id, exc_info=True)
-            await self._settle(queue, lease, f"{type(exc).__name__}: {exc}", terminal=_terminal(exc))
+            await self._settle(queue, lease, _reason(exc), terminal=_terminal(exc))
             return 0
         finally:
+            work.cancel()
             renewing.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await renewing
+
+    async def _run(self, queue: NotebookClient, lease: CaptureLease, scope: Scope | None) -> int:
+        session_id = lease.job.session_id
+        scope = scope or await self.scope(session_id)
+        if _writable(scope) != lease.job.notebook_id:
+            # The session is gone, or no longer captures into that notebook: nothing to do.
+            await queue.capture_commit(lease, NOOP_OUTCOME)
+            return 0
+        assert scope is not None
+        return await self._capture(scope, session_id, lease.job.run_ids, lease=lease)
 
     @staticmethod
     async def _settle(
-        queue: NotebookClient, lease: CaptureLease, reason: str, *, terminal: bool = False, release: bool = False
+        queue: NotebookClient,
+        lease: CaptureLease,
+        reason: str,
+        *,
+        terminal: bool = False,
+        release: bool = False,
+        delay_s: float = 0.0,
     ) -> None:
         try:
             if release:
-                await queue.capture_release(lease, reason)
+                await queue.capture_release(lease, reason, delay_s=delay_s)
             else:
                 await queue.capture_fail(lease, reason, terminal=terminal)
         except Exception:  # unreachable: the lease runs out, and the sweeper claims it again
@@ -618,10 +669,12 @@ class SessionMemory:
                 else:
                     resolution = await resolve(one_shot, statements, existing)
                     verdict = (compared, resolution)
-                drafts = [extracted.drafts[i] for i in resolution.add]
                 # A burst run late (a retry, a backlog) is older than what was learned since:
-                # never does it retire a fact written after its own turns (G3).
+                # a fact written after its own turns is never retired by it, and what of the
+                # burst that fact already corrected is not added (G3).
                 newer = {f.id for f in held if f.updated_at > said_at}
+                outdated = {new for new, fact_id in resolution.contradicts if fact_id in newer}
+                drafts = [extracted.drafts[i] for i in resolution.add if i not in outdated]
                 retire = [i for i in resolution.retire if not _queued_id(i) and i not in newer]
                 if lease is None and not drafts and not retire:
                     return 0
@@ -635,7 +688,7 @@ class SessionMemory:
                     )
                 except StaleResolution:
                     logger.info("session %s: the notebook changed since resolution: resolving again", session_id)
-            raise CaptureFailed(f"the notebook changed under each of {RESOLVE_ATTEMPTS} resolutions", retryable=True)
+            raise CaptureStale
         except NotebookArchived:
             if drafts:
                 raise  # as a capture into an archived notebook always has
@@ -858,7 +911,7 @@ async def _extract(one_shot: OneShot, session_id: str, items: list[Item]) -> Noo
                 refused = isinstance(exc, MalformedOutcome) or (
                     not overflow and not is_retryable(exc) and not is_refused_key(exc)
                 )
-                return Failed(f"{type(exc).__name__}: {exc}", retryable=not (at_floor or refused))
+                return Failed(_reason(exc), retryable=not (at_floor or refused))
             condensed = again_on
             await asyncio.sleep(pause or 0.0)
     return Failed("extraction attempts exhausted", retryable=True)

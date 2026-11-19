@@ -425,11 +425,9 @@ async def test_a_burst_retried_late_never_retires_what_was_learned_after_it(
         finally:
             stop.set()
             await sweeping
-        async with asyncio.timeout(30):
-            while len(texts := {f.text for f in await _facts(state, sid)}) < 2:
-                await asyncio.sleep(0.2)
+        texts = {f.text for f in await _facts(state, sid)}
     assert barrier["result"] == "success"
-    assert texts == {"Lives in Paris", "Lives in Berlin"}, "the newer fact is kept; consolidation (G5) reconciles"
+    assert texts == {"Lives in Paris"}, "the newer fact is kept, and what it corrected is not added"
 
 
 async def test_agent_only_sessions_are_never_captured(

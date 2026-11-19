@@ -241,3 +241,13 @@ async def test_only_a_commit_counts_against_the_tenants_change_limit(
     async with _raw(svc, "t1") as raw:
         again = await raw.post(f"/v1/capture/jobs/{lease.job.job_id}:commit", json={"lease": {"job": {}}, "outcome": NOOP})
     assert again.status_code == 429, "a commit is a change, and counted"
+
+
+async def test_a_nul_in_a_queue_step_is_refused_not_a_server_error(svc: MemoryServiceHandle) -> None:
+    client = svc.client()
+    nb = await _notebook(client)
+    async with _raw(svc, "t1") as raw:
+        answer = await raw.post(
+            "/v1/capture/jobs", json={"tenant_id": "t1", "session_id": "s\u0000", "notebook_id": nb, "run_ids": ["r"]}
+        )
+    assert answer.status_code == 422

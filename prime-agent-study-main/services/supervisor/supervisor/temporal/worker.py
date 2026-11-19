@@ -209,12 +209,15 @@ def _capture_sweeper(
 ) -> list[asyncio.Task[None]]:
     """The worker's capture sweeper (G3), when memory lives in a memory service."""
     from supervisor.memory.client import NotebookClient
-    from supervisor.memory.sweeper import capture_sweeper
+    from supervisor.memory.sweeper import capture_sweeper, sweep_concurrency
 
     store = state.manager.memory.store
     if not isinstance(store, NotebookClient):
         return []
-    return [asyncio.create_task(capture_sweeper(activities.memory, store, should_stop=stop.is_set))]
+    concurrency = sweep_concurrency()  # here, so a bad setting stops the worker, never the sweeper alone
+    return [
+        asyncio.create_task(capture_sweeper(activities.memory, store, should_stop=stop.is_set, concurrency=concurrency))
+    ]
 
 
 async def _bootstrap_version(client: Client, deployment: str, build_id: str, mode: str) -> None:

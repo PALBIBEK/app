@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -620,3 +621,80 @@ async def test_pruning_drops_idle_sessions_and_the_counters_of_notebooks_gone(
         counters = list(await db.scalars(select(CaptureNotebookRow.notebook_id)))
     assert sessions == 0, "no job left, and idle"
     assert counters == [notebook], "a live notebook keeps its count: it is part of its revision"
+
+
+@pytest.mark.parametrize("change", ["clear", "delete"])
+async def test_a_persons_change_drops_outcomes_committed_and_not_yet_queued(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """A commit whose queuing failed is repaired later from its kept outcome: a clear or a
+    delete meanwhile must not be undone by it, as it is not by what is already queued."""
+    memory = svc.app.state.memory
+    q = queue(svc)
+    await memory.notebooks.capture(notebook, ["Keeps a vault key"])
+    (held,) = await svc.client().facts(notebook)
+    await enqueue(svc, notebook, "session", 1, 1)
+    real = memory.notebooks.observe
+
+    async def down(*args: object, **kwargs: object) -> int:
+        raise ConnectionError("the inbox is unreachable")
+
+    monkeypatch.setattr(memory.notebooks, "observe", down)
+    await q.commit(await claim(svc, "worker"), observations("Keeps a vault key"))
+    monkeypatch.setattr(memory.notebooks, "observe", real)
+    if change == "clear":
+        await memory.notebooks.clear(notebook)
+    else:
+        await memory.notebooks.delete(notebook, [held.id])
+
+    clock.at += 60_000
+    await q.reconcile()
+    await memory.inbox.drain()
+
+    assert await svc.client().facts(notebook) == [], "never brought back"
+    assert (await cursors(svc)).indexed == 1
+    assert (await q.flush(tenant_id=T, session_id="session", through_turn=1, timeout_s=0))[0] == "failed"
+
+
+async def test_a_queued_capture_set_aside_changes_the_revision(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
+    """S3: a resolution that found a statement still queued is stale once it never lands."""
+    from sqlalchemy import update
+
+    from supervisor.memory_service.notebooks.models import InboxRow
+    from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS
+
+    memory = svc.app.state.memory
+    q = queue(svc)
+    for session in ("a", "b"):
+        await enqueue(svc, notebook, session, 1, 1)
+        await q.commit(await claim(svc, "w", session_id=session), observations(f"From {session}"))
+    seen = await q.revision(notebook)
+    async with memory._factory() as db:  # the older row set aside, the newest still queued
+        oldest = min(await db.scalars(select_ids(InboxRow, notebook)))
+        await db.execute(update(InboxRow).where(InboxRow.id == oldest).values(promoted_at=clock.at, attempts=PROMOTE_ATTEMPTS))
+        await db.commit()
+    assert await q.revision(notebook) != seen
+
+
+def select_ids(row: Any, notebook: str) -> Any:
+    from sqlalchemy import select
+
+    return select(row.id).where(row.notebook_id == notebook)
+
+
+async def test_releases_never_count_against_a_jobs_attempts(svc: MemoryServiceHandle, notebook: str, clock: Clock) -> None:
+    q = queue(svc)
+    await enqueue(svc, notebook, "session", 1, 1)
+    for _ in range(MAX_CAPTURE_ATTEMPTS + 2):  # a worker stopping again and again
+        await q.release_retryable(await claim(svc, "worker"), "interrupted")
+    await q.fail_retryable(await claim(svc, "worker"), "one real failure")
+    assert (await q.work_state(tenant_id=T, session_id="session", through_turn=1)).terminal == 0, "still retried"
+
+
+async def test_the_job_just_queued_is_claimed_whatever_another_replicas_clock_says(
+    svc: MemoryServiceHandle, notebook: str, clock: Clock
+) -> None:
+    q = queue(svc)
+    job = await q.enqueue(tenant_id=T, session_id="session", notebook_id=notebook, run_ids=["r1"])
+    clock.at -= 5  # the claim reached a replica a few ms behind
+    assert await q.claim(tenant_id=T, owner="w", lease_s=60, job_id=job.job_id) is not None

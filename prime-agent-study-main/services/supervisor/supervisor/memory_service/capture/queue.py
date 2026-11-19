@@ -70,6 +70,7 @@ from supervisor.memory_service.notebooks.errors import (
 )
 from supervisor.memory_service.notebooks.models import InboxRow, NotebookRow
 from supervisor.memory_service.notebooks.ops import PROMOTE_ATTEMPTS, NotebookOps, expiry_day
+from supervisor.memory_service.notebooks.store import mark_handled
 from supervisor.memory_service.notebooks.types import Provenance, capture_provenance
 from supervisor.memory_service.notebooks.wire import context_in, observation_in
 from supervisor.memory_service.observations import ObservationInvalid
@@ -325,7 +326,13 @@ class CaptureQueue:
             raise CaptureInvalid(f"a lease lasts 1..={MAX_LEASE_S} seconds")
         now = self._clock()
         expires = now + int(lease_s * 1000)
-        query = select(CaptureJobRow).where(CaptureJobRow.tenant_id == tenant_id, _claimable(now, pending_grace_ms))
+        if job_id is not None and pending_grace_ms == 0:
+            # The job its caller just queued, claimed at once: whatever another replica's clock
+            # wrote as its ``available_at`` (a few ms ahead is a minute's wait for the sweeper).
+            open_now = or_(_claimable(now), and_(CaptureJobRow.status == "pending", ~CaptureJobRow.terminal))
+        else:
+            open_now = _claimable(now, pending_grace_ms)
+        query = select(CaptureJobRow).where(CaptureJobRow.tenant_id == tenant_id, open_now)
         if session_id is not None:
             query = query.where(CaptureJobRow.session_id == session_id)
         if job_id is not None:
@@ -345,13 +352,15 @@ class CaptureQueue:
                         await _advance(db, gone, now)
                     await db.commit()
                     return None
-                if row.status != "running" or int(row.attempt) < MAX_CAPTURE_ATTEMPTS:
+                if row.status == "running":
+                    row.failures = int(row.failures) + 1  # its holder's lease ran out: a claim lost
+                if int(row.failures) < MAX_CAPTURE_ATTEMPTS:
                     break
-                # Its every holder's lease ran out (a worker it kills or hangs): never claimed
-                # again, so it takes no more workers down, and its range is resolved.
+                # Its every claim ended badly, the last with its lease run out (a burst that
+                # kills or hangs its worker): never claimed again, and its range is resolved.
                 row.status, row.terminal = "failed", True
                 row.lease_owner = row.lease_expires_at = None
-                row.last_error = f"its lease ran out on each of its {row.attempt} claims"
+                row.last_error = f"its lease ran out, after {row.failures} claims ended badly"
                 row.outcome = None
                 row.queued = row.indexed = True
                 row.updated_at = now
@@ -448,18 +457,23 @@ class CaptureQueue:
             if row is None:
                 raise StaleLease()
             _fenced(row, lease, now)
-            final = terminal or int(row.attempt) >= MAX_CAPTURE_ATTEMPTS
+            row.failures = int(row.failures) + 1
+            final = terminal or int(row.failures) >= MAX_CAPTURE_ATTEMPTS
             row.status, row.terminal, row.last_error = "failed", final, error
             row.lease_owner = row.lease_expires_at = None
-            row.available_at = now + min(MAX_RETRY_BACKOFF_MS, RETRY_BACKOFF_MS * 2 ** (int(row.attempt) - 1))
+            row.available_at = now + min(MAX_RETRY_BACKOFF_MS, RETRY_BACKOFF_MS * 2 ** (int(row.failures) - 1))
             row.updated_at = now
             if final:
                 await _advance(db, row.session_id, now)
             await db.commit()
 
-    async def release_retryable(self, lease: CaptureLease, error: str) -> None:
+    async def release_retryable(self, lease: CaptureLease, error: str, *, delay_ms: int = 0) -> None:
         """Give an exact owner and attempt's lease back during cancellation: claimable again at
-        once, without waiting for its deadline (Grok's ``release_retryable``)."""
+        once, without waiting for its deadline (Grok's ``release_retryable``), or after
+        ``delay_ms`` (a resolution the notebook kept making stale). No failure is counted:
+        nothing was wrong with the job."""
+        if not 0 <= delay_ms <= MAX_RETRY_BACKOFF_MS:
+            raise CaptureInvalid(f"a release waits 0..={MAX_RETRY_BACKOFF_MS} ms")
         now = self._clock()
         async with self._db() as db:
             released = await db.execute(
@@ -473,7 +487,7 @@ class CaptureQueue:
                     CaptureJobRow.attempt == lease.job.attempt,
                 )
                 .values(
-                    status="failed", lease_owner=None, lease_expires_at=None, available_at=now,
+                    status="failed", lease_owner=None, lease_expires_at=None, available_at=now + delay_ms,
                     last_error=sanitize_failure(error), updated_at=now,
                 )
             )
@@ -496,13 +510,68 @@ class CaptureQueue:
         except (
             ObservationInvalid, InvalidObservation, InvalidExpiry, MemoryLimitExceeded, NotebookArchived, NotebookNotFound,
         ) as exc:
-            logger.warning("capture job %s: its outcome cannot be kept: %s", job.job_id, exc)
-            await self._resolve_unkept(job.job_id, sanitize_failure(f"{type(exc).__name__}: {exc}"))
+            logger.warning("capture job %s: its outcome cannot be kept: %s", job.job_id, type(exc).__name__)
+            # The class alone: what it says may quote the outcome (the status routes show it).
+            await self._resolve_unkept(job.job_id, f"{type(exc).__name__}: its outcome cannot be kept")
             return
         except Exception:  # the database, the embedder: ``reconcile`` queues it again
             logger.warning("capture job %s: queuing its outcome failed", job.job_id, exc_info=True)
             return
-        await self._mark(job.job_id, queued=True)
+        await self._queued(job)
+
+    async def _queued(self, job: CaptureJob) -> None:
+        """Its outcome is in the inbox: marked so, unless a person changed the notebook while
+        it was being queued (``drop_unqueued``): then the row is dropped too, either order."""
+        async with self._db() as db:
+            row = await db.get(CaptureJobRow, job.job_id, with_for_update=True)
+            if row is not None and row.status == "completed" and not row.queued:
+                row.queued, row.updated_at = True, self._clock()
+            elif row is not None and row.terminal:
+                await db.execute(
+                    mark_handled(InboxRow.notebook_id == job.notebook_id, InboxRow.idempotency_key == job.job_id, at=self._clock())
+                )
+            await db.commit()
+
+    async def drop_unqueued(self, notebook_id: str, *, db: AsyncSession | None = None) -> int:
+        """A person changed the notebook (a clear, a delete, an edit, a restore): the outcomes
+        committed into it and not queued yet (a commit whose queuing failed, for
+        reconciliation to retry) were judged against what it held before, and the inbox's
+        protections for queued captures never reached them. They are dropped, as clearing
+        drops what is queued; one being queued as this runs is dropped by ``_queued``. The
+        jobs dropped. ``db``: the person's change's own transaction (its notebook locked), which
+        commits it; otherwise one of its own."""
+        if db is None:
+            async with self._db() as own:
+                dropped = await self.drop_unqueued(notebook_id, db=own)
+                await own.commit()
+                return dropped
+        now = self._clock()
+        rows = list(
+            await db.scalars(
+                select(CaptureJobRow)
+                .where(CaptureJobRow.notebook_id == notebook_id, CaptureJobRow.status == "completed", ~CaptureJobRow.queued)
+                .order_by(CaptureJobRow.job_id)
+                .with_for_update()
+            )
+        )
+        for row in rows:
+            row.status, row.terminal = "failed", True
+            row.last_error = "a person changed the notebook before its facts were queued"
+            row.outcome = None
+            row.queued = row.indexed = True
+            row.updated_at = now
+        if rows:
+            await self._count_change(db, notebook_id, now)
+        for session_id in sorted({r.session_id for r in rows}):
+            await _advance(db, session_id, now)
+        return len(rows)
+
+    async def _count_change(self, db: AsyncSession, notebook_id: str, now: int) -> None:
+        """What is still to land in the notebook changed without a fact or a queued row
+        changing (a committed outcome dropped): counted, so a resolution read before is stale."""
+        counter = await self._notebook_for_update(db, notebook_id, now)
+        counter.commits = int(counter.commits) + 1
+        counter.updated_at = now
 
     async def _resolve_unkept(self, job_id: str, error: str) -> None:
         now = self._clock()
@@ -514,6 +583,7 @@ class CaptureQueue:
             row.queued = row.indexed = True
             row.outcome = None  # never kept: nothing of it stays
             row.updated_at = now
+            await self._count_change(db, row.notebook_id, now)  # a resolution may have counted on it
             await _advance(db, row.session_id, now)
             await db.commit()
 
@@ -568,11 +638,16 @@ class CaptureQueue:
                         ~CaptureJobRow.indexed,
                         ~CaptureJobRow.queued,
                         CaptureJobRow.completed_at < now - LAND_GRACE_MS,
+                        CaptureJobRow.updated_at < now - LAND_GRACE_MS,  # not taken by another pass lately
                     )
                     .order_by(CaptureJobRow.completed_at)
                     .limit(RECONCILE_BATCH)
+                    .with_for_update(skip_locked=True)
                 )
             )
+            for row in unqueued:  # this pass's: another replica's skips them a while
+                row.updated_at = now
+            await db.commit()
             queued = list(
                 (await db.execute(
                     select(CaptureJobRow.job_id, CaptureJobRow.notebook_id, InboxRow.promoted_at, InboxRow.attempts)
@@ -860,11 +935,18 @@ async def _advance(db: AsyncSession, session_id: str, now: int) -> None:
 
 async def _revision(db: AsyncSession, notebook_id: str) -> str:
     facts = await db.scalar(select(NotebookRow.revision).where(NotebookRow.id == notebook_id))
-    queued = await db.scalar(
-        select(func.max(InboxRow.id)).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
-    )
+    # The newest queued row and how many are queued: a row queued raises the first, one
+    # landing raises the facts' revision, and one set aside (the drainer gave up on it)
+    # lowers the count, so whatever leaves the queue changes the revision too.
+    newest, waiting = (
+        await db.execute(
+            select(func.max(InboxRow.id), func.count()).where(
+                InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None)
+            )
+        )
+    ).one()
     commits = await db.scalar(select(CaptureNotebookRow.commits).where(CaptureNotebookRow.notebook_id == notebook_id))
-    return f"{int(facts or 0)}.{int(queued or 0)}.{int(commits or 0)}"
+    return f"{int(facts or 0)}.{int(newest or 0)}.{int(waiting or 0)}.{int(commits or 0)}"
 
 
 def _canonical(outcome: dict[str, Any]) -> dict[str, Any]:
