@@ -870,7 +870,7 @@ requires before any gap is ported.
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
 | G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [~] eight review rounds; merged on request | [~] correctness and capture met; recall latency needs a sized environment | [x] | #197 |
 | G2 typed observations, strict schema | P0 | [x] | [x] | [x] | [~] 28 review rounds and a verifying one; what was left is answered on #198 | [~] correctness and capture met; recall latency needs a sized environment | [x] | #198 |
-| G3 durable capture queue, cursors, barrier | P0 | [x] | [x] | [x] | [~] a review round and a verifying one; see the PR | [~] correctness and capture met; recall latency needs a sized environment | [x] | PRNUM |
+| G3 durable capture queue, cursors, barrier | P0 | [x] | [x] | [x] | [~] five review rounds and a verifying one; what was left is documented on #200 | [~] correctness and capture met; recall latency needs a sized environment | [x] | #200 |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G5 consolidation (Dream) | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G6 bounded memory index, read ledger | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
