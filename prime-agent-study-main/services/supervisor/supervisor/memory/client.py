@@ -32,6 +32,14 @@ from typing import Any, Final
 import httpx
 
 from supervisor.http_cookies import SHARED_LIMITS, no_cookies
+from supervisor.memory_service.capture.errors import (
+    CaptureConflict,
+    CaptureInvalid,
+    StaleLease,
+    StaleResolution,
+    UnknownCaptureSession,
+)
+from supervisor.memory_service.capture.queue import CaptureJob, CaptureLease
 from supervisor.memory_service.notebooks import wire
 from supervisor.memory_service.notebooks.errors import (
     EmptyFact,
@@ -52,6 +60,7 @@ from supervisor.memory_service.notebooks.types import (
     Fact,
     Notebook,
     NotebookStats,
+    Provenance,
     Revision,
     subject_of,
     tenant_of,
@@ -74,6 +83,9 @@ _CONNECT_TIMEOUT_S = 3.0
 
 Credential = Callable[[str], str | None]
 
+
+SWEEPER_TENANT: Final = "_capture-sweeper"
+"""Whom a cross-tenant capture read (``capture_tenants``) is made as: no tenant's data."""
 
 class MemoryUnavailable(NotebookError):
     """The memory service could not be reached, or failed; nothing is known to have changed."""
@@ -300,6 +312,82 @@ class NotebookClient:
             self._no_observations_until = time.monotonic() + OLDER_SERVICE_RECHECK_S
             return None
 
+    # --- the durable capture queue (G3; ``memory_service.capture``) --------------------------
+
+    async def capture_enqueue(
+        self, *, tenant_id: str, session_id: str, notebook_id: str, run_ids: Sequence[str]
+    ) -> CaptureJob:
+        """Queue a burst of a session's turns (the same burst again is the same job)."""
+        body = {"tenant_id": tenant_id, "session_id": session_id, "notebook_id": notebook_id, "run_ids": list(run_ids)}
+        return _job_in(await self._call(tenant_id, "POST", "/v1/capture/jobs", json=body))
+
+    async def capture_claim(
+        self,
+        *,
+        tenant_id: str,
+        owner: str,
+        lease_s: float,
+        session_id: str | None = None,
+        job_id: str | None = None,
+        pending_grace_s: float = 0,
+    ) -> CaptureLease | None:
+        body = {
+            "tenant_id": tenant_id, "owner": owner, "lease_s": lease_s, "session_id": session_id, "job_id": job_id,
+            "pending_grace_s": pending_grace_s,
+        }
+        lease = (await self._call(tenant_id, "POST", "/v1/capture/jobs:claim", json=body))["lease"]
+        return None if lease is None else _lease_in(lease)
+
+    async def capture_commit(
+        self, lease: CaptureLease, outcome: dict[str, Any], *, resolved_at: str | None = None
+    ) -> bool:
+        """Commit a lease's outcome; whether it was committed already (a retried commit)."""
+        body = {"lease": _lease_out(lease), "outcome": outcome, "resolved_at": resolved_at}
+        answer = await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:commit", json=body)
+        return bool(answer["was_already_committed"])
+
+    async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+        """Extend a lease its holder is still working under."""
+        body = {"lease": _lease_out(lease), "lease_s": lease_s}
+        answer = await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:renew", json=body)
+        return _lease_in(answer["lease"])
+
+    async def capture_fail(self, lease: CaptureLease, error: str, *, terminal: bool) -> None:
+        body = {"lease": _lease_out(lease), "error": error[:16_384], "terminal": terminal}
+        await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:fail", json=body)
+
+    async def capture_release(self, lease: CaptureLease, error: str, *, stale: bool = False) -> None:
+        """Give a lease back with no failure counted: claimable at once, or (``stale``: the
+        notebook kept changing under its resolution) after a pause that grows each time."""
+        body = {"lease": _lease_out(lease), "error": error[:16_384], "stale": stale}
+        await self._call(lease.job.tenant_id, "POST", f"/v1/capture/jobs/{lease.job.job_id}:release", json=body)
+
+    async def capture_tenants(self, *, limit: int = 32, pending_grace_s: float = 0) -> list[str]:
+        """The tenants with capture work to claim, in fair order (content-free)."""
+        params = {"limit": limit, "pending_grace_s": pending_grace_s}
+        answer = await self._call(SWEEPER_TENANT, "GET", "/v1/capture/tenants", params=params)
+        return [str(t) for t in answer["tenants"]]
+
+    async def capture_view(self, notebook_id: str) -> tuple[str, list[tuple[str, Provenance]]]:
+        """The notebook's revision as a capture's resolution reads it, and the statements
+        committed into it and not landed yet, each with the provenance its fact will have
+        (S3): what an audience may see of them is its disclosure's to say."""
+        answer = await self._call(tenant_of(notebook_id), "GET", f"/v1/capture/notebooks/{notebook_id}")
+        return str(answer["revision"]), [
+            (str(q["statement"]), wire.provenance_in(q["provenance"])) for q in answer["queued"]
+        ]
+
+    async def capture_flush(
+        self, *, tenant_id: str, session_id: str, through_turn: int | None = None, timeout_s: float = 240.0
+    ) -> dict[str, Any]:
+        """Grok's ``/flush`` barrier: ``result`` (success, retry, failed or timeout), with
+        the session's cursors and content-free work state."""
+        body = {"tenant_id": tenant_id, "through_turn": through_turn, "timeout_s": timeout_s}
+        answer: dict[str, Any] = await self._call(
+            tenant_id, "POST", f"/v1/capture/sessions/{session_id}:flush", json=body, timeout=timeout_s + 10
+        )
+        return answer
+
     async def edit(
         self,
         notebook_id: str,
@@ -414,7 +502,48 @@ def _key(
     }
 
 
-def _error(response: httpx.Response) -> NotebookError:
+def _job_in(d: dict[str, Any]) -> CaptureJob:
+    return CaptureJob(
+        job_id=str(d["job_id"]), tenant_id=str(d["tenant_id"]), session_id=str(d["session_id"]),
+        notebook_id=str(d["notebook_id"]), run_ids=tuple(str(r) for r in d["run_ids"]),
+        from_turn=int(d["from_turn"]), through_turn=int(d["through_turn"]), attempt=int(d["attempt"]),
+    )
+
+
+def _lease_in(d: dict[str, Any]) -> CaptureLease:
+    return CaptureLease(_job_in(d["job"]), str(d["owner"]), int(d["expires_at"]))
+
+
+def _lease_out(lease: CaptureLease) -> dict[str, Any]:
+    job = lease.job
+    return {
+        "job": {
+            "job_id": job.job_id, "tenant_id": job.tenant_id, "session_id": job.session_id,
+            "notebook_id": job.notebook_id, "run_ids": list(job.run_ids), "from_turn": job.from_turn,
+            "through_turn": job.through_turn, "attempt": job.attempt,
+        },
+        "owner": lease.owner,
+        "expires_at": lease.expires_at,
+    }
+
+
+def _capture_error(code: object, detail: dict[str, Any]) -> Exception | None:
+    """The capture queue's own errors (``memory_service.capture.errors``), by code."""
+    message = str(detail.get("message", ""))
+    if code == "StaleLease":
+        return StaleLease()
+    if code == "StaleResolution":
+        return StaleResolution(str(detail.get("expected", "")), str(detail.get("actual", "")))
+    if code == "UnknownCaptureSession":
+        return UnknownCaptureSession(str(detail.get("session_id", "")))
+    if code == "CaptureInvalid":
+        return CaptureInvalid(message)
+    if code == "CaptureConflict":
+        return CaptureConflict(message)
+    return None
+
+
+def _error(response: httpx.Response) -> Exception:
     """The service's error, rebuilt from its ``code`` and details."""
     try:
         detail = response.json().get("detail")
@@ -423,6 +552,8 @@ def _error(response: httpx.Response) -> NotebookError:
     if not isinstance(detail, dict):
         detail = {"message": str(detail or response.text)[:500]}
     code = detail.get("code")
+    if (capture := _capture_error(code, detail)) is not None:
+        return capture
     if code == "NotebookNotFound":
         return NotebookNotFound(str(detail.get("ref", "")))
     if code == "NotebookExists":

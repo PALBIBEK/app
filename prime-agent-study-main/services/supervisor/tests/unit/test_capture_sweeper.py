@@ -1,0 +1,347 @@
+"""Each worker's capture sweeper (G3) and how a leased job ends, against fakes of the queue.
+
+The queue's own rules (claims, leases, cursors) are tested against the service in
+``tests/memory_store/test_capture_queue.py``; here, what the worker does with them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from supervisor.memory import sweeper, turn
+from supervisor.memory.client import RouteMissing
+from supervisor.memory_service.capture.errors import CaptureInvalid, StaleLease
+from supervisor.memory_service.capture.queue import CaptureJob, CaptureLease
+from supervisor.memory_service.notebooks.errors import NotebookNotFound
+
+pytestmark = pytest.mark.asyncio
+
+
+def _lease(tenant: str, n: int = 1) -> CaptureLease:
+    job = CaptureJob(f"cap-{tenant}-{n}", tenant, f"s-{tenant}", f"{tenant}~nb", (f"r{n}",), n, n, 1)
+    return CaptureLease(job, "host:1", 0)
+
+
+class FakeQueue:
+    """What the sweeper and ``run_capture`` call on ``NotebookClient``."""
+
+    def __init__(self, work: dict[str, list[CaptureLease]]) -> None:
+        self.work = work
+        self.listed: list[tuple[int, float]] = []
+        self.claims: list[str] = []
+        self.ended: list[tuple[str, str, Any]] = []
+        self.stale: list[bool] = []
+
+    async def capture_tenants(self, *, limit: int = 32, pending_grace_s: float = 0) -> list[str]:
+        self.listed.append((limit, pending_grace_s))
+        return [t for t, jobs in self.work.items() if jobs][:limit]
+
+    async def capture_claim(self, *, tenant_id: str, **_: Any) -> CaptureLease | None:
+        self.claims.append(tenant_id)
+        jobs = self.work.get(tenant_id) or []
+        return jobs.pop(0) if jobs else None
+
+    async def capture_commit(self, lease: CaptureLease, outcome: dict[str, Any], **_: Any) -> bool:
+        self.ended.append(("commit", lease.job.job_id, outcome))
+        return False
+
+    async def capture_fail(self, lease: CaptureLease, error: str, *, terminal: bool) -> None:
+        self.ended.append(("fail", lease.job.job_id, terminal))
+
+    async def capture_release(self, lease: CaptureLease, error: str, *, stale: bool = False) -> None:
+        self.ended.append(("release", lease.job.job_id, error))
+        self.stale.append(stale)
+
+    async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+        self.ended.append(("renew", lease.job.job_id, lease_s))
+        return lease
+
+
+class FakeMemory:
+    def __init__(self, hold: asyncio.Event | None = None) -> None:
+        self.ran: list[str] = []
+        self.cancelled: list[str] = []
+        self.hold = hold
+
+    async def run_capture(self, lease: CaptureLease) -> int:
+        self.ran.append(lease.job.job_id)
+        try:
+            if self.hold is not None:
+                await self.hold.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(lease.job.job_id)  # ``run_capture`` releases its lease here
+            raise
+        return 0
+
+
+async def _one_round(memory: FakeMemory, queue: FakeQueue, *, concurrency: int) -> None:
+    """The sweeper for about one round: stopped once it has listed the tenants and claimed."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        sweeper.capture_sweeper(memory, queue, should_stop=stop.is_set, concurrency=concurrency, interval_s=0.05)  # type: ignore[arg-type]
+    )
+    async with asyncio.timeout(5):
+        while len(queue.listed) < 1:
+            await asyncio.sleep(0.001)
+        await asyncio.sleep(0.02)  # the round's claims and runs, inside the interval
+    stop.set()
+    await task
+
+
+def test_sweep_concurrency_is_read_from_the_environment() -> None:
+    assert sweeper.sweep_concurrency({}) == sweeper.DEFAULT_CONCURRENCY
+    assert sweeper.sweep_concurrency({sweeper.CONCURRENCY_ENV: " 5 "}) == 5
+    assert sweeper.sweep_concurrency({sweeper.CONCURRENCY_ENV: "0"}) == 0
+    for bad in ("-1", "two", "1.5"):
+        with pytest.raises(ValueError, match=sweeper.CONCURRENCY_ENV):
+            sweeper.sweep_concurrency({sweeper.CONCURRENCY_ENV: bad})
+
+
+async def test_a_round_serves_every_tenant_once_before_any_tenant_twice() -> None:
+    queue = FakeQueue({"busy": [_lease("busy", n) for n in range(1, 4)], "quiet": [_lease("quiet")]})
+    memory = FakeMemory()
+
+    await _one_round(memory, queue, concurrency=4)
+
+    assert memory.ran[:2] == ["cap-busy-1", "cap-quiet-1"], "one each first, in the service's order"
+    assert sorted(memory.ran[2:]) == ["cap-busy-2", "cap-busy-3"], "then free slots go to the tenant left with work"
+    assert queue.listed == [(4 * sweeper.LIST_PER_SLOT, sweeper.PENDING_GRACE_S)], "pending jobs are their activity's first"
+
+
+async def test_the_sweeper_runs_no_more_than_its_concurrency_and_releases_on_stop() -> None:
+    queue = FakeQueue({t: [_lease(t)] for t in ("a", "b", "c")})
+    hold = asyncio.Event()
+    memory = FakeMemory(hold)
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(
+        sweeper.capture_sweeper(memory, queue, should_stop=stop.is_set, concurrency=2, interval_s=0.01)  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(0.1)
+    assert len(memory.ran) == 2 and queue.work["c"], "two at once; the third waits for a free slot"
+    stop.set()
+    await asyncio.wait_for(task, 5)
+    assert sorted(memory.cancelled) == sorted(memory.ran), "cancelled when it stopped, not waited on"
+
+
+async def test_a_sweeper_set_to_zero_never_claims() -> None:
+    queue = FakeQueue({"a": [_lease("a")]})
+    await sweeper.capture_sweeper(FakeMemory(), queue, should_stop=lambda: False, concurrency=0)  # type: ignore[arg-type]
+    assert queue.listed == []
+
+
+async def test_a_claim_failing_mid_round_still_runs_the_leases_taken() -> None:
+    class Flaky(FakeQueue):
+        async def capture_claim(self, *, tenant_id: str, **kw: Any) -> CaptureLease | None:
+            if tenant_id == "b":
+                raise OSError("rate limited")
+            return await super().capture_claim(tenant_id=tenant_id, **kw)
+
+    queue = Flaky({"a": [_lease("a")], "b": [_lease("b")]})
+    memory = FakeMemory()
+    await _one_round(memory, queue, concurrency=2)
+    assert memory.ran == ["cap-a-1"], "taken, so run: never held until its lease runs out"
+
+
+async def test_a_lease_is_renewed_while_its_job_runs(monkeypatch: pytest.MonkeyPatch, writable: None) -> None:
+    monkeypatch.setattr(turn, "RENEW_EVERY_S", 0.01)
+    queue = FakeQueue({})
+
+    async def slow(*a: Any, **k: Any) -> int:
+        await asyncio.sleep(0.1)
+        return 0
+
+    await _session_memory(queue, slow).run_capture(_job_lease())
+    renewals = [e for e in queue.ended if e[0] == "renew"]
+    assert len(renewals) >= 3 and renewals[0][2] == turn.CAPTURE_LEASE_S
+    queue.ended.clear()
+    await asyncio.sleep(0.05)
+    assert queue.ended == [], "never renewed once its job ended"
+
+
+async def test_an_unreachable_service_is_tried_again_next_round() -> None:
+    class Down(FakeQueue):
+        calls = 0
+
+        async def capture_tenants(self, **kw: Any) -> list[str]:
+            Down.calls += 1
+            raise OSError("connection refused")
+
+    rounds = iter([False, False, True])
+    await sweeper.capture_sweeper(FakeMemory(), Down({}), should_stop=lambda: next(rounds), concurrency=1, interval_s=0)  # type: ignore[arg-type]
+    assert Down.calls == 2
+
+
+# --- how a leased job ends (``SessionMemory.run_capture``) ------------------------------------
+
+
+def _session_memory(queue: FakeQueue, capture: Any, scope: Any = "scope") -> turn.SessionMemory:
+    memory = object.__new__(turn.SessionMemory)
+    memory._queue_for = lambda notebook_id: queue  # type: ignore[method-assign]
+
+    async def _scope(session_id: str) -> Any:
+        return scope
+
+    memory.scope = _scope  # type: ignore[method-assign]
+    memory._capture = capture  # type: ignore[method-assign]
+    return memory
+
+
+@pytest.fixture
+def writable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(turn, "_writable", lambda scope: None if scope is None else "t~nb")
+
+
+def _job_lease() -> CaptureLease:
+    return CaptureLease(CaptureJob("cap-1", "t", "s", "t~nb", ("r1",), 1, 1, 1), "host:1", 0)
+
+
+@pytest.mark.usefixtures("writable")
+async def test_a_job_whose_session_no_longer_captures_there_is_committed_as_nothing() -> None:
+    queue = FakeQueue({})
+
+    async def never(*a: Any, **k: Any) -> int:
+        raise AssertionError("nothing to extract")
+
+    assert await _session_memory(queue, never, scope=None).run_capture(_job_lease()) == 0
+    assert queue.ended == [("commit", "cap-1", turn.NOOP_OUTCOME)]
+
+
+@pytest.mark.usefixtures("writable")
+@pytest.mark.parametrize(
+    ("raised", "ended"),
+    [
+        (turn.CaptureFailed("the model refused", retryable=True), ("fail", "cap-1", False)),
+        (turn.CaptureFailed("too long at the floor", retryable=False), ("fail", "cap-1", True)),
+        (NotebookNotFound("t~nb"), ("fail", "cap-1", True)),
+        (CaptureInvalid("an outcome that cannot be kept"), ("fail", "cap-1", True)),
+        (OSError("the service is unreachable"), ("fail", "cap-1", False)),
+        (RouteMissing("t~nb"), ("fail", "cap-1", False)),  # a replica older than G3, mid-upgrade
+    ],
+)
+async def test_a_failed_job_is_recorded_retryable_or_for_good(raised: Exception, ended: tuple[str, str, bool]) -> None:
+    queue = FakeQueue({})
+
+    async def capture(*a: Any, **k: Any) -> int:
+        raise raised
+
+    assert await _session_memory(queue, capture).run_capture(_job_lease()) == 0
+    assert queue.ended == [ended]
+
+
+@pytest.mark.usefixtures("writable")
+async def test_a_job_taken_over_is_left_to_its_new_owner() -> None:
+    queue = FakeQueue({})
+
+    async def capture(*a: Any, **k: Any) -> int:
+        raise StaleLease()
+
+    assert await _session_memory(queue, capture).run_capture(_job_lease()) == 0
+    assert queue.ended == [], "the new lease's holder records how it ends"
+
+
+@pytest.mark.usefixtures("writable")
+async def test_an_interrupted_job_is_released_at_once() -> None:
+    queue = FakeQueue({})
+    started = asyncio.Event()
+
+    async def capture(*a: Any, **k: Any) -> int:
+        started.set()
+        await asyncio.sleep(3600)
+        return 0
+
+    running = asyncio.create_task(_session_memory(queue, capture).run_capture(_job_lease()))
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert queue.ended == [("release", "cap-1", "interrupted")]
+
+
+@pytest.mark.usefixtures("writable")
+async def test_a_capture_kept_stale_is_given_back_for_a_while_with_no_failure_counted() -> None:
+    queue = FakeQueue({})
+
+    async def stale(*a: Any, **k: Any) -> int:
+        raise turn.CaptureStale
+
+    assert await _session_memory(queue, stale).run_capture(_job_lease()) == 0
+    assert [e[0] for e in queue.ended] == ["release"] and queue.stale == [True], "given back as stale: it waits"
+
+
+@pytest.mark.usefixtures("writable")
+async def test_a_job_taken_over_mid_work_is_stopped_and_left_to_its_new_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its renewal is refused: its model calls would all be charged for a commit fenced out."""
+    monkeypatch.setattr(turn, "RENEW_EVERY_S", 0.01)
+
+    class Taken(FakeQueue):
+        async def capture_renew(self, lease: CaptureLease, lease_s: float) -> CaptureLease:
+            raise StaleLease()
+
+    queue = Taken({})
+    stopped = asyncio.Event()
+
+    async def long(*a: Any, **k: Any) -> int:
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            stopped.set()
+        return 0
+
+    assert await asyncio.wait_for(_session_memory(queue, long).run_capture(_job_lease()), 5) == 0
+    assert stopped.is_set() and queue.ended == [], "stopped, and nothing recorded: the new holder's"
+
+
+@pytest.mark.usefixtures("writable")
+async def test_a_job_past_its_deadline_fails_retryably(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(turn, "RUN_DEADLINE_S", 0.05)
+    queue = FakeQueue({})
+
+    async def hung(*a: Any, **k: Any) -> int:
+        await asyncio.sleep(3600)
+        return 0
+
+    assert await _session_memory(queue, hung).run_capture(_job_lease()) == 0
+    assert queue.ended == [("fail", "cap-1", False)], "a hang counts against the job: never held for good"
+
+
+async def test_a_sweeper_stopped_mid_claim_gives_back_what_it_took(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sweeper, "CLAIM_ANSWER_S", 0.05)  # the claim on the wire never answers
+    gate = asyncio.Event()
+
+    class Slow(FakeQueue):
+        async def capture_claim(self, *, tenant_id: str, **kw: Any) -> CaptureLease | None:
+            if tenant_id == "b":
+                await gate.wait()  # stopped here
+            return await super().capture_claim(tenant_id=tenant_id, **kw)
+
+    queue = Slow({"a": [_lease("a")], "b": [_lease("b")]})
+    claiming = asyncio.create_task(sweeper._claim(queue, 2))  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)
+    claiming.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await claiming
+    assert queue.ended == [("release", "cap-a-1", "the sweeper stopped")]
+
+
+async def test_a_claim_on_the_wire_when_the_sweeper_stops_is_given_back() -> None:
+    answered = asyncio.Event()
+
+    class Slow(FakeQueue):
+        async def capture_claim(self, *, tenant_id: str, **kw: Any) -> CaptureLease | None:
+            lease = await super().capture_claim(tenant_id=tenant_id, **kw)  # granted on the service
+            await answered.wait()  # its answer still on the way
+            return lease
+
+    queue = Slow({"a": [_lease("a")]})
+    claiming = asyncio.create_task(sweeper._claim(queue, 1))  # type: ignore[arg-type]
+    await asyncio.sleep(0.02)
+    claiming.cancel()
+    await asyncio.sleep(0)
+    answered.set()
+    with pytest.raises(asyncio.CancelledError):
+        await claiming
+    assert queue.ended == [("release", "cap-a-1", "the sweeper stopped")]

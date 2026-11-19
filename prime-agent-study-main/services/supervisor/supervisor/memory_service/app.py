@@ -18,6 +18,7 @@ from supervisor.memory_service.auth import (
     enforce_scope_tenant,
     resolve_http_auth,
 )
+from supervisor.memory_service.capture.routes import router as capture_router
 from supervisor.memory_service.limits import MAX_ITEM_CHARS, MAX_RECALL_TOKENS, has_nul
 from supervisor.memory_service.notebooks.routes import router as notebook_router
 from supervisor.memory_service.rate_limit import (
@@ -147,6 +148,15 @@ PUBLIC_PATHS = frozenset({"/v1/healthz", "/v1/readyz"})
 """Process and readiness probes: answered without credentials (compose and k8s health checks)."""
 
 
+def _queue_bookkeeping(path: str) -> bool:
+    """The capture queue's own steps (G3: enqueue, claim, renew, fail, release, the barrier):
+    they change no tenant's memory, and each is bounded by the queue itself, one or two a
+    burst. Only a commit, which queues facts, counts against the tenant's change limit, as
+    the capture it replaces did; the others counted too would make every burst four
+    changes, and one tenant's busy hour a stream of 429s mid-capture."""
+    return path.startswith("/v1/capture/") and not path.endswith(":commit")
+
+
 async def _guard(request: Request) -> None:
     """Every other route: a verified caller (``auth.resolve_http_auth``), and mutations rate-limited.
 
@@ -163,6 +173,8 @@ async def _guard(request: Request) -> None:
             status_code=422,
             detail={"code": "NUL_CHARACTER", "message": "text may not contain the NUL character (U+0000)"},
         )
+    if _queue_bookkeeping(request.url.path):
+        return
     key = rate_limit_key(
         tenant_id=caller_tenant(request) or request.headers.get("x-tenant-id"),
         client_ip=request.client.host if request.client else None,
@@ -535,6 +547,7 @@ def create_app(
 
     app.include_router(router)
     app.include_router(notebook_router)
+    app.include_router(capture_router)
     return app
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import replace
 from datetime import date
 from typing import Final, Literal
@@ -21,6 +21,7 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.memory_service.limits import (
     MAX_FACT_CHARS,
@@ -154,6 +155,15 @@ class NotebookOps:
         self.on_queued: Callable[[], None] | None = None
         """Told when a capture is queued: the inbox's drainer, once it runs
         (``notebooks.inbox``). Without one, ``observe`` lands its capture itself."""
+        self.on_landed: Callable[[str, list[str]], Awaitable[object]] | None = None
+        """Told the notebook and the idempotency keys of the captures a promotion landed
+        there: the capture queue (G3), which advances their sessions' ``indexed`` cursors."""
+        self.on_changed: Callable[[AsyncSession, str, set[str] | None, set[str]], Awaitable[object]] | None = None
+        """Told, inside its transaction and before it strips what is queued, that a person
+        changed the notebook: the words no fact has any more (normalized; None for a clear:
+        all of them), and the facts no capture judged as they are now (reworded by an edit,
+        brought back by a restore). The capture queue (G3) drops the outcomes committed
+        into it and not yet queued that the change concerns."""
         self._landed_at: float | None = None  # when a promotion here last landed a capture (monotonic)
 
     def _landed(self, captures: int) -> None:
@@ -179,7 +189,7 @@ class NotebookOps:
             return 0
         _within("facts in one capture", MAX_FACTS_PER_CAPTURE, len(lines))
         _within_length(lines)
-        expires_on = _expiry(context.expires_on if context else None) or None
+        expires_on = expiry_day(context.expires_on if context else None) or None
         notebook = await self.store.get(notebook_id)
         provenance = capture_provenance(notebook.home, context)
 
@@ -225,7 +235,7 @@ class NotebookOps:
             except ObservationInvalid as exc:
                 raise InvalidObservation(str(exc)) from None
         _within_length([d.statement for d in drafts])
-        expires_on = _expiry(context.expires_on if context else None) or None
+        expires_on = expiry_day(context.expires_on if context else None) or None
         notebook = notebook or await self.store.get(notebook_id)
         if notebook.archived_at is not None:
             raise NotebookArchived(notebook_id)
@@ -376,7 +386,7 @@ class NotebookOps:
         """One transaction: up to ``batch`` of the queued captures (or the one ``only``
         names), landed and marked."""
 
-        async def run(tx: FactTx) -> tuple[int, int, int]:
+        async def run(tx: FactTx) -> tuple[int, int, int, list[str]]:
             query = select(InboxRow).where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
             if only is not None:
                 query = query.where(InboxRow.id == only)
@@ -401,10 +411,16 @@ class NotebookOps:
             landed = [r.id for r in rows if r.id not in unreadable]
             if landed:
                 await tx.db.execute(mark_handled(InboxRow.id.in_(landed), at=tx.at))
-            return len(rows), added, len(landed)
+            keys = [r.idempotency_key for r in rows if r.id not in unreadable and r.idempotency_key]
+            return len(rows), added, len(landed), keys
 
-        captures, added, landed = await self.store.transact(notebook_id, run)
+        captures, added, landed, keys = await self.store.transact(notebook_id, run)
         self._landed(landed)  # evidence the service lands captures: never one only set aside
+        if keys and self.on_landed is not None:
+            try:
+                await self.on_landed(notebook_id, keys)
+            except Exception:  # told late, by reconciliation, then: never the landing undone
+                logger.warning("notebook %s: telling what landed failed", notebook_id, exc_info=True)
         return captures, added
 
     async def edit(
@@ -419,7 +435,7 @@ class NotebookOps:
         _within_length([e.text for e in edits])
         if blank := [e.id for e in edits if not edited_text(e.text)]:
             raise EmptyFact(blank)
-        expiry = _expiry(context.expires_on if context else None)  # None: keep; "": clear
+        expiry = expiry_day(context.expires_on if context else None)  # None: keep; "": clear
         notebook = await self.store.get(notebook_id)
         # Editing from a conversation exposes the fact to that conversation's sources.
         exposure = capture_provenance(notebook.home, context) if context else None
@@ -428,6 +444,10 @@ class NotebookOps:
             current = await tx.current()
             targets = resolve_ids(current, [e.id for e in edits])
             rewritten = {f.id: edited_text(e.text) for e, f in zip(edits, targets, strict=True)}
+            reworded = {i for i, text in rewritten.items() if text != next(f.text for f in targets if f.id == i)}
+            await self._changed(
+                tx, notebook_id, _gone(current, [rewritten.get(f.id, f.text) for f in current]), reworded
+            )
             await _forget_queued(tx, [f.text for f in current], [rewritten.get(f.id, f.text) for f in current])
             for edit, fact in zip(edits, targets, strict=True):
                 provenance = (
@@ -451,6 +471,7 @@ class NotebookOps:
             removed = resolve_ids(current, ids)
             await tx.remove(removed)
             gone = {f.id for f in removed}
+            await self._changed(tx, notebook_id, _gone(current, [f.text for f in current if f.id not in gone]), set())
             await _forget_queued(tx, [f.text for f in current], [f.text for f in current if f.id not in gone])
 
         await self.store.transact(notebook_id, run, author=author)
@@ -463,6 +484,7 @@ class NotebookOps:
         async def run(tx: FactTx) -> int:
             facts = await tx.current()
             await tx.remove(facts)
+            await self._changed(tx, notebook_id, None, set())  # before the queue is read: see ``_changed``
             # Marked as handled, not deleted: a retried burst still finds its key (and lands
             # nothing); pruned with the rest in time.
             await tx.db.execute(mark_handled(InboxRow.notebook_id == notebook_id, at=tx.at))
@@ -474,6 +496,13 @@ class NotebookOps:
 
     async def history(self, notebook_id: str) -> list[Revision]:
         return await self.store.history(notebook_id)
+
+    async def _changed(self, tx: FactTx, notebook_id: str, gone: set[str] | None, judged: set[str]) -> None:
+        """Before the change reads the queue (strips it, or marks it handled): a capture whose
+        row goes in meanwhile is then either kept out (the queue's handled row under its key)
+        or in before that read, and stripped by it."""
+        if self.on_changed is not None and (gone is None or gone or judged):
+            await self.on_changed(tx.db, notebook_id, gone, judged)
 
     async def facts_at(self, notebook_id: str, revision: int) -> list[Fact]:
         """The facts as they were at ``revision`` (0, before any change, to the current one)."""
@@ -498,12 +527,12 @@ class NotebookOps:
             current = {f.id: f for f in await tx.current()}
             removed = [f for i, f in current.items() if i not in target]
             await tx.remove(removed)
-            await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
             # A fact the restore brings back (or gives its old words again) was judged by no
             # capture queued before it: none of them retires it.
-            await _spare_from_queued(
-                tx, [i for i, f in target.items() if i not in current or current[i].text != f.text]
-            )
+            revived = [i for i, f in target.items() if i not in current or current[i].text != f.text]
+            await self._changed(tx, notebook_id, _gone(current.values(), [f.text for f in target.values()]), set(revived))
+            await _forget_queued(tx, [f.text for f in current.values()], [f.text for f in target.values()])
+            await _spare_from_queued(tx, revived)
             for fact_id, fact in target.items():
                 live = current.get(fact_id)
                 if live is None:
@@ -537,6 +566,11 @@ async def _spare_from_queued(tx: FactTx, fact_ids: Sequence[str]) -> None:
         kept = [r for r in retire if not (isinstance(r, dict) and r.get("id") in spared)]
         if len(kept) != len(retire):
             await tx.db.execute(update(InboxRow).where(InboxRow.id == row_id).values(retire=kept))
+
+
+def _gone(before: Iterable[Fact], after: Iterable[str]) -> set[str]:
+    """The words (normalized) a change leaves no fact with."""
+    return {normalize(f.text) for f in before} - {normalize(t) for t in after}
 
 
 async def _forget_queued(tx: FactTx, before: Iterable[str], after: Iterable[str]) -> None:
@@ -590,7 +624,7 @@ def _within_length(texts: Sequence[str]) -> None:
     _within("characters in a fact", MAX_FACT_CHARS, longest)
 
 
-def _expiry(value: str | None) -> str | None:
+def expiry_day(value: str | None) -> str | None:
     """A day as YYYY-MM-DD (mem0's _normalize_expiration_date); "" (clear) and None pass."""
     if value is None or value == "":
         return value

@@ -20,11 +20,14 @@ from supervisor.agent.events import MemoryContext, MemoryInjected, ToolEnd, Turn
 from supervisor.app import SupervisorState
 from supervisor.db.models import ScopeMembershipRow, ScopeRow, SessionRow
 from supervisor.memory.binding import MemoryBinding
+from supervisor.memory.client import NotebookClient
 from supervisor.memory.service import CaptureContext
+from supervisor.memory.sweeper import capture_sweeper
 from supervisor.memory.transcript import STOPPED_MARKER
-from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source
+from supervisor.memory_service.capture.errors import StaleResolution, UnknownCaptureSession
+from supervisor.memory_service.notebooks.types import Fact, Sensitivity, personal_source, tenant_of
 from supervisor.memory_service.observations import PROMPT_VERSION
-from supervisor.seams.core.types import ChatMessage
+from supervisor.seams.core.types import ChatMessage, ModelGatewayError
 from supervisor.temporal.contracts import Activity, Message
 from supervisor.temporal.job_workflow import SubagentJobWorkflow
 from supervisor.temporal.worker import session_worker
@@ -239,6 +242,47 @@ async def test_a_captured_fact_that_contradicts_one_held_retires_it(
     ], "retired, not erased: its history keeps it"
 
 
+@pytest.mark.parametrize("related_change", [False, True], ids=["unrelated", "related"])
+async def test_a_resolution_made_stale_is_redone_only_when_its_facts_changed(
+    env: Env, model: Callable[..., ScriptedGateway], related_change: bool
+) -> None:
+    """S3: a commit refused because the notebook changed since resolution resolves again;
+    when the facts related to the burst are as they were (another session's unrelated
+    change), the verdict holds and the model is not asked again."""
+    gateway = model(extract="SENSITIVITY: ordinary\n- Prefers tea in the morning")
+    state = await env.state()
+    store = state.manager.memory.store
+    assert isinstance(store, NotebookClient)
+    async with session_worker(env.client, state, task_queue=env.queue):
+        sid = await env.create(state, memory=QUICK)
+        await env.sessions.submit(sid, Message("c1", "I drink tea every morning"))
+        await env.wait_for(state, sid, run_ended())
+        await _wait_facts(state, sid, 1)
+        notebook = (await _binding(state, sid)).write
+        assert notebook is not None
+        real_commit, refused = store.capture_commit, []
+
+        async def changed_first(lease, outcome, *, resolved_at=None):  # type: ignore[no-untyped-def]
+            if resolved_at is not None and not refused:
+                refused.append(resolved_at)  # another session's capture lands meanwhile
+                said = "Drinks coffee in the morning" if related_change else "Owns a bicycle"
+                await store.capture(notebook, [said], context=TRACKED)
+                raise StaleResolution(resolved_at, "changed")
+            return await real_commit(lease, outcome, resolved_at=resolved_at)
+
+        store.capture_commit = changed_first  # type: ignore[method-assign]
+        gateway.extract = "SENSITIVITY: ordinary\n- Prefers coffee in the morning"
+        gateway.resolution = '{"facts": [{"new": 0, "duplicates": [], "contradicts": [0]}]}'
+        await env.sessions.submit(sid, Message("c2", "I switched to coffee in the mornings"))
+        await env.wait_for(state, sid, run_ended(2))
+        async with asyncio.timeout(30):
+            while "Prefers coffee in the morning" not in {f.text for f in await _facts(state, sid)}:
+                await asyncio.sleep(0.2)
+    assert refused, "the first commit was refused as stale"
+    resolutions = [c for k, c in gateway.one_shots if k.startswith("You compare NEW FACTS")]
+    assert len(resolutions) == (2 if related_change else 1)
+
+
 async def test_a_turn_that_used_tools_captures_unknown_provenance(
     env: Env, model: Callable[..., ScriptedGateway]
 ) -> None:
@@ -292,6 +336,62 @@ async def test_a_pending_capture_survives_its_worker(
     async with session_worker(env.client, second, task_queue=env.queue):
         (fact,) = await _wait_facts(second, sid, 1)
     assert fact.text == "Works from Lisbon"
+
+
+async def _capture_state(
+    store: NotebookClient, tenant: str, sid: str, until: Callable[[dict], object], timeout: float = 30
+) -> dict:
+    """The session's capture state once ``until(work)`` holds (the burst is queued after
+    its quiet window: until then the queue knows no such session)."""
+    async with asyncio.timeout(timeout):
+        while True:
+            try:
+                state = await store.capture_flush(tenant_id=tenant, session_id=sid, timeout_s=0)
+            except UnknownCaptureSession:
+                state = None
+            if state is not None and until(state["work"]):
+                return state
+            await asyncio.sleep(0.1)
+
+
+async def test_a_capture_whose_extraction_failed_stays_queued_and_a_sweep_lands_it(
+    env: Env, model: Callable[..., ScriptedGateway], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3: a burst whose extraction failed in a way that may pass is not dropped. Its job backs off in the
+    capture queue, a worker's sweeper claims it again, and its fact lands; the barrier
+    then reports the session indexed through its last turn."""
+    import supervisor.memory_service.capture.queue as capture_queue
+
+    monkeypatch.setattr(capture_queue, "RETRY_BACKOFF_MS", 200)  # the service runs in this process
+    gateway = model(extract="SENSITIVITY: ordinary\n- Deploys on Fridays")
+    # Rate limited for an hour: past the attempt's retry window, so it is retried later, by the queue.
+    gateway.extract_errors.append(ModelGatewayError(429, "rate limited", retry_after=3600.0))
+    state = await env.state()
+    store = state.manager.memory.store
+    assert isinstance(store, NotebookClient)
+    async with session_worker(env.client, state, task_queue=env.queue) as activities:
+        sid = await env.create(state, memory=QUICK)
+        tenant = tenant_of((await _binding(state, sid)).write or "")
+        await env.sessions.submit(sid, Message("c1", "We deploy on Fridays"))
+        await env.wait_for(state, sid, run_ended())
+        held = await _capture_state(store, tenant, sid, lambda work: work["failed"] or work["terminal"])
+        assert not held["work"]["terminal"], held
+        assert held["result"] == "retry" and held["cursors"]["captured"] == 0, "held, not dropped"
+        assert held["work"]["last_error"]
+        # Any worker's sweeper (the worker process runs one beside its pollers) retries it.
+        stop = asyncio.Event()
+        sweeping = asyncio.create_task(
+            capture_sweeper(activities.memory, store, should_stop=stop.is_set, concurrency=1, interval_s=0.2)
+        )
+        try:
+            (fact,) = await _wait_facts(state, sid, 1)
+        finally:
+            stop.set()
+            await sweeping
+        barrier = await store.capture_flush(tenant_id=tenant, session_id=sid, timeout_s=30)
+    assert fact.text == "Deploys on Fridays"
+    assert barrier["result"] == "success" and barrier["cursors"] == {"requested": 1, "captured": 1, "indexed": 1}
+    assert len([k for k, _ in gateway.one_shots if k.startswith("You extract")]) == 2, "extracted again once"
 
 
 async def test_agent_only_sessions_are_never_captured(

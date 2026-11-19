@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from supervisor.memory_service.bank import MemoryBank
 from supervisor.memory_service.buffer import WriteBehindBuffer
+from supervisor.memory_service.capture.queue import CaptureQueue
 from supervisor.memory_service.cost import CachingEmbedder, flush_batch_is_barren
 from supervisor.memory_service.db import init_db, make_engine, make_session_factory, pool_settings
 from supervisor.memory_service.embed import Embedder
@@ -60,6 +61,9 @@ class SeqConflict(Exception):
     """Durable seq does not match expected contiguous next."""
 
 
+CAPTURE_RECONCILE_S = 2.0
+"""How often each replica repairs the capture queue's crash windows (``CaptureQueue.reconcile``)."""
+
 class MemoryService:
     """
     Tier 1 durable session log.
@@ -97,6 +101,12 @@ class MemoryService:
         self.notebooks = NotebookOps(NotebookStore(self._factory, self._embedder))
         self.inbox = InboxDrainer(self.notebooks, concurrency=drainer_concurrency(pool_settings(), self._engine.url.drivername))
         """Lands queued automatic captures as facts (G2); started with ``start_inbox_drainer``."""
+        self.capture = CaptureQueue(self._factory, self.notebooks)
+        """The durable capture queue (G3): jobs, leases and each session's cursors."""
+        self.notebooks.on_landed = lambda notebook_id, keys: self.capture.mark_indexed(keys, notebook_id=notebook_id)
+        self.notebooks.on_changed = lambda db, notebook_id, gone, judged: self.capture.drop_unqueued(
+            notebook_id, db=db, gone=gone, judged=judged
+        )
         arch_root = archive_dir or "memory_archive"
         self._retention = RetentionService(
             self._factory, ObjectArchive(arch_root), hot_days=hot_days
@@ -143,8 +153,12 @@ class MemoryService:
 
     def start_inbox_drainer(self, *, interval_s: float = 1.0) -> None:
         """Land queued captures as facts: at once when one is queued here, and every
-        ``interval_s`` for those queued on other replicas (until ``aclose``)."""
+        ``interval_s`` for those queued on other replicas (until ``aclose``). With them, the
+        capture queue's repair of every crash window (G3: ``CaptureQueue.reconcile``), and
+        its pruning."""
         self._start("inbox", lambda: self.inbox.run(interval_s))
+        self._start("capture", lambda: self._every(CAPTURE_RECONCILE_S, "capture reconcile", self.capture.reconcile))
+        self._start("capture-prune", lambda: self._every(3600.0, "capture prune", self.capture.prune))
 
     def start_buffer_sweeper(self, *, interval_s: float = 60.0, idle_ms: int = BUFFER_IDLE_MS) -> None:
         """Run ``sweep_buffers`` every ``interval_s`` (until ``aclose``)."""
@@ -447,6 +461,8 @@ class MemoryService:
         )
         if notebooks is not None:
             erased["notebooks_erased"] = notebooks
+            # What their sessions' captures would have kept, committed but not yet landed.
+            erased["captures_scrubbed"] = await self.capture.forget_erased(tenant_id=tenant)
         return erased
 
     async def archive_session(self, session_id: str) -> dict:

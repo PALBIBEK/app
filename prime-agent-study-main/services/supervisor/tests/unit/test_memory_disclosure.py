@@ -264,3 +264,21 @@ async def test_observations_with_no_label_are_classified_as_captures_are(noteboo
         while not (facts := await memory.facts(nb)):
             await asyncio.sleep(0.05)
     assert facts[0].provenance.sensitivity is Sensitivity.SENSITIVE
+
+
+async def test_statements_still_to_land_are_shown_by_the_same_rules(notebooks: NotebookClient) -> None:
+    """A capture's resolution compares a burst with statements queued but not landed yet
+    (G3, S3): an audience sees of them only what it would see once they are facts."""
+    from supervisor.memory.turn import _as_facts
+    from supervisor.memory.view import visible
+
+    memory, nb = await _seeded(notebooks)
+    pending = _as_facts([
+        ("queued personal", Provenance(Sensitivity.SENSITIVE, (personal_source(ALICE),))),
+        ("queued in x", Provenance(Sensitivity.SENSITIVE, (X,))),
+    ])
+    shared = ClassifiedMemory(_view(memory, Audience(ALICE, X, (ALICE, BOB), Members(x={ALICE, BOB}))), None)  # type: ignore[arg-type]
+    assert [f.text for f in await visible(shared, nb, pending)] == ["queued in x"]
+    private = _view(memory, Audience(ALICE, personal_source(ALICE), (ALICE,), Members(x={ALICE})))
+    assert [f.text for f in await visible(private, nb, pending)] == ["queued personal", "queued in x"]
+    assert [f.text for f in await visible(memory, nb, pending)] == ["queued personal", "queued in x"], "no audience: all"

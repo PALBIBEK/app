@@ -93,6 +93,8 @@ class SessionActivities:
         self._heartbeats = heartbeats
         self._home = Placement(home_queue)
         self._steps = GithiSteps(manager, reader)
+        self.memory = self._steps.memory
+        """The session memory these steps capture with: the capture sweeper's too (G3)."""
         self._jobs = JobSteps(manager, reader)
 
     @property

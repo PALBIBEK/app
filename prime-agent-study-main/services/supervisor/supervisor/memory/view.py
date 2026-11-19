@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from supervisor.memory.service import CaptureContext, MemoryService
+from supervisor.memory.service import CaptureCommit, CaptureContext, MemoryService
 from supervisor.memory_service.notebooks.types import (
     Candidate,
     CaptureMetadata,
@@ -55,12 +55,13 @@ class MemoryView:
         context: CaptureContext | None = None,
         retire: Sequence[str] = (),
         idempotency_key: str | None = None,
+        commit: CaptureCommit | None = None,
     ) -> int | None:
         """Queue typed observations (G2), or None when the memory below takes plain
         captures only (``observe``)."""
         return await observe(
             self._base, notebook_id, drafts, author=author, context=context, retire=retire,
-            idempotency_key=idempotency_key,
+            idempotency_key=idempotency_key, commit=commit,
         )
 
     async def query(
@@ -73,6 +74,12 @@ class MemoryView:
 
     async def facts(self, notebook_id: str) -> list[Fact]:
         return await self._base.facts(notebook_id)
+
+    async def visible(self, notebook_id: str, facts: Sequence[Fact]) -> list[Fact]:
+        """Of ``facts`` (not read from the notebook: statements still queued for it), those
+        this view's audience may see, by each layer's rules (``DisclosedMemory``)."""
+        below = getattr(self._base, "visible", None)
+        return list(facts) if below is None else await below(notebook_id, facts)
 
     async def edit(
         self,
@@ -102,6 +109,13 @@ class MemoryView:
         await self._base.restore(notebook_id, revision, author=author)
 
 
+async def visible(memory: MemoryService, notebook_id: str, facts: Sequence[Fact]) -> list[Fact]:
+    """Of ``facts`` (not read from the notebook: statements still to land in it), those
+    ``memory``'s audience may see; all of them where no layer has an audience's rules."""
+    filtered = getattr(memory, "visible", None)
+    return list(facts) if filtered is None else await filtered(notebook_id, facts)
+
+
 async def observe(
     memory: MemoryService,
     notebook_id: str,
@@ -111,16 +125,26 @@ async def observe(
     context: CaptureContext | None = None,
     retire: Sequence[str] = (),
     idempotency_key: str | None = None,
+    commit: CaptureCommit | None = None,
 ) -> int | None:
     """Queue typed observations into ``memory`` (G2), ``retire`` (the facts they make false)
     going after them: the number queued, or None when it takes plain captures only (a
     provider's own memory, or a memory service older than G2), for the caller to capture
     their statements and retire separately. Not part of ``MemoryService``, so a provider
-    without it still is one."""
+    without it still is one.
+
+    ``commit``: as a capture job's outcome (G3): committed under its lease, then queued,
+    rather than queued directly; none of either is then a no-op the job commits too."""
     queue = getattr(memory, "observe", None)
     if queue is None:
         return None
+    if commit is not None:
+        committed: int | None = await queue(
+            notebook_id, drafts, author=author, context=context, retire=retire, commit=commit
+        )
+        return committed
     queued: int | None = await queue(
         notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
     )
     return queued
+

@@ -544,7 +544,9 @@ class AgentSessionWorkflow:
                 **self._options(Activity.CAPTURE_MEMORY),
             )
         except ActivityError as err:
-            # Capture is best effort: a failed burst is dropped, never blocks the session.
+            # Never blocks the session. Once queued (the activity's first step, idempotent), a
+            # burst is the capture queue's to retry (G3: memory.sweeper); only one the memory
+            # service could not take for all of the activity's retries is lost here.
             workflow.logger.warning("memory capture failed for %d turns: %s", len(runs), err)
 
     async def _run_whole(self, message: Message) -> TurnOutcome:

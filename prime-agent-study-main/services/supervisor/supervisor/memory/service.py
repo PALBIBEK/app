@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 from supervisor.memory.client import NotebookClient, UnavailableNotebooks
+from supervisor.memory_service.capture.queue import CaptureLease
 from supervisor.memory_service.notebooks.rank import ranked_candidates
 from supervisor.memory_service.notebooks.render import (
     clean_captured,
@@ -27,9 +28,19 @@ from supervisor.memory_service.notebooks.types import (
     RecallContext,
     Revision,
 )
+from supervisor.memory_service.notebooks.wire import context_out, observation_out
 from supervisor.memory_service.observations import ObservationDraft
 
 type CaptureMode = Literal["explicit", "automatic"]
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureCommit:
+    """A capture job's lease (G3), and the notebook revision its resolution read (S3; None
+    to commit whatever the notebook holds now)."""
+
+    lease: CaptureLease
+    resolved_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,8 +153,20 @@ class NotebookMemory:
         context: CaptureContext | None = None,
         retire: Sequence[str] = (),
         idempotency_key: str | None = None,
+        commit: CaptureCommit | None = None,
     ) -> int | None:
-        """Queue typed observations (G2), or None from a service that takes only plain captures."""
+        """Queue typed observations (G2), or None from a service that takes only plain
+        captures. ``commit``: as a capture job's outcome (G3), committed under its lease,
+        a no-op included; the number committed."""
+        if commit is not None:
+            outcome = {
+                "observations": [observation_out(d) for d in drafts],
+                "retire": list(retire),
+                "context": context_out(context),
+                "author": author,
+            }
+            await self._store.capture_commit(commit.lease, outcome, resolved_at=commit.resolved_at)
+            return len(drafts)
         if not drafts and not retire:
             return 0
         return await self._store.observe(

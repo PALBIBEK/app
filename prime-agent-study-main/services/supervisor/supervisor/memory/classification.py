@@ -12,7 +12,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 
-from supervisor.memory.service import CaptureContext, MemoryService
+from supervisor.memory.service import CaptureCommit, CaptureContext, MemoryService
 from supervisor.memory.view import MemoryView
 from supervisor.memory_service.extraction_prompt import SENSITIVITY_PROMPT
 from supervisor.memory_service.notebooks.types import CaptureMetadata, Edit, Sensitivity, stricter
@@ -90,6 +90,7 @@ class ClassifiedMemory(MemoryView):
         context: CaptureContext | None = None,
         retire: Sequence[str] = (),
         idempotency_key: str | None = None,
+        commit: CaptureCommit | None = None,
     ) -> int | None:
         """Labelled as ``capture`` labels: an automatic capture arrives labelled (the
         extraction's own), anything else is classified."""
@@ -99,7 +100,8 @@ class ClassifiedMemory(MemoryView):
             sensitivity = stricter(sensitivity, await classify(self._one_shot, [d.statement for d in drafts]))
             context = _with_sensitivity(context, sensitivity)
         return await super().observe(
-            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key
+            notebook_id, drafts, author=author, context=context, retire=retire, idempotency_key=idempotency_key,
+            commit=commit,
         )
 
     async def edit(

@@ -408,6 +408,110 @@ sessions).
   retired fact.
 - One tenant's 10,000-job backlog does not delay another tenant's job beyond its fair share.
 
+*Done (G3):* `memory_service/capture/` ports Grok's `V2CaptureStore` (reference
+`xai-grok-memory/src/v2_capture.rs`) for intent, on the memory service's Postgres.
+- **Queue:** a burst is one job, keyed by its session and run ids (`cap-…`), so a retried
+  capture activity enqueues the same job. Its turn range follows the session's last, so the
+  `requested` cursor only grows. Claims are `FOR UPDATE SKIP LOCKED` on the open-work index,
+  pending before failed, oldest first.
+- **Leases:** each carries its claim's attempt (its generation), and commit, fail, release
+  and renew all check owner, attempt, tenant, range and expiry, so a paused holder is fenced,
+  even after another claim committed. A lease lasts 2 minutes and its holder renews it every
+  40 s while it works, so a dead worker frees its job fast and a slow one keeps it; one
+  whose renewal is refused (taken over) stops at once, its model calls unspent. A job runs
+  at most nine minutes under its lease, then fails retryably. A cancelled holder releases
+  at once. Releases count no failure; failures and runs-out do, and at eight the job is
+  failed for good (a burst that kills its worker).
+- **Outcomes:** commit keeps the outcome and its hash; the same bytes again are idempotent,
+  others are refused. An outcome that could never be kept (bad observation, context or
+  expiry) is refused at commit. The outcome is then queued into G2's inbox under the job's
+  id; a crash between the two is repaired by `reconcile` from the kept outcome, never by
+  extracting again. A person's change to the notebook (an edit, a delete, a clear, a
+  restore), in its own transaction and before it strips the queue, drops the committed
+  outcomes it concerns (restating words it removed; any, for a clear) whose rows are not in
+  the inbox yet, and puts a handled row under each one's key, so their queuing lands
+  nothing. It also concerns an outcome retiring a fact the change reworded or brought back
+  (judged against words the fact no longer has). One whose row took the key first is in
+  the queue before the strip reads it. Such a change takes the notebook's counter lock, so
+  a commit resolved before it waits, then finds the revision changed. A dropped outcome
+  loses its other statements too (in the inbox, only the concerned ones would go). Outcomes are content: cleared once their facts land or cannot
+  land, and scrubbed with an erased owner's notebooks; diagnostics of a model's or a
+  burst's words keep only the error's class.
+- **Cursors:** per session, `requested`, `captured` (committed or failed for good) and
+  `indexed` (landed: G2's drainer tells the queue the keys it landed, per notebook). Each
+  advances over a contiguous run of resolved jobs only. Pruning (a week) never removes a
+  job above a cursor.
+- **Failures:** sanitized and bounded (512 bytes). A failure that may pass (a rate limit, an
+  overloaded or unreachable provider, a transcript still too long but not at its floor)
+  backs off 5 s doubling to 5 minutes, eight claims at most; so does a refused key, which
+  the session's next step renews. One that would fail the same way (a spent budget, an
+  unknown model, an answer malformed twice, an overflow at the shortest budget, a notebook
+  gone) is failed for good, so the range resolves. So is a capture the inbox sets aside:
+  the barrier says failed, and the facts still land if it is requeued.
+- **Resolution (S3):** a commit names the notebook revision its resolution read, which
+  counts landed facts, queued captures and committed captures (commits into one notebook
+  take turns on a counter row). A stale one is refused, and the worker reads again: the
+  revision, then the statements committed and not yet landed (with their provenance, shown
+  only as the session's audience may see them, and the newest 1,000 at most), then the
+  facts. A verdict whose related facts did not change is reused, with no model call. Every
+  attempt is checked; a capture still stale after four is given back, with no failure
+  counted, for a pause that doubles each time; after six such releases it commits as
+  resolved (a rare near-duplicate is consolidation's, G5, never a capture lost). The
+  revision also counts the queued rows, so one set aside changes it.
+- **Workers:** the capture activity enqueues its burst and runs it at once under its own
+  lease. Each worker's sweeper (`memory/sweeper.py`, `MEMORY_CAPTURE_SWEEP_CONCURRENCY`, 2)
+  claims what is left (failed, expired, or pending past a minute), one job per tenant a
+  pass, the tenant with the fewest running first (then the fewest waiting, then the
+  oldest), and a tenant a second job only once every listed tenant has had its turn. The cross-tenant listing is content-free.
+- **Barrier:** `POST /v1/capture/sessions/{id}:flush` waits on that session's `indexed`
+  cursor (at most four minutes) and answers success, retry, failed or timeout with
+  content-free counts; `GET /v1/capture/sessions/{id}` is the status read (G10 builds on it).
+- **Rate limits:** only a commit counts against the tenant's change limit, as the capture
+  it replaces did; the queue's own steps do not.
+- **Back-compat:** a memory service older than G3 (no capture routes) is captured as before.
+- **Known limits:** lease expiry and backoff read each replica's clock, so replicas need
+  NTP (a skew past a minute would fence a healthy holder). A burst run after its session's
+  audience changed reads only its turns since the change, as any capture does, and may
+  find nothing to keep. As in Grok, pending bursts are claimed before failed ones are
+  retried, so a burst retried late is resolved after later ones (its session's or
+  another's) and can contradict what they learned; telling which statement is newer is
+  consolidation's (G5), which sees every fact's source turn. An operator's requeue of
+  set-aside captures can return the revision to an earlier value (a resolution then
+  passes with one statement it compared gone), and reconciliation's scan of queued jobs
+  grows with the inbox's backlog. A burst cannot retire a statement still to land (only
+  landed facts), so a contradiction between two captures in flight at once lands both,
+  for consolidation (G5).
+
+*Tests:* Grok's ten (`tests/memory_store/test_capture_queue.py`, on SQLite and Postgres) and
+ours beside them: the routes and their tenant isolation, the sweeper and how a leased job
+ends, and end to end on Temporal, a failed extraction held in the queue and landed by a
+sweep. *Concurrency (Postgres, in CI's 20-run step):* 8 workers × 500 jobs run exactly once
+with every cursor watched; a worker paused past its lease is fenced; 20 sessions resolving
+against one notebook keep one fact (before the commit counter, all 20 added it; before
+committed outcomes were part of the view, 3 runs in 20 added it twice); a 10,000-job
+backlog leaves another tenant served within a round; two replicas commit two sessions
+independently.
+
+*Load (4 tenants × 50 sessions, capture on), the final G3 and `main` (G2) one after the
+other on one machine, fresh capture tables:*
+
+| Measure | G2 (`main`) | G3 |
+|---|---|---|
+| Session errors | 0 | 0 |
+| Captured | 200/200 | 200/200 |
+| Lost, duplicated, crossed, unrecalled | 0 | 0 |
+| Capture p50 / p95 | 3.2 / 6.9 s | 2.7 / 8.3 s |
+| Recall p50 / p95 | 1,858 / 3,024 ms | 1,855 / 3,309 ms |
+| First step p95 | 9,952 ms | 9,929 ms |
+
+Capture's p95 pays for S3: each tenant's 50 sessions share one notebook, and 111 commits
+found it changed and resolved again (a verdict whose related facts held was reused, with
+no model call). The 216 to 228 jobs failed for good each run are the stand-in model's
+prose answers, malformed twice, which G2 dropped the same way. Found by G3's load runs, and fixed in G3: an answer
+malformed twice was retried by the queue (16 charged calls a burst), and the queue's own
+steps were refused by the tenant's change limit. The recall target still needs a sized
+environment.
+
 ### G4 (P0). Forgetting a fact does not stop it being learned again
 
 *Ours:* `delete` removes a fact (history keeps it). Capture deduplicates against live facts
@@ -766,7 +870,7 @@ requires before any gap is ported.
 | G0 Postgres fixture, workers, load script and targets | P0 | n/a | [x] | [x] | [x] | [~] correctness met; latency needs a sized environment | [x] | #196 |
 | G1 transcript of the whole turn, condensed; stopped turns | P0 | [x] | [x] | [x] | [~] eight review rounds; merged on request | [~] correctness and capture met; recall latency needs a sized environment | [x] | #197 |
 | G2 typed observations, strict schema | P0 | [x] | [x] | [x] | [~] 28 review rounds and a verifying one; what was left is answered on #198 | [~] correctness and capture met; recall latency needs a sized environment | [x] | #198 |
-| G3 durable capture queue, cursors, barrier | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| G3 durable capture queue, cursors, barrier | P0 | [x] | [x] | [x] | [~] five review rounds and a verifying one; what was left is documented on #200 | [~] correctness and capture met; recall latency needs a sized environment | [x] | #200 |
 | G4 forgetting suppresses re-capture | P0 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G5 consolidation (Dream) | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
 | G6 bounded memory index, read ledger | P1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |

@@ -789,6 +789,29 @@ class NotebookStore:
                 if isinstance(o, dict) and isinstance(o.get("statement"), str)
             ]
 
+    async def queued_with_provenance(self, notebook_id: str, *, limit: int) -> list[tuple[str, Provenance]]:
+        """The statements the notebook's newest queued captures hold, about ``limit`` at most,
+        each with the provenance its fact will have (what an audience may see of it is its
+        disclosure's to say)."""
+        async with self._db() as db:
+            rows = await db.execute(
+                select(InboxRow.observations, InboxRow.sensitivity, InboxRow.sources, InboxRow.source_unknown)
+                .where(InboxRow.notebook_id == notebook_id, InboxRow.promoted_at.is_(None))
+                .order_by(InboxRow.id.desc())
+                .limit(limit)  # every row holds one statement at least
+            )
+            out: list[tuple[str, Provenance]] = []
+            for observations, sensitivity, sources, unknown in rows.all():
+                provenance = Provenance(Sensitivity.parse(sensitivity), tuple(sources or ()), bool(unknown))
+                out += [
+                    (o["statement"], provenance)
+                    for o in observations or ()
+                    if isinstance(o, dict) and isinstance(o.get("statement"), str)
+                ]
+                if len(out) >= limit:
+                    break
+            return out[:limit]
+
     async def all_texts(self, notebook_id: str) -> list[str]:
         """Every live fact's text (a full notebook's, to tell a repeat from a new fact)."""
         async with self._db() as db:

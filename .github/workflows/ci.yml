@@ -196,8 +196,9 @@ jobs:
             exit 1
           }
       - name: Memory concurrency, 20 runs in a row (a race that fails once in twenty fails daily at scale)
-        # docs/memory-gaps.md, G0 to G2: memory's concurrency tests on this job's Postgres
-        # (G0's stores, G1's captures reading their transcripts, G2's inbox), each run 20 times (a few
+        # docs/memory-gaps.md, G0 to G3: memory's concurrency tests on this job's Postgres
+        # (G0's stores, G1's captures reading their transcripts, G2's inbox, G3's capture
+        # queue), each run 20 times (a few
         # minutes on four workers; each run has a database of its own); on the first half's
         # runner only, since they need no split. Failures and a stuck run are annotated as
         # the suite's are.
@@ -205,14 +206,14 @@ jobs:
         working-directory: ${{ env.PROJECT }}/services/supervisor
         run: |
           set -o pipefail
-          timeout --signal=INT --kill-after=60 15m pytest -q -rfE -n 4 --count 20 \
+          timeout --signal=INT --kill-after=60 25m pytest -q -rfE -n 4 --count 20 \
             tests/memory_store/test_memory_concurrency.py tests/unit/test_memory_capture_concurrency.py \
-            tests/memory_store/test_observation_concurrency.py \
+            tests/memory_store/test_observation_concurrency.py tests/memory_store/test_capture_concurrency.py \
             2>&1 | tee concurrency.out || {
             status=$?
             grep -E '^(FAILED|ERROR) ' concurrency.out | head -40 | sed 's/^/::error title=memory concurrency::/' || true
             if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-              echo "::error title=memory concurrency stuck (stopped after 15 minutes)::$(tail -c 4000 concurrency.out | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+              echo "::error title=memory concurrency stuck (stopped after 25 minutes)::$(tail -c 4000 concurrency.out | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
             fi
             exit 1
           }

@@ -204,6 +204,22 @@ async def _serve_health(health: Health, port: int, stop: asyncio.Event) -> None:
     await task
 
 
+def _capture_sweeper(
+    state: SupervisorState, activities: SessionActivities, stop: asyncio.Event
+) -> list[asyncio.Task[None]]:
+    """The worker's capture sweeper (G3), when memory lives in a memory service."""
+    from supervisor.memory.client import NotebookClient
+    from supervisor.memory.sweeper import capture_sweeper, sweep_concurrency
+
+    store = state.manager.memory.store
+    if not isinstance(store, NotebookClient):
+        return []
+    concurrency = sweep_concurrency()  # here, so a bad setting stops the worker, never the sweeper alone
+    return [
+        asyncio.create_task(capture_sweeper(activities.memory, store, should_stop=stop.is_set, concurrency=concurrency))
+    ]
+
+
 async def _bootstrap_version(client: Client, deployment: str, build_id: str, mode: str) -> None:
     from supervisor.temporal.rollout import bootstrap
 
@@ -251,6 +267,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
             side.append(asyncio.create_task(heartbeat_loop(state.heartbeats, beat, finished, on_beat=health.on_beat)))
         loops = [
             asyncio.create_task(approval_sweeper(state.manager, should_stop=stop.is_set)),
+            *_capture_sweeper(state, activities, stop),
             asyncio.create_task(
                 sandbox_idle_sweeper(
                     state.manager, should_stop=stop.is_set, interval_s=state.manager.sandbox_lifecycle.sweep_s
